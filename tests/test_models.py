@@ -5,7 +5,6 @@ Tests for data models.
 from datetime import datetime
 from decimal import Decimal
 
-import pytest
 
 from data_manager.models.events import EventType, MarketDataEvent
 from data_manager.models.market_data import Candle, Trade

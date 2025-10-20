@@ -3,6 +3,7 @@ Data catalog and metadata models.
 """
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -49,7 +50,7 @@ class DatasetMetadata(BaseModel):
     update_frequency: str = Field(..., description="Expected update frequency")
     retention_days: int | None = Field(None, description="Data retention period in days")
     tags: list[str] = Field(default_factory=list, description="Dataset tags")
-    metadata: dict[str, any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     created_at: datetime = Field(..., description="Dataset creation timestamp")
     updated_at: datetime = Field(..., description="Dataset last update timestamp")
 
@@ -64,7 +65,7 @@ class LineageRecord(BaseModel):
     dataset_id: str = Field(..., description="Dataset identifier")
     source_dataset_id: str | None = Field(None, description="Source dataset identifier")
     transformation: str = Field(..., description="Transformation applied")
-    transformation_params: dict[str, any] = Field(
+    transformation_params: dict[str, Any] = Field(
         default_factory=dict, description="Transformation parameters"
     )
     input_records: int = Field(..., description="Number of input records")

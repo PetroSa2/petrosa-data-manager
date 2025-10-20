@@ -4,6 +4,7 @@ NATS event message models.
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +27,7 @@ class MarketDataEvent(BaseModel):
     event_type: EventType = Field(..., description="Type of market data event")
     symbol: str = Field(..., description="Trading pair symbol")
     timestamp: datetime = Field(..., description="Event timestamp")
-    data: dict[str, any] = Field(..., description="Event data payload")
+    data: dict[str, Any] = Field(..., description="Event data payload")
     exchange: str = Field(default="binance", description="Exchange name")
     stream: str | None = Field(None, description="Stream name")
 

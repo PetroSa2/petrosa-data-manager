@@ -4,6 +4,7 @@ Analytics and computed metrics models.
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -13,7 +14,7 @@ class MetricMetadata(BaseModel):
 
     method: str = Field(..., description="Computation method used")
     window: str = Field(..., description="Time window for computation")
-    parameters: dict[str, any] = Field(default_factory=dict, description="Computation parameters")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Computation parameters")
     completeness: float = Field(
         ..., ge=0.0, le=100.0, description="Data completeness for computation"
     )

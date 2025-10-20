@@ -3,6 +3,7 @@ Data health and quality metrics models.
 """
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -43,7 +44,7 @@ class DatasetHealth(BaseModel):
     gaps: list[GapInfo] = Field(default_factory=list, description="List of detected gaps")
     last_audit: datetime = Field(..., description="Last audit timestamp")
     last_update: datetime = Field(..., description="Last data update timestamp")
-    metadata: dict[str, any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
