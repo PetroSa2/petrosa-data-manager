@@ -3,9 +3,7 @@ Message handler for routing market data events to appropriate processors.
 """
 
 import logging
-from datetime import datetime
 from decimal import Decimal
-from typing import Dict, Optional
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import (
@@ -19,7 +17,6 @@ from data_manager.models.events import EventType, MarketDataEvent
 from data_manager.models.market_data import (
     Candle,
     FundingRate,
-    MarkPrice,
     OrderBookDepth,
     OrderBookLevel,
     Ticker,
@@ -35,8 +32,8 @@ class MessageHandler:
     def __init__(self, db_manager: DatabaseManager | None = None) -> None:
         self.initialized = False
         self.db_manager = db_manager
-        self._handlers: Dict[EventType, callable] = {}
-        self._stats: Dict[str, int] = {
+        self._handlers: dict[EventType, callable] = {}
+        self._stats: dict[str, int] = {
             "trades": 0,
             "tickers": 0,
             "depth": 0,
@@ -249,9 +246,9 @@ class MessageHandler:
                     symbol=event.symbol,
                     timestamp=event.timestamp,
                     funding_rate=Decimal(str(event.data.get("r", "0"))),
-                    mark_price=Decimal(str(event.data.get("p", "0")))
-                    if event.data.get("p")
-                    else None,
+                    mark_price=(
+                        Decimal(str(event.data.get("p", "0"))) if event.data.get("p") else None
+                    ),
                 )
                 await self.funding_repo.insert(funding)
                 logger.debug(f"Stored funding rate for {event.symbol}")
@@ -283,9 +280,7 @@ class MessageHandler:
                     low=Decimal(str(kline.get("l", "0"))),
                     close=Decimal(str(kline.get("c", "0"))),
                     volume=Decimal(str(kline.get("v", "0"))),
-                    quote_volume=Decimal(str(kline.get("q", "0")))
-                    if kline.get("q")
-                    else None,
+                    quote_volume=Decimal(str(kline.get("q", "0"))) if kline.get("q") else None,
                     trades_count=int(kline.get("n", 0)) if kline.get("n") else None,
                     timeframe=kline.get("i", "1m"),  # Default to 1m if not specified
                 )
@@ -306,7 +301,6 @@ class MessageHandler:
             },
         )
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """Get handler statistics."""
         return self._stats.copy()
-

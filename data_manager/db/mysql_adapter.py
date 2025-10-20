@@ -13,7 +13,6 @@ from pydantic import BaseModel
 try:
     import sqlalchemy as sa
     from sqlalchemy import (
-        Boolean,
         Column,
         DateTime,
         Index,
@@ -32,6 +31,8 @@ try:
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
     SQLALCHEMY_AVAILABLE = False
+
+import contextlib
 
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
@@ -57,7 +58,8 @@ class MySQLAdapter(BaseAdapter):
         """
         if not SQLALCHEMY_AVAILABLE:
             raise ImportError(
-                "SQLAlchemy and MySQL driver are required. Install with: pip install sqlalchemy pymysql"
+                "SQLAlchemy and MySQL driver are required. "
+                "Install with: pip install sqlalchemy pymysql"
             )
 
         # Use provided connection string or build from constants
@@ -240,10 +242,8 @@ class MySQLAdapter(BaseAdapter):
                     # Ensure datetime fields are proper datetime objects
                     for key, value in record.items():
                         if isinstance(value, str) and key.endswith(("_at", "timestamp")):
-                            try:
+                            with contextlib.suppress(Exception):
                                 record[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                            except:
-                                pass
                     records.append(record)
 
                 # Insert records
@@ -306,9 +306,7 @@ class MySQLAdapter(BaseAdapter):
             table = self._get_table(collection)
 
             # Build query
-            query = select(table).where(
-                and_(table.c.timestamp >= start, table.c.timestamp < end)
-            )
+            query = select(table).where(and_(table.c.timestamp >= start, table.c.timestamp < end))
 
             if symbol:
                 query = query.where(table.c.symbol == symbol)
@@ -429,4 +427,3 @@ class MySQLAdapter(BaseAdapter):
         if not self._connected:
             raise DatabaseError("Database is not connected")
         return self.engine
-

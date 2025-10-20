@@ -4,7 +4,6 @@ Data access endpoints for raw market data.
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -27,7 +26,7 @@ class CandleResponse(BaseModel):
 
     pair: str
     period: str
-    values: List[dict]
+    values: list[dict]
     metadata: dict
     parameters: dict
 
@@ -36,7 +35,7 @@ class TradeResponse(BaseModel):
     """Trade data response."""
 
     pair: str
-    values: List[dict]
+    values: list[dict]
     metadata: dict
     parameters: dict
 
@@ -54,7 +53,7 @@ class FundingResponse(BaseModel):
     """Funding rate data response."""
 
     pair: str
-    values: List[dict]
+    values: list[dict]
     metadata: dict
     parameters: dict
 
@@ -63,8 +62,8 @@ class FundingResponse(BaseModel):
 async def get_candles(
     pair: str = Query(..., description="Trading pair symbol"),
     period: str = Query(..., description="Candle period (e.g., '1m', '1h')"),
-    start: Optional[datetime] = Query(None, description="Start timestamp"),
-    end: Optional[datetime] = Query(None, description="End timestamp"),
+    start: datetime | None = Query(None, description="Start timestamp"),
+    end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of candles"),
 ) -> CandleResponse:
     """
@@ -97,9 +96,11 @@ async def get_candles(
         # Format response
         values = [
             {
-                "timestamp": c.get("timestamp").isoformat()
-                if isinstance(c.get("timestamp"), datetime)
-                else str(c.get("timestamp")),
+                "timestamp": (
+                    c.get("timestamp").isoformat()
+                    if isinstance(c.get("timestamp"), datetime)
+                    else str(c.get("timestamp"))
+                ),
                 "open": str(c.get("open")),
                 "high": str(c.get("high")),
                 "low": str(c.get("low")),
@@ -139,8 +140,8 @@ async def get_candles(
 @router.get("/trades")
 async def get_trades(
     pair: str = Query(..., description="Trading pair symbol"),
-    start: Optional[datetime] = Query(None, description="Start timestamp"),
-    end: Optional[datetime] = Query(None, description="End timestamp"),
+    start: datetime | None = Query(None, description="Start timestamp"),
+    end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of trades"),
 ) -> TradeResponse:
     """
@@ -168,9 +169,11 @@ async def get_trades(
 
         values = [
             {
-                "timestamp": t.get("timestamp").isoformat()
-                if isinstance(t.get("timestamp"), datetime)
-                else str(t.get("timestamp")),
+                "timestamp": (
+                    t.get("timestamp").isoformat()
+                    if isinstance(t.get("timestamp"), datetime)
+                    else str(t.get("timestamp"))
+                ),
                 "trade_id": t.get("trade_id"),
                 "price": str(t.get("price")),
                 "quantity": str(t.get("quantity")),
@@ -243,9 +246,11 @@ async def get_depth(
                 "last_update_id": depth.get("last_update_id", 0),
             },
             metadata={
-                "timestamp": depth.get("timestamp").isoformat()
-                if isinstance(depth.get("timestamp"), datetime)
-                else str(depth.get("timestamp")),
+                "timestamp": (
+                    depth.get("timestamp").isoformat()
+                    if isinstance(depth.get("timestamp"), datetime)
+                    else str(depth.get("timestamp"))
+                ),
                 "source": "mongodb",
                 "collection": f"depth_{pair}",
             },
@@ -260,8 +265,8 @@ async def get_depth(
 @router.get("/funding")
 async def get_funding(
     pair: str = Query(..., description="Trading pair symbol"),
-    start: Optional[datetime] = Query(None, description="Start timestamp"),
-    end: Optional[datetime] = Query(None, description="End timestamp"),
+    start: datetime | None = Query(None, description="Start timestamp"),
+    end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records"),
 ) -> FundingResponse:
     """
@@ -288,9 +293,11 @@ async def get_funding(
 
         values = [
             {
-                "timestamp": f.get("timestamp").isoformat()
-                if isinstance(f.get("timestamp"), datetime)
-                else str(f.get("timestamp")),
+                "timestamp": (
+                    f.get("timestamp").isoformat()
+                    if isinstance(f.get("timestamp"), datetime)
+                    else str(f.get("timestamp"))
+                ),
                 "funding_rate": str(f.get("funding_rate")),
                 "mark_price": str(f.get("mark_price")) if f.get("mark_price") else None,
             }
@@ -318,4 +325,3 @@ async def get_funding(
     except Exception as e:
         logger.error(f"Error fetching funding rates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-

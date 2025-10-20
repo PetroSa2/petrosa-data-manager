@@ -63,4 +63,3 @@ def test_trade_model():
     assert trade.symbol == "BTCUSDT"
     assert trade.trade_id == 12345
     assert trade.side == "buy"
-

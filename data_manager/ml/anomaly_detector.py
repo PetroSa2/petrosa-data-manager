@@ -48,17 +48,11 @@ class MLAnomalyDetector:
             )
 
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.audit_repo = AuditRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.audit_repo = AuditRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
         # Initialize Isolation Forest model
-        self.model = IsolationForest(
-            contamination=contamination, random_state=42, n_estimators=100
-        )
+        self.model = IsolationForest(contamination=contamination, random_state=42, n_estimators=100)
 
     async def detect_price_anomalies(
         self, symbol: str, timeframe: str, window_days: int = 7
@@ -146,18 +140,14 @@ class MLAnomalyDetector:
                 # Log to audit repository
                 await self._log_anomaly(symbol, timeframe, anomaly)
 
-            logger.info(
-                f"ML detected {len(anomalies)} anomalies for {symbol} {timeframe}"
-            )
+            logger.info(f"ML detected {len(anomalies)} anomalies for {symbol} {timeframe}")
             return anomalies
 
         except Exception as e:
             logger.error(f"Error in ML anomaly detection: {e}", exc_info=True)
             return []
 
-    async def _log_anomaly(
-        self, symbol: str, timeframe: str, anomaly: dict
-    ) -> None:
+    async def _log_anomaly(self, symbol: str, timeframe: str, anomaly: dict) -> None:
         """Log detected anomaly to audit logs."""
         try:
             dataset_id = f"candles_{symbol}_{timeframe}"
@@ -173,4 +163,3 @@ class MLAnomalyDetector:
             )
         except Exception as e:
             logger.error(f"Failed to log anomaly: {e}")
-

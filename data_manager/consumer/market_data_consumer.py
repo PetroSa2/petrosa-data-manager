@@ -5,7 +5,7 @@ Market data consumer for processing NATS messages.
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from prometheus_client import Counter, Histogram
 
@@ -44,18 +44,16 @@ class MarketDataConsumer:
 
     def __init__(
         self,
-        nats_client: Optional[NATSClient] = None,
-        message_handler: Optional[MessageHandler] = None,
-        db_manager: Optional[any] = None,
+        nats_client: NATSClient | None = None,
+        message_handler: MessageHandler | None = None,
+        db_manager: any | None = None,
     ) -> None:
         self.nats_client = nats_client or NATSClient()
         self.db_manager = db_manager
         self.message_handler = message_handler or MessageHandler(db_manager=db_manager)
         self.running = False
         self.subscription = None
-        self._message_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=constants.MESSAGE_QUEUE_SIZE
-        )
+        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=constants.MESSAGE_QUEUE_SIZE)
         self._processing_tasks: list = []
 
     async def start(self) -> bool:
@@ -203,4 +201,3 @@ class MarketDataConsumer:
             "queue_size": self._message_queue.qsize(),
             "workers": len(self._processing_tasks),
         }
-

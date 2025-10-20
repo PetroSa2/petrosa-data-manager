@@ -3,6 +3,7 @@ Main application entry point for Petrosa Data Manager.
 """
 
 import asyncio
+import contextlib
 import logging
 import signal
 import sys
@@ -82,7 +83,7 @@ class DataManagerApp:
             self.db_manager = None
 
         # Initialize and start NATS consumer
-        if constants.ENABLE_API or True:  # Always start consumer for now
+        if True:  # Always start consumer for now
             self.consumer = MarketDataConsumer(db_manager=self.db_manager)
             if await self.consumer.start():
                 logger.info("Market data consumer started successfully")
@@ -126,10 +127,8 @@ class DataManagerApp:
         # Stop API server
         if self.api_server_task:
             self.api_server_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.api_server_task
-            except asyncio.CancelledError:
-                pass
             logger.info("API server stopped")
 
         # Shutdown database connections
@@ -241,4 +240,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

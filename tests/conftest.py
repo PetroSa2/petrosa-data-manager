@@ -37,4 +37,3 @@ def sample_candle_data():
         "close": "50500.00",
         "volume": "1000.0",
     }
-

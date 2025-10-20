@@ -69,4 +69,3 @@ class HealthRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to get latest health: {e}")
             return None
-

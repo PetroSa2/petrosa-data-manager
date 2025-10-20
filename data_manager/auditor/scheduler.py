@@ -69,15 +69,11 @@ class AuditScheduler:
             for timeframe in constants.SUPPORTED_TIMEFRAMES:
                 try:
                     # Detect gaps
-                    gaps = await self.gap_detector.detect_gaps(
-                        symbol, timeframe, start, end
-                    )
+                    gaps = await self.gap_detector.detect_gaps(symbol, timeframe, start, end)
                     total_gaps += len(gaps)
 
                     if gaps:
-                        logger.warning(
-                            f"Found {len(gaps)} gaps for {symbol} {timeframe}"
-                        )
+                        logger.warning(f"Found {len(gaps)} gaps for {symbol} {timeframe}")
 
                     # Calculate health metrics
                     health = await self.health_scorer.calculate_health(
@@ -106,4 +102,3 @@ class AuditScheduler:
             f"gaps={total_gaps}, "
             f"duration={audit_duration:.1f}s"
         )
-

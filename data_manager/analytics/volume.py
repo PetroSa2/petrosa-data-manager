@@ -26,9 +26,7 @@ class VolumeCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_volume(
         self,
@@ -54,9 +52,7 @@ class VolumeCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 5:  # Need minimum data points
-                logger.warning(
-                    f"Insufficient data for volume calculation: {len(candles)} candles"
-                )
+                logger.warning(f"Insufficient data for volume calculation: {len(candles)} candles")
                 return None
 
             # Convert to DataFrame
@@ -121,4 +117,3 @@ class VolumeCalculator:
                 exc_info=True,
             )
             return None
-

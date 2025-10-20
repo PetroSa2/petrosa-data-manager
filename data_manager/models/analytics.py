@@ -4,7 +4,6 @@ Analytics and computed metrics models.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,9 +13,7 @@ class MetricMetadata(BaseModel):
 
     method: str = Field(..., description="Computation method used")
     window: str = Field(..., description="Time window for computation")
-    parameters: Dict[str, any] = Field(
-        default_factory=dict, description="Computation parameters"
-    )
+    parameters: dict[str, any] = Field(default_factory=dict, description="Computation parameters")
     completeness: float = Field(
         ..., ge=0.0, le=100.0, description="Data completeness for computation"
     )
@@ -33,9 +30,11 @@ class VolatilityMetrics(BaseModel):
     timeframe: str = Field(..., description="Data timeframe")
     rolling_stddev: Decimal = Field(..., description="Rolling standard deviation")
     annualized_volatility: Decimal = Field(..., description="Annualized volatility")
-    parkinson: Optional[Decimal] = Field(None, description="Parkinson volatility estimator")
-    garman_klass: Optional[Decimal] = Field(None, description="Garman-Klass volatility")
-    volatility_of_volatility: Optional[Decimal] = Field(None, description="Volatility of volatility")
+    parkinson: Decimal | None = Field(None, description="Parkinson volatility estimator")
+    garman_klass: Decimal | None = Field(None, description="Garman-Klass volatility")
+    volatility_of_volatility: Decimal | None = Field(
+        None, description="Volatility of volatility"
+    )
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -67,7 +66,7 @@ class SpreadMetrics(BaseModel):
     market_depth_bid: Decimal = Field(..., description="Market depth on bid side")
     market_depth_ask: Decimal = Field(..., description="Market depth on ask side")
     liquidity_ratio: Decimal = Field(..., description="Liquidity ratio (Amihud proxy)")
-    slippage_estimate: Optional[Decimal] = Field(None, description="Estimated slippage")
+    slippage_estimate: Decimal | None = Field(None, description="Estimated slippage")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -85,7 +84,7 @@ class DeviationMetrics(BaseModel):
     bollinger_upper: Decimal = Field(..., description="Bollinger upper band")
     bollinger_lower: Decimal = Field(..., description="Bollinger lower band")
     price_range_index: Decimal = Field(..., description="Price range index")
-    autocorrelation: Optional[Decimal] = Field(None, description="Serial autocorrelation")
+    autocorrelation: Decimal | None = Field(None, description="Serial autocorrelation")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -102,8 +101,8 @@ class TrendMetrics(BaseModel):
     wma: Decimal = Field(..., description="Weighted moving average")
     rate_of_change: Decimal = Field(..., description="Rate of change")
     directional_strength: Decimal = Field(..., description="Directional strength index")
-    crossover_signal: Optional[str] = Field(None, description="Crossover signal (bullish/bearish)")
-    rolling_beta: Optional[Decimal] = Field(None, description="Rolling beta to benchmark")
+    crossover_signal: str | None = Field(None, description="Crossover signal (bullish/bearish)")
+    rolling_beta: Decimal | None = Field(None, description="Rolling beta to benchmark")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -115,13 +114,11 @@ class SeasonalityMetrics(BaseModel):
 
     symbol: str = Field(..., description="Trading pair symbol")
     timeframe: str = Field(..., description="Data timeframe")
-    hourly_pattern: Dict[int, Decimal] = Field(
-        ..., description="Hourly recurring patterns (0-23)"
-    )
-    daily_pattern: Dict[int, Decimal] = Field(..., description="Daily patterns (0-6)")
+    hourly_pattern: dict[int, Decimal] = Field(..., description="Hourly recurring patterns (0-23)")
+    daily_pattern: dict[int, Decimal] = Field(..., description="Daily patterns (0-6)")
     seasonal_deviation: Decimal = Field(..., description="Deviation from seasonal mean")
     entropy_index: Decimal = Field(..., description="Entropy/randomness index")
-    dominant_cycle: Optional[int] = Field(None, description="Dominant cycle period in hours")
+    dominant_cycle: int | None = Field(None, description="Dominant cycle period in hours")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -133,16 +130,14 @@ class CorrelationMetrics(BaseModel):
 
     symbol: str = Field(..., description="Trading pair symbol")
     timeframe: str = Field(..., description="Data timeframe")
-    correlation_matrix: Dict[str, Decimal] = Field(
+    correlation_matrix: dict[str, Decimal] = Field(
         ..., description="Pairwise correlation with other symbols"
     )
     rolling_correlation: Decimal = Field(..., description="Rolling correlation to benchmark")
-    cross_correlation_lag: Optional[int] = Field(
+    cross_correlation_lag: int | None = Field(
         None, description="Cross-correlation lag in periods"
     )
-    volatility_correlation: Optional[Decimal] = Field(
-        None, description="Volatility correlation"
-    )
+    volatility_correlation: Decimal | None = Field(None, description="Volatility correlation")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -166,4 +161,3 @@ class MarketRegime(BaseModel):
 
     class Config:
         json_encoders = {Decimal: str, datetime: lambda v: v.isoformat()}
-

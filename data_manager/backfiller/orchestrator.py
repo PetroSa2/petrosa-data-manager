@@ -32,12 +32,8 @@ class BackfillOrchestrator:
         """
         self.db_manager = db_manager
         self.binance_client = BinanceClient()
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.funding_repo = FundingRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.funding_repo = FundingRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
         self.backfill_repo = BackfillRepository(
             db_manager.mysql_adapter, db_manager.mongodb_adapter
         )
@@ -99,9 +95,7 @@ class BackfillOrchestrator:
 
             # Execute backfill based on data type
             if data_type == "candles":
-                await self._backfill_candles(
-                    job_id, symbol, timeframe, start_time, end_time
-                )
+                await self._backfill_candles(job_id, symbol, timeframe, start_time, end_time)
             elif data_type == "funding":
                 await self._backfill_funding(job_id, symbol, start_time, end_time)
             else:
@@ -129,8 +123,7 @@ class BackfillOrchestrator:
     ) -> None:
         """Backfill candle data."""
         logger.info(
-            f"Backfilling candles for {symbol} {timeframe} "
-            f"from {start_time} to {end_time}"
+            f"Backfilling candles for {symbol} {timeframe} " f"from {start_time} to {end_time}"
         )
 
         # Create chunks (Binance API limit is 1000 per request)
@@ -195,9 +188,7 @@ class BackfillOrchestrator:
         end_time: datetime,
     ) -> None:
         """Backfill funding rate data."""
-        logger.info(
-            f"Backfilling funding rates for {symbol} from {start_time} to {end_time}"
-        )
+        logger.info(f"Backfilling funding rates for {symbol} from {start_time} to {end_time}")
 
         try:
             # Fetch from Binance
@@ -216,9 +207,11 @@ class BackfillOrchestrator:
                     symbol=symbol,
                     timestamp=datetime.fromtimestamp(rate_data["fundingTime"] / 1000.0),
                     funding_rate=Decimal(str(rate_data["fundingRate"])),
-                    mark_price=Decimal(str(rate_data.get("markPrice", "0")))
-                    if rate_data.get("markPrice")
-                    else None,
+                    mark_price=(
+                        Decimal(str(rate_data.get("markPrice", "0")))
+                        if rate_data.get("markPrice")
+                        else None
+                    ),
                 )
                 funding_rates.append(funding)
 
@@ -232,4 +225,3 @@ class BackfillOrchestrator:
 
         except Exception as e:
             logger.error(f"Error backfilling funding rates: {e}", exc_info=True)
-

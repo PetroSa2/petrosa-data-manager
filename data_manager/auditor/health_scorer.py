@@ -28,12 +28,8 @@ class HealthScorer:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.health_repo = HealthRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.health_repo = HealthRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_health(
         self,
@@ -63,9 +59,7 @@ class HealthScorer:
             expected_count = calculate_expected_records(start, end, timeframe)
 
             # Calculate completeness
-            completeness = (
-                (actual_count / expected_count * 100) if expected_count > 0 else 0.0
-            )
+            completeness = (actual_count / expected_count * 100) if expected_count > 0 else 0.0
 
             # Get freshness (seconds since last data point)
             latest_candles = await self.candle_repo.get_latest(symbol, timeframe, limit=1)
@@ -125,4 +119,3 @@ class HealthScorer:
                 consistency_score=0.0,
                 quality_score=0.0,
             )
-

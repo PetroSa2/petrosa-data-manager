@@ -5,7 +5,6 @@ Correlation and cross-market metrics calculator.
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -29,16 +28,14 @@ class CorrelationCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_correlation(
         self,
-        symbols: List[str],
+        symbols: list[str],
         timeframe: str,
         window_days: int = 30,
-    ) -> Dict[str, CorrelationMetrics]:
+    ) -> dict[str, CorrelationMetrics]:
         """
         Calculate correlation metrics for multiple symbols.
 
@@ -77,14 +74,9 @@ class CorrelationCalculator:
                     lambda x: float(x) if isinstance(x, Decimal) else float(str(x))
                 )
                 df["timestamp"] = pd.to_datetime(df["timestamp"])
-                df_pivot = df.set_index("timestamp")[["close"]].rename(
-                    columns={"close": symbol}
-                )
+                df_pivot = df.set_index("timestamp")[["close"]].rename(columns={"close": symbol})
 
-                if merged is None:
-                    merged = df_pivot
-                else:
-                    merged = merged.join(df_pivot, how="inner")
+                merged = df_pivot if merged is None else merged.join(df_pivot, how="inner")
 
             if merged is None or len(merged) < 20:
                 logger.warning("Insufficient aligned data for correlation")
@@ -114,9 +106,7 @@ class CorrelationCalculator:
                 # Rolling correlation to benchmark
                 rolling_correlation = Decimal("0")
                 if symbol != benchmark and benchmark in merged.columns:
-                    rolling_corr_series = (
-                        merged[symbol].rolling(window=30).corr(merged[benchmark])
-                    )
+                    rolling_corr_series = merged[symbol].rolling(window=30).corr(merged[benchmark])
                     if not rolling_corr_series.empty:
                         rolling_correlation = Decimal(str(rolling_corr_series.iloc[-1]))
 
@@ -199,4 +189,3 @@ class CorrelationCalculator:
         except Exception as e:
             logger.error(f"Error calculating correlation: {e}", exc_info=True)
             return {}
-

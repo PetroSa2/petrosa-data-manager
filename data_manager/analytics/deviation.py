@@ -27,9 +27,7 @@ class DeviationCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_deviation(
         self,
@@ -55,7 +53,9 @@ class DeviationCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 20:
-                logger.warning(f"Insufficient data for deviation calculation: {len(candles)} candles")
+                logger.warning(
+                    f"Insufficient data for deviation calculation: {len(candles)} candles"
+                )
                 return None
 
             # Convert to DataFrame
@@ -78,7 +78,11 @@ class DeviationCalculator:
 
             # Z-Score (standardized deviation)
             current_price = df["close"].iloc[-1]
-            z_score = (current_price - bollinger_middle) / standard_deviation if standard_deviation > 0 else 0
+            z_score = (
+                (current_price - bollinger_middle) / standard_deviation
+                if standard_deviation > 0
+                else 0
+            )
 
             # Price Range Index
             rolling_max = df["close"].rolling(window=rolling_window).max()
@@ -94,11 +98,11 @@ class DeviationCalculator:
             autocorrelation = df["close"].autocorr(lag=1)
 
             # Coefficient of Variation
-            cv = (standard_deviation / bollinger_middle) if bollinger_middle > 0 else 0
+            (standard_deviation / bollinger_middle) if bollinger_middle > 0 else 0
 
             # Skewness and Kurtosis
-            skewness = df["close"].rolling(window=rolling_window).skew().iloc[-1]
-            kurtosis = df["close"].rolling(window=rolling_window).kurt().iloc[-1]
+            df["close"].rolling(window=rolling_window).skew().iloc[-1]
+            df["close"].rolling(window=rolling_window).kurt().iloc[-1]
 
             # Create metadata
             metadata = MetricMetadata(
@@ -116,23 +120,27 @@ class DeviationCalculator:
             metrics = DeviationMetrics(
                 symbol=symbol,
                 timeframe=timeframe,
-                standard_deviation=Decimal(str(standard_deviation))
-                if not np.isnan(standard_deviation)
-                else Decimal("0"),
+                standard_deviation=(
+                    Decimal(str(standard_deviation))
+                    if not np.isnan(standard_deviation)
+                    else Decimal("0")
+                ),
                 variance=Decimal(str(variance)) if not np.isnan(variance) else Decimal("0"),
                 z_score=Decimal(str(z_score)) if not np.isnan(z_score) else Decimal("0"),
-                bollinger_upper=Decimal(str(bollinger_upper))
-                if not np.isnan(bollinger_upper)
-                else Decimal("0"),
-                bollinger_lower=Decimal(str(bollinger_lower))
-                if not np.isnan(bollinger_lower)
-                else Decimal("0"),
-                price_range_index=Decimal(str(price_range_index))
-                if not np.isnan(price_range_index)
-                else Decimal("0"),
-                autocorrelation=Decimal(str(autocorrelation))
-                if not np.isnan(autocorrelation)
-                else None,
+                bollinger_upper=(
+                    Decimal(str(bollinger_upper)) if not np.isnan(bollinger_upper) else Decimal("0")
+                ),
+                bollinger_lower=(
+                    Decimal(str(bollinger_lower)) if not np.isnan(bollinger_lower) else Decimal("0")
+                ),
+                price_range_index=(
+                    Decimal(str(price_range_index))
+                    if not np.isnan(price_range_index)
+                    else Decimal("0")
+                ),
+                autocorrelation=(
+                    Decimal(str(autocorrelation)) if not np.isnan(autocorrelation) else None
+                ),
                 metadata=metadata,
             )
 
@@ -153,4 +161,3 @@ class DeviationCalculator:
                 exc_info=True,
             )
             return None
-

@@ -23,6 +23,7 @@ class BackfillRepository(BaseRepository):
             True if successful
         """
         try:
+
             class Job:
                 def model_dump(self):
                     return job
@@ -74,4 +75,3 @@ class BackfillRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to update job status: {e}")
             return False
-
