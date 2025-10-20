@@ -33,9 +33,7 @@ class VolatilityMetrics(BaseModel):
     annualized_volatility: Decimal = Field(..., description="Annualized volatility")
     parkinson: Decimal | None = Field(None, description="Parkinson volatility estimator")
     garman_klass: Decimal | None = Field(None, description="Garman-Klass volatility")
-    volatility_of_volatility: Decimal | None = Field(
-        None, description="Volatility of volatility"
-    )
+    volatility_of_volatility: Decimal | None = Field(None, description="Volatility of volatility")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
     class Config:
@@ -135,9 +133,7 @@ class CorrelationMetrics(BaseModel):
         ..., description="Pairwise correlation with other symbols"
     )
     rolling_correlation: Decimal = Field(..., description="Rolling correlation to benchmark")
-    cross_correlation_lag: int | None = Field(
-        None, description="Cross-correlation lag in periods"
-    )
+    cross_correlation_lag: int | None = Field(None, description="Cross-correlation lag in periods")
     volatility_correlation: Decimal | None = Field(None, description="Volatility correlation")
     metadata: MetricMetadata = Field(..., description="Computation metadata")
 
