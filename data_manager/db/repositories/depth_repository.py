@@ -30,9 +30,7 @@ class DepthRepository(BaseRepository):
         except Exception as e:
             # Only log as error if it's not a duplicate key issue
             if "duplicate key error" in str(e).lower():
-                logger.debug(
-                    f"Skipped duplicate depth for {depth.symbol}"
-                )
+                logger.debug(f"Skipped duplicate depth for {depth.symbol}")
                 return False
             logger.error(f"Failed to insert depth for {depth.symbol}: {e}")
             return False

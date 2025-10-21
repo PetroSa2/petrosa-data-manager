@@ -103,8 +103,8 @@ class MongoDBAdapter(BaseAdapter):
             except DuplicateKeyError as e:
                 # Extract actual inserted count from error details
                 inserted_count = 0
-                if hasattr(e, 'details') and e.details:
-                    inserted_count = e.details.get('nInserted', 0)
+                if hasattr(e, "details") and e.details:
+                    inserted_count = e.details.get("nInserted", 0)
                     # Log summary only, not full error
                     logger.debug(
                         f"Skipped {len(documents) - inserted_count} "
@@ -116,13 +116,9 @@ class MongoDBAdapter(BaseAdapter):
         except PyMongoError as e:
             # Check if this is a duplicate key error wrapped in another exception
             if "duplicate key error" in str(e).lower():
-                logger.debug(
-                    f"Duplicate key error in {collection}, skipping duplicates"
-                )
+                logger.debug(f"Duplicate key error in {collection}, skipping duplicates")
                 return 0
-            raise DatabaseError(
-                f"Failed to write to MongoDB {collection}: {e}"
-            ) from e
+            raise DatabaseError(f"Failed to write to MongoDB {collection}: {e}") from e
 
     def write_batch(
         self, model_instances: list[BaseModel], collection: str, batch_size: int = 1000
