@@ -45,9 +45,7 @@ class MessageHandler:
         # - Trades, candles, depth, tickers, funding → binance-data-extractor handles this
         # - Data-manager only tracks metrics and persists analytics/audit results
         # - Repositories are not needed for message handling
-        logger.info(
-            "Message handler initialized (tracking mode only - no raw data persistence)"
-        )
+        logger.info("Message handler initialized (tracking mode only - no raw data persistence)")
 
         # Register handlers for each event type
         self._handlers = {
@@ -105,7 +103,7 @@ class MessageHandler:
     async def _handle_trade(self, event: MarketDataEvent) -> None:
         """
         Handle trade event.
-        
+
         NOTE: We do NOT persist individual trades - that's the binance-data-extractor's job.
         Data-manager only monitors data quality and computes analytics.
         """
@@ -123,7 +121,7 @@ class MessageHandler:
     async def _handle_ticker(self, event: MarketDataEvent) -> None:
         """
         Handle ticker event.
-        
+
         NOTE: Tickers are 24h summary stats - we track but don't persist them.
         """
         self._stats["tickers"] += 1
@@ -140,7 +138,7 @@ class MessageHandler:
     async def _handle_depth(self, event: MarketDataEvent) -> None:
         """
         Handle order book depth event.
-        
+
         NOTE: Depth data is TOO EXPENSIVE to persist. We only use it for:
         - Real-time spread calculations
         - Liquidity monitoring
@@ -172,7 +170,7 @@ class MessageHandler:
     async def _handle_funding_rate(self, event: MarketDataEvent) -> None:
         """
         Handle funding rate event.
-        
+
         NOTE: Funding rates change infrequently (every 8h). These are already
         persisted by binance-data-extractor. We just track them here.
         """
@@ -189,7 +187,7 @@ class MessageHandler:
     async def _handle_candle(self, event: MarketDataEvent) -> None:
         """
         Handle candle/kline event.
-        
+
         NOTE: Candles are already persisted by binance-data-extractor.
         Data-manager reads FROM extractor's database for analytics, not stores its own copy.
         """

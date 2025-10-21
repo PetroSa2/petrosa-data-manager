@@ -42,12 +42,15 @@ class MarketDataEvent(BaseModel):
         Returns None if message is invalid (missing symbol).
         """
         import logging
+
         logger = logging.getLogger(__name__)
-        
+
         # Handle socket-client message format: {"stream": "...", "data": {...}}
         # The actual Binance data is nested inside the "data" field
-        actual_data = msg_data.get("data", msg_data)  # Use nested data if present, otherwise use top-level
-        
+        actual_data = msg_data.get(
+            "data", msg_data
+        )  # Use nested data if present, otherwise use top-level
+
         # Determine event type from message
         event_type = EventType.UNKNOWN
         if "e" in actual_data:
@@ -82,14 +85,14 @@ class MarketDataEvent(BaseModel):
         # 2. From top level (legacy format)
         # 3. From stream name (depth, markPrice, fundingRate messages)
         symbol = actual_data.get("s", actual_data.get("symbol", msg_data.get("symbol")))
-        
+
         # If no symbol in data, extract from stream name (e.g., "btcusdt@depth20@100ms" -> "BTCUSDT")
         if not symbol and "stream" in msg_data:
             stream = msg_data.get("stream", "")
             if "@" in stream:
                 symbol_part = stream.split("@")[0]  # Get "btcusdt" from "btcusdt@depth20@100ms"
                 symbol = symbol_part.upper()  # Convert to "BTCUSDT"
-        
+
         if not symbol or symbol == "UNKNOWN" or not isinstance(symbol, str):
             # This shouldn't happen now - log if it does
             logger.debug(

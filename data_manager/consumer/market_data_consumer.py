@@ -225,19 +225,21 @@ class MarketDataConsumer:
     async def _report_stats(self) -> None:
         """Periodically report processing statistics at INFO level."""
         stats_interval = 60  # Report every 60 seconds
-        
+
         while self.running:
             try:
                 await asyncio.sleep(stats_interval)
-                
+
                 # Calculate messages per second
                 current_time = asyncio.get_event_loop().time()
                 time_elapsed = current_time - self._last_stats_time
-                messages_per_sec = self._messages_processed / time_elapsed if time_elapsed > 0 else 0
-                
+                messages_per_sec = (
+                    self._messages_processed / time_elapsed if time_elapsed > 0 else 0
+                )
+
                 # Get handler stats
                 handler_stats = self.message_handler.get_stats()
-                
+
                 # Log summary
                 logger.info(
                     f"Message processing stats: "
@@ -249,11 +251,11 @@ class MarketDataConsumer:
                     f"candles={handler_stats.get('candles', 0)}, "
                     f"queue_size={self._message_queue.qsize()}"
                 )
-                
+
                 # Reset counters for next interval
                 self._messages_processed = 0
                 self._last_stats_time = current_time
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
