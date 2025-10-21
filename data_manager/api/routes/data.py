@@ -64,12 +64,15 @@ async def get_candles(
     period: str = Query(..., description="Candle period (e.g., '1m', '1h')"),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of candles"),
-) -> CandleResponse:
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of candles (default: 100, max: 1000)"),
+    offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
+    sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
+) -> dict:
     """
-    Get OHLCV candle data for a trading pair.
+    Get OHLCV candle data for a trading pair with pagination and sorting.
 
     Returns time series of candles with specified timeframe.
+    Supports pagination via offset/limit and sorting by timestamp.
     """
     if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -89,9 +92,15 @@ async def get_candles(
 
         # Query MongoDB
         candles = await candle_repo.get_range(pair, period, start, end)
-
-        # Limit results
-        candles = candles[:limit]
+        
+        # Apply sorting
+        if sort_order.lower() == "desc":
+            candles = list(reversed(candles))
+        
+        total_count = len(candles)
+        
+        # Apply pagination
+        paginated_candles = candles[offset:offset + limit]
 
         # Format response
         values = [
@@ -109,28 +118,40 @@ async def get_candles(
                 "quote_volume": str(c.get("quote_volume")) if c.get("quote_volume") else None,
                 "trades_count": c.get("trades_count"),
             }
-            for c in candles
+            for c in paginated_candles
         ]
 
-        return CandleResponse(
-            pair=pair,
-            period=period,
-            values=values,
-            metadata={
+        return {
+            "pair": pair,
+            "period": period,
+            "data": values,
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+                "page": (offset // limit) + 1 if limit > 0 else 1,
+                "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
+                "has_next": offset + limit < total_count,
+                "has_previous": offset > 0,
+            },
+            "sort": {
+                "by": "timestamp",
+                "order": sort_order,
+            },
+            "metadata": {
                 "data_completeness": 100.0,
                 "last_updated": datetime.utcnow().isoformat(),
                 "source": "mongodb",
                 "collection": f"candles_{pair}_{period}",
                 "records_returned": len(values),
             },
-            parameters={
+            "parameters": {
                 "pair": pair,
                 "period": period,
                 "start": start.isoformat() if start else None,
                 "end": end.isoformat() if end else None,
-                "limit": limit,
             },
-        )
+        }
 
     except Exception as e:
         logger.error(f"Error fetching candles: {e}", exc_info=True)
@@ -142,12 +163,15 @@ async def get_trades(
     pair: str = Query(..., description="Trading pair symbol"),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of trades"),
-) -> TradeResponse:
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of trades (default: 100, max: 1000)"),
+    offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
+    sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
+) -> dict:
     """
-    Get individual trade data for a trading pair.
+    Get individual trade data for a trading pair with pagination and sorting.
 
     Returns detailed trade execution history.
+    Supports pagination via offset/limit and sorting by timestamp.
     """
     if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -165,7 +189,15 @@ async def get_trades(
             start = end - timedelta(hours=1)
 
         trades = await trade_repo.get_range(pair, start, end)
-        trades = trades[:limit]
+        
+        # Apply sorting
+        if sort_order.lower() == "desc":
+            trades = list(reversed(trades))
+        
+        total_count = len(trades)
+        
+        # Apply pagination
+        paginated_trades = trades[offset:offset + limit]
 
         values = [
             {
@@ -179,26 +211,38 @@ async def get_trades(
                 "quantity": str(t.get("quantity")),
                 "side": t.get("side"),
             }
-            for t in trades
+            for t in paginated_trades
         ]
 
-        return TradeResponse(
-            pair=pair,
-            values=values,
-            metadata={
+        return {
+            "pair": pair,
+            "data": values,
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+                "page": (offset // limit) + 1 if limit > 0 else 1,
+                "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
+                "has_next": offset + limit < total_count,
+                "has_previous": offset > 0,
+            },
+            "sort": {
+                "by": "timestamp",
+                "order": sort_order,
+            },
+            "metadata": {
                 "data_completeness": 100.0,
                 "last_updated": datetime.utcnow().isoformat(),
                 "source": "mongodb",
                 "collection": f"trades_{pair}",
                 "records_returned": len(values),
             },
-            parameters={
+            "parameters": {
                 "pair": pair,
                 "start": start.isoformat() if start else None,
                 "end": end.isoformat() if end else None,
-                "limit": limit,
             },
-        )
+        }
 
     except Exception as e:
         logger.error(f"Error fetching trades: {e}", exc_info=True)
@@ -267,12 +311,15 @@ async def get_funding(
     pair: str = Query(..., description="Trading pair symbol"),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records"),
-) -> FundingResponse:
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records (default: 100, max: 1000)"),
+    offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
+    sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
+) -> dict:
     """
-    Get funding rate data for a futures trading pair.
+    Get funding rate data for a futures trading pair with pagination and sorting.
 
     Returns historical funding rates.
+    Supports pagination via offset/limit and sorting by timestamp.
     """
     if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -289,7 +336,15 @@ async def get_funding(
             start = end - timedelta(days=7)
 
         funding_rates = await funding_repo.get_range(pair, start, end)
-        funding_rates = funding_rates[:limit]
+        
+        # Apply sorting
+        if sort_order.lower() == "desc":
+            funding_rates = list(reversed(funding_rates))
+        
+        total_count = len(funding_rates)
+        
+        # Apply pagination
+        paginated_funding_rates = funding_rates[offset:offset + limit]
 
         values = [
             {
@@ -301,26 +356,38 @@ async def get_funding(
                 "funding_rate": str(f.get("funding_rate")),
                 "mark_price": str(f.get("mark_price")) if f.get("mark_price") else None,
             }
-            for f in funding_rates
+            for f in paginated_funding_rates
         ]
 
-        return FundingResponse(
-            pair=pair,
-            values=values,
-            metadata={
+        return {
+            "pair": pair,
+            "data": values,
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+                "page": (offset // limit) + 1 if limit > 0 else 1,
+                "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
+                "has_next": offset + limit < total_count,
+                "has_previous": offset > 0,
+            },
+            "sort": {
+                "by": "timestamp",
+                "order": sort_order,
+            },
+            "metadata": {
                 "data_completeness": 100.0,
                 "last_updated": datetime.utcnow().isoformat(),
                 "source": "mongodb",
                 "collection": f"funding_rates_{pair}",
                 "records_returned": len(values),
             },
-            parameters={
+            "parameters": {
                 "pair": pair,
                 "start": start.isoformat() if start else None,
                 "end": end.isoformat() if end else None,
-                "limit": limit,
             },
-        )
+        }
 
     except Exception as e:
         logger.error(f"Error fetching funding rates: {e}", exc_info=True)

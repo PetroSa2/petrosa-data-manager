@@ -105,18 +105,64 @@ async def start_backfill(
 @router.get("/jobs")
 async def list_backfill_jobs(
     status: str | None = Query(None, description="Filter by status"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of jobs"),
-) -> BackfillJobListResponse:
+    symbol: str | None = Query(None, description="Filter by trading symbol"),
+    data_type: str | None = Query(None, description="Filter by data type (candles, trades, depth, funding)"),
+    from_time: datetime | None = Query(None, alias="from", description="Start time for filtering"),
+    to_time: datetime | None = Query(None, alias="to", description="End time for filtering"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of jobs (default: 100, max: 1000)"),
+    offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
+    sort_by: str = Query("created_at", description="Sort by field (created_at, started_at, priority)"),
+    sort_order: str = Query("desc", description="Sort order (asc, desc)"),
+) -> dict:
     """
-    List backfill jobs.
+    List backfill jobs with filtering and pagination.
 
-    Returns list of backfill jobs with optional status filter.
+    Returns list of backfill jobs with comprehensive filtering options
+    including status, symbol, data type, and time range. Results are paginated and sortable.
     """
     # TODO: Implement actual job listing from database
-    return BackfillJobListResponse(
-        jobs=[],
-        total_count=0,
-    )
+    # This is a placeholder structure showing the expected response format
+    jobs = []
+    
+    # Apply filters (when database implementation is added)
+    # if status:
+    #     jobs = filter by status
+    # if symbol:
+    #     jobs = filter by symbol
+    # if data_type:
+    #     jobs = filter by data_type
+    # if from_time/to_time:
+    #     jobs = filter by time range
+    
+    total_count = len(jobs)
+    
+    # Apply sorting (when database implementation is added)
+    # Apply pagination
+    paginated_jobs = jobs[offset:offset + limit]
+    
+    return {
+        "data": paginated_jobs,
+        "pagination": {
+            "total": total_count,
+            "limit": limit,
+            "offset": offset,
+            "page": (offset // limit) + 1 if limit > 0 else 1,
+            "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
+            "has_next": offset + limit < total_count,
+            "has_previous": offset > 0,
+        },
+        "filters_applied": {
+            "status": status,
+            "symbol": symbol,
+            "data_type": data_type,
+            "from": from_time.isoformat() if from_time else None,
+            "to": to_time.isoformat() if to_time else None,
+        },
+        "sort": {
+            "by": sort_by,
+            "order": sort_order,
+        },
+    }
 
 
 @router.get("/jobs/{job_id}")

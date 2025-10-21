@@ -478,20 +478,30 @@ async def get_regime(
 @router.get("/market-overview")
 async def market_overview(
     pairs: str = Query("BTCUSDT,ETHUSDT", description="Comma-separated list of trading pairs"),
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of pairs to return (default: 10, max: 100)"),
+    offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
+    sort_by: str = Query("symbol", description="Sort by field (symbol, volatility, volume, trend)"),
+    sort_order: str = Query("asc", description="Sort order (asc, desc)"),
 ) -> dict:
     """
-    Get comprehensive market overview for multiple pairs.
+    Get comprehensive market overview for multiple pairs with pagination.
 
     Returns volatility, volume, trend, and regime for each pair.
+    Supports pagination and sorting for efficient data retrieval.
     """
     if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
         pair_list = [p.strip() for p in pairs.split(",")]
+        
+        # Apply pagination to pair list
+        total_pairs = len(pair_list)
+        paginated_pair_list = pair_list[offset:offset + limit]
+        
         overview = {}
 
-        for pair in pair_list:
+        for pair in paginated_pair_list:
             try:
                 # Get latest metrics for each type
                 vol_data = await api_module.db_manager.mongodb_adapter.query_latest(
@@ -542,10 +552,47 @@ async def market_overview(
                 logger.warning(f"Error getting overview for {pair}: {e}")
                 overview[pair] = None
 
+        # Apply sorting if requested
+        if sort_by != "symbol":
+            try:
+                # Convert overview dict to list of tuples for sorting
+                overview_list = list(overview.items())
+                if sort_by == "volatility":
+                    overview_list.sort(
+                        key=lambda x: float(x[1]["volatility"]["annualized"]) if x[1] else 0,
+                        reverse=(sort_order == "desc")
+                    )
+                elif sort_by == "volume":
+                    overview_list.sort(
+                        key=lambda x: float(x[1]["volume"]["spike_ratio"]) if x[1] else 0,
+                        reverse=(sort_order == "desc")
+                    )
+                elif sort_by == "trend":
+                    overview_list.sort(
+                        key=lambda x: float(x[1]["trend"]["roc"]) if x[1] else 0,
+                        reverse=(sort_order == "desc")
+                    )
+                overview = dict(overview_list)
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"Could not sort by {sort_by}: {e}")
+
         return {
             "overview": overview,
+            "pagination": {
+                "total": total_pairs,
+                "limit": limit,
+                "offset": offset,
+                "page": (offset // limit) + 1,
+                "pages": (total_pairs + limit - 1) // limit if limit > 0 else 0,
+                "has_next": offset + limit < total_pairs,
+                "has_previous": offset > 0,
+            },
+            "sort": {
+                "by": sort_by,
+                "order": sort_order,
+            },
             "timestamp": datetime.utcnow().isoformat(),
-            "pairs_requested": len(pair_list),
+            "pairs_requested": len(paginated_pair_list),
             "pairs_available": len([v for v in overview.values() if v is not None]),
         }
 
