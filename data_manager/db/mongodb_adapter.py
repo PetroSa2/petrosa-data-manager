@@ -102,22 +102,25 @@ class MongoDBAdapter(BaseAdapter):
                 return len(result.inserted_ids)
             except DuplicateKeyError as e:
                 # Extract actual inserted count from error details
+                # This is expected behavior - duplicates are normal during backfill/replay
                 inserted_count = 0
                 if hasattr(e, "details") and e.details:
                     inserted_count = e.details.get("nInserted", 0)
-                    # Log summary only, not full error
+                # Only log if we actually inserted something, otherwise it's just duplicates
+                if inserted_count > 0:
                     logger.debug(
-                        f"Skipped {len(documents) - inserted_count} "
-                        f"duplicate records in {collection}, "
-                        f"inserted {inserted_count} new records"
+                        f"Inserted {inserted_count}/{len(documents)} records to {collection} "
+                        f"(skipped {len(documents) - inserted_count} duplicates)"
                     )
                 return inserted_count if inserted_count > 0 else 0
 
         except PyMongoError as e:
             # Check if this is a duplicate key error wrapped in another exception
             if "duplicate key error" in str(e).lower():
-                logger.debug(f"Duplicate key error in {collection}, skipping duplicates")
+                # Duplicates are expected - no need to log
                 return 0
+            # Only raise for actual errors, not duplicates
+            logger.warning(f"MongoDB write error for {collection}: {e}")
             raise DatabaseError(f"Failed to write to MongoDB {collection}: {e}") from e
 
     def write_batch(

@@ -157,7 +157,7 @@ class MessageHandler:
                 await self.trade_repo.insert(trade)
                 logger.debug(f"Stored trade for {event.symbol}")
             except Exception as e:
-                logger.error(f"Failed to store trade: {e}")
+                logger.debug(f"Failed to store trade: {e}")  # Database may not be ready
 
     async def _handle_ticker(self, event: MarketDataEvent) -> None:
         """Handle ticker event."""
@@ -190,7 +190,7 @@ class MessageHandler:
                 await self.ticker_repo.insert(ticker)
                 logger.debug(f"Stored ticker for {event.symbol}")
             except Exception as e:
-                logger.error(f"Failed to store ticker: {e}")
+                logger.debug(f"Failed to store ticker: {e}")  # Database may not be ready
 
     async def _handle_depth(self, event: MarketDataEvent) -> None:
         """Handle order book depth event."""
@@ -226,7 +226,7 @@ class MessageHandler:
                 await self.depth_repo.insert(depth)
                 logger.debug(f"Stored depth for {event.symbol}")
             except Exception as e:
-                logger.error(f"Failed to store depth: {e}")
+                logger.debug(f"Failed to store depth: {e}")  # Database may not be ready
 
     async def _handle_mark_price(self, event: MarketDataEvent) -> None:
         """Handle mark price event."""
@@ -265,7 +265,7 @@ class MessageHandler:
                 await self.funding_repo.insert(funding)
                 logger.debug(f"Stored funding rate for {event.symbol}")
             except Exception as e:
-                logger.error(f"Failed to store funding rate: {e}")
+                logger.debug(f"Failed to store funding rate: {e}")  # Database may not be ready
 
     async def _handle_candle(self, event: MarketDataEvent) -> None:
         """Handle candle/kline event."""
@@ -299,7 +299,7 @@ class MessageHandler:
                 await self.candle_repo.insert(candle)
                 logger.debug(f"Stored candle for {event.symbol}")
             except Exception as e:
-                logger.error(f"Failed to store candle: {e}")
+                logger.debug(f"Failed to store candle: {e}")  # Database may not be ready
 
     async def _handle_unknown(self, event: MarketDataEvent) -> None:
         """Handle unknown event type."""
