@@ -46,7 +46,7 @@ class MarketDataConsumer:
         self,
         nats_client: NATSClient | None = None,
         message_handler: MessageHandler | None = None,
-        db_manager: any | None = None,
+        db_manager: Any | None = None,
     ) -> None:
         self.nats_client = nats_client or NATSClient()
         self.db_manager = db_manager
