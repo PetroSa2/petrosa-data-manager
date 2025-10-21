@@ -86,7 +86,8 @@ class MarketDataEvent(BaseModel):
         # 3. From stream name (depth, markPrice, fundingRate messages)
         symbol = actual_data.get("s", actual_data.get("symbol", msg_data.get("symbol")))
 
-        # If no symbol in data, extract from stream name (e.g., "btcusdt@depth20@100ms" -> "BTCUSDT")
+        # If no symbol in data, extract from stream name
+        # e.g., "btcusdt@depth20@100ms" -> "BTCUSDT"
         if not symbol and "stream" in msg_data:
             stream = msg_data.get("stream", "")
             if "@" in stream:
