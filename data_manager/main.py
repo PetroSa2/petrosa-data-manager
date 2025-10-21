@@ -223,6 +223,10 @@ async def main():
     if constants.OTEL_ENABLED:
         otel_init.init_telemetry()
 
+        # Attach logging handler for OTLP log export
+        if constants.OTEL_EXPORTER_OTLP_ENDPOINT:
+            otel_init.attach_logging_handler_simple()
+
     app = DataManagerApp()
 
     # Register signal handlers
