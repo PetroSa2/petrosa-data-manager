@@ -28,6 +28,12 @@ class DepthRepository(BaseRepository):
             count = await self.mongodb.write([depth], collection)
             return count > 0
         except Exception as e:
+            # Only log as error if it's not a duplicate key issue
+            if "duplicate key error" in str(e).lower():
+                logger.debug(
+                    f"Skipped duplicate depth for {depth.symbol}"
+                )
+                return False
             logger.error(f"Failed to insert depth for {depth.symbol}: {e}")
             return False
 
@@ -63,6 +69,10 @@ class DepthRepository(BaseRepository):
             return total_inserted
 
         except Exception as e:
+            # Only log as error if it's not a duplicate key issue
+            if "duplicate key error" in str(e).lower():
+                logger.debug("Skipped some duplicate depths in batch")
+                return total_inserted  # Return what was inserted
             logger.error(f"Failed to insert depth batch: {e}")
             return 0
 
