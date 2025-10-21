@@ -3,7 +3,14 @@ target-version = "py311"
 
 [lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
-ignore = ["E501"]
+ignore = [
+    "E501",  # Line too long (handled by black)
+    "B008",  # Do not perform function calls in argument defaults (FastAPI pattern)
+    "B904",  # Within except clause, raise from (not critical for HTTP exceptions)
+    "SIM105",  # Use contextlib.suppress (try-except-pass is clearer in some cases)
+    "SIM108",  # Use ternary operator (if-else is clearer in some cases)
+    "SIM222",  # Use True instead of ... or True (intentional pattern)
+]
 
 [lint.per-file-ignores]
 "__init__.py" = ["F401"]
