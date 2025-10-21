@@ -55,6 +55,9 @@ class MarketDataConsumer:
         self.subscription = None
         self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=constants.MESSAGE_QUEUE_SIZE)
         self._processing_tasks: list = []
+        self._stats_task: asyncio.Task | None = None
+        self._messages_processed = 0
+        self._last_stats_time = asyncio.get_event_loop().time()
 
     async def start(self) -> bool:
         """Start the consumer."""
@@ -86,6 +89,9 @@ class MarketDataConsumer:
                 task = asyncio.create_task(self._process_messages_worker(i))
                 self._processing_tasks.append(task)
 
+            # Start stats reporting task
+            self._stats_task = asyncio.create_task(self._report_stats())
+
             logger.info(
                 "Market data consumer started successfully",
                 extra={
@@ -103,6 +109,14 @@ class MarketDataConsumer:
         """Stop the consumer."""
         logger.info("Stopping market data consumer")
         self.running = False
+
+        # Stop stats reporting
+        if self._stats_task:
+            self._stats_task.cancel()
+            try:
+                await self._stats_task
+            except asyncio.CancelledError:
+                pass
 
         # Wait for processing tasks to complete
         if self._processing_tasks:
@@ -198,6 +212,7 @@ class MarketDataConsumer:
             processing_time = asyncio.get_event_loop().time() - start_time
             message_processing_time.labels(event_type=event_type).observe(processing_time)
             messages_processed.labels(event_type=event_type).inc()
+            self._messages_processed += 1
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON message: {e}")
@@ -206,6 +221,43 @@ class MarketDataConsumer:
         except Exception as e:
             logger.error(f"Failed to process message: {e}", exc_info=True)
             messages_failed.labels(event_type=event_type, error_type="processing").inc()
+
+    async def _report_stats(self) -> None:
+        """Periodically report processing statistics at INFO level."""
+        stats_interval = 60  # Report every 60 seconds
+        
+        while self.running:
+            try:
+                await asyncio.sleep(stats_interval)
+                
+                # Calculate messages per second
+                current_time = asyncio.get_event_loop().time()
+                time_elapsed = current_time - self._last_stats_time
+                messages_per_sec = self._messages_processed / time_elapsed if time_elapsed > 0 else 0
+                
+                # Get handler stats
+                handler_stats = self.message_handler.get_stats()
+                
+                # Log summary
+                logger.info(
+                    f"Message processing stats: "
+                    f"total={self._messages_processed}, "
+                    f"rate={messages_per_sec:.1f} msg/s, "
+                    f"trades={handler_stats.get('trades', 0)}, "
+                    f"depth={handler_stats.get('depth', 0)}, "
+                    f"tickers={handler_stats.get('tickers', 0)}, "
+                    f"candles={handler_stats.get('candles', 0)}, "
+                    f"queue_size={self._message_queue.qsize()}"
+                )
+                
+                # Reset counters for next interval
+                self._messages_processed = 0
+                self._last_stats_time = current_time
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Error reporting stats: {e}")
 
     async def get_stats(self) -> dict:
         """Get consumer statistics."""
