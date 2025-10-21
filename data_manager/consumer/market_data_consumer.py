@@ -44,9 +44,15 @@ class MarketDataConsumer:
 
     def __init__(
         self,
+<<<<<<< HEAD
         nats_client: Optional[NATSClient] = None,
         message_handler: Optional[MessageHandler] = None,
         db_manager: Optional[any] = None,
+=======
+        nats_client: NATSClient | None = None,
+        message_handler: MessageHandler | None = None,
+        db_manager: Any | None = None,
+>>>>>>> 0411079 (fix: Dockerfile optimization and MongoDB Atlas configuration)
     ) -> None:
         self.nats_client = nats_client or NATSClient()
         self.db_manager = db_manager

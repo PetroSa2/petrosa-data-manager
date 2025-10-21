@@ -1,0 +1,68 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: petrosa-data-manager-config
+  namespace: petrosa-apps
+  labels:
+    app: data-manager
+    component: data-intelligence
+    version: VERSION_PLACEHOLDER
+data:
+  # Environment
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  
+  # NATS Configuration
+  NATS_CONSUMER_SUBJECT: "binance.futures.websocket.data"
+  NATS_CLIENT_NAME: "petrosa-data-manager-consumer"
+  NATS_CONNECT_TIMEOUT: "10"
+  NATS_MAX_RECONNECT_ATTEMPTS: "10"
+  NATS_RECONNECT_TIME_WAIT: "2"
+  
+  # Feature Flags
+  ENABLE_AUDITOR: "true"
+  ENABLE_BACKFILLER: "true"
+  ENABLE_ANALYTICS: "true"
+  ENABLE_API: "true"
+  
+  # Scheduling Configuration
+  AUDIT_INTERVAL: "300"  # 5 minutes
+  ANALYTICS_INTERVAL: "900"  # 15 minutes
+  HEALTH_CHECK_INTERVAL: "60"  # 1 minute
+  
+  # API Configuration
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  API_WORKERS: "4"
+  
+  # Binance API Configuration
+  BINANCE_API_BASE_URL: "https://api.binance.com"
+  BINANCE_FAPI_BASE_URL: "https://fapi.binance.com"
+  BINANCE_RATE_LIMIT: "1200"
+  
+  # Data Processing Configuration
+  MAX_BATCH_SIZE: "1000"
+  MAX_CONCURRENT_TASKS: "10"
+  MESSAGE_QUEUE_SIZE: "10000"
+  
+  # Gap Detection Configuration
+  GAP_TOLERANCE_SECONDS: "60"
+  MIN_GAP_SIZE_SECONDS: "120"
+  
+  # Analytics Configuration
+  DEFAULT_VOLATILITY_WINDOW: "30"
+  DEFAULT_VOLUME_WINDOW: "24"
+  DEFAULT_TREND_WINDOW: "20"
+  
+  # Health Check Configuration
+  HEALTH_CHECK_PORT: "8080"
+  METRICS_PORT: "9090"
+  
+  # OpenTelemetry Configuration
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "petrosa-data-manager"
+  
+  # Supported trading pairs
+  SUPPORTED_PAIRS: "BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,SOLUSDT"
+

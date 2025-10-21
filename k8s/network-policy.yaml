@@ -1,0 +1,79 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: petrosa-data-manager-network-policy
+  namespace: petrosa-apps
+  labels:
+    app: data-manager
+    component: data-intelligence
+spec:
+  podSelector:
+    matchLabels:
+      app: data-manager
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # Allow traffic from within the namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: petrosa-apps
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 9090
+  
+  # Allow traffic from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # Allow NATS (assume nats namespace)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  
+  # Allow MongoDB Atlas (external) - uses SRV records and TLS on port 27017
+  - ports:
+    - protocol: TCP
+      port: 27017
+  
+  # Allow HTTPS for Binance API
+  - ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow HTTP for external MySQL (dbass.com.br)
+  - ports:
+    - protocol: TCP
+      port: 3306
+  
+  # Allow OTLP exporter
+  - ports:
+    - protocol: TCP
+      port: 4317
+    - protocol: TCP
+      port: 4318
+
