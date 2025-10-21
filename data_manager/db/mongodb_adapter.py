@@ -100,12 +100,24 @@ class MongoDBAdapter(BaseAdapter):
             try:
                 result = await coll.insert_many(documents, ordered=False)
                 return len(result.inserted_ids)
-            except DuplicateKeyError:
-                # Count how many were successfully inserted before duplicate
-                logger.debug(f"Some duplicate records skipped in {collection}")
-                return len(documents)  # Approximation
+            except DuplicateKeyError as e:
+                # Extract actual inserted count from error details
+                inserted_count = 0
+                if hasattr(e, "details") and e.details:
+                    inserted_count = e.details.get("nInserted", 0)
+                    # Log summary only, not full error
+                    logger.debug(
+                        f"Skipped {len(documents) - inserted_count} "
+                        f"duplicate records in {collection}, "
+                        f"inserted {inserted_count} new records"
+                    )
+                return inserted_count if inserted_count > 0 else 0
 
         except PyMongoError as e:
+            # Check if this is a duplicate key error wrapped in another exception
+            if "duplicate key error" in str(e).lower():
+                logger.debug(f"Duplicate key error in {collection}, skipping duplicates")
+                return 0
             raise DatabaseError(f"Failed to write to MongoDB {collection}: {e}") from e
 
     def write_batch(

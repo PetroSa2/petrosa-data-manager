@@ -35,8 +35,12 @@ class MarketDataEvent(BaseModel):
         json_encoders = {datetime: lambda v: v.isoformat()}
 
     @staticmethod
-    def from_nats_message(msg_data: dict) -> "MarketDataEvent":
-        """Parse NATS message into MarketDataEvent."""
+    def from_nats_message(msg_data: dict) -> "MarketDataEvent | None":
+        """
+        Parse NATS message into MarketDataEvent.
+
+        Returns None if message is invalid (missing symbol).
+        """
         # Determine event type from message
         event_type = EventType.UNKNOWN
         if "e" in msg_data:
@@ -66,8 +70,10 @@ class MarketDataEvent(BaseModel):
             elif "kline" in stream:
                 event_type = EventType.CANDLE
 
-        # Extract symbol
-        symbol = msg_data.get("s", msg_data.get("symbol", "UNKNOWN"))
+        # Extract symbol - return None if missing or invalid
+        symbol = msg_data.get("s", msg_data.get("symbol"))
+        if not symbol or symbol == "UNKNOWN" or not isinstance(symbol, str):
+            return None
 
         # Extract timestamp (try multiple fields)
         timestamp_ms = msg_data.get("E", msg_data.get("T", msg_data.get("t", 0)))

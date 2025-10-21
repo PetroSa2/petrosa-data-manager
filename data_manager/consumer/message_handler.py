@@ -100,6 +100,18 @@ class MessageHandler:
             logger.warning("Message handler not initialized")
             return
 
+        # Validate symbol before processing
+        if not event.symbol or event.symbol == "UNKNOWN":
+            logger.warning(
+                "Skipping event with invalid symbol",
+                extra={
+                    "event_type": event.event_type.value,
+                    "symbol": event.symbol,
+                },
+            )
+            self._stats["unknown"] += 1
+            return
+
         try:
             handler = self._handlers.get(event.event_type)
             if handler:

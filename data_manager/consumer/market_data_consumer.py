@@ -165,6 +165,16 @@ class MarketDataConsumer:
 
             # Parse into MarketDataEvent
             event = MarketDataEvent.from_nats_message(data)
+
+            # Skip invalid messages (missing or invalid symbol)
+            if event is None:
+                logger.warning(
+                    "Skipping message with missing or invalid symbol",
+                    extra={"data_keys": list(data.keys())},
+                )
+                messages_received.labels(event_type="invalid").inc()
+                return
+
             event_type = event.event_type.value
             messages_received.labels(event_type=event_type).inc()
 
