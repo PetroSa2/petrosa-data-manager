@@ -2,6 +2,8 @@
 Tests for API endpoints.
 """
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -41,6 +43,10 @@ def test_readiness_endpoint(client):
     assert "components" in data
 
 
+@pytest.mark.skipif(
+    os.getenv("CI") == "true",
+    reason="Requires database connectivity - skipped in CI",
+)
 def test_candles_endpoint(client):
     """Test candles data endpoint."""
     response = client.get("/data/candles?pair=BTCUSDT&period=1h")
@@ -52,6 +58,10 @@ def test_candles_endpoint(client):
     assert "metadata" in data
 
 
+@pytest.mark.skipif(
+    os.getenv("CI") == "true",
+    reason="Requires database connectivity - skipped in CI",
+)
 def test_volatility_endpoint(client):
     """Test volatility analytics endpoint."""
     response = client.get(
