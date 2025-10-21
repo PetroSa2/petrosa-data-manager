@@ -78,5 +78,8 @@ def test_catalog_datasets_endpoint(client):
     response = client.get("/catalog/datasets")
     assert response.status_code == 200
     data = response.json()
-    assert "datasets" in data
-    assert "total_count" in data
+    assert "data" in data
+    assert "pagination" in data
+    assert "total" in data["pagination"]
+    assert "limit" in data["pagination"]
+    assert "offset" in data["pagination"]
