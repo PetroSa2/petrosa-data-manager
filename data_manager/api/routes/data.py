@@ -64,7 +64,9 @@ async def get_candles(
     period: str = Query(..., description="Candle period (e.g., '1m', '1h')"),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of candles (default: 100, max: 1000)"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of candles (default: 100, max: 1000)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
 ) -> dict:
@@ -92,15 +94,15 @@ async def get_candles(
 
         # Query MongoDB
         candles = await candle_repo.get_range(pair, period, start, end)
-        
+
         # Apply sorting
         if sort_order.lower() == "desc":
             candles = list(reversed(candles))
-        
+
         total_count = len(candles)
-        
+
         # Apply pagination
-        paginated_candles = candles[offset:offset + limit]
+        paginated_candles = candles[offset : offset + limit]
 
         # Format response
         values = [
@@ -163,7 +165,9 @@ async def get_trades(
     pair: str = Query(..., description="Trading pair symbol"),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of trades (default: 100, max: 1000)"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of trades (default: 100, max: 1000)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
 ) -> dict:
@@ -189,15 +193,15 @@ async def get_trades(
             start = end - timedelta(hours=1)
 
         trades = await trade_repo.get_range(pair, start, end)
-        
+
         # Apply sorting
         if sort_order.lower() == "desc":
             trades = list(reversed(trades))
-        
+
         total_count = len(trades)
-        
+
         # Apply pagination
-        paginated_trades = trades[offset:offset + limit]
+        paginated_trades = trades[offset : offset + limit]
 
         values = [
             {
@@ -311,7 +315,9 @@ async def get_funding(
     pair: str = Query(..., description="Trading pair symbol"),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records (default: 100, max: 1000)"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of records (default: 100, max: 1000)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
 ) -> dict:
@@ -336,15 +342,15 @@ async def get_funding(
             start = end - timedelta(days=7)
 
         funding_rates = await funding_repo.get_range(pair, start, end)
-        
+
         # Apply sorting
         if sort_order.lower() == "desc":
             funding_rates = list(reversed(funding_rates))
-        
+
         total_count = len(funding_rates)
-        
+
         # Apply pagination
-        paginated_funding_rates = funding_rates[offset:offset + limit]
+        paginated_funding_rates = funding_rates[offset : offset + limit]
 
         values = [
             {

@@ -21,7 +21,9 @@ async def get_anomalies(
     status: str | None = Query(None, description="Filter by status (new, acknowledged, resolved)"),
     from_time: datetime | None = Query(None, alias="from", description="Start time for filtering"),
     to_time: datetime | None = Query(None, alias="to", description="End time for filtering"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of anomalies (default: 100, max: 1000)"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of anomalies (default: 100, max: 1000)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_by: str = Query("timestamp", description="Sort by field (timestamp, severity)"),
     sort_order: str = Query("desc", description="Sort order (asc, desc)"),
@@ -57,49 +59,64 @@ async def get_anomalies(
         # Apply filters
         if severity:
             anomalies = [a for a in anomalies if a.get("severity") == severity]
-        
+
         if status:
             anomalies = [a for a in anomalies if a.get("status") == status]
-        
+
         if from_time:
             anomalies = [
-                a for a in anomalies
-                if a.get("timestamp") and
-                (isinstance(a["timestamp"], datetime) and a["timestamp"] >= from_time or
-                 isinstance(a["timestamp"], str) and datetime.fromisoformat(a["timestamp"].replace('Z', '+00:00')) >= from_time)
+                a
+                for a in anomalies
+                if a.get("timestamp")
+                and (
+                    isinstance(a["timestamp"], datetime)
+                    and a["timestamp"] >= from_time
+                    or isinstance(a["timestamp"], str)
+                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00")) >= from_time
+                )
             ]
-        
+
         if to_time:
             anomalies = [
-                a for a in anomalies
-                if a.get("timestamp") and
-                (isinstance(a["timestamp"], datetime) and a["timestamp"] <= to_time or
-                 isinstance(a["timestamp"], str) and datetime.fromisoformat(a["timestamp"].replace('Z', '+00:00')) <= to_time)
+                a
+                for a in anomalies
+                if a.get("timestamp")
+                and (
+                    isinstance(a["timestamp"], datetime)
+                    and a["timestamp"] <= to_time
+                    or isinstance(a["timestamp"], str)
+                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00")) <= to_time
+                )
             ]
-        
+
         total_count = len(anomalies)
-        
+
         # Apply sorting
         reverse = sort_order.lower() == "desc"
         try:
             if sort_by == "timestamp":
                 anomalies.sort(
-                    key=lambda x: x.get("timestamp", datetime.min) if isinstance(x.get("timestamp"), datetime) 
-                    else datetime.fromisoformat(x.get("timestamp", "1970-01-01").replace('Z', '+00:00')),
-                    reverse=reverse
+                    key=lambda x: (
+                        x.get("timestamp", datetime.min)
+                        if isinstance(x.get("timestamp"), datetime)
+                        else datetime.fromisoformat(
+                            x.get("timestamp", "1970-01-01").replace("Z", "+00:00")
+                        )
+                    ),
+                    reverse=reverse,
                 )
             elif sort_by == "severity":
                 # Sort by severity level (assuming: critical > high > medium > low)
                 severity_order = {"critical": 4, "high": 3, "medium": 2, "low": 1}
                 anomalies.sort(
                     key=lambda x: severity_order.get(x.get("severity", "").lower(), 0),
-                    reverse=reverse
+                    reverse=reverse,
                 )
         except (KeyError, ValueError, TypeError) as e:
             logger.warning(f"Could not sort by {sort_by}: {e}")
-        
+
         # Apply pagination
-        paginated_anomalies = anomalies[offset:offset + limit]
+        paginated_anomalies = anomalies[offset : offset + limit]
 
         return {
             "pair": pair,

@@ -106,12 +106,18 @@ async def start_backfill(
 async def list_backfill_jobs(
     status: str | None = Query(None, description="Filter by status"),
     symbol: str | None = Query(None, description="Filter by trading symbol"),
-    data_type: str | None = Query(None, description="Filter by data type (candles, trades, depth, funding)"),
+    data_type: str | None = Query(
+        None, description="Filter by data type (candles, trades, depth, funding)"
+    ),
     from_time: datetime | None = Query(None, alias="from", description="Start time for filtering"),
     to_time: datetime | None = Query(None, alias="to", description="End time for filtering"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of jobs (default: 100, max: 1000)"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of jobs (default: 100, max: 1000)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
-    sort_by: str = Query("created_at", description="Sort by field (created_at, started_at, priority)"),
+    sort_by: str = Query(
+        "created_at", description="Sort by field (created_at, started_at, priority)"
+    ),
     sort_order: str = Query("desc", description="Sort order (asc, desc)"),
 ) -> dict:
     """
@@ -123,7 +129,7 @@ async def list_backfill_jobs(
     # TODO: Implement actual job listing from database
     # This is a placeholder structure showing the expected response format
     jobs = []
-    
+
     # Apply filters (when database implementation is added)
     # if status:
     #     jobs = filter by status
@@ -133,13 +139,13 @@ async def list_backfill_jobs(
     #     jobs = filter by data_type
     # if from_time/to_time:
     #     jobs = filter by time range
-    
+
     total_count = len(jobs)
-    
+
     # Apply sorting (when database implementation is added)
     # Apply pagination
-    paginated_jobs = jobs[offset:offset + limit]
-    
+    paginated_jobs = jobs[offset : offset + limit]
+
     return {
         "data": paginated_jobs,
         "pagination": {

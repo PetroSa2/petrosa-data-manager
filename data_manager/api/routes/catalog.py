@@ -72,7 +72,9 @@ async def list_datasets(
     category: str | None = Query(None, description="Filter by category"),
     owner: str | None = Query(None, description="Filter by owner"),
     search: str | None = Query(None, description="Text search in name/description"),
-    limit: int = Query(50, ge=1, le=500, description="Maximum number of results (default: 50, max: 500)"),
+    limit: int = Query(
+        50, ge=1, le=500, description="Maximum number of results (default: 50, max: 500)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_by: str = Query("name", description="Sort by field (name, created_at, updated_at)"),
     sort_order: str = Query("asc", description="Sort order (asc, desc)"),
@@ -108,27 +110,28 @@ async def list_datasets(
         # Apply filters
         if category:
             datasets = [d for d in datasets if d.category == category]
-        
+
         if owner:
             datasets = [d for d in datasets if d.owner == owner]
-        
+
         if search:
             search_lower = search.lower()
             datasets = [
-                d for d in datasets
+                d
+                for d in datasets
                 if search_lower in d.name.lower() or search_lower in d.description.lower()
             ]
-        
+
         total_count = len(datasets)
-        
+
         # Apply sorting
         reverse = sort_order.lower() == "desc"
         if sort_by == "name":
             datasets.sort(key=lambda x: x.name, reverse=reverse)
         # Note: created_at and updated_at would need to be added to DatasetInfo model
-        
+
         # Apply pagination
-        paginated_datasets = datasets[offset:offset + limit]
+        paginated_datasets = datasets[offset : offset + limit]
 
         return {
             "data": paginated_datasets,

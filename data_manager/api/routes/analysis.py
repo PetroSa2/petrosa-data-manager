@@ -478,7 +478,9 @@ async def get_regime(
 @router.get("/market-overview")
 async def market_overview(
     pairs: str = Query("BTCUSDT,ETHUSDT", description="Comma-separated list of trading pairs"),
-    limit: int = Query(10, ge=1, le=100, description="Maximum number of pairs to return (default: 10, max: 100)"),
+    limit: int = Query(
+        10, ge=1, le=100, description="Maximum number of pairs to return (default: 10, max: 100)"
+    ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_by: str = Query("symbol", description="Sort by field (symbol, volatility, volume, trend)"),
     sort_order: str = Query("asc", description="Sort order (asc, desc)"),
@@ -494,11 +496,11 @@ async def market_overview(
 
     try:
         pair_list = [p.strip() for p in pairs.split(",")]
-        
+
         # Apply pagination to pair list
         total_pairs = len(pair_list)
-        paginated_pair_list = pair_list[offset:offset + limit]
-        
+        paginated_pair_list = pair_list[offset : offset + limit]
+
         overview = {}
 
         for pair in paginated_pair_list:
@@ -560,17 +562,17 @@ async def market_overview(
                 if sort_by == "volatility":
                     overview_list.sort(
                         key=lambda x: float(x[1]["volatility"]["annualized"]) if x[1] else 0,
-                        reverse=(sort_order == "desc")
+                        reverse=(sort_order == "desc"),
                     )
                 elif sort_by == "volume":
                     overview_list.sort(
                         key=lambda x: float(x[1]["volume"]["spike_ratio"]) if x[1] else 0,
-                        reverse=(sort_order == "desc")
+                        reverse=(sort_order == "desc"),
                     )
                 elif sort_by == "trend":
                     overview_list.sort(
                         key=lambda x: float(x[1]["trend"]["roc"]) if x[1] else 0,
-                        reverse=(sort_order == "desc")
+                        reverse=(sort_order == "desc"),
                     )
                 overview = dict(overview_list)
             except (KeyError, ValueError, TypeError) as e:
