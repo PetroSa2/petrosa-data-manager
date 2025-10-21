@@ -5,7 +5,6 @@ Repository for audit log operations.
 import logging
 import uuid
 from datetime import datetime
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 
@@ -96,9 +95,7 @@ class AuditRepository(BaseRepository):
             logger.error(f"Failed to log health check: {e}")
             return False
 
-    def get_recent_logs(
-        self, dataset_id: str | None = None, limit: int = 100
-    ) -> List[dict]:
+    def get_recent_logs(self, dataset_id: str | None = None, limit: int = 100) -> list[dict]:
         """
         Get recent audit logs.
 
@@ -115,4 +112,3 @@ class AuditRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to get recent logs: {e}")
             return []
-

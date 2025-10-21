@@ -180,4 +180,3 @@ class BaseAdapter(ABC):
 
 class DatabaseError(Exception):
     """Custom exception for database operations."""
-

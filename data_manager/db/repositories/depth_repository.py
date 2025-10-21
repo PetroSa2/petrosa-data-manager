@@ -3,8 +3,6 @@ Repository for order book depth data operations.
 """
 
 import logging
-from datetime import datetime
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import OrderBookDepth
@@ -33,7 +31,7 @@ class DepthRepository(BaseRepository):
             logger.error(f"Failed to insert depth for {depth.symbol}: {e}")
             return False
 
-    async def insert_batch(self, depths: List[OrderBookDepth]) -> int:
+    async def insert_batch(self, depths: list[OrderBookDepth]) -> int:
         """
         Insert multiple depth snapshots.
 
@@ -68,7 +66,7 @@ class DepthRepository(BaseRepository):
             logger.error(f"Failed to insert depth batch: {e}")
             return 0
 
-    async def get_latest(self, symbol: str, limit: int = 1) -> List[dict]:
+    async def get_latest(self, symbol: str, limit: int = 1) -> list[dict]:
         """
         Get most recent depth snapshots.
 
@@ -85,4 +83,3 @@ class DepthRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to query latest depth for {symbol}: {e}")
             return []
-

@@ -2,9 +2,8 @@
 NATS client connection manager with reconnection logic.
 """
 
-import asyncio
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import nats
 import nats.aio.client
@@ -29,10 +28,10 @@ class NATSClient:
     """NATS client with connection management."""
 
     def __init__(self) -> None:
-        self.nc: Optional[nats.aio.client.Client] = None
+        self.nc: nats.aio.client.Client | None = None
         self.connected: bool = False
-        self._reconnect_cb: Optional[Callable] = None
-        self._disconnect_cb: Optional[Callable] = None
+        self._reconnect_cb: Callable | None = None
+        self._disconnect_cb: Callable | None = None
 
     async def connect(self) -> bool:
         """Connect to NATS server."""
@@ -92,8 +91,8 @@ class NATSClient:
                 nats_connection_status.set(0)
 
     async def subscribe(
-        self, subject: str, callback: Callable, queue: Optional[str] = None
-    ) -> Optional[nats.aio.subscription.Subscription]:
+        self, subject: str, callback: Callable, queue: str | None = None
+    ) -> nats.aio.subscription.Subscription | None:
         """Subscribe to a NATS subject."""
         if not self.nc or not self.connected:
             logger.error("Cannot subscribe: not connected to NATS")
@@ -160,10 +159,9 @@ class NATSClient:
 
     def set_callbacks(
         self,
-        reconnect_cb: Optional[Callable] = None,
-        disconnect_cb: Optional[Callable] = None,
+        reconnect_cb: Callable | None = None,
+        disconnect_cb: Callable | None = None,
     ) -> None:
         """Set callbacks for connection events."""
         self._reconnect_cb = reconnect_cb
         self._disconnect_cb = disconnect_cb
-

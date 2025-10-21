@@ -27,9 +27,7 @@ class TrendCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_trend(
         self,
@@ -88,17 +86,15 @@ class TrendCalculator:
             # Crossover Detection (SMA 20 vs SMA 50)
             df["sma_50"] = df["close"].rolling(window=50).mean()
             crossover_signal = (
-                "bullish"
-                if df["sma_20"].iloc[-1] > df["sma_50"].iloc[-1]
-                else "bearish"
+                "bullish" if df["sma_20"].iloc[-1] > df["sma_50"].iloc[-1] else "bearish"
             )
 
-            # RSI (Relative Strength Index) - 14 periods
-            delta = df["close"].diff()
-            gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
+            # RSI (Relative Strength Index) - 14 periods (calculated but not used yet)
+            # delta = df["close"].diff()
+            # gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+            # loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            # rs = gain / loss
+            # rsi = 100 - (100 / (1 + rs))
 
             # Rolling Beta to benchmark (simplified - would need BTCUSDT data)
             # For now, use simple correlation as proxy
@@ -117,21 +113,31 @@ class TrendCalculator:
             metrics = TrendMetrics(
                 symbol=symbol,
                 timeframe=timeframe,
-                sma=Decimal(str(df["sma_20"].iloc[-1]))
-                if not pd.isna(df["sma_20"].iloc[-1])
-                else Decimal("0"),
-                ema=Decimal(str(df["ema_20"].iloc[-1]))
-                if not pd.isna(df["ema_20"].iloc[-1])
-                else Decimal("0"),
-                wma=Decimal(str(df["wma_20"].iloc[-1]))
-                if not pd.isna(df["wma_20"].iloc[-1])
-                else Decimal("0"),
-                rate_of_change=Decimal(str(df["roc"].iloc[-1]))
-                if not pd.isna(df["roc"].iloc[-1])
-                else Decimal("0"),
-                directional_strength=Decimal(str(directional_strength.iloc[-1]))
-                if not pd.isna(directional_strength.iloc[-1])
-                else Decimal("0"),
+                sma=(
+                    Decimal(str(df["sma_20"].iloc[-1]))
+                    if not pd.isna(df["sma_20"].iloc[-1])
+                    else Decimal("0")
+                ),
+                ema=(
+                    Decimal(str(df["ema_20"].iloc[-1]))
+                    if not pd.isna(df["ema_20"].iloc[-1])
+                    else Decimal("0")
+                ),
+                wma=(
+                    Decimal(str(df["wma_20"].iloc[-1]))
+                    if not pd.isna(df["wma_20"].iloc[-1])
+                    else Decimal("0")
+                ),
+                rate_of_change=(
+                    Decimal(str(df["roc"].iloc[-1]))
+                    if not pd.isna(df["roc"].iloc[-1])
+                    else Decimal("0")
+                ),
+                directional_strength=(
+                    Decimal(str(directional_strength.iloc[-1]))
+                    if not pd.isna(directional_strength.iloc[-1])
+                    else Decimal("0")
+                ),
                 crossover_signal=crossover_signal,
                 rolling_beta=rolling_beta,
                 metadata=metadata,
@@ -151,4 +157,3 @@ class TrendCalculator:
         except Exception as e:
             logger.error(f"Error calculating trend for {symbol} {timeframe}: {e}", exc_info=True)
             return None
-

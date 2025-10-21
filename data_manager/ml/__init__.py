@@ -18,4 +18,3 @@ __all__ = [
     "MLAnomalyDetector",
     "ML_AVAILABLE",
 ]
-

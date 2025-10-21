@@ -4,7 +4,6 @@ Repository for funding rate data operations.
 
 import logging
 from datetime import datetime
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import FundingRate
@@ -33,7 +32,7 @@ class FundingRepository(BaseRepository):
             logger.error(f"Failed to insert funding rate for {funding.symbol}: {e}")
             return False
 
-    async def insert_batch(self, funding_rates: List[FundingRate]) -> int:
+    async def insert_batch(self, funding_rates: list[FundingRate]) -> int:
         """
         Insert multiple funding rates.
 
@@ -68,9 +67,7 @@ class FundingRepository(BaseRepository):
             logger.error(f"Failed to insert funding rate batch: {e}")
             return 0
 
-    async def get_range(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> List[dict]:
+    async def get_range(self, symbol: str, start: datetime, end: datetime) -> list[dict]:
         """
         Get funding rates within time range.
 
@@ -89,7 +86,7 @@ class FundingRepository(BaseRepository):
             logger.error(f"Failed to query funding rates for {symbol}: {e}")
             return []
 
-    async def get_latest(self, symbol: str, limit: int = 1) -> List[dict]:
+    async def get_latest(self, symbol: str, limit: int = 1) -> list[dict]:
         """
         Get most recent funding rates.
 
@@ -106,4 +103,3 @@ class FundingRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to query latest funding rates for {symbol}: {e}")
             return []
-

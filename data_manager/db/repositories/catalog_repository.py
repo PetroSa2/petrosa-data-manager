@@ -3,8 +3,6 @@ Repository for catalog operations.
 """
 
 import logging
-from datetime import datetime
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 
@@ -25,6 +23,7 @@ class CatalogRepository(BaseRepository):
             True if successful
         """
         try:
+
             class Dataset:
                 def model_dump(self):
                     return dataset
@@ -35,7 +34,7 @@ class CatalogRepository(BaseRepository):
             logger.error(f"Failed to upsert dataset: {e}")
             return False
 
-    def get_all_datasets(self) -> List[dict]:
+    def get_all_datasets(self) -> list[dict]:
         """
         Get all datasets.
 
@@ -68,4 +67,3 @@ class CatalogRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to get dataset: {e}")
             return None
-

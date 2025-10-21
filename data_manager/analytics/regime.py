@@ -24,9 +24,7 @@ class RegimeClassifier:
         """
         self.db_manager = db_manager
 
-    async def classify_regime(
-        self, symbol: str, timeframe: str
-    ) -> MarketRegime | None:
+    async def classify_regime(self, symbol: str, timeframe: str) -> MarketRegime | None:
         """
         Classify market regime for a symbol.
 
@@ -54,12 +52,8 @@ class RegimeClassifier:
                 return None
 
             # Extract metric values
-            annualized_vol = float(
-                volatility_data[0].get("annualized_volatility", 0)
-            )
-            volume_spike_ratio = float(
-                volume_data[0].get("volume_spike_ratio", 1.0)
-            )
+            annualized_vol = float(volatility_data[0].get("annualized_volatility", 0))
+            volume_spike_ratio = float(volume_data[0].get("volume_spike_ratio", 1.0))
             roc = 0.0  # Rate of change from trend data if available
             if trend_data:
                 roc = float(trend_data[0].get("rate_of_change", 0))
@@ -168,4 +162,3 @@ class RegimeClassifier:
                 exc_info=True,
             )
             return None
-

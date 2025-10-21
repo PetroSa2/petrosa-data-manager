@@ -4,7 +4,6 @@ Repository for trade data operations.
 
 import logging
 from datetime import datetime
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import Trade
@@ -33,7 +32,7 @@ class TradeRepository(BaseRepository):
             logger.error(f"Failed to insert trade for {trade.symbol}: {e}")
             return False
 
-    async def insert_batch(self, trades: List[Trade]) -> int:
+    async def insert_batch(self, trades: list[Trade]) -> int:
         """
         Insert multiple trades.
 
@@ -68,9 +67,7 @@ class TradeRepository(BaseRepository):
             logger.error(f"Failed to insert trade batch: {e}")
             return 0
 
-    async def get_range(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> List[dict]:
+    async def get_range(self, symbol: str, start: datetime, end: datetime) -> list[dict]:
         """
         Get trades within time range.
 
@@ -89,7 +86,7 @@ class TradeRepository(BaseRepository):
             logger.error(f"Failed to query trades for {symbol}: {e}")
             return []
 
-    async def get_latest(self, symbol: str, limit: int = 1) -> List[dict]:
+    async def get_latest(self, symbol: str, limit: int = 1) -> list[dict]:
         """
         Get most recent trades.
 
@@ -127,4 +124,3 @@ class TradeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to count trades for {symbol}: {e}")
             return 0
-

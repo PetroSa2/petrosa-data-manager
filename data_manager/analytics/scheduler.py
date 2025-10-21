@@ -89,9 +89,7 @@ class AnalyticsScheduler:
                         metrics_calculated += 1
 
                     # Calculate trend
-                    trend = await self.trend_calc.calculate_trend(
-                        symbol, timeframe, window_days=30
-                    )
+                    trend = await self.trend_calc.calculate_trend(symbol, timeframe, window_days=30)
                     if trend:
                         metrics_calculated += 1
 
@@ -143,4 +141,3 @@ class AnalyticsScheduler:
             logger.error(f"Error calculating correlations: {e}", exc_info=True)
 
         logger.info(f"Analytics cycle complete: calculated {metrics_calculated} metrics")
-

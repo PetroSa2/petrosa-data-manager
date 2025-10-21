@@ -13,7 +13,6 @@ from pydantic import BaseModel
 try:
     import sqlalchemy as sa
     from sqlalchemy import (
-        Boolean,
         Column,
         DateTime,
         Index,
@@ -57,7 +56,7 @@ class MySQLAdapter(BaseAdapter):
         """
         if not SQLALCHEMY_AVAILABLE:
             raise ImportError(
-                "SQLAlchemy and MySQL driver are required. Install with: pip install sqlalchemy pymysql"
+                "SQLAlchemy and MySQL driver required. " "Install: pip install sqlalchemy pymysql"
             )
 
         # Use provided connection string or build from constants
@@ -242,7 +241,7 @@ class MySQLAdapter(BaseAdapter):
                         if isinstance(value, str) and key.endswith(("_at", "timestamp")):
                             try:
                                 record[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                            except:
+                            except (ValueError, TypeError):
                                 pass
                     records.append(record)
 
@@ -306,9 +305,7 @@ class MySQLAdapter(BaseAdapter):
             table = self._get_table(collection)
 
             # Build query
-            query = select(table).where(
-                and_(table.c.timestamp >= start, table.c.timestamp < end)
-            )
+            query = select(table).where(and_(table.c.timestamp >= start, table.c.timestamp < end))
 
             if symbol:
                 query = query.where(table.c.symbol == symbol)
@@ -429,4 +426,3 @@ class MySQLAdapter(BaseAdapter):
         if not self._connected:
             raise DatabaseError("Database is not connected")
         return self.engine
-

@@ -26,7 +26,7 @@ jobs:
 
       - name: Run flake8
         run: |
-          flake8 data_manager tests --max-line-length=100 --count --statistics
+          flake8 data_manager tests --max-line-length=100 --extend-ignore=E203 --count --statistics
 
       - name: Run black check
         run: |

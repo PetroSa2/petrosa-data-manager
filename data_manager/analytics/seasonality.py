@@ -5,7 +5,6 @@ Seasonality and cyclical pattern calculator.
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -30,9 +29,7 @@ class SeasonalityCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_seasonality(
         self,
@@ -120,9 +117,7 @@ class SeasonalityCalculator:
             if len(positive_power) > 0:
                 dominant_freq_idx = np.argmax(positive_power)
                 dominant_freq = positive_freqs[dominant_freq_idx]
-                dominant_cycle = (
-                    int(1 / dominant_freq) if dominant_freq != 0 else None
-                )
+                dominant_cycle = int(1 / dominant_freq) if dominant_freq != 0 else None
             else:
                 dominant_cycle = None
 
@@ -169,4 +164,3 @@ class SeasonalityCalculator:
                 exc_info=True,
             )
             return None
-

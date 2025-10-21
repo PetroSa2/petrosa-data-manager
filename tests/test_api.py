@@ -54,7 +54,9 @@ def test_candles_endpoint(client):
 
 def test_volatility_endpoint(client):
     """Test volatility analytics endpoint."""
-    response = client.get("/analysis/volatility?pair=BTCUSDT&period=1h&method=rolling_stddev&window=30d")
+    response = client.get(
+        "/analysis/volatility?pair=BTCUSDT&period=1h&method=rolling_stddev&window=30d"
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["pair"] == "BTCUSDT"
@@ -68,4 +70,3 @@ def test_catalog_datasets_endpoint(client):
     data = response.json()
     assert "datasets" in data
     assert "total_count" in data
-

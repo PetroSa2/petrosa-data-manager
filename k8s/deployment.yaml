@@ -1,0 +1,180 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petrosa-data-manager
+  namespace: petrosa-apps
+  labels:
+    app: data-manager
+    component: data-intelligence
+    version: VERSION_PLACEHOLDER
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: data-manager
+  template:
+    metadata:
+      labels:
+        app: data-manager
+        component: data-intelligence
+        version: VERSION_PLACEHOLDER
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: data-manager
+        image: yurisa2/petrosa-data-manager:VERSION_PLACEHOLDER
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        # From ConfigMap
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: ENVIRONMENT
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: LOG_LEVEL
+        - name: NATS_CONSUMER_SUBJECT
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: NATS_CONSUMER_SUBJECT
+        - name: ENABLE_AUDITOR
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: ENABLE_AUDITOR
+        - name: ENABLE_BACKFILLER
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: ENABLE_BACKFILLER
+        - name: ENABLE_ANALYTICS
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: ENABLE_ANALYTICS
+        - name: ENABLE_API
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: ENABLE_API
+        - name: API_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: API_PORT
+        - name: SUPPORTED_PAIRS
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: SUPPORTED_PAIRS
+        - name: AUDIT_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: AUDIT_INTERVAL
+        - name: ANALYTICS_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: ANALYTICS_INTERVAL
+        
+        # From Common ConfigMap
+        - name: NATS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-common-config
+              key: NATS_URL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-common-config
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+              optional: true
+        
+        # From Secrets - Use existing MYSQL_URI and mongodb credentials
+        - name: MYSQL_URI
+          valueFrom:
+            secretKeyRef:
+              name: petrosa-sensitive-credentials
+              key: MYSQL_URI
+        - name: MONGODB_URL
+          valueFrom:
+            secretKeyRef:
+              name: petrosa-sensitive-credentials
+              key: mongodb-connection-string
+        - name: BINANCE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: petrosa-sensitive-credentials
+              key: BINANCE_API_KEY
+              optional: true
+        - name: BINANCE_API_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: petrosa-sensitive-credentials
+              key: BINANCE_API_SECRET
+              optional: true
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        
+        livenessProbe:
+          httpGet:
+            path: /health/liveness
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health/readiness
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+      
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+

@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from data_manager.db.database_manager import DatabaseManager
-from data_manager.db.repositories import DepthRepository, VolumeCalculator
+from data_manager.db.repositories import DepthRepository
 from data_manager.models.analytics import MetricMetadata, SpreadMetrics
 
 logger = logging.getLogger(__name__)
@@ -24,9 +24,7 @@ class SpreadCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.depth_repo = DepthRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.depth_repo = DepthRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_spread(self, symbol: str) -> SpreadMetrics | None:
         """
@@ -60,7 +58,9 @@ class SpreadCalculator:
             # Calculate spread
             bid_ask_spread = best_ask_price - best_bid_price
             mid_price = (best_bid_price + best_ask_price) / 2
-            spread_percentage = (bid_ask_spread / mid_price * 100) if mid_price > 0 else Decimal("0")
+            spread_percentage = (
+                (bid_ask_spread / mid_price * 100) if mid_price > 0 else Decimal("0")
+            )
 
             # Calculate market depth (sum volumes within 1% of mid price)
             threshold_bid = mid_price * Decimal("0.99")
@@ -84,14 +84,14 @@ class SpreadCalculator:
             # Slippage estimate (VWAP deviation for common order sizes)
             slippage_estimate = self._calculate_slippage(bids, asks, mid_price)
 
-            # Order book imbalance
-            total_bid_volume = sum(Decimal(str(level.get("quantity", 0))) for level in bids[:10])
-            total_ask_volume = sum(Decimal(str(level.get("quantity", 0))) for level in asks[:10])
-            order_book_imbalance = (
-                (total_bid_volume - total_ask_volume) / (total_bid_volume + total_ask_volume)
-                if (total_bid_volume + total_ask_volume) > 0
-                else Decimal("0")
-            )
+            # Order book imbalance (calculated but not used in response yet)
+            # total_bid_volume = sum(Decimal(str(level.get("quantity", 0))) for level in bids[:10])
+            # total_ask_volume = sum(Decimal(str(level.get("quantity", 0))) for level in asks[:10])
+            # order_book_imbalance = (
+            #     (total_bid_volume - total_ask_volume) / (total_bid_volume + total_ask_volume)
+            #     if (total_bid_volume + total_ask_volume) > 0
+            #     else Decimal("0")
+            # )
 
             # Create metadata
             metadata = MetricMetadata(
@@ -171,4 +171,3 @@ class SpreadCalculator:
         except Exception as e:
             logger.error(f"Error calculating slippage: {e}")
             return Decimal("0")
-

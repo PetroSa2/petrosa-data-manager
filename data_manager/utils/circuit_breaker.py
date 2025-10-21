@@ -6,8 +6,8 @@ Based on petrosa-binance-data-extractor patterns.
 
 import logging
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,8 @@ class DatabaseCircuitBreaker:
             self.success_count += 1
             if self.success_count >= self.success_threshold:
                 logger.info(
-                    f"Circuit breaker {self.name}: Closing circuit after {self.success_count} successes"
+                    f"Circuit breaker {self.name}: "
+                    f"Closing circuit after {self.success_count} successes"
                 )
                 self.state = CircuitBreakerState.CLOSED
                 self.failure_count = 0
@@ -128,4 +129,3 @@ class DatabaseCircuitBreaker:
         self.failure_count = 0
         self.success_count = 0
         self.last_failure_time = None
-
