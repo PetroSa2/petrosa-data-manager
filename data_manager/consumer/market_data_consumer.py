@@ -167,8 +167,9 @@ class MarketDataConsumer:
             event = MarketDataEvent.from_nats_message(data)
 
             # Skip invalid messages (missing or invalid symbol)
+            # These are expected from upstream - log at debug level
             if event is None:
-                logger.warning(
+                logger.debug(
                     "Skipping message with missing or invalid symbol",
                     extra={"data_keys": list(data.keys())},
                 )

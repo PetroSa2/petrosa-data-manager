@@ -102,7 +102,8 @@ class MessageHandler:
 
         # Validate symbol before processing
         if not event.symbol or event.symbol == "UNKNOWN":
-            logger.warning(
+            # Log at debug level - these are expected invalid messages from upstream
+            logger.debug(
                 "Skipping event with invalid symbol",
                 extra={
                     "event_type": event.event_type.value,
@@ -304,7 +305,8 @@ class MessageHandler:
     async def _handle_unknown(self, event: MarketDataEvent) -> None:
         """Handle unknown event type."""
         self._stats["unknown"] += 1
-        logger.warning(
+        # Log at debug level - unknown event types are expected from upstream
+        logger.debug(
             "Received unknown event type",
             extra={
                 "event_type": event.event_type.value,
