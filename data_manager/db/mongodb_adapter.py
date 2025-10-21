@@ -40,9 +40,7 @@ class MongoDBAdapter(BaseAdapter):
             **kwargs: Additional MongoDB client options
         """
         if not MOTOR_AVAILABLE:
-            raise ImportError(
-                "Motor is required for MongoDB. Install with: pip install motor"
-            )
+            raise ImportError("Motor is required for MongoDB. Install with: pip install motor")
 
         super().__init__(connection_string, **kwargs)
 
@@ -260,4 +258,3 @@ class MongoDBAdapter(BaseAdapter):
             return collections
         except PyMongoError as e:
             raise DatabaseError(f"Failed to list collections: {e}") from e
-

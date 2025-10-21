@@ -57,4 +57,3 @@ class BaseRepository:
             List of dictionary representations
         """
         return [self._model_to_dict(model) for model in models]
-

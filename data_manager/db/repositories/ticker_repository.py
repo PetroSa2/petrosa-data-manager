@@ -3,7 +3,6 @@ Repository for ticker data operations.
 """
 
 import logging
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import Ticker
@@ -32,7 +31,7 @@ class TickerRepository(BaseRepository):
             logger.error(f"Failed to insert ticker for {ticker.symbol}: {e}")
             return False
 
-    async def insert_batch(self, tickers: List[Ticker]) -> int:
+    async def insert_batch(self, tickers: list[Ticker]) -> int:
         """
         Insert multiple tickers.
 
@@ -67,7 +66,7 @@ class TickerRepository(BaseRepository):
             logger.error(f"Failed to insert ticker batch: {e}")
             return 0
 
-    async def get_latest(self, symbol: str, limit: int = 1) -> List[dict]:
+    async def get_latest(self, symbol: str, limit: int = 1) -> list[dict]:
         """
         Get most recent tickers.
 
@@ -84,4 +83,3 @@ class TickerRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to query latest tickers for {symbol}: {e}")
             return []
-

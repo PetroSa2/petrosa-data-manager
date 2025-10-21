@@ -5,8 +5,6 @@ Tests for data models.
 from datetime import datetime
 from decimal import Decimal
 
-import pytest
-
 from data_manager.models.events import EventType, MarketDataEvent
 from data_manager.models.market_data import Candle, Trade
 
@@ -63,4 +61,3 @@ def test_trade_model():
     assert trade.symbol == "BTCUSDT"
     assert trade.trade_id == 12345
     assert trade.side == "buy"
-

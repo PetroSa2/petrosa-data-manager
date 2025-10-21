@@ -50,9 +50,7 @@ def parse_timeframe_to_seconds(timeframe: str) -> int:
     return parse_timeframe_to_minutes(timeframe) * 60
 
 
-def calculate_expected_records(
-    start: datetime, end: datetime, timeframe: str
-) -> int:
+def calculate_expected_records(start: datetime, end: datetime, timeframe: str) -> int:
     """
     Calculate expected number of records in a time range.
 
@@ -93,4 +91,3 @@ def create_time_chunks(
         current = chunk_end
 
     return chunks
-

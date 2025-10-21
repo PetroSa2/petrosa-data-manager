@@ -5,7 +5,6 @@ Binance REST API client for fetching historical data.
 import asyncio
 import logging
 from datetime import datetime
-from typing import List
 
 import httpx
 
@@ -75,7 +74,7 @@ class BinanceClient:
         start_time: datetime,
         end_time: datetime,
         limit: int = 1000,
-    ) -> List[List]:
+    ) -> list[list]:
         """
         Fetch kline/candle data from Binance.
 
@@ -139,7 +138,7 @@ class BinanceClient:
         start_time: datetime,
         end_time: datetime,
         limit: int = 1000,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Fetch funding rate data from Binance Futures.
 
@@ -187,7 +186,7 @@ class BinanceClient:
         start_time: datetime,
         end_time: datetime,
         limit: int = 1000,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Fetch aggregated trade data from Binance.
 
@@ -225,8 +224,7 @@ class BinanceClient:
                 data = response.json()
 
                 logger.debug(
-                    f"Fetched {len(data)} trades for {symbol} "
-                    f"from {start_time} to {end_time}"
+                    f"Fetched {len(data)} trades for {symbol} " f"from {start_time} to {end_time}"
                 )
                 return data
 
@@ -241,4 +239,3 @@ class BinanceClient:
                     raise
 
         return []
-

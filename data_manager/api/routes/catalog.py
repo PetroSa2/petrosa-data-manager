@@ -4,7 +4,6 @@ Data catalog endpoints for dataset metadata and schemas.
 
 import logging
 from datetime import datetime
-from typing import List
 
 from fastapi import APIRouter, Path
 from pydantic import BaseModel
@@ -25,13 +24,13 @@ class DatasetInfo(BaseModel):
     category: str
     owner: str
     update_frequency: str
-    tags: List[str]
+    tags: list[str]
 
 
 class DatasetListResponse(BaseModel):
     """Dataset list response."""
 
-    datasets: List[DatasetInfo]
+    datasets: list[DatasetInfo]
     total_count: int
     last_updated: datetime
 
@@ -55,8 +54,8 @@ class SchemaResponse(BaseModel):
 
     schema_id: str
     version: str
-    fields: List[dict]
-    primary_keys: List[str]
+    fields: list[dict]
+    primary_keys: list[str]
     created_at: datetime
 
 
@@ -64,7 +63,7 @@ class LineageResponse(BaseModel):
     """Data lineage response."""
 
     dataset_id: str
-    lineage: List[dict]
+    lineage: list[dict]
     metadata: dict
 
 
@@ -169,4 +168,3 @@ async def get_lineage(
             "last_updated": datetime.utcnow().isoformat(),
         },
     )
-

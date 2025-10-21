@@ -5,12 +5,9 @@ Backfill management endpoints.
 import logging
 import uuid
 from datetime import datetime
-from typing import List, Optional
 
 from fastapi import APIRouter, Body, Path, Query
 from pydantic import BaseModel
-
-import data_manager.api.app as api_module
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +22,7 @@ class BackfillRequestBody(BaseModel):
 
     symbol: str
     data_type: str
-    timeframe: Optional[str] = None
+    timeframe: str | None = None
     start_time: datetime
     end_time: datetime
     priority: int = 5
@@ -41,14 +38,14 @@ class BackfillJobResponse(BaseModel):
     records_fetched: int
     records_inserted: int
     created_at: datetime
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    started_at: datetime | None
+    completed_at: datetime | None
 
 
 class BackfillJobListResponse(BaseModel):
     """List of backfill jobs."""
 
-    jobs: List[BackfillJobResponse]
+    jobs: list[BackfillJobResponse]
     total_count: int
 
 
@@ -107,7 +104,7 @@ async def start_backfill(
 
 @router.get("/jobs")
 async def list_backfill_jobs(
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of jobs"),
 ) -> BackfillJobListResponse:
     """
@@ -149,4 +146,3 @@ async def get_backfill_job(
         started_at=datetime.utcnow(),
         completed_at=datetime.utcnow(),
     )
-

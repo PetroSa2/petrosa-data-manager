@@ -4,7 +4,6 @@ Repository for candle/kline data operations.
 
 import logging
 from datetime import datetime
-from typing import List
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import Candle
@@ -34,12 +33,10 @@ class CandleRepository(BaseRepository):
             count = await self.mongodb.write([candle], collection)
             return count > 0
         except Exception as e:
-            logger.error(
-                f"Failed to insert candle for {candle.symbol} {candle.timeframe}: {e}"
-            )
+            logger.error(f"Failed to insert candle for {candle.symbol} {candle.timeframe}: {e}")
             return False
 
-    async def insert_batch(self, candles: List[Candle]) -> int:
+    async def insert_batch(self, candles: list[Candle]) -> int:
         """
         Insert multiple candles.
 
@@ -76,7 +73,7 @@ class CandleRepository(BaseRepository):
 
     async def get_range(
         self, symbol: str, timeframe: str, start: datetime, end: datetime
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Get candles within time range.
 
@@ -96,7 +93,7 @@ class CandleRepository(BaseRepository):
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             return []
 
-    async def get_latest(self, symbol: str, timeframe: str, limit: int = 1) -> List[dict]:
+    async def get_latest(self, symbol: str, timeframe: str, limit: int = 1) -> list[dict]:
         """
         Get most recent candles.
 
@@ -154,4 +151,3 @@ class CandleRepository(BaseRepository):
             await self.mongodb.ensure_indexes(collection)
         except Exception as e:
             logger.warning(f"Failed to ensure indexes for {symbol} {timeframe}: {e}")
-

@@ -4,7 +4,6 @@ Gap detection for time series data.
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Tuple
 
 import constants
 from data_manager.db.database_manager import DatabaseManager
@@ -30,12 +29,8 @@ class GapDetector:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.audit_repo = AuditRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.audit_repo = AuditRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def detect_gaps(
         self,
@@ -43,7 +38,7 @@ class GapDetector:
         timeframe: str,
         start: datetime,
         end: datetime,
-    ) -> List[GapInfo]:
+    ) -> list[GapInfo]:
         """
         Detect gaps in candle data.
 
@@ -57,9 +52,7 @@ class GapDetector:
             List of GapInfo objects
         """
         try:
-            logger.info(
-                f"Detecting gaps for {symbol} {timeframe} from {start} to {end}"
-            )
+            logger.info(f"Detecting gaps for {symbol} {timeframe} from {start} to {end}")
 
             # Get all candles in range
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
@@ -78,8 +71,11 @@ class GapDetector:
 
             # Parse timestamps
             timestamps = [
-                candle["timestamp"] if isinstance(candle["timestamp"], datetime)
-                else datetime.fromisoformat(str(candle["timestamp"]))
+                (
+                    candle["timestamp"]
+                    if isinstance(candle["timestamp"], datetime)
+                    else datetime.fromisoformat(str(candle["timestamp"]))
+                )
                 for candle in candles
             ]
             timestamps.sort()
@@ -143,9 +139,7 @@ class GapDetector:
             logger.error(f"Error detecting gaps for {symbol} {timeframe}: {e}", exc_info=True)
             return []
 
-    def _calculate_expected_records(
-        self, start: datetime, end: datetime, timeframe: str
-    ) -> int:
+    def _calculate_expected_records(self, start: datetime, end: datetime, timeframe: str) -> int:
         """Calculate expected number of records."""
         interval_seconds = parse_timeframe_to_seconds(timeframe)
         duration_seconds = (end - start).total_seconds()
@@ -165,4 +159,3 @@ class GapDetector:
             )
         except Exception as e:
             logger.error(f"Failed to log gap: {e}")
-

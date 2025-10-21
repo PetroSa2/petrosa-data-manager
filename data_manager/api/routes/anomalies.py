@@ -4,7 +4,6 @@ Anomaly detection endpoints.
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -18,7 +17,7 @@ router = APIRouter()
 @router.get("/anomalies")
 async def get_anomalies(
     pair: str = Query(..., description="Trading pair symbol"),
-    severity: Optional[str] = Query(None, description="Filter by severity"),
+    severity: str | None = Query(None, description="Filter by severity"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of anomalies"),
 ) -> dict:
     """
@@ -46,7 +45,9 @@ async def get_anomalies(
 
         # Filter for anomaly type audits
         anomalies = [
-            log for log in logs if "anomaly" in log.get("details", "").lower()
+            log
+            for log in logs
+            if "anomaly" in log.get("details", "").lower()
             or "outlier" in log.get("details", "").lower()
         ]
 
@@ -128,7 +129,8 @@ async def anomaly_summary() -> dict:
 
         # Filter anomaly-related logs
         anomaly_logs = [
-            log for log in logs
+            log
+            for log in logs
             if "anomaly" in log.get("details", "").lower()
             or "outlier" in log.get("details", "").lower()
         ]
@@ -155,4 +157,3 @@ async def anomaly_summary() -> dict:
     except Exception as e:
         logger.error(f"Error generating anomaly summary: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-

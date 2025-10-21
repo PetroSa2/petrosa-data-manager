@@ -50,7 +50,7 @@ clean: ## Clean up generated files
 
 lint: ## Run all linters
 	@echo "Running linters..."
-	$(VENV)/bin/flake8 data_manager tests --max-line-length=100
+	$(VENV)/bin/flake8 data_manager tests --max-line-length=100 --extend-ignore=E203
 	$(VENV)/bin/black --check data_manager tests
 	$(VENV)/bin/ruff check data_manager tests
 	$(VENV)/bin/mypy data_manager

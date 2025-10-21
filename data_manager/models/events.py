@@ -3,9 +3,8 @@ NATS event message models.
 """
 
 from datetime import datetime
-from decimal import Decimal
 from enum import Enum
-from typing import Dict, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -28,9 +27,9 @@ class MarketDataEvent(BaseModel):
     event_type: EventType = Field(..., description="Type of market data event")
     symbol: str = Field(..., description="Trading pair symbol")
     timestamp: datetime = Field(..., description="Event timestamp")
-    data: Dict[str, any] = Field(..., description="Event data payload")
+    data: dict[str, Any] = Field(..., description="Event data payload")
     exchange: str = Field(default="binance", description="Exchange name")
-    stream: Optional[str] = Field(None, description="Stream name")
+    stream: str | None = Field(None, description="Stream name")
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
@@ -91,7 +90,7 @@ class BackfillRequest(BaseModel):
 
     symbol: str = Field(..., description="Trading pair symbol")
     data_type: str = Field(..., description="Data type (candles/trades/funding)")
-    timeframe: Optional[str] = Field(None, description="Timeframe for candles")
+    timeframe: str | None = Field(None, description="Timeframe for candles")
     start_time: datetime = Field(..., description="Backfill start time")
     end_time: datetime = Field(..., description="Backfill end time")
     priority: int = Field(default=5, ge=1, le=10, description="Priority (1=highest, 10=lowest)")
@@ -109,11 +108,10 @@ class BackfillJob(BaseModel):
     progress: float = Field(default=0.0, ge=0.0, le=100.0, description="Progress percentage")
     records_fetched: int = Field(default=0, description="Number of records fetched")
     records_inserted: int = Field(default=0, description="Number of records inserted")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    started_at: Optional[datetime] = Field(None, description="Job start timestamp")
-    completed_at: Optional[datetime] = Field(None, description="Job completion timestamp")
+    error_message: str | None = Field(None, description="Error message if failed")
+    started_at: datetime | None = Field(None, description="Job start timestamp")
+    completed_at: datetime | None = Field(None, description="Job completion timestamp")
     created_at: datetime = Field(..., description="Job creation timestamp")
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
-
