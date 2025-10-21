@@ -77,7 +77,10 @@ class DataManagerApp:
             await self.db_manager.initialize()
             logger.info("Database connections initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize databases: {e}")
+            logger.warning(
+                f"Failed to initialize databases: {e}. "
+                "Service will run in limited mode (NATS consumer only)."
+            )
             # Continue without database - will be limited functionality
             self.db_manager = None
 
@@ -175,6 +178,14 @@ class DataManagerApp:
             logger.warning("Auditor requires database, but db_manager not available")
             return
 
+        # Check database health before starting
+        if not self.db_manager.is_healthy():
+            logger.warning(
+                "Auditor not started: Database connections not healthy. "
+                "This is expected if databases are not yet configured."
+            )
+            return
+
         logger.info("Starting auditor background worker")
 
         # Import here to avoid circular dependency
@@ -196,6 +207,14 @@ class DataManagerApp:
 
         if not self.db_manager:
             logger.warning("Analytics requires database, but db_manager not available")
+            return
+
+        # Check database health before starting
+        if not self.db_manager.is_healthy():
+            logger.warning(
+                "Analytics not started: Database connections not healthy. "
+                "This is expected if databases are not yet configured."
+            )
             return
 
         logger.info("Starting analytics background worker")

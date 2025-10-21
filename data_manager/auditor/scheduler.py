@@ -43,7 +43,9 @@ class AuditScheduler:
                 await self.run_audit_cycle()
                 await asyncio.sleep(constants.AUDIT_INTERVAL)
             except Exception as e:
-                logger.error(f"Error in audit scheduler: {e}", exc_info=True)
+                logger.warning(
+                    f"Audit cycle failed: {e}. Will retry in {constants.AUDIT_INTERVAL}s"
+                )
                 await asyncio.sleep(30)  # Short backoff on error
 
         logger.info("Audit scheduler stopped")
@@ -89,10 +91,7 @@ class AuditScheduler:
                     symbols_audited += 1
 
                 except Exception as e:
-                    logger.error(
-                        f"Error auditing {symbol} {timeframe}: {e}",
-                        exc_info=True,
-                    )
+                    logger.warning(f"Error auditing {symbol} {timeframe}: {e}")
 
         audit_duration = (datetime.utcnow() - audit_start).total_seconds()
 

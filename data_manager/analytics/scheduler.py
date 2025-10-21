@@ -54,7 +54,9 @@ class AnalyticsScheduler:
                 await self.run_analytics_cycle()
                 await asyncio.sleep(constants.ANALYTICS_INTERVAL)
             except Exception as e:
-                logger.error(f"Error in analytics scheduler: {e}", exc_info=True)
+                logger.warning(
+                    f"Analytics cycle failed: {e}. Will retry in {constants.ANALYTICS_INTERVAL}s"
+                )
                 await asyncio.sleep(30)  # Short backoff on error
 
         logger.info("Analytics scheduler stopped")
@@ -109,10 +111,7 @@ class AnalyticsScheduler:
                             metrics_calculated += 1
 
                 except Exception as e:
-                    logger.error(
-                        f"Error calculating analytics for {symbol} {timeframe}: {e}",
-                        exc_info=True,
-                    )
+                    logger.warning(f"Error calculating analytics for {symbol} {timeframe}: {e}")
 
             # Calculate spread (uses latest depth, not timeframe-specific)
             try:
@@ -120,7 +119,7 @@ class AnalyticsScheduler:
                 if spread:
                     metrics_calculated += 1
             except Exception as e:
-                logger.error(f"Error calculating spread for {symbol}: {e}", exc_info=True)
+                logger.warning(f"Error calculating spread for {symbol}: {e}")
 
             # Classify market regime (uses computed metrics)
             try:
@@ -128,7 +127,7 @@ class AnalyticsScheduler:
                 if regime:
                     metrics_calculated += 1
             except Exception as e:
-                logger.error(f"Error classifying regime for {symbol}: {e}", exc_info=True)
+                logger.warning(f"Error classifying regime for {symbol}: {e}")
 
         # Calculate cross-market correlation (all pairs together, 1h timeframe)
         try:
@@ -138,6 +137,6 @@ class AnalyticsScheduler:
             if correlations:
                 metrics_calculated += len(correlations)
         except Exception as e:
-            logger.error(f"Error calculating correlations: {e}", exc_info=True)
+            logger.warning(f"Error calculating correlations: {e}")
 
         logger.info(f"Analytics cycle complete: calculated {metrics_calculated} metrics")

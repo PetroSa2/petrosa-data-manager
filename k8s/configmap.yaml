@@ -21,9 +21,9 @@ data:
   NATS_RECONNECT_TIME_WAIT: "2"
   
   # Feature Flags
-  ENABLE_AUDITOR: "true"
-  ENABLE_BACKFILLER: "true"
-  ENABLE_ANALYTICS: "true"
+  ENABLE_AUDITOR: "false"  # Disabled: runs without leader election, causes duplicate work
+  ENABLE_BACKFILLER: "false"  # Disabled: not needed until data accumulates
+  ENABLE_ANALYTICS: "false"  # Disabled: runs without leader election, causes duplicate work
   ENABLE_API: "true"
   
   # Scheduling Configuration
