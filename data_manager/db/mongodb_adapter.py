@@ -94,6 +94,9 @@ class MongoDBAdapter(BaseAdapter):
                 if "symbol" in doc and "timestamp" in doc:
                     timestamp_ms = int(doc["timestamp"].timestamp() * 1000)
                     doc["_id"] = f"{doc['symbol']}_{timestamp_ms}"
+                
+                # Convert Decimal to float for MongoDB compatibility
+                doc = self._convert_decimals_to_float(doc)
                 documents.append(doc)
 
             # Insert with ordered=False to continue on duplicates
@@ -273,3 +276,26 @@ class MongoDBAdapter(BaseAdapter):
             return collections
         except PyMongoError as e:
             raise DatabaseError(f"Failed to list collections: {e}") from e
+
+    @staticmethod
+    def _convert_decimals_to_float(doc: dict) -> dict:
+        """
+        Recursively convert Decimal objects to float in a dictionary.
+        
+        MongoDB Motor doesn't support Decimal type, so we need to convert them.
+        """
+        from decimal import Decimal
+        
+        for key, value in doc.items():
+            if isinstance(value, Decimal):
+                doc[key] = float(value)
+            elif isinstance(value, dict):
+                doc[key] = MongoDBAdapter._convert_decimals_to_float(value)
+            elif isinstance(value, list):
+                doc[key] = [
+                    MongoDBAdapter._convert_decimals_to_float(item) if isinstance(item, dict)
+                    else float(item) if isinstance(item, Decimal)
+                    else item
+                    for item in value
+                ]
+        return doc
