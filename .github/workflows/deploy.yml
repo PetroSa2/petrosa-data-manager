@@ -131,6 +131,11 @@ jobs:
     - name: Update Image Tags in Manifests
       run: |
         IMAGE_TAG="${{ needs.build-and-push.outputs.version }}"
+        
+        echo "Using image tag: ${IMAGE_TAG}"
+        
+        # Update the image tag in Kubernetes manifests
+        # Replace VERSION_PLACEHOLDER with the actual version tag
         find k8s/ -name "*.yaml" -o -name "*.yml" | xargs sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g"
         
         # Also replace the image name to use the correct format with secrets
@@ -150,28 +155,12 @@ jobs:
         else
           echo "✅ All image references updated to versioned tag: ${IMAGE_TAG}"
         fi
-    - name: Checkout petrosa_k8s repository
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository_owner }}/petrosa_k8s
-        path: petrosa_k8s
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Update petrosa_k8s manifests with new version
-      run: |
-        IMAGE_TAG="${{ needs.build-and-push.outputs.version }}"
-        
-        # Update VERSION_PLACEHOLDER in petrosa_k8s/k8s/data-manager/ manifests
-        find petrosa_k8s/k8s/data-manager/ -name "*.yaml" | xargs sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g"
-        
-        # Update image reference
-        find petrosa_k8s/k8s/data-manager/ -name "*.yaml" | xargs sed -i "s|yurisa2/petrosa-data-manager:VERSION_PLACEHOLDER|${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager:${IMAGE_TAG}|g"
-        
-        echo "✅ Updated petrosa_k8s manifests"
     
     - name: Apply Kubernetes Manifests
       run: |
-        kubectl apply --insecure-skip-tls-verify -f petrosa_k8s/k8s/data-manager/ -n ${{ env.NAMESPACE }}
+        # Apply all manifests from this repository's k8s/ directory
+        kubectl apply --insecure-skip-tls-verify -f k8s/ -n ${{ env.NAMESPACE }}
+        echo "✅ Kubernetes manifests applied"
     - name: Wait for deployment to be ready
       run: |
         kubectl rollout status deployment/petrosa-data-manager -n ${{ env.NAMESPACE }} --timeout=300s --insecure-skip-tls-verify
