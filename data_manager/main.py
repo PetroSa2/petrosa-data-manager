@@ -56,8 +56,8 @@ class DataManagerApp:
         self.db_manager: DatabaseManager | None = None
         self.consumer: MarketDataConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
-        self.leader_election: "LeaderElectionManager | None" = None
-        self.backfill_orchestrator: "BackfillOrchestrator | None" = None
+        self.leader_election: LeaderElectionManager | None = None
+        self.backfill_orchestrator: BackfillOrchestrator | None = None
         self.running = False
         self._shutdown_event = asyncio.Event()
 
