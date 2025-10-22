@@ -21,10 +21,24 @@ data:
   NATS_RECONNECT_TIME_WAIT: "2"
   
   # Feature Flags
-  ENABLE_AUDITOR: "false"  # Disabled: runs without leader election, causes duplicate work
+  ENABLE_AUDITOR: "true"  # Enabled: now has leader election support
   ENABLE_BACKFILLER: "false"  # Disabled: not needed until data accumulates
   ENABLE_ANALYTICS: "false"  # Disabled: runs without leader election, causes duplicate work
   ENABLE_API: "true"
+  
+  # Leader Election Configuration
+  ENABLE_LEADER_ELECTION: "true"
+  LEADER_ELECTION_HEARTBEAT_INTERVAL: "10"  # seconds
+  LEADER_ELECTION_TIMEOUT: "30"  # seconds
+  
+  # Auto-Backfill Configuration
+  ENABLE_AUTO_BACKFILL: "false"  # Disabled initially for conservative rollout
+  MIN_AUTO_BACKFILL_GAP: "3600"  # 1 hour in seconds
+  MAX_AUTO_BACKFILL_JOBS: "5"
+  
+  # Duplicate Handling Configuration
+  ENABLE_DUPLICATE_REMOVAL: "false"  # Disabled initially for conservative rollout
+  DUPLICATE_RESOLUTION_STRATEGY: "keep_newest"  # keep_newest, keep_oldest, manual
   
   # Scheduling Configuration
   AUDIT_INTERVAL: "300"  # 5 minutes

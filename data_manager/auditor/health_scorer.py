@@ -36,6 +36,8 @@ class HealthScorer:
         symbol: str,
         timeframe: str,
         lookback_hours: int = 24,
+        gaps: list | None = None,
+        duplicates_count: int = 0,
     ) -> DataHealthMetrics:
         """
         Calculate health metrics for a dataset.
@@ -44,6 +46,8 @@ class HealthScorer:
             symbol: Trading pair symbol
             timeframe: Timeframe (e.g., '1m', '1h')
             lookback_hours: Hours to look back for analysis
+            gaps: List of detected gaps (optional)
+            duplicates_count: Number of duplicates detected
 
         Returns:
             DataHealthMetrics instance
@@ -71,18 +75,35 @@ class HealthScorer:
             else:
                 freshness_seconds = int(timedelta(hours=lookback_hours).total_seconds())
 
-            # For now, assume no gaps or duplicates (gap detector handles this separately)
-            gaps_count = 0
-            duplicates_count = 0
+            # Use provided gaps and duplicates count
+            gaps_count = len(gaps) if gaps else 0
 
-            # Calculate consistency score (100 for now, will enhance later)
+            # Calculate consistency score based on data quality issues
             consistency_score = 100.0
+            
+            # Reduce score for gaps (each gap reduces score)
+            if gaps_count > 0:
+                gap_penalty = min(gaps_count * 10, 50)  # Max 50% penalty for gaps
+                consistency_score -= gap_penalty
+            
+            # Reduce score for duplicates
+            if duplicates_count > 0:
+                duplicate_penalty = min(duplicates_count * 5, 30)  # Max 30% penalty for duplicates
+                consistency_score -= duplicate_penalty
+            
+            # Ensure consistency score is not negative
+            consistency_score = max(consistency_score, 0.0)
+
+            # Calculate freshness score (0-100, where 100 is most recent)
+            # Penalize data older than 5 minutes (300 seconds)
+            freshness_score = max(0.0, 100.0 - (freshness_seconds / 300.0 * 100.0))
+            freshness_score = min(freshness_score, 100.0)
 
             # Calculate overall quality score (weighted average)
             quality_score = (
-                completeness * 0.5  # 50% weight on completeness
-                + consistency_score * 0.3  # 30% weight on consistency
-                + (100.0 - min(freshness_seconds / 60.0, 100.0)) * 0.2  # 20% weight on freshness
+                completeness * 0.4  # 40% weight on completeness
+                + consistency_score * 0.4  # 40% weight on consistency
+                + freshness_score * 0.2  # 20% weight on freshness
             )
 
             metrics = DataHealthMetrics(
@@ -98,9 +119,14 @@ class HealthScorer:
             dataset_id = f"candles_{symbol}_{timeframe}"
             await self.health_repo.insert(dataset_id, symbol, metrics)
 
-            logger.info(
+            logger.debug(
                 f"Health calculated for {symbol} {timeframe}: "
-                f"completeness={completeness:.2f}%, quality={quality_score:.2f}"
+                f"completeness={completeness:.2f}%, "
+                f"consistency={consistency_score:.2f}%, "
+                f"freshness={freshness_score:.2f}%, "
+                f"quality={quality_score:.2f}, "
+                f"gaps={gaps_count}, "
+                f"duplicates={duplicates_count}"
             )
 
             return metrics

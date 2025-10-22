@@ -114,6 +114,86 @@ async def health_summary():
     }
 
 
+@router.get("/leader")
+async def leader_status():
+    """
+    Get leader election status.
+    
+    Returns information about the current leader pod and this pod's status.
+    """
+    try:
+        # Access leader election manager from main app
+        from data_manager import main as main_module
+        
+        # Try to get the app instance (if available)
+        # This is a simple approach - in production you might use dependency injection
+        leader_election = getattr(api_module, "leader_election", None)
+        
+        if leader_election:
+            status = leader_election.get_status()
+            return {
+                "enabled": True,
+                "pod_id": status["pod_id"],
+                "is_leader": status["is_leader"],
+                "leader_pod_id": status["leader_pod_id"],
+                "running": status["running"],
+                "heartbeat_interval": status["heartbeat_interval"],
+                "election_timeout": status["election_timeout"],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        else:
+            return {
+                "enabled": False,
+                "message": "Leader election not initialized or disabled",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+    except Exception as e:
+        logger.error(f"Error getting leader status: {e}")
+        return {
+            "enabled": False,
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+
+@router.get("/audit-status")
+async def audit_status():
+    """
+    Get audit scheduler status.
+    
+    Returns information about the audit scheduler including last run time,
+    leader status, and configuration.
+    """
+    try:
+        # Access audit scheduler status
+        audit_scheduler = getattr(api_module, "audit_scheduler", None)
+        
+        if audit_scheduler:
+            status = audit_scheduler.get_status()
+            return {
+                "enabled": True,
+                "running": status["running"],
+                "last_audit_time": status.get("last_audit_time"),
+                "is_leader": status.get("is_leader", False),
+                "leader_pod_id": status.get("leader_pod_id"),
+                "pod_id": status.get("pod_id"),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        else:
+            return {
+                "enabled": False,
+                "message": "Audit scheduler not initialized or disabled",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+    except Exception as e:
+        logger.error(f"Error getting audit status: {e}")
+        return {
+            "enabled": False,
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+
 @router.get("")
 async def data_health(
     pair: str = Query(..., description="Trading pair symbol"),
