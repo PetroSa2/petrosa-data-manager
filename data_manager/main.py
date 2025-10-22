@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 import sys
+from typing import TYPE_CHECKING
 
 import structlog
 import uvicorn
@@ -16,6 +17,10 @@ import otel_init
 from data_manager.api.app import create_app
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
+
+if TYPE_CHECKING:
+    from data_manager.backfiller.orchestrator import BackfillOrchestrator
+    from data_manager.leader_election import LeaderElectionManager
 
 # Configure structured logging
 structlog.configure(
@@ -51,6 +56,8 @@ class DataManagerApp:
         self.db_manager: DatabaseManager | None = None
         self.consumer: MarketDataConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
+        self.leader_election: LeaderElectionManager | None = None
+        self.backfill_orchestrator: BackfillOrchestrator | None = None
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -83,6 +90,23 @@ class DataManagerApp:
             )
             # Continue without database - will be limited functionality
             self.db_manager = None
+
+        # Initialize leader election if enabled and database available
+        if constants.ENABLE_LEADER_ELECTION and self.db_manager and self.db_manager.mongodb_adapter:
+            try:
+                from data_manager.leader_election import LeaderElectionManager
+
+                self.leader_election = LeaderElectionManager()
+                await self.leader_election.initialize(self.db_manager.mongodb_adapter.client)
+                await self.leader_election.start()
+                logger.info(
+                    f"Leader election initialized: "
+                    f"is_leader={self.leader_election.is_leader}, "
+                    f"pod_id={self.leader_election.pod_id}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize leader election: {e}", exc_info=True)
+                self.leader_election = None
 
         # Initialize and start NATS consumer
         if constants.ENABLE_API or True:  # Always start consumer for now
@@ -120,6 +144,11 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
+
+        # Stop leader election
+        if self.leader_election:
+            await self.leader_election.stop()
+            logger.info("Leader election stopped")
 
         # Stop consumer
         if self.consumer:
@@ -192,7 +221,11 @@ class DataManagerApp:
         from data_manager.auditor.scheduler import AuditScheduler
 
         try:
-            audit_scheduler = AuditScheduler(self.db_manager)
+            audit_scheduler = AuditScheduler(
+                self.db_manager,
+                leader_election=self.leader_election,
+                backfill_orchestrator=self.backfill_orchestrator,
+            )
             await audit_scheduler.start()
         except Exception as e:
             logger.error(f"Error in auditor: {e}", exc_info=True)

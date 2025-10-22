@@ -97,3 +97,25 @@ SUPPORTED_PAIRS = os.getenv(
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
+# Leader Election Configuration
+ENABLE_LEADER_ELECTION = os.getenv("ENABLE_LEADER_ELECTION", "true").lower() == "true"
+LEADER_ELECTION_HEARTBEAT_INTERVAL = int(
+    os.getenv("LEADER_ELECTION_HEARTBEAT_INTERVAL", "10")
+)  # seconds
+LEADER_ELECTION_TIMEOUT = int(os.getenv("LEADER_ELECTION_TIMEOUT", "30"))  # seconds
+
+# Auto-Backfill Configuration
+ENABLE_AUTO_BACKFILL = os.getenv("ENABLE_AUTO_BACKFILL", "false").lower() == "true"
+MIN_AUTO_BACKFILL_GAP = int(
+    os.getenv("MIN_AUTO_BACKFILL_GAP", "3600")
+)  # seconds (1 hour)
+MAX_AUTO_BACKFILL_JOBS = int(os.getenv("MAX_AUTO_BACKFILL_JOBS", "5"))  # concurrent jobs
+
+# Duplicate Handling Configuration
+ENABLE_DUPLICATE_REMOVAL = (
+    os.getenv("ENABLE_DUPLICATE_REMOVAL", "false").lower() == "true"
+)
+DUPLICATE_RESOLUTION_STRATEGY = os.getenv(
+    "DUPLICATE_RESOLUTION_STRATEGY", "keep_newest"
+)  # keep_newest, keep_oldest, manual
+

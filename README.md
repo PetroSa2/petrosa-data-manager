@@ -163,6 +163,14 @@ make k8s-clean
 | `API_PORT` | `8000` | API server port |
 | `AUDIT_INTERVAL` | `300` | Audit interval in seconds |
 | `ANALYTICS_INTERVAL` | `900` | Analytics interval in seconds |
+| `ENABLE_LEADER_ELECTION` | `true` | Enable MongoDB-based leader election |
+| `LEADER_ELECTION_HEARTBEAT_INTERVAL` | `10` | Leader heartbeat interval (seconds) |
+| `LEADER_ELECTION_TIMEOUT` | `30` | Leader election timeout (seconds) |
+| `ENABLE_AUTO_BACKFILL` | `false` | Enable automatic backfill for detected gaps |
+| `MIN_AUTO_BACKFILL_GAP` | `3600` | Minimum gap size to trigger backfill (seconds) |
+| `MAX_AUTO_BACKFILL_JOBS` | `5` | Maximum concurrent backfill jobs |
+| `ENABLE_DUPLICATE_REMOVAL` | `false` | Enable automatic duplicate removal |
+| `DUPLICATE_RESOLUTION_STRATEGY` | `keep_newest` | Duplicate resolution strategy |
 
 ### Kubernetes Configuration
 
@@ -262,13 +270,56 @@ Supported event types:
 
 ---
 
+## 🔒 Leader Election
+
+The Data Manager uses MongoDB-based leader election to ensure only one pod runs background schedulers (auditor, analytics) in multi-replica deployments.
+
+### How It Works
+
+1. **Election**: On startup, each pod attempts to become leader via atomic MongoDB write
+2. **Heartbeat**: Leader sends heartbeat every 10 seconds to prove it's alive
+3. **Failover**: If leader fails (no heartbeat for 30s), followers elect new leader
+4. **Safety**: Prevents duplicate work and database contention
+
+### Configuration
+
+```yaml
+# Enable leader election (recommended for production)
+ENABLE_LEADER_ELECTION: "true"
+
+# Heartbeat frequency
+LEADER_ELECTION_HEARTBEAT_INTERVAL: "10"  # seconds
+
+# Leader timeout
+LEADER_ELECTION_TIMEOUT: "30"  # seconds
+```
+
+### Monitoring
+
+```bash
+# Check which pod is the leader
+kubectl exec -it data-manager-xxx -- curl localhost:8000/health/leader
+
+# Check audit scheduler status
+kubectl exec -it data-manager-xxx -- curl localhost:8000/health/audit-status
+```
+
+See [docs/AUDITOR.md](docs/AUDITOR.md) for complete details.
+
+---
+
 ## 🎯 Roadmap
 
 * ✅ NATS consumer for market data events
 * ✅ FastAPI serving layer with schema-rich endpoints
 * ✅ Kubernetes manifests and deployment
+* ✅ Auditor implementation with leader election
+  * ✅ Gap detection with auto-backfill integration
+  * ✅ Duplicate detection and removal
+  * ✅ Health scoring with enhanced metrics
+  * ✅ MongoDB-based leader election for multi-replica safety
+* ✅ Leader election for background schedulers
 * 🚧 Database integration (PostgreSQL + MongoDB)
-* 🚧 Auditor implementation (gap detection, health scoring)
 * 🚧 Backfiller implementation (Binance API integration)
 * 🚧 Analytics engine (all metric calculators)
 * 🚧 Catalog management (dataset registry)
