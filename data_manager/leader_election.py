@@ -78,8 +78,7 @@ class LeaderElectionManager:
 
             # TTL index on last_heartbeat for automatic cleanup of stale entries
             await leader_collection.create_index(
-                "last_heartbeat",
-                expireAfterSeconds=self.election_timeout * 2
+                "last_heartbeat", expireAfterSeconds=self.election_timeout * 2
             )
 
             logger.debug("Leader election indexes ensured")
@@ -109,9 +108,7 @@ class LeaderElectionManager:
                 # Start heartbeat task
                 self.heartbeat_task = asyncio.create_task(self._maintain_leadership())
             else:
-                logger.info(
-                    f"Pod {self.pod_id} is a FOLLOWER. Leader: {self.leader_pod_id}"
-                )
+                logger.info(f"Pod {self.pod_id} is a FOLLOWER. Leader: {self.leader_pod_id}")
 
             return True
 
@@ -160,15 +157,13 @@ class LeaderElectionManager:
                 # Check if current leader is stale (no heartbeat for timeout period)
                 if (
                     last_heartbeat
-                    and (datetime.utcnow() - last_heartbeat).total_seconds()
-                    < self.election_timeout
+                    and (datetime.utcnow() - last_heartbeat).total_seconds() < self.election_timeout
                 ):
                     # Current leader is still active
                     self.is_leader = False
                     self.leader_pod_id = current_leader_pod
                     logger.debug(
-                        f"Pod {self.pod_id} is a follower. "
-                        f"Active leader: {current_leader_pod}"
+                        f"Pod {self.pod_id} is a follower. " f"Active leader: {current_leader_pod}"
                     )
                     return False
 
@@ -204,8 +199,7 @@ class LeaderElectionManager:
                 self.is_leader = False
                 self.leader_pod_id = leader_doc["pod_id"] if leader_doc else None
                 logger.info(
-                    f"Pod {self.pod_id} lost leader election. "
-                    f"Leader: {self.leader_pod_id}"
+                    f"Pod {self.pod_id} lost leader election. " f"Leader: {self.leader_pod_id}"
                 )
                 return False
 
@@ -232,9 +226,7 @@ class LeaderElectionManager:
                     logger.warning("Failed to send heartbeat, checking leadership...")
                     # Verify we're still the leader
                     if not await self._verify_leadership():
-                        logger.error(
-                            f"Lost leadership! Pod {self.pod_id} is no longer leader"
-                        )
+                        logger.error(f"Lost leadership! Pod {self.pod_id} is no longer leader")
                         self.is_leader = False
                         break
 
@@ -273,9 +265,7 @@ class LeaderElectionManager:
                 logger.debug(f"Heartbeat sent by leader {self.pod_id}")
                 return True
             else:
-                logger.warning(
-                    f"Heartbeat failed: No document modified for pod {self.pod_id}"
-                )
+                logger.warning(f"Heartbeat failed: No document modified for pod {self.pod_id}")
                 return False
 
         except Exception as e:
@@ -309,9 +299,7 @@ class LeaderElectionManager:
 
         try:
             leader_election = self.mongodb_db.leader_election
-            result = await leader_election.delete_one(
-                {"status": "leader", "pod_id": self.pod_id}
-            )
+            result = await leader_election.delete_one({"status": "leader", "pod_id": self.pod_id})
 
             if result.deleted_count > 0:
                 logger.info(f"Leadership released by pod {self.pod_id}")

@@ -80,13 +80,9 @@ class DuplicateDetector:
 
                 # Auto-remove if enabled
                 if constants.ENABLE_DUPLICATE_REMOVAL:
-                    removed = await self.remove_duplicates(
-                        symbol, timeframe, start, end, candles
-                    )
+                    removed = await self.remove_duplicates(symbol, timeframe, start, end, candles)
                     if removed > 0:
-                        logger.info(
-                            f"Removed {removed} duplicates for {symbol} {timeframe}"
-                        )
+                        logger.info(f"Removed {removed} duplicates for {symbol} {timeframe}")
 
             return duplicates
 
@@ -180,13 +176,12 @@ class DuplicateDetector:
 
             if removed_count > 0:
                 logger.info(
-                    f"Successfully removed {removed_count} duplicates "
-                    f"for {symbol} {timeframe}"
+                    f"Successfully removed {removed_count} duplicates " f"for {symbol} {timeframe}"
                 )
                 # Update metrics
-                duplicates_removed_counter.labels(
-                    symbol=symbol, timeframe=timeframe
-                ).inc(removed_count)
+                duplicates_removed_counter.labels(symbol=symbol, timeframe=timeframe).inc(
+                    removed_count
+                )
 
             return removed_count
 

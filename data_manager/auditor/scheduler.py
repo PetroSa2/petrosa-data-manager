@@ -83,9 +83,7 @@ class AuditScheduler:
         # Check if leader election is enabled and required
         if constants.ENABLE_LEADER_ELECTION:
             if not self.leader_election:
-                logger.error(
-                    "Leader election is enabled but no LeaderElectionManager provided"
-                )
+                logger.error("Leader election is enabled but no LeaderElectionManager provided")
                 return
 
             # Check if this pod is the leader
@@ -98,8 +96,7 @@ class AuditScheduler:
                 return
 
             logger.info(
-                f"Pod {self.leader_election.pod_id} is the LEADER. "
-                f"Starting audit scheduler."
+                f"Pod {self.leader_election.pod_id} is the LEADER. " f"Starting audit scheduler."
             )
             audit_leader_status.set(1)
         else:
@@ -119,9 +116,7 @@ class AuditScheduler:
                     and self.leader_election
                     and not self.leader_election.is_leader
                 ):
-                    logger.warning(
-                        "Lost leadership! Stopping audit scheduler on this pod."
-                    )
+                    logger.warning("Lost leadership! Stopping audit scheduler on this pod.")
                     audit_leader_status.set(0)
                     break
 
@@ -176,9 +171,9 @@ class AuditScheduler:
                     if duplicates > 0:
                         logger.warning(f"Found {duplicates} duplicates for {symbol} {timeframe}")
                         # Update metrics
-                        audit_duplicates_detected.labels(
-                            symbol=symbol, timeframe=timeframe
-                        ).inc(duplicates)
+                        audit_duplicates_detected.labels(symbol=symbol, timeframe=timeframe).inc(
+                            duplicates
+                        )
 
                     # Calculate health metrics (now includes gaps and duplicates)
                     health = await self.health_scorer.calculate_health(

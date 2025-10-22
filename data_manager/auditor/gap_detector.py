@@ -200,9 +200,7 @@ class GapDetector:
 
             # Check if backfill orchestrator is available
             if not self.backfill_orchestrator:
-                logger.warning(
-                    "Auto-backfill enabled but no backfill orchestrator available"
-                )
+                logger.warning("Auto-backfill enabled but no backfill orchestrator available")
                 return
 
             # Create backfill request
@@ -225,9 +223,7 @@ class GapDetector:
             # Create backfill job
             job = await self.backfill_orchestrator.create_backfill_job(request)
 
-            logger.info(
-                f"Backfill job created: {job.job_id} for {symbol} {timeframe}"
-            )
+            logger.info(f"Backfill job created: {job.job_id} for {symbol} {timeframe}")
 
             # Update metrics
             auto_backfill_triggered_counter.labels(
