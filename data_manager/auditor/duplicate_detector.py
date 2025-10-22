@@ -77,7 +77,7 @@ class DuplicateDetector:
 
             if duplicates > 0:
                 logger.warning(f"Found {duplicates} duplicate timestamps for {symbol} {timeframe}")
-                
+
                 # Auto-remove if enabled
                 if constants.ENABLE_DUPLICATE_REMOVAL:
                     removed = await self.remove_duplicates(
@@ -144,12 +144,10 @@ class DuplicateDetector:
                 if constants.DUPLICATE_RESOLUTION_STRATEGY == "keep_newest":
                     # Keep the candle with the most recent _id (assuming ObjectId)
                     duplicate_candles.sort(key=lambda c: c.get("_id", ""), reverse=True)
-                    to_keep = duplicate_candles[0]
                     to_remove = duplicate_candles[1:]
                 elif constants.DUPLICATE_RESOLUTION_STRATEGY == "keep_oldest":
                     # Keep the candle with the oldest _id
                     duplicate_candles.sort(key=lambda c: c.get("_id", ""))
-                    to_keep = duplicate_candles[0]
                     to_remove = duplicate_candles[1:]
                 else:
                     logger.warning(
@@ -181,7 +179,10 @@ class DuplicateDetector:
                 )
 
             if removed_count > 0:
-                logger.info(f"Successfully removed {removed_count} duplicates for {symbol} {timeframe}")
+                logger.info(
+                    f"Successfully removed {removed_count} duplicates "
+                    f"for {symbol} {timeframe}"
+                )
                 # Update metrics
                 duplicates_removed_counter.labels(
                     symbol=symbol, timeframe=timeframe

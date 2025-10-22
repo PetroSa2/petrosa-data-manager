@@ -97,7 +97,10 @@ class AuditScheduler:
                 audit_leader_status.set(0)
                 return
 
-            logger.info(f"Pod {self.leader_election.pod_id} is the LEADER. Starting audit scheduler.")
+            logger.info(
+                f"Pod {self.leader_election.pod_id} is the LEADER. "
+                f"Starting audit scheduler."
+            )
             audit_leader_status.set(1)
         else:
             logger.warning(
@@ -111,13 +114,16 @@ class AuditScheduler:
         while self.running:
             try:
                 # Verify leadership if leader election is enabled
-                if constants.ENABLE_LEADER_ELECTION and self.leader_election:
-                    if not self.leader_election.is_leader:
-                        logger.warning(
-                            "Lost leadership! Stopping audit scheduler on this pod."
-                        )
-                        audit_leader_status.set(0)
-                        break
+                if (
+                    constants.ENABLE_LEADER_ELECTION
+                    and self.leader_election
+                    and not self.leader_election.is_leader
+                ):
+                    logger.warning(
+                        "Lost leadership! Stopping audit scheduler on this pod."
+                    )
+                    audit_leader_status.set(0)
+                    break
 
                 await self.run_audit_cycle()
                 await asyncio.sleep(constants.AUDIT_INTERVAL)

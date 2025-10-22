@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import constants
@@ -43,7 +43,7 @@ class LeaderElectionManager:
         """
         try:
             self.mongodb_client = mongodb_client
-            
+
             # Get database from MongoDB connection string
             # Extract database name from MONGODB_URL or use default
             database_name = constants.MONGODB_DB
@@ -69,13 +69,13 @@ class LeaderElectionManager:
                 return
 
             leader_collection = self.mongodb_db.leader_election
-            
+
             # Index on status for quick leader lookup
             await leader_collection.create_index("status")
-            
+
             # Index on pod_id for pod-specific queries
             await leader_collection.create_index("pod_id")
-            
+
             # TTL index on last_heartbeat for automatic cleanup of stale entries
             await leader_collection.create_index(
                 "last_heartbeat",
@@ -178,7 +178,7 @@ class LeaderElectionManager:
                 )
 
             # Try to become leader using upsert
-            result = await leader_election.update_one(
+            _ = await leader_election.update_one(
                 {"status": "leader"},
                 {
                     "$set": {
@@ -296,10 +296,7 @@ class LeaderElectionManager:
             leader_election = self.mongodb_db.leader_election
             leader_doc = await leader_election.find_one({"status": "leader"})
 
-            if leader_doc and leader_doc["pod_id"] == self.pod_id:
-                return True
-            else:
-                return False
+            return leader_doc and leader_doc["pod_id"] == self.pod_id
 
         except Exception as e:
             logger.error(f"Error verifying leadership: {e}")
@@ -341,4 +338,3 @@ class LeaderElectionManager:
             "heartbeat_interval": self.heartbeat_interval,
             "election_timeout": self.election_timeout,
         }
-

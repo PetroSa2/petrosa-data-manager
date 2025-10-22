@@ -80,17 +80,17 @@ class HealthScorer:
 
             # Calculate consistency score based on data quality issues
             consistency_score = 100.0
-            
+
             # Reduce score for gaps (each gap reduces score)
             if gaps_count > 0:
                 gap_penalty = min(gaps_count * 10, 50)  # Max 50% penalty for gaps
                 consistency_score -= gap_penalty
-            
+
             # Reduce score for duplicates
             if duplicates_count > 0:
                 duplicate_penalty = min(duplicates_count * 5, 30)  # Max 30% penalty for duplicates
                 consistency_score -= duplicate_penalty
-            
+
             # Ensure consistency score is not negative
             consistency_score = max(consistency_score, 0.0)
 

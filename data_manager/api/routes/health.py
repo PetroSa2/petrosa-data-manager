@@ -118,17 +118,16 @@ async def health_summary():
 async def leader_status():
     """
     Get leader election status.
-    
+
     Returns information about the current leader pod and this pod's status.
     """
     try:
         # Access leader election manager from main app
-        from data_manager import main as main_module
-        
+
         # Try to get the app instance (if available)
         # This is a simple approach - in production you might use dependency injection
         leader_election = getattr(api_module, "leader_election", None)
-        
+
         if leader_election:
             status = leader_election.get_status()
             return {
@@ -160,14 +159,14 @@ async def leader_status():
 async def audit_status():
     """
     Get audit scheduler status.
-    
+
     Returns information about the audit scheduler including last run time,
     leader status, and configuration.
     """
     try:
         # Access audit scheduler status
         audit_scheduler = getattr(api_module, "audit_scheduler", None)
-        
+
         if audit_scheduler:
             status = audit_scheduler.get_status()
             return {

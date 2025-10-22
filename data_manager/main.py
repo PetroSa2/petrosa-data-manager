@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 import sys
+from typing import TYPE_CHECKING
 
 import structlog
 import uvicorn
@@ -16,6 +17,10 @@ import otel_init
 from data_manager.api.app import create_app
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
+
+if TYPE_CHECKING:
+    from data_manager.backfiller.orchestrator import BackfillOrchestrator
+    from data_manager.leader_election import LeaderElectionManager
 
 # Configure structured logging
 structlog.configure(
