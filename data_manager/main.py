@@ -178,10 +178,11 @@ class DataManagerApp:
         # Create app and set database manager reference
         app = create_app()
         from data_manager import api
-        from data_manager.api.routes import backfill
+        from data_manager.api.routes import backfill, config
 
         api.app.db_manager = self.db_manager
         backfill.backfill_orchestrator = getattr(self, "backfill_orchestrator", None)
+        config.set_database_manager(self.db_manager)
 
         config = uvicorn.Config(
             app,

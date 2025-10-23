@@ -312,3 +312,260 @@ class MongoDBAdapter(BaseAdapter):
                     for item in value
                 ]
         return doc
+
+    # -------------------------------------------------------------------------
+    # Configuration Management Methods
+    # -------------------------------------------------------------------------
+
+    async def get_app_config(self) -> dict | None:
+        """
+        Get application configuration.
+
+        Returns:
+            Configuration document or None if not found
+        """
+        if not self._connected:
+            return None
+
+        try:
+            # Single document approach - get the first (and only) config
+            config = await self.db.app_config.find_one()
+            return config
+        except Exception as e:
+            logger.error(f"Error fetching app config: {e}")
+            return None
+
+    async def upsert_app_config(self, config: dict, metadata: dict) -> str | None:
+        """
+        Create or update application configuration.
+
+        Args:
+            config: Configuration values
+            metadata: Additional metadata (created_by, reason, etc.)
+
+        Returns:
+            Configuration ID or None on failure
+        """
+        if not self._connected:
+            return None
+
+        try:
+            # Add metadata
+            config.update(metadata)
+            config["updated_at"] = datetime.utcnow().isoformat()
+
+            # Upsert (update if exists, insert if not)
+            result = await self.db.app_config.replace_one(
+                {},  # Empty filter matches any document
+                config,
+                upsert=True
+            )
+
+            if result.upserted_id:
+                logger.info(f"Created new app config: {result.upserted_id}")
+                return str(result.upserted_id)
+            else:
+                logger.info("Updated existing app config")
+                return "updated"
+
+        except Exception as e:
+            logger.error(f"Error upserting app config: {e}")
+            return None
+
+    async def get_global_config(self, strategy_id: str) -> dict | None:
+        """
+        Get global strategy configuration.
+
+        Args:
+            strategy_id: Strategy identifier
+
+        Returns:
+            Configuration document or None if not found
+        """
+        if not self._connected:
+            return None
+
+        try:
+            config = await self.db.strategy_configs_global.find_one(
+                {"strategy_id": strategy_id}
+            )
+            return config
+        except Exception as e:
+            logger.error(f"Error fetching global config for {strategy_id}: {e}")
+            return None
+
+    async def upsert_global_config(self, strategy_id: str, parameters: dict, metadata: dict) -> str | None:
+        """
+        Create or update global strategy configuration.
+
+        Args:
+            strategy_id: Strategy identifier
+            parameters: Strategy parameters
+            metadata: Additional metadata
+
+        Returns:
+            Configuration ID or None on failure
+        """
+        if not self._connected:
+            return None
+
+        try:
+            config_doc = {
+                "strategy_id": strategy_id,
+                "parameters": parameters,
+                "version": 1,
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+                **metadata
+            }
+
+            result = await self.db.strategy_configs_global.replace_one(
+                {"strategy_id": strategy_id},
+                config_doc,
+                upsert=True
+            )
+
+            if result.upserted_id:
+                logger.info(f"Created global config for {strategy_id}: {result.upserted_id}")
+                return str(result.upserted_id)
+            else:
+                logger.info(f"Updated global config for {strategy_id}")
+                return "updated"
+
+        except Exception as e:
+            logger.error(f"Error upserting global config for {strategy_id}: {e}")
+            return None
+
+    async def get_symbol_config(self, strategy_id: str, symbol: str) -> dict | None:
+        """
+        Get symbol-specific strategy configuration.
+
+        Args:
+            strategy_id: Strategy identifier
+            symbol: Trading symbol
+
+        Returns:
+            Configuration document or None if not found
+        """
+        if not self._connected:
+            return None
+
+        try:
+            config = await self.db.strategy_configs_symbol.find_one(
+                {"strategy_id": strategy_id, "symbol": symbol}
+            )
+            return config
+        except Exception as e:
+            logger.error(f"Error fetching symbol config for {strategy_id}/{symbol}: {e}")
+            return None
+
+    async def upsert_symbol_config(self, strategy_id: str, symbol: str, parameters: dict, metadata: dict) -> str | None:
+        """
+        Create or update symbol-specific strategy configuration.
+
+        Args:
+            strategy_id: Strategy identifier
+            symbol: Trading symbol
+            parameters: Strategy parameters
+            metadata: Additional metadata
+
+        Returns:
+            Configuration ID or None on failure
+        """
+        if not self._connected:
+            return None
+
+        try:
+            config_doc = {
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "parameters": parameters,
+                "version": 1,
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+                **metadata
+            }
+
+            result = await self.db.strategy_configs_symbol.replace_one(
+                {"strategy_id": strategy_id, "symbol": symbol},
+                config_doc,
+                upsert=True
+            )
+
+            if result.upserted_id:
+                logger.info(f"Created symbol config for {strategy_id}/{symbol}: {result.upserted_id}")
+                return str(result.upserted_id)
+            else:
+                logger.info(f"Updated symbol config for {strategy_id}/{symbol}")
+                return "updated"
+
+        except Exception as e:
+            logger.error(f"Error upserting symbol config for {strategy_id}/{symbol}: {e}")
+            return None
+
+    async def delete_global_config(self, strategy_id: str) -> bool:
+        """
+        Delete global strategy configuration.
+
+        Args:
+            strategy_id: Strategy identifier
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        if not self._connected:
+            return False
+
+        try:
+            result = await self.db.strategy_configs_global.delete_one(
+                {"strategy_id": strategy_id}
+            )
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Error deleting global config for {strategy_id}: {e}")
+            return False
+
+    async def delete_symbol_config(self, strategy_id: str, symbol: str) -> bool:
+        """
+        Delete symbol-specific strategy configuration.
+
+        Args:
+            strategy_id: Strategy identifier
+            symbol: Trading symbol
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        if not self._connected:
+            return False
+
+        try:
+            result = await self.db.strategy_configs_symbol.delete_one(
+                {"strategy_id": strategy_id, "symbol": symbol}
+            )
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Error deleting symbol config for {strategy_id}/{symbol}: {e}")
+            return False
+
+    async def list_all_strategy_ids(self) -> list[str]:
+        """
+        Get list of all strategy IDs with configurations.
+
+        Returns:
+            List of unique strategy IDs
+        """
+        if not self._connected:
+            return []
+
+        try:
+            global_ids = await self.db.strategy_configs_global.distinct("strategy_id")
+            symbol_ids = await self.db.strategy_configs_symbol.distinct("strategy_id")
+
+            # Combine and deduplicate
+            all_ids = list(set(global_ids + symbol_ids))
+            return sorted(all_ids)
+
+        except Exception as e:
+            logger.error(f"Error listing strategy IDs: {e}")
+            return []
