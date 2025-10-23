@@ -230,11 +230,22 @@ class MongoDBAdapter(BaseAdapter):
         try:
             coll = self.db[collection]
 
-            # Create indexes
-            indexes = [
-                IndexModel([("timestamp", ASCENDING)]),
-                IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)]),
-            ]
+            # Create indexes based on collection type
+            if collection == "schemas":
+                # Schema registry specific indexes
+                indexes = [
+                    IndexModel([("name", ASCENDING)]),
+                    IndexModel([("version", ASCENDING)]),
+                    IndexModel([("status", ASCENDING)]),
+                    IndexModel([("name", ASCENDING), ("version", ASCENDING)], unique=True),
+                    IndexModel([("created_at", ASCENDING)]),
+                ]
+            else:
+                # Default time-series indexes
+                indexes = [
+                    IndexModel([("timestamp", ASCENDING)]),
+                    IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)]),
+                ]
 
             await coll.create_indexes(indexes)
             logger.info(f"Indexes created/verified for MongoDB collection: {collection}")

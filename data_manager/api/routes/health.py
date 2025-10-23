@@ -92,6 +92,66 @@ async def readiness() -> ReadinessStatus:
     )
 
 
+@router.get("/databases")
+async def database_health():
+    """
+    Detailed database connection health status.
+    
+    Returns individual database connection status with metrics.
+    """
+    if not api_module.db_manager:
+        return {
+            "error": "Database manager not available",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    
+    health = api_module.db_manager.health_check()
+    stats = api_module.db_manager.get_connection_stats()
+    
+    return {
+        "databases": health,
+        "statistics": stats,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/connections")
+async def connection_stats():
+    """
+    Database connection pool statistics.
+    
+    Returns detailed connection pool metrics and statistics.
+    """
+    if not api_module.db_manager:
+        return {
+            "error": "Database manager not available",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    
+    stats = api_module.db_manager.get_connection_stats()
+    
+    # Add connection pool information
+    connection_info = {
+        "mysql": {
+            "pool_size": 5,  # From MySQL adapter configuration
+            "max_overflow": 10,
+            "pool_timeout": 30,
+            "pool_recycle": 1800,
+        },
+        "mongodb": {
+            "max_pool_size": 100,
+            "min_pool_size": 0,
+            "max_idle_time_ms": 0,
+        }
+    }
+    
+    return {
+        "statistics": stats,
+        "pool_configuration": connection_info,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
 @router.get("/summary")
 async def health_summary():
     """
