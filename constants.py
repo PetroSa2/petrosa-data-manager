@@ -119,3 +119,33 @@ DUPLICATE_RESOLUTION_STRATEGY = os.getenv(
     "DUPLICATE_RESOLUTION_STRATEGY", "keep_newest"
 )  # keep_newest, keep_oldest, manual
 
+# Connection Management Configuration
+DB_HEALTH_CHECK_INTERVAL = int(os.getenv("DB_HEALTH_CHECK_INTERVAL", "30"))  # seconds
+DB_RECONNECT_MAX_ATTEMPTS = int(os.getenv("DB_RECONNECT_MAX_ATTEMPTS", "10"))
+DB_RECONNECT_BACKOFF_BASE = int(os.getenv("DB_RECONNECT_BACKOFF_BASE", "2"))  # exponential backoff
+DB_CONNECTION_TIMEOUT = int(os.getenv("DB_CONNECTION_TIMEOUT", "30"))  # seconds
+
+# API Limits Configuration
+API_MAX_PAGE_SIZE = int(os.getenv("API_MAX_PAGE_SIZE", "10000"))
+API_DEFAULT_PAGE_SIZE = int(os.getenv("API_DEFAULT_PAGE_SIZE", "100"))
+API_MAX_BATCH_SIZE = int(os.getenv("API_MAX_BATCH_SIZE", "5000"))
+API_QUERY_TIMEOUT = int(os.getenv("API_QUERY_TIMEOUT", "30"))  # seconds
+
+# Raw Query Limits Configuration
+RAW_QUERY_TIMEOUT = int(os.getenv("RAW_QUERY_TIMEOUT", "60"))  # seconds
+RAW_QUERY_MAX_RESULTS = int(os.getenv("RAW_QUERY_MAX_RESULTS", "100000"))
+RAW_QUERY_ENABLED = os.getenv("RAW_QUERY_ENABLED", "true").lower() == "true"
+
+# Logging Configuration
+LOG_REQUEST_DETAILS = os.getenv("LOG_REQUEST_DETAILS", "true").lower() == "true"
+LOG_RESPONSE_DETAILS = os.getenv("LOG_RESPONSE_DETAILS", "true").lower() == "true"
+LOG_QUERY_DETAILS = os.getenv("LOG_QUERY_DETAILS", "false").lower() == "true"
+
+# Schema Registry Configuration
+SCHEMA_VALIDATION_ENABLED = os.getenv("SCHEMA_VALIDATION_ENABLED", "true").lower() == "true"
+SCHEMA_STRICT_MODE = os.getenv("SCHEMA_STRICT_MODE", "false").lower() == "true"
+SCHEMA_CACHE_TTL = int(os.getenv("SCHEMA_CACHE_TTL", "300"))  # seconds
+SCHEMA_AUTO_REGISTER = os.getenv("SCHEMA_AUTO_REGISTER", "false").lower() == "true"
+SCHEMA_MAX_VERSIONS = int(os.getenv("SCHEMA_MAX_VERSIONS", "10"))
+SCHEMA_COMPATIBILITY_MODE = os.getenv("SCHEMA_COMPATIBILITY_MODE", "BACKWARD")  # BACKWARD, FORWARD, FULL, NONE
+

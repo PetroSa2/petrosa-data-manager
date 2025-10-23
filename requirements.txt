@@ -17,6 +17,7 @@ scipy>=1.12.0
 # Validation and configuration
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+jsonschema>=4.20.0
 
 # Logging and observability
 structlog>=24.1.0

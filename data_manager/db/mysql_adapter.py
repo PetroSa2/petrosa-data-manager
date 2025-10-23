@@ -208,6 +208,25 @@ class MySQLAdapter(BaseAdapter):
             Index("idx_lineage_records_dataset", "dataset_id"),
         )
 
+        # Schemas table for schema registry
+        self.tables["schemas"] = Table(
+            "schemas",
+            self.metadata,
+            Column("schema_id", String(64), primary_key=True),
+            Column("name", String(100), nullable=False),
+            Column("version", Integer, nullable=False),
+            Column("schema_json", Text, nullable=False),
+            Column("compatibility_mode", String(20)),
+            Column("status", String(20), nullable=False),
+            Column("description", Text),
+            Column("created_at", DateTime, nullable=False),
+            Column("updated_at", DateTime, nullable=False),
+            Column("created_by", String(100)),
+            Index("idx_schemas_name", "name"),
+            Index("idx_schemas_status", "status"),
+            Index("idx_schemas_name_version", "name", "version", unique=True),
+        )
+
         # Create all tables
         if self.engine is not None:
             self.metadata.create_all(self.engine)

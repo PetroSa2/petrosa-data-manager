@@ -114,14 +114,46 @@ make k8s-clean
 * `GET /health/liveness` - Kubernetes liveness probe
 * `GET /health/readiness` - Kubernetes readiness probe
 * `GET /health/summary` - Overall system health
+* `GET /health/databases` - Detailed database connection status
+* `GET /health/connections` - Connection pool statistics
 * `GET /health?pair={pair}&period={period}` - Data quality metrics
 
-### Data Access
+### Data Access (Domain-Specific)
 
 * `GET /data/candles?pair={pair}&period={period}` - OHLCV candle data
 * `GET /data/trades?pair={pair}` - Individual trade data
 * `GET /data/depth?pair={pair}` - Order book depth
 * `GET /data/funding?pair={pair}` - Funding rate data
+
+### Generic CRUD API
+
+* `GET /api/v1/{database}/{collection}` - Query records with filtering, sorting, pagination
+* `POST /api/v1/{database}/{collection}` - Insert single or multiple records
+* `PUT /api/v1/{database}/{collection}` - Update records with filtering
+* `DELETE /api/v1/{database}/{collection}` - Delete records with filtering
+* `POST /api/v1/{database}/{collection}/batch` - Batch operations (insert/update/delete)
+
+### Raw Query API
+
+* `POST /api/v1/raw/mysql` - Execute raw SQL queries (with safety validation)
+* `POST /api/v1/raw/mongodb` - Execute raw MongoDB queries/aggregations
+
+### Schema Registry API
+
+* `POST /schemas/{database}/{name}` - Register new schema
+* `GET /schemas/{database}/{name}` - Get latest schema
+* `GET /schemas/{database}/{name}/versions` - List schema versions
+* `GET /schemas/{database}/{name}/versions/{version}` - Get specific version
+* `PUT /schemas/{database}/{name}/versions/{version}` - Update schema
+* `DELETE /schemas/{database}/{name}/versions/{version}` - Deprecate schema
+* `GET /schemas` - List all schemas (both databases)
+* `GET /schemas?database={db}` - List schemas for specific database
+* `POST /schemas/validate` - Validate data against schema
+* `POST /schemas/compatibility` - Check schema compatibility
+* `GET /schemas/search?query={query}` - Search schemas by name/description
+* `POST /schemas/bootstrap` - Bootstrap common schemas
+* `GET /schemas/cache/stats` - Get schema cache statistics
+* `POST /schemas/cache/clear` - Clear schema cache
 
 ### Analytics
 
@@ -143,6 +175,286 @@ make k8s-clean
 * `POST /backfill/start` - Trigger manual backfill
 * `GET /backfill/jobs` - List backfill jobs
 * `GET /backfill/jobs/{job_id}` - Job status
+
+---
+
+## 🚀 API Usage Examples
+
+### Generic CRUD Operations
+
+#### Query Records
+```bash
+# Get all records from a collection
+curl "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m"
+
+# Filter and sort records
+curl "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m?filter={\"symbol\":\"BTCUSDT\"}&sort={\"timestamp\":-1}&limit=100"
+
+# Paginate results
+curl "http://localhost:8000/api/v1/mongodb/trades_BTCUSDT?limit=50&offset=100"
+```
+
+#### Insert Records
+```bash
+# Insert single record
+curl -X POST "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m" \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"symbol": "BTCUSDT", "open": 50000, "high": 51000, "low": 49000, "close": 50500, "volume": 1000}}'
+
+# Insert multiple records
+curl -X POST "http://localhost:8000/api/v1/mongodb/trades_BTCUSDT" \
+  -H "Content-Type: application/json" \
+  -d '{"data": [{"symbol": "BTCUSDT", "price": 50000, "quantity": 0.1}, {"symbol": "BTCUSDT", "price": 50100, "quantity": 0.2}]}'
+```
+
+#### Batch Operations
+```bash
+# Batch insert/update/delete
+curl -X POST "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m/batch" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operations": [
+      {"type": "insert", "data": {"symbol": "BTCUSDT", "open": 50000}},
+      {"type": "update", "filter": {"symbol": "BTCUSDT"}, "data": {"updated": true}},
+      {"type": "delete", "filter": {"symbol": "ETHUSDT"}}
+    ]
+  }'
+```
+
+### Schema Registry Operations
+
+#### Register Schema
+```bash
+# Register MongoDB schema for candles
+curl -X POST "http://localhost:8000/schemas/mongodb/candle_v1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": 1,
+    "schema": {
+      "type": "object",
+      "required": ["symbol", "timestamp", "open", "high", "low", "close", "volume"],
+      "properties": {
+        "symbol": {"type": "string", "pattern": "^[A-Z]+$"},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "open": {"type": "number", "minimum": 0},
+        "high": {"type": "number", "minimum": 0},
+        "low": {"type": "number", "minimum": 0},
+        "close": {"type": "number", "minimum": 0},
+        "volume": {"type": "number", "minimum": 0}
+      }
+    },
+    "description": "OHLCV candle data schema"
+  }'
+
+# Register MySQL schema for orders
+curl -X POST "http://localhost:8000/schemas/mysql/order_v1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": 1,
+    "schema": {
+      "type": "object",
+      "required": ["order_id", "symbol", "side", "type", "status"],
+      "properties": {
+        "order_id": {"type": "string"},
+        "symbol": {"type": "string", "pattern": "^[A-Z]+$"},
+        "side": {"type": "string", "enum": ["BUY", "SELL"]},
+        "type": {"type": "string", "enum": ["LIMIT", "MARKET"]},
+        "status": {"type": "string", "enum": ["NEW", "FILLED", "CANCELED"]},
+        "quantity": {"type": "number", "minimum": 0},
+        "price": {"type": "number", "minimum": 0}
+      }
+    },
+    "description": "Order management schema"
+  }'
+```
+
+#### Get Schema Information
+```bash
+# Get latest schema
+curl "http://localhost:8000/schemas/mongodb/candle_v1"
+
+# Get specific version
+curl "http://localhost:8000/schemas/mongodb/candle_v1/versions/1"
+
+# List all versions
+curl "http://localhost:8000/schemas/mongodb/candle_v1/versions"
+
+# List all schemas
+curl "http://localhost:8000/schemas"
+
+# List schemas by database
+curl "http://localhost:8000/schemas?database=mongodb"
+```
+
+#### Validate Data Against Schema
+```bash
+# Validate single record
+curl -X POST "http://localhost:8000/schemas/validate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database": "mongodb",
+    "schema_name": "candle_v1",
+    "data": {
+      "symbol": "BTCUSDT",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "open": 50000,
+      "high": 51000,
+      "low": 49000,
+      "close": 50500,
+      "volume": 100.5
+    }
+  }'
+
+# Validate batch data
+curl -X POST "http://localhost:8000/schemas/validate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database": "mongodb",
+    "schema_name": "candle_v1",
+    "data": [
+      {"symbol": "BTCUSDT", "timestamp": "2025-01-01T00:00:00Z", "open": 50000, "high": 51000, "low": 49000, "close": 50500, "volume": 100.5},
+      {"symbol": "ETHUSDT", "timestamp": "2025-01-01T00:00:00Z", "open": 3000, "high": 3100, "low": 2900, "close": 3050, "volume": 500.2}
+    ]
+  }'
+```
+
+#### Schema Compatibility Checking
+```bash
+# Check compatibility between schema versions
+curl -X POST "http://localhost:8000/schemas/compatibility" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database": "mongodb",
+    "schema_name": "candle_v1",
+    "old_version": 1,
+    "new_version": 2
+  }'
+```
+
+#### Bootstrap Common Schemas
+```bash
+# Bootstrap all common schemas for MongoDB
+curl -X POST "http://localhost:8000/schemas/bootstrap" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database": "mongodb",
+    "schemas": [
+      {
+        "version": 1,
+        "schema": {
+          "type": "object",
+          "required": ["symbol", "timestamp", "open", "high", "low", "close", "volume"],
+          "properties": {
+            "symbol": {"type": "string", "pattern": "^[A-Z]+$"},
+            "timestamp": {"type": "string", "format": "date-time"},
+            "open": {"type": "number", "minimum": 0},
+            "high": {"type": "number", "minimum": 0},
+            "low": {"type": "number", "minimum": 0},
+            "close": {"type": "number", "minimum": 0},
+            "volume": {"type": "number", "minimum": 0}
+          }
+        },
+        "description": "OHLCV candle data schema"
+      }
+    ],
+    "overwrite_existing": false
+  }'
+```
+
+### CRUD Operations with Schema Validation
+
+#### Insert with Validation
+```bash
+# Insert with automatic schema validation
+curl -X POST "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": {
+      "symbol": "BTCUSDT",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "open": 50000,
+      "high": 51000,
+      "low": 49000,
+      "close": 50500,
+      "volume": 100.5
+    }
+  }'
+
+# Batch insert with validation
+curl -X POST "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": [
+      {"symbol": "BTCUSDT", "timestamp": "2025-01-01T00:00:00Z", "open": 50000, "high": 51000, "low": 49000, "close": 50500, "volume": 100.5},
+      {"symbol": "BTCUSDT", "timestamp": "2025-01-01T01:00:00Z", "open": 50500, "high": 51500, "low": 49500, "close": 51000, "volume": 150.2}
+    ]
+  }'
+```
+
+#### Update with Validation
+```bash
+# Update with schema validation
+curl -X PUT "http://localhost:8000/api/v1/mysql/orders?schema=order_v1&validate=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filter": {"order_id": "12345"},
+    "data": {
+      "status": "FILLED",
+      "updated_at": "2025-01-01T12:00:00Z"
+    }
+  }'
+```
+
+### Raw Query Operations
+
+#### MySQL Raw Queries
+```bash
+# Execute SQL query
+curl -X POST "http://localhost:8000/api/v1/raw/mysql" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT COUNT(*) as total FROM audit_logs WHERE timestamp > NOW() - INTERVAL 1 HOUR"}'
+```
+
+#### MongoDB Raw Queries
+```bash
+# Find query
+curl -X POST "http://localhost:8000/api/v1/raw/mongodb" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "candles_BTCUSDT_1m: {\"find\": {\"symbol\": \"BTCUSDT\"}, \"limit\": 10}"}'
+
+# Aggregation pipeline
+curl -X POST "http://localhost:8000/api/v1/raw/mongodb" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{\"collection\": \"trades_BTCUSDT\", \"aggregate\": [{\"$group\": {\"_id\": \"$symbol\", \"count\": {\"$sum\": 1}}}]}"}'
+```
+
+### Health Monitoring
+
+#### Check Database Health
+```bash
+# Overall health
+curl "http://localhost:8000/health/readiness"
+
+# Detailed database status
+curl "http://localhost:8000/health/databases"
+
+# Connection pool statistics
+curl "http://localhost:8000/health/connections"
+```
+
+### Metrics and Monitoring
+
+#### Prometheus Metrics
+```bash
+# View all metrics
+curl "http://localhost:8000/metrics"
+
+# Key metrics to monitor:
+# - data_manager_requests_total (request count by endpoint/status)
+# - data_manager_request_duration_seconds (request latency)
+# - data_manager_database_operations_total (DB operation count)
+# - data_manager_active_connections (connection pool status)
+```
 
 ---
 
@@ -209,6 +521,92 @@ make pipeline
 
 ---
 
+## 🗃️ Schema Registry
+
+The Schema Registry provides centralized schema management for all Petrosa services, ensuring data consistency and validation across the platform.
+
+### Key Features
+
+* **Database-Specific Storage**: Schemas stored in their respective databases (MySQL for structured data, MongoDB for time-series)
+* **Version Management**: Full schema versioning with compatibility checking
+* **Automatic Validation**: CRUD operations can validate data against registered schemas
+* **Schema Discovery**: Easy schema exploration and documentation
+* **Compatibility Checking**: Validate schema evolution and migration paths
+* **Bootstrap Support**: Predefined schemas for common data types
+
+### Schema Storage Strategy
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              petrosa-data-manager (API Gateway)              │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Schema Registry REST API                                   │
+│  ├─ /schemas?database={db}           (list schemas)        │
+│  ├─ /schemas/{db}/{name}             (get/register)        │
+│  ├─ /schemas/{db}/{name}/versions    (versions)            │
+│  └─ /schemas/validate?database={db}  (validate)            │
+│                                                             │
+└──────────────────┬───────────────────┬──────────────────────┘
+                   │                   │
+        ┌──────────▼─────────┐  ┌─────▼──────────────┐
+        │      MySQL         │  │     MongoDB        │
+        ├────────────────────┤  ├────────────────────┤
+        │ schemas table:     │  │ schemas collection:│
+        │  - schema_name     │  │  {                 │
+        │  - version         │  │    name: "...",    │
+        │  - schema_json     │  │    version: 1,     │
+        │  - created_at      │  │    schema: {...},  │
+        │  - status          │  │    created_at: ... │
+        │                    │  │  }                 │
+        └────────────────────┘  └────────────────────┘
+```
+
+### Common Schemas
+
+#### MongoDB Schemas (Time-Series Data)
+* **candle_v1**: OHLCV candle data with volume metrics
+* **trade_v1**: Trade execution data with order information
+* **depth_v1**: Order book depth with bid/ask arrays
+* **funding_v1**: Funding rate data with mark/index prices
+
+#### MySQL Schemas (Structured Data)
+* **order_v1**: Order management with status tracking
+* **health_metrics_v1**: Data quality metrics and monitoring
+* **audit_log_v1**: Data integrity audit logs
+* **strategy_signal_v1**: Trading strategy signals and decisions
+
+### Schema Validation Integration
+
+All CRUD operations support optional schema validation:
+
+```bash
+# Insert with validation
+POST /api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true
+
+# Update with validation  
+PUT /api/v1/mysql/orders?schema=order_v1&validate=true
+
+# Batch operations with validation
+POST /api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true
+```
+
+### Configuration
+
+Environment variables for schema registry:
+
+```bash
+# Schema validation settings
+SCHEMA_VALIDATION_ENABLED=true
+SCHEMA_STRICT_MODE=false
+SCHEMA_CACHE_TTL=300
+SCHEMA_AUTO_REGISTER=false
+SCHEMA_MAX_VERSIONS=10
+SCHEMA_COMPATIBILITY_MODE=BACKWARD
+```
+
+---
+
 ## 📊 Metrics
 
 Prometheus metrics are exposed on port 9090:
@@ -218,6 +616,11 @@ Prometheus metrics are exposed on port 9090:
 * `data_manager_messages_failed_total` - Failed messages
 * `data_manager_message_processing_seconds` - Message processing time
 * `data_manager_nats_connection_status` - NATS connection status
+* `data_manager_requests_total` - Request count by endpoint/status
+* `data_manager_request_duration_seconds` - Request latency histogram
+* `data_manager_database_operations_total` - Database operation counts
+* `data_manager_active_connections` - Connection pool status
+* `data_manager_errors_total` - Error rates by endpoint
 
 ---
 
