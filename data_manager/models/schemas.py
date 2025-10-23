@@ -44,7 +44,7 @@ class SchemaDefinition(BaseModel):
     created_by: str | None = Field(None, description="Creator identifier", max_length=100)
 
     @validator("name")
-    def validate_name(cls, v):
+    def validate_name(cls, v):  # noqa: N805
         """Validate schema name format."""
         if not v.replace("_", "").replace("-", "").isalnum():
             raise ValueError(
@@ -53,7 +53,7 @@ class SchemaDefinition(BaseModel):
         return v.lower()
 
     @validator("schema")
-    def validate_schema_json(cls, v):
+    def validate_schema_json(cls, v):  # noqa: N805
         """Validate that schema is valid JSON Schema."""
         if not isinstance(v, dict):
             raise ValueError("Schema must be a JSON object")
@@ -89,7 +89,7 @@ class SchemaRegistration(BaseModel):
     created_by: str | None = Field(None, description="Creator identifier", max_length=100)
 
     @validator("schema")
-    def validate_schema_json(cls, v):
+    def validate_schema_json(cls, v):  # noqa: N805
         """Validate that schema is valid JSON Schema."""
         if not isinstance(v, dict):
             raise ValueError("Schema must be a JSON object")
@@ -111,7 +111,7 @@ class SchemaUpdate(BaseModel):
     description: str | None = Field(None, description="Updated description", max_length=500)
 
     @validator("schema")
-    def validate_schema_json(cls, v):
+    def validate_schema_json(cls, v):  # noqa: N805
         """Validate that schema is valid JSON Schema."""
         if v is not None:
             if not isinstance(v, dict):
@@ -132,7 +132,7 @@ class SchemaValidationRequest(BaseModel):
     data: dict[str, Any] | list[dict[str, Any]] = Field(..., description="Data to validate")
 
     @validator("schema_name")
-    def validate_schema_name(cls, v):
+    def validate_schema_name(cls, v):  # noqa: N805
         """Validate schema name format."""
         if not v.replace("_", "").replace("-", "").isalnum():
             raise ValueError(
