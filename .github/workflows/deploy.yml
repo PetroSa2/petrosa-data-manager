@@ -144,12 +144,16 @@ jobs:
         RELEASE_VERSION: ${{ steps.version.outputs.pypi_version }}
       run: |
         echo "Building client package with version: $RELEASE_VERSION"
-        # Temporarily rename pyproject.toml to avoid conflict with setup.py
+        # Install setuptools and wheel
+        python -m pip install setuptools wheel
+        # Temporarily rename pyproject.toml to avoid conflict
         mv pyproject.toml pyproject.toml.bak
-        # Build using setup.py which is configured for the client library
-        python setup.py sdist bdist_wheel
+        # Build using setup.py (client library configuration)
+        python setup.py sdist bdist_wheel --universal
         # Restore pyproject.toml
         mv pyproject.toml.bak pyproject.toml
+        # Verify packages were created
+        ls -lh dist/
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
