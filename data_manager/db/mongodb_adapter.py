@@ -356,9 +356,7 @@ class MongoDBAdapter(BaseAdapter):
 
             # Upsert (update if exists, insert if not)
             result = await self.db.app_config.replace_one(
-                {},  # Empty filter matches any document
-                config,
-                upsert=True
+                {}, config, upsert=True  # Empty filter matches any document
             )
 
             if result.upserted_id:
@@ -386,15 +384,15 @@ class MongoDBAdapter(BaseAdapter):
             return None
 
         try:
-            config = await self.db.strategy_configs_global.find_one(
-                {"strategy_id": strategy_id}
-            )
+            config = await self.db.strategy_configs_global.find_one({"strategy_id": strategy_id})
             return config
         except Exception as e:
             logger.error(f"Error fetching global config for {strategy_id}: {e}")
             return None
 
-    async def upsert_global_config(self, strategy_id: str, parameters: dict, metadata: dict) -> str | None:
+    async def upsert_global_config(
+        self, strategy_id: str, parameters: dict, metadata: dict
+    ) -> str | None:
         """
         Create or update global strategy configuration.
 
@@ -416,13 +414,11 @@ class MongoDBAdapter(BaseAdapter):
                 "version": 1,
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat(),
-                **metadata
+                **metadata,
             }
 
             result = await self.db.strategy_configs_global.replace_one(
-                {"strategy_id": strategy_id},
-                config_doc,
-                upsert=True
+                {"strategy_id": strategy_id}, config_doc, upsert=True
             )
 
             if result.upserted_id:
@@ -459,7 +455,9 @@ class MongoDBAdapter(BaseAdapter):
             logger.error(f"Error fetching symbol config for {strategy_id}/{symbol}: {e}")
             return None
 
-    async def upsert_symbol_config(self, strategy_id: str, symbol: str, parameters: dict, metadata: dict) -> str | None:
+    async def upsert_symbol_config(
+        self, strategy_id: str, symbol: str, parameters: dict, metadata: dict
+    ) -> str | None:
         """
         Create or update symbol-specific strategy configuration.
 
@@ -483,17 +481,17 @@ class MongoDBAdapter(BaseAdapter):
                 "version": 1,
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat(),
-                **metadata
+                **metadata,
             }
 
             result = await self.db.strategy_configs_symbol.replace_one(
-                {"strategy_id": strategy_id, "symbol": symbol},
-                config_doc,
-                upsert=True
+                {"strategy_id": strategy_id, "symbol": symbol}, config_doc, upsert=True
             )
 
             if result.upserted_id:
-                logger.info(f"Created symbol config for {strategy_id}/{symbol}: {result.upserted_id}")
+                logger.info(
+                    f"Created symbol config for {strategy_id}/{symbol}: {result.upserted_id}"
+                )
                 return str(result.upserted_id)
             else:
                 logger.info(f"Updated symbol config for {strategy_id}/{symbol}")
@@ -517,9 +515,7 @@ class MongoDBAdapter(BaseAdapter):
             return False
 
         try:
-            result = await self.db.strategy_configs_global.delete_one(
-                {"strategy_id": strategy_id}
-            )
+            result = await self.db.strategy_configs_global.delete_one({"strategy_id": strategy_id})
             return result.deleted_count > 0
         except Exception as e:
             logger.error(f"Error deleting global config for {strategy_id}: {e}")
