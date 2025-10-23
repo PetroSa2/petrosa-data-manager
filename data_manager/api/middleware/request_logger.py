@@ -86,7 +86,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                     "collection": request.path_params.get("collection"),
                 }
             
-            logger.info("API Request", extra=request_log)
+            logger.debug("API Request", extra=request_log)
             
         except Exception as e:
             logger.error(f"Error logging request {request_id}: {e}")
@@ -127,7 +127,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                 response_log["error"] = True
                 response_log["error_type"] = "client_error" if response.status_code < 500 else "server_error"
             
-            logger.info("API Response", extra=response_log)
+            logger.debug("API Response", extra=response_log)
             
         except Exception as e:
             logger.error(f"Error logging response {request_id}: {e}")

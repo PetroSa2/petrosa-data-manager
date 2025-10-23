@@ -22,7 +22,7 @@ data:
   
   # Feature Flags
   ENABLE_AUDITOR: "true"  # Enabled: now has leader election support
-  ENABLE_BACKFILLER: "false"  # Disabled: not needed until data accumulates
+  ENABLE_BACKFILLER: "true"  # Enabled: required for auto-backfill to work
   ENABLE_ANALYTICS: "false"  # Disabled: runs without leader election, causes duplicate work
   ENABLE_API: "true"
   
@@ -32,7 +32,7 @@ data:
   LEADER_ELECTION_TIMEOUT: "30"  # seconds
   
   # Auto-Backfill Configuration
-  ENABLE_AUTO_BACKFILL: "false"  # Disabled initially for conservative rollout
+  ENABLE_AUTO_BACKFILL: "true"  # Enabled: automatically backfill detected gaps
   MIN_AUTO_BACKFILL_GAP: "3600"  # 1 hour in seconds
   MAX_AUTO_BACKFILL_JOBS: "5"
   
@@ -79,4 +79,9 @@ data:
   
   # Supported trading pairs
   SUPPORTED_PAIRS: "BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,SOLUSDT"
+  
+  # Logging Configuration
+  LOG_REQUEST_DETAILS: "true"
+  LOG_RESPONSE_DETAILS: "true"
+  LOG_QUERY_DETAILS: "false"
 

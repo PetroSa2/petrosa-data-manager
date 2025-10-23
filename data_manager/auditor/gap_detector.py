@@ -64,7 +64,7 @@ class GapDetector:
             List of GapInfo objects
         """
         try:
-            logger.info(f"Detecting gaps for {symbol} {timeframe} from {start} to {end}")
+            logger.debug(f"Detecting gaps for {symbol} {timeframe} from {start} to {end}")
 
             # Get all candles in range
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
@@ -144,7 +144,10 @@ class GapDetector:
                 gaps.append(gap)
                 await self._log_gap(symbol, timeframe, gap)
 
-            logger.info(f"Found {len(gaps)} gaps for {symbol} {timeframe}")
+            if gaps:
+                logger.debug(f"Found {len(gaps)} gaps for {symbol} {timeframe}")
+            else:
+                logger.debug(f"No gaps found for {symbol} {timeframe}")
             return gaps
 
         except Exception as e:
