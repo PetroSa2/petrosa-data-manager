@@ -6,7 +6,7 @@ Provides centralized configuration management through the data management servic
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["Configuration"])
 
 # Global database manager instance
-db_manager: Optional[DatabaseManager] = None
+db_manager: DatabaseManager | None = None
 
 
 def set_database_manager(manager: DatabaseManager) -> None:
@@ -31,27 +31,27 @@ def set_database_manager(manager: DatabaseManager) -> None:
 class AppConfigRequest(BaseModel):
     """Application configuration request model."""
 
-    enabled_strategies: List[str] = Field(..., description="List of enabled strategy IDs")
-    symbols: List[str] = Field(..., description="List of trading symbols")
-    candle_periods: List[str] = Field(..., description="List of timeframes")
+    enabled_strategies: list[str] = Field(..., description="List of enabled strategy IDs")
+    symbols: list[str] = Field(..., description="List of trading symbols")
+    candle_periods: list[str] = Field(..., description="List of timeframes")
     min_confidence: float = Field(0.6, ge=0.0, le=1.0, description="Minimum confidence threshold")
     max_confidence: float = Field(0.95, ge=0.0, le=1.0, description="Maximum confidence threshold")
     max_positions: int = Field(10, ge=1, description="Maximum concurrent positions")
-    position_sizes: List[int] = Field([100, 200, 500, 1000], description="Available position sizes")
+    position_sizes: list[int] = Field([100, 200, 500, 1000], description="Available position sizes")
     changed_by: str = Field(..., description="Who is making the change")
-    reason: Optional[str] = Field(None, description="Reason for the change")
+    reason: str | None = Field(None, description="Reason for the change")
 
 
 class AppConfigResponse(BaseModel):
     """Application configuration response model."""
 
-    enabled_strategies: List[str]
-    symbols: List[str]
-    candle_periods: List[str]
+    enabled_strategies: list[str]
+    symbols: list[str]
+    candle_periods: list[str]
     min_confidence: float
     max_confidence: float
     max_positions: int
-    position_sizes: List[int]
+    position_sizes: list[int]
     version: int
     source: str
     created_at: str
@@ -61,15 +61,15 @@ class AppConfigResponse(BaseModel):
 class StrategyConfigRequest(BaseModel):
     """Strategy configuration request model."""
 
-    parameters: Dict[str, Any] = Field(..., description="Strategy parameters")
+    parameters: dict[str, Any] = Field(..., description="Strategy parameters")
     changed_by: str = Field(..., description="Who is making the change")
-    reason: Optional[str] = Field(None, description="Reason for the change")
+    reason: str | None = Field(None, description="Reason for the change")
 
 
 class StrategyConfigResponse(BaseModel):
     """Strategy configuration response model."""
 
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
     version: int
     source: str
     is_override: bool
@@ -236,7 +236,7 @@ async def update_application_config(request: AppConfigRequest):
 @router.get("/strategies/{strategy_id}", response_model=StrategyConfigResponse)
 async def get_strategy_config(
     strategy_id: str,
-    symbol: Optional[str] = Query(None, description="Symbol-specific configuration"),
+    symbol: str | None = Query(None, description="Symbol-specific configuration"),
 ):
     """
     Get strategy configuration.
@@ -293,7 +293,7 @@ async def get_strategy_config(
 async def update_strategy_config(
     strategy_id: str,
     request: StrategyConfigRequest,
-    symbol: Optional[str] = Query(None, description="Symbol-specific configuration"),
+    symbol: str | None = Query(None, description="Symbol-specific configuration"),
 ):
     """
     Update strategy configuration.
@@ -354,7 +354,7 @@ async def update_strategy_config(
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy_config(
     strategy_id: str,
-    symbol: Optional[str] = Query(None, description="Symbol-specific configuration to delete"),
+    symbol: str | None = Query(None, description="Symbol-specific configuration to delete"),
 ):
     """
     Delete strategy configuration.
