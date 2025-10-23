@@ -143,8 +143,13 @@ jobs:
       env:
         RELEASE_VERSION: ${{ steps.version.outputs.pypi_version }}
       run: |
-        echo "Building package with version: $RELEASE_VERSION"
-        python -m build
+        echo "Building client package with version: $RELEASE_VERSION"
+        # Temporarily rename pyproject.toml to avoid conflict with setup.py
+        mv pyproject.toml pyproject.toml.bak
+        # Build using setup.py which is configured for the client library
+        python setup.py sdist bdist_wheel
+        # Restore pyproject.toml
+        mv pyproject.toml.bak pyproject.toml
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
