@@ -96,7 +96,7 @@ async def readiness() -> ReadinessStatus:
 async def database_health():
     """
     Detailed database connection health status.
-    
+
     Returns individual database connection status with metrics.
     """
     if not api_module.db_manager:
@@ -104,10 +104,10 @@ async def database_health():
             "error": "Database manager not available",
             "timestamp": datetime.utcnow().isoformat(),
         }
-    
+
     health = api_module.db_manager.health_check()
     stats = api_module.db_manager.get_connection_stats()
-    
+
     return {
         "databases": health,
         "statistics": stats,
@@ -119,7 +119,7 @@ async def database_health():
 async def connection_stats():
     """
     Database connection pool statistics.
-    
+
     Returns detailed connection pool metrics and statistics.
     """
     if not api_module.db_manager:
@@ -127,9 +127,9 @@ async def connection_stats():
             "error": "Database manager not available",
             "timestamp": datetime.utcnow().isoformat(),
         }
-    
+
     stats = api_module.db_manager.get_connection_stats()
-    
+
     # Add connection pool information
     connection_info = {
         "mysql": {
@@ -142,9 +142,9 @@ async def connection_stats():
             "max_pool_size": 100,
             "min_pool_size": 0,
             "max_idle_time_ms": 0,
-        }
+        },
     }
-    
+
     return {
         "statistics": stats,
         "pool_configuration": connection_info,

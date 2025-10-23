@@ -11,8 +11,18 @@ from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
 
 import constants
-from data_manager.api.routes import analysis, anomalies, backfill, catalog, data, health, generic, raw, schemas
-from data_manager.api.middleware import RequestLoggerMiddleware, MetricsMiddleware
+from data_manager.api.middleware import MetricsMiddleware, RequestLoggerMiddleware
+from data_manager.api.routes import (
+    analysis,
+    anomalies,
+    backfill,
+    catalog,
+    data,
+    generic,
+    health,
+    raw,
+    schemas,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +52,7 @@ def create_app() -> FastAPI:
     # Add custom middleware (order matters - first added is outermost)
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestLoggerMiddleware)
-    
+
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
@@ -63,7 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog.router, prefix="/catalog", tags=["Catalog"])
     app.include_router(backfill.router, prefix="/backfill", tags=["Backfill"])
     app.include_router(anomalies.router, prefix="/anomalies", tags=["Anomalies"])
-    
+
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
     app.include_router(raw.router, tags=["Raw Queries"])

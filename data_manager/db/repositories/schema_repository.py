@@ -6,17 +6,16 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
 
-from data_manager.db.mysql_adapter import MySQLAdapter
 from data_manager.db.mongodb_adapter import MongoDBAdapter
+from data_manager.db.mysql_adapter import MySQLAdapter
 from data_manager.models.schemas import (
+    CompatibilityMode,
     SchemaDefinition,
     SchemaRegistration,
+    SchemaStatus,
     SchemaUpdate,
     SchemaVersion,
-    SchemaStatus,
-    CompatibilityMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 class SchemaRepository:
     """
     Repository for schema operations across MySQL and MongoDB.
-    
+
     Provides database-agnostic interface for schema management with
     database-specific storage implementations.
     """
@@ -36,24 +35,21 @@ class SchemaRepository:
         self.mongodb_adapter = mongodb_adapter
 
     async def register_schema(
-        self, 
-        database: str, 
-        name: str, 
-        registration: SchemaRegistration
+        self, database: str, name: str, registration: SchemaRegistration
     ) -> SchemaDefinition:
         """
         Register a new schema in the specified database.
-        
+
         Args:
             database: Target database ('mysql' or 'mongodb')
             name: Schema name
             registration: Schema registration data
-            
+
         Returns:
             Registered schema definition
         """
         schema_id = f"{name}_{registration.version}_{uuid.uuid4().hex[:8]}"
-        
+
         schema_def = SchemaDefinition(
             name=name,
             version=registration.version,
@@ -75,19 +71,16 @@ class SchemaRepository:
         return schema_def
 
     async def get_schema(
-        self, 
-        database: str, 
-        name: str, 
-        version: Optional[int] = None
-    ) -> Optional[SchemaDefinition]:
+        self, database: str, name: str, version: int | None = None
+    ) -> SchemaDefinition | None:
         """
         Get schema by name and optional version.
-        
+
         Args:
             database: Source database
             name: Schema name
             version: Specific version (None for latest)
-            
+
         Returns:
             Schema definition or None if not found
         """
@@ -99,23 +92,23 @@ class SchemaRepository:
             raise ValueError(f"Unsupported database: {database}")
 
     async def list_schemas(
-        self, 
-        database: Optional[str] = None,
-        name_pattern: Optional[str] = None,
-        status: Optional[SchemaStatus] = None,
+        self,
+        database: str | None = None,
+        name_pattern: str | None = None,
+        status: SchemaStatus | None = None,
         page: int = 1,
-        page_size: int = 100
-    ) -> Tuple[List[SchemaDefinition], int]:
+        page_size: int = 100,
+    ) -> tuple[list[SchemaDefinition], int]:
         """
         List schemas with optional filtering.
-        
+
         Args:
             database: Database filter ('mysql', 'mongodb', or None for both)
             name_pattern: Name pattern filter
             status: Status filter
             page: Page number
             page_size: Page size
-            
+
         Returns:
             Tuple of (schemas, total_count)
         """
@@ -141,18 +134,14 @@ class SchemaRepository:
 
         return all_schemas, total_count
 
-    async def get_schema_versions(
-        self, 
-        database: str, 
-        name: str
-    ) -> List[SchemaVersion]:
+    async def get_schema_versions(self, database: str, name: str) -> list[SchemaVersion]:
         """
         Get all versions of a schema.
-        
+
         Args:
             database: Source database
             name: Schema name
-            
+
         Returns:
             List of schema versions
         """
@@ -164,21 +153,17 @@ class SchemaRepository:
             raise ValueError(f"Unsupported database: {database}")
 
     async def update_schema(
-        self, 
-        database: str, 
-        name: str, 
-        version: int, 
-        update: SchemaUpdate
-    ) -> Optional[SchemaDefinition]:
+        self, database: str, name: str, version: int, update: SchemaUpdate
+    ) -> SchemaDefinition | None:
         """
         Update an existing schema.
-        
+
         Args:
             database: Target database
             name: Schema name
             version: Schema version
             update: Update data
-            
+
         Returns:
             Updated schema definition or None if not found
         """
@@ -189,20 +174,15 @@ class SchemaRepository:
         else:
             raise ValueError(f"Unsupported database: {database}")
 
-    async def deprecate_schema(
-        self, 
-        database: str, 
-        name: str, 
-        version: int
-    ) -> bool:
+    async def deprecate_schema(self, database: str, name: str, version: int) -> bool:
         """
         Deprecate a schema version.
-        
+
         Args:
             database: Target database
             name: Schema name
             version: Schema version
-            
+
         Returns:
             True if deprecated successfully
         """
@@ -214,22 +194,20 @@ class SchemaRepository:
             raise ValueError(f"Unsupported database: {database}")
 
     async def search_schemas(
-        self, 
-        query: str, 
-        database: Optional[str] = None
-    ) -> List[SchemaDefinition]:
+        self, query: str, database: str | None = None
+    ) -> list[SchemaDefinition]:
         """
         Search schemas by name or description.
-        
+
         Args:
             query: Search query
             database: Database filter
-            
+
         Returns:
             List of matching schemas
         """
         all_schemas = []
-        
+
         if database is None or database == "mysql":
             mysql_schemas = await self._search_mysql_schemas(query)
             all_schemas.extend(mysql_schemas)
@@ -261,18 +239,21 @@ class SchemaRepository:
 
             # Use MySQL adapter to insert
             from pydantic import BaseModel
+
             class SchemaRecord(BaseModel):
                 pass
-            
+
             # Create a dynamic model for the record
             record = SchemaRecord(**schema_data)
             self.mysql_adapter.write([record], "schemas")
-            
+
         except Exception as e:
             logger.error(f"Failed to register MySQL schema {schema_def.name}: {e}")
             raise
 
-    async def _get_mysql_schema(self, name: str, version: Optional[int] = None) -> Optional[SchemaDefinition]:
+    async def _get_mysql_schema(
+        self, name: str, version: int | None = None
+    ) -> SchemaDefinition | None:
         """Get schema from MySQL."""
         try:
             # Query MySQL for schema
@@ -282,7 +263,9 @@ class SchemaRepository:
                     "schemas", datetime.min, datetime.max, None
                 )
                 # Filter by name and version
-                matching = [s for s in schemas if s.get("name") == name and s.get("version") == version]
+                matching = [
+                    s for s in schemas if s.get("name") == name and s.get("version") == version
+                ]
             else:
                 # Get latest version
                 schemas = self.mysql_adapter.query_range(
@@ -314,17 +297,11 @@ class SchemaRepository:
             return None
 
     async def _list_mysql_schemas(
-        self, 
-        name_pattern: Optional[str], 
-        status: Optional[SchemaStatus], 
-        page: int, 
-        page_size: int
-    ) -> Tuple[List[SchemaDefinition], int]:
+        self, name_pattern: str | None, status: SchemaStatus | None, page: int, page_size: int
+    ) -> tuple[list[SchemaDefinition], int]:
         """List schemas from MySQL."""
         try:
-            schemas = self.mysql_adapter.query_range(
-                "schemas", datetime.min, datetime.max, None
-            )
+            schemas = self.mysql_adapter.query_range("schemas", datetime.min, datetime.max, None)
 
             # Apply filters
             filtered_schemas = []
@@ -333,7 +310,7 @@ class SchemaRepository:
                     continue
                 if status and SchemaStatus(schema_data.get("status")) != status:
                     continue
-                
+
                 schema_def = SchemaDefinition(
                     name=schema_data["name"],
                     version=schema_data["version"],
@@ -348,7 +325,7 @@ class SchemaRepository:
                 filtered_schemas.append(schema_def)
 
             total_count = len(filtered_schemas)
-            
+
             # Apply pagination
             start_idx = (page - 1) * page_size
             end_idx = start_idx + page_size
@@ -360,16 +337,14 @@ class SchemaRepository:
             logger.error(f"Failed to list MySQL schemas: {e}")
             return [], 0
 
-    async def _get_mysql_schema_versions(self, name: str) -> List[SchemaVersion]:
+    async def _get_mysql_schema_versions(self, name: str) -> list[SchemaVersion]:
         """Get all versions of a MySQL schema."""
         try:
-            schemas = self.mysql_adapter.query_range(
-                "schemas", datetime.min, datetime.max, None
-            )
-            
+            schemas = self.mysql_adapter.query_range("schemas", datetime.min, datetime.max, None)
+
             # Filter by name
             matching = [s for s in schemas if s.get("name") == name]
-            
+
             versions = []
             for schema_data in matching:
                 version = SchemaVersion(
@@ -392,11 +367,8 @@ class SchemaRepository:
             return []
 
     async def _update_mysql_schema(
-        self, 
-        name: str, 
-        version: int, 
-        update: SchemaUpdate
-    ) -> Optional[SchemaDefinition]:
+        self, name: str, version: int, update: SchemaUpdate
+    ) -> SchemaDefinition | None:
         """Update MySQL schema."""
         # This would require implementing update operations in MySQL adapter
         # For now, return None as update is not implemented
@@ -410,19 +382,19 @@ class SchemaRepository:
         logger.warning("MySQL schema deprecation not implemented yet")
         return False
 
-    async def _search_mysql_schemas(self, query: str) -> List[SchemaDefinition]:
+    async def _search_mysql_schemas(self, query: str) -> list[SchemaDefinition]:
         """Search MySQL schemas."""
         try:
-            schemas = self.mysql_adapter.query_range(
-                "schemas", datetime.min, datetime.max, None
-            )
+            schemas = self.mysql_adapter.query_range("schemas", datetime.min, datetime.max, None)
 
             results = []
             for schema_data in schemas:
                 # Simple text search in name and description
-                if (query.lower() in schema_data.get("name", "").lower() or
-                    query.lower() in schema_data.get("description", "").lower()):
-                    
+                if (
+                    query.lower() in schema_data.get("name", "").lower()
+                    or query.lower() in schema_data.get("description", "").lower()
+                ):
+
                     schema_def = SchemaDefinition(
                         name=schema_data["name"],
                         version=schema_data["version"],
@@ -462,17 +434,20 @@ class SchemaRepository:
 
             # Use MongoDB adapter to insert
             from pydantic import BaseModel
+
             class SchemaRecord(BaseModel):
                 pass
-            
+
             record = SchemaRecord(**schema_doc)
             await self.mongodb_adapter.write([record], "schemas")
-            
+
         except Exception as e:
             logger.error(f"Failed to register MongoDB schema {schema_def.name}: {e}")
             raise
 
-    async def _get_mongodb_schema(self, name: str, version: Optional[int] = None) -> Optional[SchemaDefinition]:
+    async def _get_mongodb_schema(
+        self, name: str, version: int | None = None
+    ) -> SchemaDefinition | None:
         """Get schema from MongoDB."""
         try:
             if version:
@@ -481,7 +456,9 @@ class SchemaRepository:
                     "schemas", datetime.min, datetime.max, None
                 )
                 # Filter by name and version
-                matching = [s for s in schemas if s.get("name") == name and s.get("version") == version]
+                matching = [
+                    s for s in schemas if s.get("name") == name and s.get("version") == version
+                ]
             else:
                 # Get latest version
                 schemas = await self.mongodb_adapter.query_range(
@@ -513,12 +490,8 @@ class SchemaRepository:
             return None
 
     async def _list_mongodb_schemas(
-        self, 
-        name_pattern: Optional[str], 
-        status: Optional[SchemaStatus], 
-        page: int, 
-        page_size: int
-    ) -> Tuple[List[SchemaDefinition], int]:
+        self, name_pattern: str | None, status: SchemaStatus | None, page: int, page_size: int
+    ) -> tuple[list[SchemaDefinition], int]:
         """List schemas from MongoDB."""
         try:
             schemas = await self.mongodb_adapter.query_range(
@@ -532,7 +505,7 @@ class SchemaRepository:
                     continue
                 if status and SchemaStatus(schema_data.get("status")) != status:
                     continue
-                
+
                 schema_def = SchemaDefinition(
                     name=schema_data["name"],
                     version=schema_data["version"],
@@ -547,7 +520,7 @@ class SchemaRepository:
                 filtered_schemas.append(schema_def)
 
             total_count = len(filtered_schemas)
-            
+
             # Apply pagination
             start_idx = (page - 1) * page_size
             end_idx = start_idx + page_size
@@ -559,16 +532,16 @@ class SchemaRepository:
             logger.error(f"Failed to list MongoDB schemas: {e}")
             return [], 0
 
-    async def _get_mongodb_schema_versions(self, name: str) -> List[SchemaVersion]:
+    async def _get_mongodb_schema_versions(self, name: str) -> list[SchemaVersion]:
         """Get all versions of a MongoDB schema."""
         try:
             schemas = await self.mongodb_adapter.query_range(
                 "schemas", datetime.min, datetime.max, None
             )
-            
+
             # Filter by name
             matching = [s for s in schemas if s.get("name") == name]
-            
+
             versions = []
             for schema_data in matching:
                 version = SchemaVersion(
@@ -591,11 +564,8 @@ class SchemaRepository:
             return []
 
     async def _update_mongodb_schema(
-        self, 
-        name: str, 
-        version: int, 
-        update: SchemaUpdate
-    ) -> Optional[SchemaDefinition]:
+        self, name: str, version: int, update: SchemaUpdate
+    ) -> SchemaDefinition | None:
         """Update MongoDB schema."""
         # This would require implementing update operations in MongoDB adapter
         # For now, return None as update is not implemented
@@ -609,7 +579,7 @@ class SchemaRepository:
         logger.warning("MongoDB schema deprecation not implemented yet")
         return False
 
-    async def _search_mongodb_schemas(self, query: str) -> List[SchemaDefinition]:
+    async def _search_mongodb_schemas(self, query: str) -> list[SchemaDefinition]:
         """Search MongoDB schemas."""
         try:
             schemas = await self.mongodb_adapter.query_range(
@@ -619,9 +589,11 @@ class SchemaRepository:
             results = []
             for schema_data in schemas:
                 # Simple text search in name and description
-                if (query.lower() in schema_data.get("name", "").lower() or
-                    query.lower() in schema_data.get("description", "").lower()):
-                    
+                if (
+                    query.lower() in schema_data.get("name", "").lower()
+                    or query.lower() in schema_data.get("description", "").lower()
+                ):
+
                     schema_def = SchemaDefinition(
                         name=schema_data["name"],
                         version=schema_data["version"],
