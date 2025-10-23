@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 import constants
 from data_manager.db import get_adapter
@@ -29,7 +29,7 @@ class DatabaseManager:
         self.mysql_adapter: MySQLAdapter | None = None
         self.mongodb_adapter: MongoDBAdapter | None = None
         self._initialized = False
-        
+
         # Connection metrics
         self._connection_start_time = None
         self._mysql_reconnect_attempts = 0
@@ -37,7 +37,7 @@ class DatabaseManager:
         self._last_health_check = None
         self._health_check_task = None
         self._shutdown_event = asyncio.Event()
-        
+
         # Connection statistics
         self._stats = {
             "mysql": {
@@ -55,7 +55,7 @@ class DatabaseManager:
                 "reconnect_attempts": 0,
                 "query_count": 0,
                 "error_count": 0,
-            }
+            },
         }
 
     async def initialize(self) -> None:
@@ -82,7 +82,7 @@ class DatabaseManager:
 
             self._initialized = True
             logger.info("All database connections initialized successfully")
-            
+
             # Start health monitoring task
             self._health_check_task = asyncio.create_task(self._health_monitor())
             logger.info("Health monitoring started")
@@ -95,7 +95,7 @@ class DatabaseManager:
     async def shutdown(self) -> None:
         """Shutdown all database connections."""
         logger.info("Shutting down database connections...")
-        
+
         # Stop health monitoring
         if self._health_check_task:
             self._health_check_task.cancel()
@@ -134,15 +134,14 @@ class DatabaseManager:
         """
         mysql_connected = self.mysql_adapter.is_connected() if self.mysql_adapter else False
         mongodb_connected = self.mongodb_adapter.is_connected() if self.mongodb_adapter else False
-        
+
         return {
             "mysql": {
                 "connected": mysql_connected,
                 "type": "mysql",
                 "stats": self._stats["mysql"],
                 "uptime_seconds": (
-                    time.time() - self._connection_start_time 
-                    if self._connection_start_time else 0
+                    time.time() - self._connection_start_time if self._connection_start_time else 0
                 ),
             },
             "mongodb": {
@@ -150,8 +149,7 @@ class DatabaseManager:
                 "type": "mongodb",
                 "stats": self._stats["mongodb"],
                 "uptime_seconds": (
-                    time.time() - self._connection_start_time 
-                    if self._connection_start_time else 0
+                    time.time() - self._connection_start_time if self._connection_start_time else 0
                 ),
             },
             "initialized": self._initialized,
@@ -188,17 +186,17 @@ class DatabaseManager:
             try:
                 await asyncio.sleep(constants.DB_HEALTH_CHECK_INTERVAL)
                 self._last_health_check = datetime.utcnow()
-                
+
                 # Check MySQL connection
                 if self.mysql_adapter and not self.mysql_adapter.is_connected():
                     logger.warning("MySQL connection lost, attempting reconnection...")
                     await self._reconnect_mysql()
-                
+
                 # Check MongoDB connection
                 if self.mongodb_adapter and not self.mongodb_adapter.is_connected():
                     logger.warning("MongoDB connection lost, attempting reconnection...")
                     await self._reconnect_mongodb()
-                    
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -209,65 +207,68 @@ class DatabaseManager:
         if self._mysql_reconnect_attempts >= constants.DB_RECONNECT_MAX_ATTEMPTS:
             logger.error("Max MySQL reconnection attempts reached")
             return
-            
+
         try:
             self._mysql_reconnect_attempts += 1
             self._stats["mysql"]["reconnect_attempts"] += 1
-            
+
             # Exponential backoff
-            backoff_delay = constants.DB_RECONNECT_BACKOFF_BASE ** self._mysql_reconnect_attempts
+            backoff_delay = constants.DB_RECONNECT_BACKOFF_BASE**self._mysql_reconnect_attempts
             await asyncio.sleep(backoff_delay)
-            
+
             # Attempt reconnection
             self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
             self.mysql_adapter.connect()
-            
+
             self._stats["mysql"]["connection_count"] += 1
             self._stats["mysql"]["last_connected"] = datetime.utcnow()
             self._mysql_reconnect_attempts = 0  # Reset on success
-            
+
             logger.info("MySQL reconnection successful")
-            
+
         except Exception as e:
             self._stats["mysql"]["error_count"] += 1
-            logger.error(f"MySQL reconnection failed (attempt {self._mysql_reconnect_attempts}): {e}")
+            logger.error(
+                f"MySQL reconnection failed (attempt {self._mysql_reconnect_attempts}): {e}"
+            )
 
     async def _reconnect_mongodb(self) -> None:
         """Reconnect to MongoDB with exponential backoff."""
         if self._mongodb_reconnect_attempts >= constants.DB_RECONNECT_MAX_ATTEMPTS:
             logger.error("Max MongoDB reconnection attempts reached")
             return
-            
+
         try:
             self._mongodb_reconnect_attempts += 1
             self._stats["mongodb"]["reconnect_attempts"] += 1
-            
+
             # Exponential backoff
-            backoff_delay = constants.DB_RECONNECT_BACKOFF_BASE ** self._mongodb_reconnect_attempts
+            backoff_delay = constants.DB_RECONNECT_BACKOFF_BASE**self._mongodb_reconnect_attempts
             await asyncio.sleep(backoff_delay)
-            
+
             # Attempt reconnection
             self.mongodb_adapter = get_adapter("mongodb", constants.MONGODB_URL)
             self.mongodb_adapter.connect()
-            
+
             self._stats["mongodb"]["connection_count"] += 1
             self._stats["mongodb"]["last_connected"] = datetime.utcnow()
             self._mongodb_reconnect_attempts = 0  # Reset on success
-            
+
             logger.info("MongoDB reconnection successful")
-            
+
         except Exception as e:
             self._stats["mongodb"]["error_count"] += 1
-            logger.error(f"MongoDB reconnection failed (attempt {self._mongodb_reconnect_attempts}): {e}")
+            logger.error(
+                f"MongoDB reconnection failed (attempt {self._mongodb_reconnect_attempts}): {e}"
+            )
 
-    def get_connection_stats(self) -> Dict[str, Any]:
+    def get_connection_stats(self) -> dict[str, Any]:
         """Get detailed connection statistics."""
         return {
             "overall": {
                 "initialized": self._initialized,
                 "uptime_seconds": (
-                    time.time() - self._connection_start_time 
-                    if self._connection_start_time else 0
+                    time.time() - self._connection_start_time if self._connection_start_time else 0
                 ),
                 "last_health_check": self._last_health_check,
             },
