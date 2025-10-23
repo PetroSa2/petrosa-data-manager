@@ -2,6 +2,7 @@
 Setup script for Petrosa Data Manager Client Library.
 """
 
+import os
 from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -9,7 +10,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="petrosa-data-manager-client",
-    version="1.0.0",
+    version=os.getenv('RELEASE_VERSION', '1.0.0'),
     author="Petrosa Systems",
     author_email="team@petrosa.com",
     description="Client library for Petrosa Data Manager API",
