@@ -2,6 +2,12 @@
 Pytest configuration and fixtures.
 """
 
+import os
+
+# Set OTEL_NO_AUTO_INIT before any imports to prevent auto-initialization
+os.environ["OTEL_NO_AUTO_INIT"] = "1"
+os.environ["ENVIRONMENT"] = "testing"
+
 import pytest
 
 
