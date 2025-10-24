@@ -42,8 +42,7 @@ def init_telemetry() -> None:
 
     if not constants.OTEL_EXPORTER_OTLP_ENDPOINT:
         logger.warning(
-            "OTEL_EXPORTER_OTLP_ENDPOINT not set, "
-            "skipping telemetry initialization"
+            "OTEL_EXPORTER_OTLP_ENDPOINT not set, skipping telemetry initialization"
         )
         return
 
@@ -68,9 +67,7 @@ def init_telemetry() -> None:
 
         # Initialize metrics
         metric_reader = PeriodicExportingMetricReader(
-            OTLPMetricExporter(
-                endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT
-            ),
+            OTLPMetricExporter(endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT),
             export_interval_millis=60000,  # Export every 60 seconds
         )
         meter_provider = MeterProvider(
@@ -97,14 +94,11 @@ def init_telemetry() -> None:
 
             logger.info("OpenTelemetry logging export configured")
             logger.info(
-                "   Note: Call attach_logging_handler_simple() "
-                "in main() to activate"
+                "   Note: Call attach_logging_handler_simple() in main() to activate"
             )
 
         except Exception as e:
-            logger.error(
-                f"Failed to set up OpenTelemetry logging export: {e}"
-            )
+            logger.error(f"Failed to set up OpenTelemetry logging export: {e}")
 
         logger.info(
             "OpenTelemetry initialized successfully",
@@ -129,10 +123,7 @@ def attach_logging_handler_simple():
     global _global_logger_provider, _otlp_logging_handler
 
     if _global_logger_provider is None:
-        logger.warning(
-            "Logger provider not configured - "
-            "logging export not available"
-        )
+        logger.warning("Logger provider not configured - logging export not available")
         return False
 
     try:

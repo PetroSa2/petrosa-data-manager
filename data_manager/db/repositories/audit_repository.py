@@ -95,7 +95,9 @@ class AuditRepository(BaseRepository):
             logger.error(f"Failed to log health check: {e}")
             return False
 
-    def get_recent_logs(self, dataset_id: str | None = None, limit: int = 100) -> list[dict]:
+    def get_recent_logs(
+        self, dataset_id: str | None = None, limit: int = 100
+    ) -> list[dict]:
         """
         Get recent audit logs.
 

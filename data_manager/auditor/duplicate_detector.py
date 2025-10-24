@@ -37,8 +37,12 @@ class DuplicateDetector:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
-        self.audit_repo = AuditRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.candle_repo = CandleRepository(
+            db_manager.mysql_adapter, db_manager.mongodb_adapter
+        )
+        self.audit_repo = AuditRepository(
+            db_manager.mysql_adapter, db_manager.mongodb_adapter
+        )
 
     async def detect_duplicates(
         self,
@@ -76,13 +80,19 @@ class DuplicateDetector:
             duplicates = sum(1 for count in timestamp_counts.values() if count > 1)
 
             if duplicates > 0:
-                logger.warning(f"Found {duplicates} duplicate timestamps for {symbol} {timeframe}")
+                logger.warning(
+                    f"Found {duplicates} duplicate timestamps for {symbol} {timeframe}"
+                )
 
                 # Auto-remove if enabled
                 if constants.ENABLE_DUPLICATE_REMOVAL:
-                    removed = await self.remove_duplicates(symbol, timeframe, start, end, candles)
+                    removed = await self.remove_duplicates(
+                        symbol, timeframe, start, end, candles
+                    )
                     if removed > 0:
-                        logger.info(f"Removed {removed} duplicates for {symbol} {timeframe}")
+                        logger.info(
+                            f"Removed {removed} duplicates for {symbol} {timeframe}"
+                        )
 
             return duplicates
 
@@ -119,7 +129,9 @@ class DuplicateDetector:
 
             # Get all candles if not provided
             if candles is None:
-                candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
+                candles = await self.candle_repo.get_range(
+                    symbol, timeframe, start, end
+                )
 
             # Group by timestamp
             timestamp_groups = {}
@@ -162,7 +174,9 @@ class DuplicateDetector:
                                 {"_id": candle_id}
                             )
                             removed_count += 1
-                            logger.debug(f"Removed duplicate candle with _id: {candle_id}")
+                            logger.debug(
+                                f"Removed duplicate candle with _id: {candle_id}"
+                            )
                     except Exception as e:
                         logger.error(f"Failed to remove duplicate: {e}")
 
@@ -176,12 +190,13 @@ class DuplicateDetector:
 
             if removed_count > 0:
                 logger.info(
-                    f"Successfully removed {removed_count} duplicates " f"for {symbol} {timeframe}"
+                    f"Successfully removed {removed_count} duplicates "
+                    f"for {symbol} {timeframe}"
                 )
                 # Update metrics
-                duplicates_removed_counter.labels(symbol=symbol, timeframe=timeframe).inc(
-                    removed_count
-                )
+                duplicates_removed_counter.labels(
+                    symbol=symbol, timeframe=timeframe
+                ).inc(removed_count)
 
             return removed_count
 

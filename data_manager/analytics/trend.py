@@ -27,7 +27,9 @@ class TrendCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.candle_repo = CandleRepository(
+            db_manager.mysql_adapter, db_manager.mongodb_adapter
+        )
 
     async def calculate_trend(
         self,
@@ -53,7 +55,9 @@ class TrendCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 50:  # Need minimum data points
-                logger.warning(f"Insufficient data for trend calculation: {len(candles)} candles")
+                logger.warning(
+                    f"Insufficient data for trend calculation: {len(candles)} candles"
+                )
                 return None
 
             # Convert to DataFrame
@@ -74,7 +78,9 @@ class TrendCalculator:
                 weights = np.arange(1, len(prices) + 1)
                 return (prices * weights).sum() / weights.sum()
 
-            df["wma_20"] = df["close"].rolling(window=20).apply(weighted_average, raw=True)
+            df["wma_20"] = (
+                df["close"].rolling(window=20).apply(weighted_average, raw=True)
+            )
 
             # Rate of Change (ROC) - 10 periods
             df["roc"] = df["close"].pct_change(periods=10) * 100
@@ -86,7 +92,9 @@ class TrendCalculator:
             # Crossover Detection (SMA 20 vs SMA 50)
             df["sma_50"] = df["close"].rolling(window=50).mean()
             crossover_signal = (
-                "bullish" if df["sma_20"].iloc[-1] > df["sma_50"].iloc[-1] else "bearish"
+                "bullish"
+                if df["sma_20"].iloc[-1] > df["sma_50"].iloc[-1]
+                else "bearish"
             )
 
             # RSI (Relative Strength Index) - 14 periods (calculated but not used yet)
@@ -155,5 +163,7 @@ class TrendCalculator:
             return metrics
 
         except Exception as e:
-            logger.error(f"Error calculating trend for {symbol} {timeframe}: {e}", exc_info=True)
+            logger.error(
+                f"Error calculating trend for {symbol} {timeframe}: {e}", exc_info=True
+            )
             return None

@@ -91,7 +91,9 @@ class MarketDataEvent(BaseModel):
         if not symbol and "stream" in msg_data:
             stream = msg_data.get("stream", "")
             if "@" in stream:
-                symbol_part = stream.split("@")[0]  # Get "btcusdt" from "btcusdt@depth20@100ms"
+                symbol_part = stream.split("@")[
+                    0
+                ]  # Get "btcusdt" from "btcusdt@depth20@100ms"
                 symbol = symbol_part.upper()  # Convert to "BTCUSDT"
 
         if not symbol or symbol == "UNKNOWN" or not isinstance(symbol, str):
@@ -102,7 +104,9 @@ class MarketDataEvent(BaseModel):
             return None
 
         # Extract timestamp (try multiple fields from both levels)
-        timestamp_ms = actual_data.get("E", actual_data.get("T", actual_data.get("t", 0)))
+        timestamp_ms = actual_data.get(
+            "E", actual_data.get("T", actual_data.get("t", 0))
+        )
         if isinstance(timestamp_ms, int) and timestamp_ms > 0:
             timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0)
         else:
@@ -125,7 +129,9 @@ class BackfillRequest(BaseModel):
     timeframe: str | None = Field(None, description="Timeframe for candles")
     start_time: datetime = Field(..., description="Backfill start time")
     end_time: datetime = Field(..., description="Backfill end time")
-    priority: int = Field(default=5, ge=1, le=10, description="Priority (1=highest, 10=lowest)")
+    priority: int = Field(
+        default=5, ge=1, le=10, description="Priority (1=highest, 10=lowest)"
+    )
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
@@ -136,8 +142,12 @@ class BackfillJob(BaseModel):
 
     job_id: str = Field(..., description="Job identifier")
     request: BackfillRequest = Field(..., description="Backfill request details")
-    status: str = Field(..., description="Job status (pending/running/completed/failed)")
-    progress: float = Field(default=0.0, ge=0.0, le=100.0, description="Progress percentage")
+    status: str = Field(
+        ..., description="Job status (pending/running/completed/failed)"
+    )
+    progress: float = Field(
+        default=0.0, ge=0.0, le=100.0, description="Progress percentage"
+    )
     records_fetched: int = Field(default=0, description="Number of records fetched")
     records_inserted: int = Field(default=0, description="Number of records inserted")
     error_message: str | None = Field(None, description="Error message if failed")

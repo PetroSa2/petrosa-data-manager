@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    name: Lint Code
+    name: Lint & Format Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -18,31 +18,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Run flake8
-        run: |
-          flake8 data_manager tests --max-line-length=100 --extend-ignore=E203 --count --statistics
+      - name: Run linting
+        run: make lint
 
-      - name: Run black check
-        run: |
-          black --check data_manager tests
-
-      - name: Run ruff
-        run: |
-          ruff check data_manager tests
-
-      - name: Run mypy
-        run: |
-          mypy data_manager || true
+      - name: Run type check
+        run: make type-check
+        continue-on-error: true  # Allow type check failures initially
 
   test:
-    name: Run Tests
+    name: Test & Coverage
     runs-on: ubuntu-latest
+    env:
+      OTEL_NO_AUTO_INIT: 1
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -51,22 +46,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Run tests
-        run: |
-          pytest tests/ -v --cov=data_manager --cov-report=xml --cov-report=term
+      - name: Run tests with coverage
+        timeout-minutes: 10
+        run: make test
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: PetroSa2/petrosa-data-manager
           file: ./coverage.xml
           flags: unittests
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
   security:
     name: Security Scan
@@ -74,21 +73,47 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret detection
+
+      - name: 🔐 Run Gitleaks (Secret Detection)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: 🐍 Run Bandit (Python Security)
         run: |
-          python -m pip install --upgrade pip
-          pip install bandit
+          pip install bandit[toml]
+          bandit -r data_manager \
+            --severity-level medium \
+            --confidence-level medium \
+            --format json \
+            --output bandit-report.json \
+            || true
+          echo "📊 Bandit Results:"
+          python -m json.tool bandit-report.json | head -30 || echo "No issues found"
 
-      - name: Run Bandit
-        run: |
-          bandit -r data_manager -f json -o bandit-report.json || true
-          cat bandit-report.json
+      - name: 🗂️ Run Trivy (Vulnerability Scanner)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
 
   build:
     name: Build Docker Image
@@ -109,4 +134,23 @@ jobs:
           tags: petrosa-data-manager:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  documentation-standards:
+    name: Documentation Standards Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check for temporary documentation patterns
+        run: |
+          temp_docs=$(find docs/ -maxdepth 1 -type f -regex '.*_\(SUMMARY\|FIX\|COMPLETE\|STATUS\)\.md$' || true)
+          if [ -n "$temp_docs" ]; then
+            echo "❌ Found temporary documentation in docs/ root:"
+            echo "$temp_docs"
+            echo ""
+            echo "These files should be in docs/archive/ subdirectories"
+            exit 1
+          fi
+          echo "✅ Documentation standards check passed"
 

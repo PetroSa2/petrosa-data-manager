@@ -1,0 +1,568 @@
+# MASTER RULES: See petrosa_k8s/.cursorrules
+
+**IMPORTANT**: This file contains service-specific rules only. For ecosystem-wide rules, architecture, shared resources, deployment patterns, and cross-service integration, always refer to:
+- **Master Cursorrules**: `/Users/yurisa2/petrosa/petrosa_k8s/.cursorrules`
+
+When working on this service, read the master cursorrules first to understand the full system context.
+
+---
+
+## Data Manager - Satellite Rules
+
+### Service Context
+
+The **Petrosa Data Manager** is the data integrity, quality, and distribution hub for the entire trading ecosystem. It ensures all trading-related datasets remain accurate, consistent, complete, and analyzable through continuous auditing, gap detection, schema validation, and analytics computation. It operates with **3 replicas** using **MongoDB leader election**, where only the leader runs background schedulers (auditor, analytics).
+
+This service provides a **dual database architecture** (PostgreSQL for metadata + MongoDB for time-series), a **Schema Registry** for cross-service data validation, a **Generic CRUD API** for both databases, **Market Analytics** (volatility, volume, correlation), and **Health Scoring** for data quality monitoring.
+
+The Data Manager is the **central data governance layer**, ensuring data quality, providing analytics, and serving as the API gateway for all data access across the Petrosa ecosystem.
+
+### Cross-References to Master
+
+- **Ecosystem Architecture**: See master § System Architecture Overview → Data Ingestion & Storage Layer
+- **Work Tracking**: See master § Centralized Work Tracking with GitHub Projects
+- **NATS Topics**: See master § NATS Message Bus → `binance.futures.websocket.data` (input)
+- **Database Architecture**: See master § Database Architecture (PostgreSQL + MongoDB dual architecture)
+- **Deployment Patterns**: See master § Data Manager Configuration
+- **Leader Election**: See master § Data Manager (leader election for schedulers)
+- **Shared Resources**: See master § Shared Resources (database credentials in secrets)
+
+---
+
+## Service-Specific Rules
+
+### Repository Structure
+
+**Key Files**:
+- `README.md` - Comprehensive service documentation
+- `Makefile` - Development commands
+- `k8s/deployment.yaml` - Deployment with 3 replicas + leader election
+- `data_manager/api/` - FastAPI server with multiple route modules
+- `data_manager/auditor/` - Data integrity validation
+- `data_manager/analytics/` - Market metrics computation
+- `data_manager/db/` - Dual database adapters
+
+**Directory Layout**:
+```
+petrosa-data-manager/
+├── data_manager/
+│   ├── api/                   # FastAPI application
+│   │   ├── app.py
+│   │   └── routes/
+│   │       ├── health.py      # Health endpoints
+│   │       ├── generic.py     # Generic CRUD
+│   │       ├── schemas.py     # Schema registry
+│   │       ├── data.py        # Domain-specific data
+│   │       ├── analysis.py    # Analytics
+│   │       └── raw.py         # Raw queries
+│   ├── auditor/               # Data integrity
+│   │   ├── scheduler.py       # Audit scheduler (leader only)
+│   │   ├── gap_detector.py
+│   │   ├── duplicate_detector.py
+│   │   └── health_scorer.py
+│   ├── analytics/             # Market analytics
+│   │   ├── scheduler.py       # Analytics scheduler (leader only)
+│   │   ├── volatility.py
+│   │   ├── volume.py
+│   │   └── correlation.py
+│   ├── db/                    # Database layer
+│   │   ├── database_manager.py
+│   │   ├── mysql_adapter.py
+│   │   ├── mongodb_adapter.py
+│   │   └── repositories/
+│   └── leader_election.py     # Leader election logic
+└── k8s/
+    ├── deployment.yaml        # 3 replicas
+    └── configmap.yaml
+```
+
+### Dual Database Architecture
+
+**Why Two Databases**:
+
+1. **PostgreSQL**: Structured metadata, catalog, audit logs, schemas
+2. **MongoDB**: Time-series data (candles, trades, depth), analytics results
+
+**Database Roles**:
+```python
+# PostgreSQL - Structured Data
+- schemas (Schema Registry)
+- catalog (Dataset metadata)
+- audit_logs (Data integrity audits)
+- health_metrics (Data quality scores)
+- backfill_jobs (Gap filling jobs)
+
+# MongoDB - Time-Series Data
+- candles_BTCUSDT_1m (OHLCV klines)
+- trades_BTCUSDT (Individual trades)
+- depth_BTCUSDT (Order book snapshots)
+- analytics_volatility (Computed metrics)
+- leader_election (Leader coordination)
+```
+
+**Connection Management**:
+```python
+class DatabaseManager:
+    """Manage connections to both databases."""
+    
+    def __init__(self):
+        self.postgres = PostgreSQLAdapter(POSTGRES_URL)
+        self.mongodb = MongoDBAdapter(MONGODB_URL)
+    
+    async def initialize(self):
+        """Initialize both database connections."""
+        await self.postgres.connect()
+        await self.mongodb.connect()
+        
+        # Test connections
+        assert await self.postgres.ping()
+        assert await self.mongodb.ping()
+```
+
+### Leader Election for Schedulers
+
+**Why Leader-Only Schedulers**:
+
+1. **Avoid Duplicate Audits**: Only one replica runs audit jobs
+2. **Consistent Analytics**: Single source of analytics computation
+3. **Resource Efficiency**: No wasted computation
+4. **Coordinated Backfills**: Single orchestrator for gap filling
+
+**Scheduler Coordination**:
+```python
+async def start(self):
+    """Start based on leader status."""
+    if await self.leader_election.try_become_leader():
+        logger.info("Elected as leader - starting schedulers")
+        await self.start_auditor_scheduler()     # Only leader
+        await self.start_analytics_scheduler()   # Only leader
+        await self.maintain_leadership()
+    else:
+        logger.info("Starting as follower - API only")
+        await self.wait_for_leader_failure()
+```
+
+**Audit Scheduler** (runs every 5 minutes):
+```python
+class AuditorScheduler:
+    """
+    Periodic data integrity checks.
+    Only runs on leader replica.
+    """
+    
+    async def run(self):
+        """Run audit cycle."""
+        while self.is_leader:
+            # Gap detection
+            gaps = await self.gap_detector.detect_gaps()
+            if gaps:
+                await self.trigger_backfill(gaps)
+            
+            # Duplicate detection
+            duplicates = await self.duplicate_detector.find_duplicates()
+            if duplicates and self.config.ENABLE_DUPLICATE_REMOVAL:
+                await self.remove_duplicates(duplicates)
+            
+            # Health scoring
+            scores = await self.health_scorer.calculate_scores()
+            await self.store_health_scores(scores)
+            
+            await asyncio.sleep(300)  # 5 minutes
+```
+
+### Schema Registry
+
+**Purpose**: Centralized schema management for cross-service data validation
+
+**Endpoints**:
+```bash
+# Register schema
+POST /schemas/{database}/{name}
+
+# Get schema
+GET /schemas/{database}/{name}
+GET /schemas/{database}/{name}/versions/{version}
+
+# List schemas
+GET /schemas
+GET /schemas?database=mongodb
+
+# Validate data
+POST /schemas/validate
+
+# Check compatibility
+POST /schemas/compatibility
+
+# Bootstrap common schemas
+POST /schemas/bootstrap
+
+# Cache management
+GET /schemas/cache/stats
+POST /schemas/cache/clear
+```
+
+**Schema Registration**:
+```bash
+# Register MongoDB schema for candles
+curl -X POST http://data-manager:8000/schemas/mongodb/candle_v1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": 1,
+    "schema": {
+      "type": "object",
+      "required": ["symbol", "timestamp", "open", "high", "low", "close", "volume"],
+      "properties": {
+        "symbol": {"type": "string", "pattern": "^[A-Z]+$"},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "open": {"type": "number", "minimum": 0},
+        "high": {"type": "number", "minimum": 0},
+        "low": {"type": "number", "minimum": 0},
+        "close": {"type": "number", "minimum": 0},
+        "volume": {"type": "number", "minimum": 0}
+      }
+    },
+    "description": "OHLCV candle data schema"
+  }'
+```
+
+**Schema Validation**:
+```bash
+# Validate data against schema
+curl -X POST http://data-manager:8000/schemas/validate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database": "mongodb",
+    "schema_name": "candle_v1",
+    "data": {
+      "symbol": "BTCUSDT",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "open": 50000,
+      "high": 51000,
+      "low": 49000,
+      "close": 50500,
+      "volume": 100.5
+    }
+  }'
+```
+
+### Generic CRUD API
+
+**Unified Access to Both Databases**:
+
+```bash
+# MongoDB operations
+GET /api/v1/mongodb/candles_BTCUSDT_1m?filter={"symbol":"BTCUSDT"}&limit=100
+POST /api/v1/mongodb/candles_BTCUSDT_1m
+PUT /api/v1/mongodb/candles_BTCUSDT_1m
+DELETE /api/v1/mongodb/candles_BTCUSDT_1m
+
+# MySQL operations
+GET /api/v1/mysql/klines?filter={"symbol":"BTCUSDT"}&limit=100
+POST /api/v1/mysql/klines
+PUT /api/v1/mysql/klines
+DELETE /api/v1/mysql/klines
+
+# Batch operations
+POST /api/v1/mongodb/candles_BTCUSDT_1m/batch
+POST /api/v1/mysql/klines/batch
+```
+
+**Query with Filtering**:
+```bash
+# Get recent candles with filtering
+curl "http://data-manager:8000/api/v1/mongodb/candles_BTCUSDT_1m?filter={\"timestamp\":{\"$gte\":\"2025-01-01\"}}&sort={\"timestamp\":-1}&limit=100"
+
+# Get by specific symbol and interval
+curl "http://data-manager:8000/api/v1/mysql/klines?filter={\"symbol\":\"BTCUSDT\",\"interval\":\"1h\"}&limit=500"
+```
+
+**Batch Operations**:
+```bash
+# Batch insert/update/delete
+curl -X POST http://data-manager:8000/api/v1/mongodb/candles_BTCUSDT_1m/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operations": [
+      {"type": "insert", "data": {"symbol": "BTCUSDT", "open": 50000, ...}},
+      {"type": "update", "filter": {"symbol": "BTCUSDT"}, "data": {"updated": true}},
+      {"type": "delete", "filter": {"symbol": "ETHUSDT"}}
+    ]
+  }'
+```
+
+### Data Auditor
+
+**Gap Detection**:
+```python
+class GapDetector:
+    """Detect missing data ranges."""
+    
+    async def detect_gaps(
+        self,
+        symbol: str,
+        interval: str
+    ) -> List[Gap]:
+        """
+        Find gaps in time-series data.
+        
+        Returns list of (start_time, end_time) tuples.
+        """
+        query = """
+        SELECT 
+            close_time + INTERVAL 1 MINUTE as gap_start,
+            LEAD(open_time) OVER (ORDER BY open_time) as gap_end
+        FROM klines
+        WHERE symbol = %s AND interval = %s
+        HAVING gap_end > gap_start
+        """
+        results = await self.execute(query, (symbol, interval))
+        return [Gap(start=r[0], end=r[1]) for r in results]
+```
+
+**Duplicate Detection**:
+```python
+class DuplicateDetector:
+    """Find and optionally remove duplicate records."""
+    
+    async def find_duplicates(self, collection: str) -> List[Duplicate]:
+        """
+        Find duplicate records in MongoDB collection.
+        
+        Uses aggregation to group by key fields.
+        """
+        pipeline = [
+            {
+                "$group": {
+                    "_id": {"symbol": "$symbol", "open_time": "$open_time"},
+                    "count": {"$sum": 1},
+                    "ids": {"$push": "$_id"}
+                }
+            },
+            {
+                "$match": {"count": {"$gt": 1}}
+            }
+        ]
+        results = await self.collection.aggregate(pipeline).to_list(None)
+        return [Duplicate(**r) for r in results]
+```
+
+**Health Scoring**:
+```python
+class HealthScorer:
+    """Calculate data quality scores."""
+    
+    async def calculate_score(
+        self,
+        symbol: str,
+        interval: str
+    ) -> HealthScore:
+        """
+        Calculate health score (0-100) based on:
+        - Gap rate (40%): Percentage of missing data
+        - Duplicate rate (20%): Percentage of duplicates
+        - Freshness (20%): How recent is the data
+        - Completeness (20%): Required fields present
+        """
+        total_records = await self.count_records(symbol, interval)
+        gaps = await self.detect_gaps(symbol, interval)
+        duplicates = await self.count_duplicates(symbol, interval)
+        last_update = await self.get_last_update(symbol, interval)
+        
+        # Calculate component scores
+        gap_score = max(0, 100 - (len(gaps) / total_records * 100 * 40))
+        dup_score = max(0, 100 - (duplicates / total_records * 100 * 20))
+        fresh_score = self._calculate_freshness(last_update) * 20
+        complete_score = 20  # Assume complete for now
+        
+        total_score = gap_score + dup_score + fresh_score + complete_score
+        
+        return HealthScore(
+            symbol=symbol,
+            interval=interval,
+            score=total_score,
+            gap_rate=len(gaps) / total_records,
+            duplicate_rate=duplicates / total_records,
+            last_update=last_update
+        )
+```
+
+### Analytics Engine
+
+**Computed Metrics**:
+
+1. **Volatility**: Standard deviation, ATR, Bollinger Band width
+2. **Volume**: Volume profile, VWAP, volume moving averages
+3. **Spread**: Bid-ask spread, liquidity depth
+4. **Trend**: Moving averages, trend strength
+5. **Correlation**: Symbol correlation matrix
+6. **Seasonality**: Day-of-week, hour-of-day patterns
+
+**Analytics API**:
+```bash
+# Volatility metrics
+GET /analysis/volatility?pair=BTCUSDT&period=1h&method=std
+
+# Volume metrics
+GET /analysis/volume?pair=BTCUSDT&period=1d
+
+# Spread and liquidity
+GET /analysis/spread?pair=BTCUSDT
+
+# Trend indicators
+GET /analysis/trend?pair=BTCUSDT&period=4h
+
+# Correlation matrix
+GET /analysis/correlation?pairs=BTCUSDT,ETHUSDT,BNBUSDT&period=1d
+```
+
+### Development Workflow
+
+**Local Development**:
+```bash
+# Setup
+make setup
+
+# Run API server only (no schedulers)
+ENABLE_LEADER_ELECTION=false ENABLE_AUDITOR=false python -m data_manager.main
+
+# Run with schedulers (as leader)
+ENABLE_LEADER_ELECTION=false python -m data_manager.main
+```
+
+**Testing**:
+```bash
+# API tests
+pytest tests/test_api.py -v
+
+# Auditor tests
+pytest tests/test_auditor.py -v
+
+# Schema registry tests
+pytest tests/test_schema_registry.py -v
+
+# Integration tests
+pytest tests/integration/ -v
+```
+
+### Common Issues & Solutions
+
+#### 1. Leader Not Running Schedulers
+
+**Symptom**: No audit jobs, no analytics computation
+
+**Check**:
+```bash
+# Check leader status
+curl http://data-manager:8000/health/leader
+
+# Check MongoDB connectivity
+kubectl exec -it deployment/petrosa-data-manager -n petrosa-apps -- mongosh --eval "db.adminCommand('ping')"
+
+# Force leader re-election
+kubectl exec -it deployment/petrosa-data-manager -n petrosa-apps -- mongosh petrosa --eval "db.leader_election.deleteOne({_id: 'data-manager-leader'})"
+```
+
+#### 2. Schema Validation Failures
+
+**Symptom**: Data insertions rejected
+
+**Check**:
+```bash
+# Check schema definition
+curl http://data-manager:8000/schemas/mongodb/candle_v1
+
+# Validate sample data
+curl -X POST http://data-manager:8000/schemas/validate \
+  -d '{"database": "mongodb", "schema_name": "candle_v1", "data": {...}}'
+
+# Disable validation temporarily
+SCHEMA_VALIDATION_ENABLED=false
+```
+
+#### 3. Database Connection Issues
+
+**Symptom**: API errors, scheduler failures
+
+**Check**:
+```bash
+# Check database health
+curl http://data-manager:8000/health/databases
+
+# Check connection pools
+curl http://data-manager:8000/health/connections
+
+# Verify credentials
+kubectl get secret petrosa-sensitive-credentials -n petrosa-apps -o yaml
+```
+
+### Configuration
+
+**Environment Variables** (service-specific):
+```bash
+# NATS (input)
+NATS_URL="nats://nats-server.nats:4222"
+NATS_CONSUMER_SUBJECT="binance.futures.websocket.data"
+
+# Databases
+POSTGRES_URL="postgresql://user:pass@postgres:5432/petrosa"
+MONGODB_URL="mongodb://mongodb:27017"
+MONGODB_DATABASE="petrosa"
+
+# Component toggles
+ENABLE_AUDITOR=true
+ENABLE_BACKFILLER=true
+ENABLE_ANALYTICS=true
+ENABLE_API=true
+
+# API settings
+API_PORT=8000
+
+# Scheduler intervals
+AUDIT_INTERVAL=300              # 5 minutes
+ANALYTICS_INTERVAL=900          # 15 minutes
+
+# Leader election
+ENABLE_LEADER_ELECTION=true
+LEADER_ELECTION_HEARTBEAT_INTERVAL=10
+LEADER_ELECTION_TIMEOUT=30
+
+# Backfill settings
+ENABLE_AUTO_BACKFILL=false
+MIN_AUTO_BACKFILL_GAP=3600
+MAX_AUTO_BACKFILL_JOBS=5
+
+# Data quality
+ENABLE_DUPLICATE_REMOVAL=false
+DUPLICATE_RESOLUTION_STRATEGY="keep_newest"
+
+# Schema validation
+SCHEMA_VALIDATION_ENABLED=true
+SCHEMA_CACHE_TTL=300
+```
+
+### Success Metrics
+
+**Data Quality**:
+- Health score: > 95 (out of 100)
+- Gap rate: < 0.1%
+- Duplicate rate: < 0.01%
+- Data freshness: < 5 minutes
+
+**Performance**:
+- API response time: < 200ms (95th percentile)
+- Audit cycle completion: < 2 minutes
+- Analytics computation: < 5 minutes
+
+**Availability**:
+- Leader failover: < 30 seconds
+- API uptime: > 99.9%
+
+### Always Reference
+
+- For ecosystem-wide rules: **See master cursorrules**
+- For work tracking: **See master § Centralized Work Tracking with GitHub Projects**
+- For NATS topics: **See master § NATS Message Bus**
+- For database schemas: **See master § Database Architecture**
+- For deployment patterns: **See master § Data Manager Configuration**
+- For leader election: **See master § Data Manager (leader election patterns)**
+

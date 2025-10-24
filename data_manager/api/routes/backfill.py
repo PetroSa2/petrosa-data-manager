@@ -109,10 +109,17 @@ async def list_backfill_jobs(
     data_type: str | None = Query(
         None, description="Filter by data type (candles, trades, depth, funding)"
     ),
-    from_time: datetime | None = Query(None, alias="from", description="Start time for filtering"),
-    to_time: datetime | None = Query(None, alias="to", description="End time for filtering"),
+    from_time: datetime | None = Query(
+        None, alias="from", description="Start time for filtering"
+    ),
+    to_time: datetime | None = Query(
+        None, alias="to", description="End time for filtering"
+    ),
     limit: int = Query(
-        100, ge=1, le=1000, description="Maximum number of jobs (default: 100, max: 1000)"
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of jobs (default: 100, max: 1000)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_by: str = Query(

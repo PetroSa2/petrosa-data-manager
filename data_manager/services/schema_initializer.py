@@ -39,7 +39,15 @@ class SchemaInitializer:
                 version=1,
                 schema={
                     "type": "object",
-                    "required": ["symbol", "timestamp", "open", "high", "low", "close", "volume"],
+                    "required": [
+                        "symbol",
+                        "timestamp",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "volume",
+                    ],
                     "properties": {
                         "symbol": {
                             "type": "string",
@@ -51,11 +59,31 @@ class SchemaInitializer:
                             "format": "date-time",
                             "description": "Candle timestamp",
                         },
-                        "open": {"type": "number", "minimum": 0, "description": "Opening price"},
-                        "high": {"type": "number", "minimum": 0, "description": "Highest price"},
-                        "low": {"type": "number", "minimum": 0, "description": "Lowest price"},
-                        "close": {"type": "number", "minimum": 0, "description": "Closing price"},
-                        "volume": {"type": "number", "minimum": 0, "description": "Trading volume"},
+                        "open": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Opening price",
+                        },
+                        "high": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Highest price",
+                        },
+                        "low": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Lowest price",
+                        },
+                        "close": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Closing price",
+                        },
+                        "volume": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Trading volume",
+                        },
                         "quote_volume": {
                             "type": "number",
                             "minimum": 0,
@@ -100,7 +128,11 @@ class SchemaInitializer:
                             "format": "date-time",
                             "description": "Trade timestamp",
                         },
-                        "price": {"type": "number", "minimum": 0, "description": "Trade price"},
+                        "price": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Trade price",
+                        },
                         "quantity": {
                             "type": "number",
                             "minimum": 0,
@@ -111,9 +143,18 @@ class SchemaInitializer:
                             "enum": ["BUY", "SELL"],
                             "description": "Trade side",
                         },
-                        "trade_id": {"type": "string", "description": "Unique trade identifier"},
-                        "buyer_order_id": {"type": "string", "description": "Buyer order ID"},
-                        "seller_order_id": {"type": "string", "description": "Seller order ID"},
+                        "trade_id": {
+                            "type": "string",
+                            "description": "Unique trade identifier",
+                        },
+                        "buyer_order_id": {
+                            "type": "string",
+                            "description": "Buyer order ID",
+                        },
+                        "seller_order_id": {
+                            "type": "string",
+                            "description": "Seller order ID",
+                        },
                         "is_buyer_maker": {
                             "type": "boolean",
                             "description": "Whether buyer is maker",
@@ -191,13 +232,20 @@ class SchemaInitializer:
                             "format": "date-time",
                             "description": "Funding rate timestamp",
                         },
-                        "funding_rate": {"type": "number", "description": "Funding rate value"},
+                        "funding_rate": {
+                            "type": "number",
+                            "description": "Funding rate value",
+                        },
                         "funding_time": {
                             "type": "string",
                             "format": "date-time",
                             "description": "Next funding time",
                         },
-                        "mark_price": {"type": "number", "minimum": 0, "description": "Mark price"},
+                        "mark_price": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Mark price",
+                        },
                         "index_price": {
                             "type": "number",
                             "minimum": 0,
@@ -223,7 +271,10 @@ class SchemaInitializer:
                     "type": "object",
                     "required": ["order_id", "symbol", "side", "type", "status"],
                     "properties": {
-                        "order_id": {"type": "string", "description": "Unique order identifier"},
+                        "order_id": {
+                            "type": "string",
+                            "description": "Unique order identifier",
+                        },
                         "symbol": {
                             "type": "string",
                             "pattern": "^[A-Z]+$",
@@ -264,7 +315,11 @@ class SchemaInitializer:
                             "minimum": 0,
                             "description": "Order quantity",
                         },
-                        "price": {"type": "number", "minimum": 0, "description": "Order price"},
+                        "price": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Order price",
+                        },
                         "stop_price": {
                             "type": "number",
                             "minimum": 0,
@@ -289,7 +344,10 @@ class SchemaInitializer:
                             "type": "string",
                             "description": "Client order identifier",
                         },
-                        "strategy_id": {"type": "string", "description": "Associated strategy ID"},
+                        "strategy_id": {
+                            "type": "string",
+                            "description": "Associated strategy ID",
+                        },
                     },
                     "additionalProperties": False,
                 },
@@ -304,7 +362,10 @@ class SchemaInitializer:
                     "type": "object",
                     "required": ["dataset_id", "symbol", "timestamp"],
                     "properties": {
-                        "dataset_id": {"type": "string", "description": "Dataset identifier"},
+                        "dataset_id": {
+                            "type": "string",
+                            "description": "Dataset identifier",
+                        },
                         "symbol": {
                             "type": "string",
                             "pattern": "^[A-Z]+$",
@@ -364,10 +425,22 @@ class SchemaInitializer:
                 version=1,
                 schema={
                     "type": "object",
-                    "required": ["audit_id", "dataset_id", "symbol", "audit_type", "timestamp"],
+                    "required": [
+                        "audit_id",
+                        "dataset_id",
+                        "symbol",
+                        "audit_type",
+                        "timestamp",
+                    ],
                     "properties": {
-                        "audit_id": {"type": "string", "description": "Unique audit identifier"},
-                        "dataset_id": {"type": "string", "description": "Dataset identifier"},
+                        "audit_id": {
+                            "type": "string",
+                            "description": "Unique audit identifier",
+                        },
+                        "dataset_id": {
+                            "type": "string",
+                            "description": "Dataset identifier",
+                        },
                         "symbol": {
                             "type": "string",
                             "pattern": "^[A-Z]+$",
@@ -430,10 +503,22 @@ class SchemaInitializer:
                 version=1,
                 schema={
                     "type": "object",
-                    "required": ["signal_id", "strategy_id", "symbol", "signal_type", "timestamp"],
+                    "required": [
+                        "signal_id",
+                        "strategy_id",
+                        "symbol",
+                        "signal_type",
+                        "timestamp",
+                    ],
                     "properties": {
-                        "signal_id": {"type": "string", "description": "Unique signal identifier"},
-                        "strategy_id": {"type": "string", "description": "Strategy identifier"},
+                        "signal_id": {
+                            "type": "string",
+                            "description": "Unique signal identifier",
+                        },
+                        "strategy_id": {
+                            "type": "string",
+                            "description": "Strategy identifier",
+                        },
                         "symbol": {
                             "type": "string",
                             "pattern": "^[A-Z]+$",
@@ -476,8 +561,14 @@ class SchemaInitializer:
                             "minimum": 0,
                             "description": "Take profit price",
                         },
-                        "metadata": {"type": "object", "description": "Additional signal metadata"},
-                        "created_by": {"type": "string", "description": "Signal creator"},
+                        "metadata": {
+                            "type": "object",
+                            "description": "Additional signal metadata",
+                        },
+                        "created_by": {
+                            "type": "string",
+                            "description": "Signal creator",
+                        },
                     },
                     "additionalProperties": False,
                 },
@@ -530,7 +621,9 @@ class SchemaInitializer:
             result[database] = []
             for schema in schema_list:
                 # Extract schema name from the schema definition
-                schema_def_name = schema.schema.get("title", "").lower().replace(" ", "_")
+                schema_def_name = (
+                    schema.schema.get("title", "").lower().replace(" ", "_")
+                )
                 if not schema_def_name:
                     # Fallback to a generic name based on database
                     schema_def_name = f"{database}_schema_{len(result[database]) + 1}"
