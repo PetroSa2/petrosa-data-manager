@@ -7,14 +7,19 @@ import json
 import logging
 from typing import Any
 
+from opentelemetry import trace
 from prometheus_client import Counter, Histogram
 
 import constants
 from data_manager.consumer.message_handler import MessageHandler
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.events import MarketDataEvent
+from data_manager.utils.nats_trace_propagator import NATSTracePropagator
 
 logger = logging.getLogger(__name__)
+
+# Get OpenTelemetry tracer
+tracer = trace.get_tracer(__name__)
 
 # Prometheus metrics
 messages_received = Counter(
@@ -168,7 +173,7 @@ class MarketDataConsumer:
         logger.info(f"Message processing worker {worker_id} stopped")
 
     async def _process_message(self, msg: Any) -> None:
-        """Process a single message."""
+        """Process a single message with trace context propagation."""
         event_type = "unknown"
         start_time = asyncio.get_event_loop().time()
 
@@ -177,42 +182,65 @@ class MarketDataConsumer:
             data = json.loads(msg.data.decode())
             messages_received.labels(event_type="raw").inc()
 
-            # Parse into MarketDataEvent
-            event = MarketDataEvent.from_nats_message(data)
+            # Extract trace context from message and create span
+            ctx = NATSTracePropagator.extract_context(data)
 
-            # Skip invalid messages (missing or invalid symbol)
-            if event is None:
-                # DEBUG: Log sample message to understand format
-                logger.warning(
-                    "Skipping message with missing or invalid symbol",
+            # Create span as child of extracted context
+            with tracer.start_as_current_span(
+                "process_nats_message",
+                context=ctx,
+                kind=trace.SpanKind.CONSUMER,
+            ) as span:
+                # Set NATS-specific attributes
+                span.set_attribute("messaging.system", "nats")
+                span.set_attribute("messaging.operation", "receive")
+                span.set_attribute("messaging.destination", constants.NATS_CONSUMER_SUBJECT)
+
+                # Parse into MarketDataEvent
+                event = MarketDataEvent.from_nats_message(data)
+
+                # Skip invalid messages (missing or invalid symbol)
+                if event is None:
+                    span.set_attribute("message.invalid", True)
+                    # DEBUG: Log sample message to understand format
+                    logger.warning(
+                        "Skipping message with missing or invalid symbol",
+                        extra={
+                            "data_keys": list(data.keys()),
+                            "sample_data": str(data)[:500],  # First 500 chars of message
+                        },
+                    )
+                    messages_received.labels(event_type="invalid").inc()
+                    return
+
+                event_type = event.event_type.value
+                messages_received.labels(event_type=event_type).inc()
+
+                # Add event details to span
+                span.set_attribute("event.type", event_type)
+                span.set_attribute("event.symbol", event.symbol)
+                span.set_attribute("event.timestamp", event.timestamp.isoformat())
+
+                logger.debug(
+                    "Processing market data event",
                     extra={
-                        "data_keys": list(data.keys()),
-                        "sample_data": str(data)[:500],  # First 500 chars of message
+                        "event_type": event_type,
+                        "symbol": event.symbol,
+                        "timestamp": event.timestamp.isoformat(),
                     },
                 )
-                messages_received.labels(event_type="invalid").inc()
-                return
 
-            event_type = event.event_type.value
-            messages_received.labels(event_type=event_type).inc()
+                # Route to appropriate handler
+                await self.message_handler.handle_event(event)
 
-            logger.debug(
-                "Processing market data event",
-                extra={
-                    "event_type": event_type,
-                    "symbol": event.symbol,
-                    "timestamp": event.timestamp.isoformat(),
-                },
-            )
+                # Track metrics
+                processing_time = asyncio.get_event_loop().time() - start_time
+                message_processing_time.labels(event_type=event_type).observe(processing_time)
+                messages_processed.labels(event_type=event_type).inc()
+                self._messages_processed += 1
 
-            # Route to appropriate handler
-            await self.message_handler.handle_event(event)
-
-            # Track metrics
-            processing_time = asyncio.get_event_loop().time() - start_time
-            message_processing_time.labels(event_type=event_type).observe(processing_time)
-            messages_processed.labels(event_type=event_type).inc()
-            self._messages_processed += 1
+                span.set_attribute("message.processing_time_seconds", processing_time)
+                span.set_status(trace.Status(trace.StatusCode.OK))
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON message: {e}")

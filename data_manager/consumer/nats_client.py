@@ -2,6 +2,7 @@
 NATS client connection manager with reconnection logic.
 """
 
+import json
 import logging
 from collections.abc import Callable
 
@@ -10,6 +11,7 @@ import nats.aio.client
 from prometheus_client import Counter, Gauge
 
 import constants
+from data_manager.utils.nats_trace_propagator import NATSTracePropagator
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +130,44 @@ class NATSClient:
             return True
         except Exception as e:
             logger.error(f"Failed to publish to subject {subject}: {e}")
+            nats_errors.labels(type="publish").inc()
+            return False
+
+    async def publish_with_trace_context(self, subject: str, message_dict: dict) -> bool:
+        """
+        Publish message to a NATS subject with trace context injection.
+
+        This method injects the current OpenTelemetry trace context into the
+        message before publishing, enabling distributed tracing across services.
+
+        Args:
+            subject: NATS subject to publish to
+            message_dict: Message dictionary (will be modified to include trace context)
+
+        Returns:
+            True if published successfully, False otherwise
+
+        Example:
+            >>> data = {"symbol": "BTCUSDT", "price": 50000}
+            >>> await nats_client.publish_with_trace_context("market.data", data)
+        """
+        if not self.nc or not self.connected:
+            logger.error("Cannot publish: not connected to NATS")
+            return False
+
+        try:
+            # Inject trace context into message
+            message_with_trace = NATSTracePropagator.inject_context(message_dict)
+
+            # Serialize to JSON and encode
+            data = json.dumps(message_with_trace).encode()
+
+            # Publish message
+            await self.nc.publish(subject, data)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to publish to subject {subject}: {e}", exc_info=True)
             nats_errors.labels(type="publish").inc()
             return False
 
