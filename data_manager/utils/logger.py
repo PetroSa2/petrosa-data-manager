@@ -7,7 +7,6 @@ with JSON formatting and proper correlation IDs.
 
 import logging
 import sys
-from typing import Optional
 
 import structlog
 from structlog.stdlib import LoggerFactory
@@ -16,11 +15,11 @@ from structlog.stdlib import LoggerFactory
 def setup_logging(level: str = "INFO", format_type: str = "json") -> structlog.BoundLogger:
     """
     Set up structured logging for the service.
-    
+
     Args:
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         format_type: Log format type ("json" or "text")
-        
+
     Returns:
         Configured structlog logger
     """
@@ -71,9 +70,10 @@ def setup_logging(level: str = "INFO", format_type: str = "json") -> structlog.B
 
     # Create logger with service context
     logger = structlog.get_logger("data-manager")
-    
+
     # Add service metadata
     import os
+
     logger = logger.bind(
         service_name="data-manager",
         service_version=os.getenv("OTEL_SERVICE_VERSION", "1.0.0"),
@@ -83,13 +83,13 @@ def setup_logging(level: str = "INFO", format_type: str = "json") -> structlog.B
     return logger
 
 
-def get_logger(name: Optional[str] = None) -> structlog.BoundLogger:
+def get_logger(name: str | None = None) -> structlog.BoundLogger:
     """
     Get a logger instance.
-    
+
     Args:
         name: Logger name (optional)
-        
+
     Returns:
         Configured structlog logger
     """
@@ -102,11 +102,11 @@ def get_logger(name: Optional[str] = None) -> structlog.BoundLogger:
 def add_correlation_id(logger: structlog.BoundLogger, correlation_id: str) -> structlog.BoundLogger:
     """
     Add correlation ID to logger context.
-    
+
     Args:
         logger: Logger instance
         correlation_id: Correlation ID for request tracing
-        
+
     Returns:
         Logger with correlation ID bound
     """
@@ -116,13 +116,12 @@ def add_correlation_id(logger: structlog.BoundLogger, correlation_id: str) -> st
 def add_request_context(logger: structlog.BoundLogger, **kwargs) -> structlog.BoundLogger:
     """
     Add request context to logger.
-    
+
     Args:
         logger: Logger instance
         **kwargs: Context key-value pairs
-        
+
     Returns:
         Logger with context bound
     """
     return logger.bind(**kwargs)
-
