@@ -182,18 +182,14 @@ class MarketDataConsumer:
             data = json.loads(msg.data.decode())
             messages_received.labels(event_type="raw").inc()
 
-            # Extract trace context from message and create span
-            ctx = NATSTracePropagator.extract_context(data)
-
-            # Create span as child of extracted context
-            with tracer.start_as_current_span(
+            # Create span from message using NATSTracePropagator utility
+            with NATSTracePropagator.create_span_from_message(
+                tracer,
+                data,
                 "process_nats_message",
-                context=ctx,
                 kind=trace.SpanKind.CONSUMER,
             ) as span:
-                # Set NATS-specific attributes
-                span.set_attribute("messaging.system", "nats")
-                span.set_attribute("messaging.operation", "receive")
+                # Set additional NATS-specific attributes
                 span.set_attribute("messaging.destination", constants.NATS_CONSUMER_SUBJECT)
 
                 # Parse into MarketDataEvent

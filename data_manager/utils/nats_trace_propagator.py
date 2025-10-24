@@ -118,13 +118,16 @@ class NATSTracePropagator:
         span_name: str,
         span_kind: SpanKind = SpanKind.CONSUMER,
         attributes: dict[str, Any] | None = None,
-    ) -> trace.Span:
+    ):
         """
         Create a span for message processing with extracted trace context.
 
         This is a convenience method that combines context extraction and
         span creation in one call. It extracts trace context from the message
         and creates a span as a child of that context.
+
+        The span is automatically set as the current span and includes
+        standard NATS messaging attributes.
 
         Args:
             tracer: OpenTelemetry tracer instance
@@ -134,7 +137,7 @@ class NATSTracePropagator:
             attributes: Additional span attributes to set
 
         Returns:
-            Created Span object (already started)
+            Context manager for the span (use with 'with' statement)
 
         Example:
             >>> tracer = trace.get_tracer(__name__)
@@ -148,24 +151,26 @@ class NATSTracePropagator:
             # Extract context from message
             ctx = NATSTracePropagator.extract_context(message_dict)
 
-            # Create span with extracted context
-            span = tracer.start_span(
+            # Prepare attributes with NATS-specific defaults
+            span_attributes = {
+                "messaging.system": "nats",
+                "messaging.operation": "receive",
+            }
+            if attributes:
+                span_attributes.update(attributes)
+
+            # Create span as current span with extracted context
+            return tracer.start_as_current_span(
                 span_name,
                 context=ctx,
                 kind=span_kind,
-                attributes=attributes or {},
+                attributes=span_attributes,
             )
-
-            # Set common NATS message attributes
-            span.set_attribute("messaging.system", "nats")
-            span.set_attribute("messaging.operation", "receive")
-
-            return span
 
         except Exception as e:
             logger.warning(f"Failed to create span from message: {e}")
-            # Return a non-recording span if extraction fails
-            return tracer.start_span(
+            # Return a context manager for a new span if extraction fails
+            return tracer.start_as_current_span(
                 span_name,
                 kind=span_kind,
                 attributes=attributes or {},
