@@ -23,6 +23,8 @@ spec:
           kubernetes.io/metadata.name: petrosa-apps
     ports:
     - protocol: TCP
+      port: 80
+    - protocol: TCP
       port: 8000
     - protocol: TCP
       port: 9090
