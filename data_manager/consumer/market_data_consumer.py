@@ -58,7 +58,9 @@ class MarketDataConsumer:
         self.message_handler = message_handler or MessageHandler(db_manager=db_manager)
         self.running = False
         self.subscription = None
-        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=constants.MESSAGE_QUEUE_SIZE)
+        self._message_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=constants.MESSAGE_QUEUE_SIZE
+        )
         self._processing_tasks: list = []
         self._stats_task: asyncio.Task | None = None
         self._messages_processed = 0
@@ -231,7 +233,9 @@ class MarketDataConsumer:
 
                 # Track metrics
                 processing_time = asyncio.get_event_loop().time() - start_time
-                message_processing_time.labels(event_type=event_type).observe(processing_time)
+                message_processing_time.labels(event_type=event_type).observe(
+                    processing_time
+                )
                 messages_processed.labels(event_type=event_type).inc()
                 self._messages_processed += 1
 
@@ -240,7 +244,9 @@ class MarketDataConsumer:
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON message: {e}")
-            messages_failed.labels(event_type=event_type, error_type="json_decode").inc()
+            messages_failed.labels(
+                event_type=event_type, error_type="json_decode"
+            ).inc()
 
         except Exception as e:
             logger.error(f"Failed to process message: {e}", exc_info=True)

@@ -65,7 +65,10 @@ async def get_candles(
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(
-        100, ge=1, le=1000, description="Maximum number of candles (default: 100, max: 1000)"
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of candles (default: 100, max: 1000)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
@@ -117,7 +120,9 @@ async def get_candles(
                 "low": str(c.get("low")),
                 "close": str(c.get("close")),
                 "volume": str(c.get("volume")),
-                "quote_volume": str(c.get("quote_volume")) if c.get("quote_volume") else None,
+                "quote_volume": str(c.get("quote_volume"))
+                if c.get("quote_volume")
+                else None,
                 "trades_count": c.get("trades_count"),
             }
             for c in paginated_candles
@@ -166,7 +171,10 @@ async def get_trades(
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(
-        100, ge=1, le=1000, description="Maximum number of trades (default: 100, max: 1000)"
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of trades (default: 100, max: 1000)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
@@ -316,7 +324,10 @@ async def get_funding(
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(
-        100, ge=1, le=1000, description="Maximum number of records (default: 100, max: 1000)"
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of records (default: 100, max: 1000)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
     sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),

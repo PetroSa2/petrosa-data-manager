@@ -74,7 +74,9 @@ class DataManagerApp:
         # Start Prometheus metrics server
         try:
             start_http_server(constants.METRICS_PORT)
-            logger.info(f"Prometheus metrics server started on port {constants.METRICS_PORT}")
+            logger.info(
+                f"Prometheus metrics server started on port {constants.METRICS_PORT}"
+            )
         except Exception as e:
             logger.error(f"Failed to start metrics server: {e}")
 
@@ -92,12 +94,18 @@ class DataManagerApp:
             self.db_manager = None
 
         # Initialize leader election if enabled and database available
-        if constants.ENABLE_LEADER_ELECTION and self.db_manager and self.db_manager.mongodb_adapter:
+        if (
+            constants.ENABLE_LEADER_ELECTION
+            and self.db_manager
+            and self.db_manager.mongodb_adapter
+        ):
             try:
                 from data_manager.leader_election import LeaderElectionManager
 
                 self.leader_election = LeaderElectionManager()
-                await self.leader_election.initialize(self.db_manager.mongodb_adapter.client)
+                await self.leader_election.initialize(
+                    self.db_manager.mongodb_adapter.client
+                )
                 await self.leader_election.start()
                 logger.info(
                     f"Leader election initialized: "
@@ -105,7 +113,9 @@ class DataManagerApp:
                     f"pod_id={self.leader_election.pod_id}"
                 )
             except Exception as e:
-                logger.error(f"Failed to initialize leader election: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to initialize leader election: {e}", exc_info=True
+                )
                 self.leader_election = None
 
         # Initialize and start NATS consumer
