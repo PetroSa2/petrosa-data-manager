@@ -27,7 +27,9 @@ class DeviationCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.candle_repo = CandleRepository(
+            db_manager.mysql_adapter, db_manager.mongodb_adapter
+        )
 
     async def calculate_deviation(
         self,
@@ -66,7 +68,9 @@ class DeviationCalculator:
 
             # Standard Deviation and Variance
             rolling_window = min(20, len(df) - 1)
-            standard_deviation = df["close"].rolling(window=rolling_window).std().iloc[-1]
+            standard_deviation = (
+                df["close"].rolling(window=rolling_window).std().iloc[-1]
+            )
             variance = df["close"].rolling(window=rolling_window).var().iloc[-1]
 
             # Bollinger Bands (SMA ± 2*StdDev)
@@ -125,13 +129,21 @@ class DeviationCalculator:
                     if not np.isnan(standard_deviation)
                     else Decimal("0")
                 ),
-                variance=Decimal(str(variance)) if not np.isnan(variance) else Decimal("0"),
-                z_score=Decimal(str(z_score)) if not np.isnan(z_score) else Decimal("0"),
+                variance=Decimal(str(variance))
+                if not np.isnan(variance)
+                else Decimal("0"),
+                z_score=Decimal(str(z_score))
+                if not np.isnan(z_score)
+                else Decimal("0"),
                 bollinger_upper=(
-                    Decimal(str(bollinger_upper)) if not np.isnan(bollinger_upper) else Decimal("0")
+                    Decimal(str(bollinger_upper))
+                    if not np.isnan(bollinger_upper)
+                    else Decimal("0")
                 ),
                 bollinger_lower=(
-                    Decimal(str(bollinger_lower)) if not np.isnan(bollinger_lower) else Decimal("0")
+                    Decimal(str(bollinger_lower))
+                    if not np.isnan(bollinger_lower)
+                    else Decimal("0")
                 ),
                 price_range_index=(
                     Decimal(str(price_range_index))
@@ -139,7 +151,9 @@ class DeviationCalculator:
                     else Decimal("0")
                 ),
                 autocorrelation=(
-                    Decimal(str(autocorrelation)) if not np.isnan(autocorrelation) else None
+                    Decimal(str(autocorrelation))
+                    if not np.isnan(autocorrelation)
+                    else None
                 ),
                 metadata=metadata,
             )

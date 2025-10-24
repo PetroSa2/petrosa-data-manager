@@ -7,21 +7,21 @@ Supports both generic CRUD operations and domain-specific market data endpoints.
 
 from .client import DataManagerClient
 from .exceptions import (
-    DataManagerError,
+    APIError,
     ConnectionError,
+    DataManagerError,
     TimeoutError,
     ValidationError,
-    APIError,
 )
 from .models import (
     CandleData,
-    TradeData,
+    DeleteOptions,
     DepthData,
     FundingData,
-    QueryOptions,
     InsertOptions,
+    QueryOptions,
+    TradeData,
     UpdateOptions,
-    DeleteOptions,
 )
 
 __version__ = "1.0.0"
@@ -41,4 +41,3 @@ __all__ = [
     "UpdateOptions",
     "DeleteOptions",
 ]
-

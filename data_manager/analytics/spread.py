@@ -24,7 +24,9 @@ class SpreadCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.depth_repo = DepthRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.depth_repo = DepthRepository(
+            db_manager.mysql_adapter, db_manager.mongodb_adapter
+        )
 
     async def calculate_spread(self, symbol: str) -> SpreadMetrics | None:
         """
@@ -40,7 +42,11 @@ class SpreadCalculator:
             # Get latest order book depth
             depth_data = await self.depth_repo.get_latest(symbol, limit=1)
 
-            if not depth_data or not depth_data[0].get("bids") or not depth_data[0].get("asks"):
+            if (
+                not depth_data
+                or not depth_data[0].get("bids")
+                or not depth_data[0].get("asks")
+            ):
                 logger.warning(f"Insufficient depth data for {symbol}")
                 return None
 
@@ -131,7 +137,11 @@ class SpreadCalculator:
             return None
 
     def _calculate_slippage(
-        self, bids: list, asks: list, mid_price: Decimal, order_size: Decimal = Decimal("1.0")
+        self,
+        bids: list,
+        asks: list,
+        mid_price: Decimal,
+        order_size: Decimal = Decimal("1.0"),
     ) -> Decimal:
         """
         Calculate estimated slippage for a given order size.

@@ -151,13 +151,13 @@ async def verify_setup():
         # Check indexes
         if "leader_election" in collections:
             leader_indexes = await db.leader_election.index_information()
-            logger.info(f"\nleader_election indexes:")
+            logger.info("\nleader_election indexes:")
             for idx_name, idx_info in leader_indexes.items():
                 logger.info(f"  - {idx_name}: {idx_info}")
 
         if "distributed_locks" in collections:
             locks_indexes = await db.distributed_locks.index_information()
-            logger.info(f"\ndistributed_locks indexes:")
+            logger.info("\ndistributed_locks indexes:")
             for idx_name, idx_info in locks_indexes.items():
                 logger.info(f"  - {idx_name}: {idx_info}")
 
@@ -193,4 +193,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

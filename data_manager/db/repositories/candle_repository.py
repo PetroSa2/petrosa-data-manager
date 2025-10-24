@@ -33,7 +33,9 @@ class CandleRepository(BaseRepository):
             count = await self.mongodb.write([candle], collection)
             return count > 0
         except Exception as e:
-            logger.error(f"Failed to insert candle for {candle.symbol} {candle.timeframe}: {e}")
+            logger.error(
+                f"Failed to insert candle for {candle.symbol} {candle.timeframe}: {e}"
+            )
             return False
 
     async def insert_batch(self, candles: list[Candle]) -> int:
@@ -93,7 +95,9 @@ class CandleRepository(BaseRepository):
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             return []
 
-    async def get_latest(self, symbol: str, timeframe: str, limit: int = 1) -> list[dict]:
+    async def get_latest(
+        self, symbol: str, timeframe: str, limit: int = 1
+    ) -> list[dict]:
         """
         Get most recent candles.
 
@@ -109,7 +113,9 @@ class CandleRepository(BaseRepository):
             collection = self._get_collection_name(symbol, timeframe)
             return await self.mongodb.query_latest(collection, symbol, limit)
         except Exception as e:
-            logger.error(f"Failed to query latest candles for {symbol} {timeframe}: {e}")
+            logger.error(
+                f"Failed to query latest candles for {symbol} {timeframe}: {e}"
+            )
             return []
 
     async def count(

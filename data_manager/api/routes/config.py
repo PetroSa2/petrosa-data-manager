@@ -31,13 +31,21 @@ def set_database_manager(manager: DatabaseManager) -> None:
 class AppConfigRequest(BaseModel):
     """Application configuration request model."""
 
-    enabled_strategies: list[str] = Field(..., description="List of enabled strategy IDs")
+    enabled_strategies: list[str] = Field(
+        ..., description="List of enabled strategy IDs"
+    )
     symbols: list[str] = Field(..., description="List of trading symbols")
     candle_periods: list[str] = Field(..., description="List of timeframes")
-    min_confidence: float = Field(0.6, ge=0.0, le=1.0, description="Minimum confidence threshold")
-    max_confidence: float = Field(0.95, ge=0.0, le=1.0, description="Maximum confidence threshold")
+    min_confidence: float = Field(
+        0.6, ge=0.0, le=1.0, description="Minimum confidence threshold"
+    )
+    max_confidence: float = Field(
+        0.95, ge=0.0, le=1.0, description="Maximum confidence threshold"
+    )
     max_positions: int = Field(10, ge=1, description="Maximum concurrent positions")
-    position_sizes: list[int] = Field([100, 200, 500, 1000], description="Available position sizes")
+    position_sizes: list[int] = Field(
+        [100, 200, 500, 1000], description="Available position sizes"
+    )
     changed_by: str = Field(..., description="Who is making the change")
     reason: str | None = Field(None, description="Reason for the change")
 
@@ -121,7 +129,9 @@ async def get_application_config():
                     min_confidence=config_doc.get("min_confidence", 0.6),
                     max_confidence=config_doc.get("max_confidence", 0.95),
                     max_positions=config_doc.get("max_positions", 10),
-                    position_sizes=config_doc.get("position_sizes", [100, 200, 500, 1000]),
+                    position_sizes=config_doc.get(
+                        "position_sizes", [100, 200, 500, 1000]
+                    ),
                     version=config_doc.get("version", 0),
                     source="mysql",
                     created_at=config_doc.get("created_at", ""),
@@ -146,7 +156,9 @@ async def get_application_config():
 
     except Exception as e:
         logger.error(f"Error fetching application config: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch application config: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch application config: {str(e)}"
+        )
 
 
 @router.post("/application", response_model=AppConfigResponse)
@@ -163,17 +175,22 @@ async def update_application_config(request: AppConfigRequest):
         # Validate configuration
         if request.min_confidence >= request.max_confidence:
             raise HTTPException(
-                status_code=400, detail="min_confidence must be less than max_confidence"
+                status_code=400,
+                detail="min_confidence must be less than max_confidence",
             )
 
         if not request.enabled_strategies:
-            raise HTTPException(status_code=400, detail="enabled_strategies cannot be empty")
+            raise HTTPException(
+                status_code=400, detail="enabled_strategies cannot be empty"
+            )
 
         if not request.symbols:
             raise HTTPException(status_code=400, detail="symbols cannot be empty")
 
         if not request.candle_periods:
-            raise HTTPException(status_code=400, detail="candle_periods cannot be empty")
+            raise HTTPException(
+                status_code=400, detail="candle_periods cannot be empty"
+            )
 
         # Prepare configuration document
         config_doc = {
@@ -203,7 +220,8 @@ async def update_application_config(request: AppConfigRequest):
         if db_manager.mysql:
             try:
                 await db_manager.mysql.upsert_app_config(
-                    config_doc, {"changed_by": request.changed_by, "reason": request.reason}
+                    config_doc,
+                    {"changed_by": request.changed_by, "reason": request.reason},
                 )
                 logger.info("Application config updated in MySQL")
             except Exception as e:
@@ -286,7 +304,9 @@ async def get_strategy_config(
 
     except Exception as e:
         logger.error(f"Error fetching strategy config for {strategy_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch strategy config: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch strategy config: {str(e)}"
+        )
 
 
 @router.post("/strategies/{strategy_id}", response_model=StrategyConfigResponse)
@@ -348,13 +368,17 @@ async def update_strategy_config(
 
     except Exception as e:
         logger.error(f"Error updating strategy config for {strategy_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update strategy config: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update strategy config: {str(e)}"
+        )
 
 
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy_config(
     strategy_id: str,
-    symbol: str | None = Query(None, description="Symbol-specific configuration to delete"),
+    symbol: str | None = Query(
+        None, description="Symbol-specific configuration to delete"
+    ),
 ):
     """
     Delete strategy configuration.
@@ -378,7 +402,9 @@ async def delete_strategy_config(
 
     except Exception as e:
         logger.error(f"Error deleting strategy config for {strategy_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete strategy config: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete strategy config: {str(e)}"
+        )
 
 
 @router.get("/strategies")
@@ -397,7 +423,9 @@ async def list_strategy_configs():
 
     except Exception as e:
         logger.error(f"Error listing strategy configs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list strategy configs: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list strategy configs: {str(e)}"
+        )
 
 
 @router.post("/cache/refresh")

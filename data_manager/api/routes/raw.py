@@ -24,7 +24,10 @@ class RawQueryRequest(BaseModel):
     query: str = Field(..., description="SQL query or MongoDB query/aggregation")
     parameters: dict[str, Any] | None = Field(None, description="Query parameters")
     timeout: int | None = Field(
-        None, ge=1, le=constants.RAW_QUERY_TIMEOUT, description="Query timeout in seconds"
+        None,
+        ge=1,
+        le=constants.RAW_QUERY_TIMEOUT,
+        description="Query timeout in seconds",
     )
 
 
@@ -161,7 +164,9 @@ def _validate_mongodb_query(query_obj: dict[str, Any]) -> None:
     """Validate MongoDB query for safety."""
     # Check for dangerous operations
     if "drop" in str(query_obj).lower():
-        raise HTTPException(status_code=400, detail="Drop operations not allowed in raw queries")
+        raise HTTPException(
+            status_code=400, detail="Drop operations not allowed in raw queries"
+        )
 
     # Check for system collection access
     system_collections = ["system.", "admin.", "config.", "local."]
@@ -169,7 +174,8 @@ def _validate_mongodb_query(query_obj: dict[str, Any]) -> None:
     for collection in system_collections:
         if collection in query_str:
             raise HTTPException(
-                status_code=400, detail=f"Access to system collection '{collection}' not allowed"
+                status_code=400,
+                detail=f"Access to system collection '{collection}' not allowed",
             )
 
 
@@ -190,9 +196,13 @@ def _parse_mongodb_query(query: str) -> dict[str, Any]:
                 query_obj["collection"] = collection
                 return query_obj
             except json.JSONDecodeError:
-                raise HTTPException(status_code=400, detail="Invalid MongoDB query format")
+                raise HTTPException(
+                    status_code=400, detail="Invalid MongoDB query format"
+                )
         else:
-            raise HTTPException(status_code=400, detail="MongoDB query must be JSON format")
+            raise HTTPException(
+                status_code=400, detail="MongoDB query must be JSON format"
+            )
 
 
 async def _execute_mysql_query(
@@ -231,7 +241,8 @@ async def _execute_mongodb_query(
 
         else:
             raise HTTPException(
-                status_code=400, detail="MongoDB query must contain 'find' or 'aggregate' operation"
+                status_code=400,
+                detail="MongoDB query must contain 'find' or 'aggregate' operation",
             )
 
         # Remove _id from results

@@ -61,7 +61,9 @@ class BinanceClient:
     def __init__(self):
         """Initialize Binance client."""
         self.client = httpx.AsyncClient(timeout=30.0)
-        self.rate_limiter = RateLimiter(requests_per_minute=constants.BINANCE_RATE_LIMIT)
+        self.rate_limiter = RateLimiter(
+            requests_per_minute=constants.BINANCE_RATE_LIMIT
+        )
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -224,7 +226,8 @@ class BinanceClient:
                 data = response.json()
 
                 logger.debug(
-                    f"Fetched {len(data)} trades for {symbol} " f"from {start_time} to {end_time}"
+                    f"Fetched {len(data)} trades for {symbol} "
+                    f"from {start_time} to {end_time}"
                 )
                 return data
 
