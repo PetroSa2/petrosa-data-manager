@@ -189,10 +189,12 @@ class MarketDataConsumer:
                 tracer,
                 data,
                 "process_nats_message",
-                kind=trace.SpanKind.CONSUMER,
+                span_kind=trace.SpanKind.CONSUMER,
             ) as span:
                 # Set additional NATS-specific attributes
-                span.set_attribute("messaging.destination", constants.NATS_CONSUMER_SUBJECT)
+                span.set_attribute(
+                    "messaging.destination", constants.NATS_CONSUMER_SUBJECT
+                )
 
                 # Parse into MarketDataEvent
                 event = MarketDataEvent.from_nats_message(data)
@@ -205,7 +207,9 @@ class MarketDataConsumer:
                         "Skipping message with missing or invalid symbol",
                         extra={
                             "data_keys": list(data.keys()),
-                            "sample_data": str(data)[:500],  # First 500 chars of message
+                            "sample_data": str(data)[
+                                :500
+                            ],  # First 500 chars of message
                         },
                     )
                     messages_received.labels(event_type="invalid").inc()
