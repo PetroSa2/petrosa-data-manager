@@ -2,23 +2,13 @@
 Setup script for Petrosa Data Manager Client Library.
 """
 
-import os
-
 from setuptools import find_packages, setup
+
+# Import version utility
+from client.version import get_version
 
 with open("README.md", encoding="utf-8") as fh:
     long_description = fh.read()
-
-# Read version from VERSION file if RELEASE_VERSION env var not set
-def get_version():
-    version = os.getenv("RELEASE_VERSION")
-    if version:
-        return version
-    try:
-        with open("VERSION", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return "1.0.0"
 
 setup(
     name="petrosa_data_manager_client",
