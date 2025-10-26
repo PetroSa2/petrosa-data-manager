@@ -48,4 +48,3 @@ jobs:
                 console.log(`   This is non-blocking and the PR can proceed normally.`);
               }
             }
-
