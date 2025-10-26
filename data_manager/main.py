@@ -284,8 +284,8 @@ async def main():
     """Main application entry point."""
     # 1. Setup OpenTelemetry FIRST (before any logging configuration)
     try:
-        from petrosa_otel import initialize_telemetry_standard, attach_logging_handler
-        
+        from petrosa_otel import attach_logging_handler, initialize_telemetry_standard
+
         if constants.OTEL_ENABLED:
             initialize_telemetry_standard(
                 service_name=constants.OTEL_SERVICE_NAME,
@@ -298,7 +298,7 @@ async def main():
 
     # 2. Setup logging (may call basicConfig)
     # Note: logging is already configured at module level
-    
+
     # 3. Attach OTel logging handler LAST (after logging is configured)
     try:
         from petrosa_otel import attach_logging_handler
