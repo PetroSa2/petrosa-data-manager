@@ -2,16 +2,17 @@
 Setup script for Petrosa Data Manager Client Library.
 """
 
-import os
-
 from setuptools import find_packages, setup
+
+# Import version utility
+from client.version import get_version
 
 with open("README.md", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="petrosa-data-manager-client",
-    version=os.getenv("RELEASE_VERSION", "1.0.0"),
+    name="petrosa_data_manager_client",
+    version=get_version(),
     author="Petrosa Systems",
     author_email="team@petrosa.com",
     description="Client library for Petrosa Data Manager API",
