@@ -6,17 +6,17 @@ import os
 import unittest
 from unittest.mock import patch
 
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+# Set OTEL_NO_AUTO_INIT before importing any modules that might initialize OpenTelemetry
+os.environ["OTEL_NO_AUTO_INIT"] = "1"
+
+from opentelemetry import trace  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
 
-from data_manager.utils.nats_trace_propagator import NATSTracePropagator
-
-# Set OTEL_NO_AUTO_INIT before importing any modules that might initialize OpenTelemetry
-os.environ["OTEL_NO_AUTO_INIT"] = "1"
+from data_manager.utils.nats_trace_propagator import NATSTracePropagator  # noqa: E402
 
 
 class TestNATSTracePropagator(unittest.TestCase):
