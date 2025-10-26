@@ -138,22 +138,33 @@ jobs:
     - name: Install Build Tools
       run: |
         python -m pip install --upgrade pip
-        python -m pip install --upgrade build twine
+        python -m pip install --upgrade build twine setuptools wheel
     - name: Build Package
-      env:
-        RELEASE_VERSION: ${{ steps.version.outputs.pypi_version }}
       run: |
-        echo "Building client package with version: $RELEASE_VERSION"
-        # Install setuptools and wheel
-        python -m pip install setuptools wheel
-        # Temporarily rename pyproject.toml to avoid conflict
-        mv pyproject.toml pyproject.toml.bak
-        # Build using setup.py (client library configuration)
-        python setup.py sdist bdist_wheel --universal
-        # Restore pyproject.toml
-        mv pyproject.toml.bak pyproject.toml
-        # Verify packages were created
+        PYPI_VERSION="${{ steps.version.outputs.pypi_version }}"
+        echo "Building client package with version: $PYPI_VERSION"
+        
+        # Write version to VERSION file (read by setup.py)
+        echo "$PYPI_VERSION" > VERSION
+        
+        # Build using setup.py directly (not pyproject.toml which is for the main service)
+        python setup.py sdist bdist_wheel
+        
+        # Verify packages were created with correct naming
+        echo "📦 Built packages:"
         ls -lh dist/
+        
+        # Verify the package name uses underscores (setup.py controls name via dynamic field)
+        if ls dist/petrosa_data_manager_client-*.tar.gz 1> /dev/null 2>&1; then
+          echo "✅ Package built with correct naming (underscores)"
+          echo "📦 Package: $(ls dist/petrosa_data_manager_client-*.tar.gz)"
+        else
+          echo "❌ ERROR: Package not found or has incorrect naming"
+          echo "Expected: dist/petrosa_data_manager_client-*.tar.gz"
+          echo "Found:"
+          ls -la dist/ || echo "No dist/ directory"
+          exit 1
+        fi
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:

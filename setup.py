@@ -9,9 +9,20 @@ from setuptools import find_packages, setup
 with open("README.md", encoding="utf-8") as fh:
     long_description = fh.read()
 
+# Read version from VERSION file if RELEASE_VERSION env var not set
+def get_version():
+    version = os.getenv("RELEASE_VERSION")
+    if version:
+        return version
+    try:
+        with open("VERSION", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "1.0.0"
+
 setup(
-    name="petrosa-data-manager-client",
-    version=os.getenv("RELEASE_VERSION", "1.0.0"),
+    name="petrosa_data_manager_client",
+    version=get_version(),
     author="Petrosa Systems",
     author_email="team@petrosa.com",
     description="Client library for Petrosa Data Manager API",

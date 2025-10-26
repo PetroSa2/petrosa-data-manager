@@ -1,6 +1,7 @@
 [project]
-name = "petrosa-data-manager"
-version = "1.0.0"
+# Note: version is dynamic - controlled by setup.py for client library packaging
+name = "petrosa-data-manager-client"
+dynamic = ["version"]
 description = "Data integrity, intelligence, and distribution hub for the Petrosa trading ecosystem"
 authors = [
     {name = "Petrosa Systems", email = "info@petrosa.com"}
