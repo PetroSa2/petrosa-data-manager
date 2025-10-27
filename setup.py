@@ -11,9 +11,9 @@ from setuptools import find_packages, setup
 def get_version() -> str:
     """
     Get the package version without importing the package.
-    
+
     This avoids importing dependencies before they're installed.
-    
+
     Priority order:
     1. RELEASE_VERSION environment variable (set by CI/CD)
     2. VERSION file in repository root
