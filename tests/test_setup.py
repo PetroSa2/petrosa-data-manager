@@ -178,7 +178,9 @@ class TestSetupPy:
 
         # This will raise SyntaxError if invalid
         try:
-            compile(code, str(setup_path), 'exec')
+            compiled_code = compile(code, str(setup_path), 'exec')
+            # Assert compilation succeeded
+            assert compiled_code is not None, "Compiled code should not be None"
         except SyntaxError as e:
             pytest.fail(f"setup.py has syntax error: {e}")
 
@@ -189,6 +191,11 @@ class TestSetupPy:
             from setuptools import find_packages, setup
 
             from client.version import get_version
+            
+            # Assert imports succeeded by checking they are callable/exist
+            assert callable(setup), "setup should be callable"
+            assert callable(find_packages), "find_packages should be callable"
+            assert callable(get_version), "get_version should be callable"
         except ImportError as e:
             pytest.fail(f"setup.py has invalid imports: {e}")
 
