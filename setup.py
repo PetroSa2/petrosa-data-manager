@@ -2,10 +2,39 @@
 Setup script for Petrosa Data Manager Client Library.
 """
 
+import os
+from pathlib import Path
+
 from setuptools import find_packages, setup
 
-# Import version utility
-from client.version import get_version
+
+def get_version() -> str:
+    """
+    Get the package version without importing the package.
+    
+    This avoids importing dependencies before they're installed.
+    
+    Priority order:
+    1. RELEASE_VERSION environment variable (set by CI/CD)
+    2. VERSION file in repository root
+    3. Default fallback: "1.0.0"
+    """
+    # Priority 1: Environment variable (CI/CD sets this)
+    version = os.getenv("RELEASE_VERSION")
+    if version:
+        return version
+
+    # Priority 2: VERSION file
+    try:
+        version_file = Path(__file__).parent / "VERSION"
+        with open(version_file, encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        pass
+
+    # Priority 3: Default fallback
+    return "1.0.0"
+
 
 with open("README.md", encoding="utf-8") as fh:
     long_description = fh.read()
