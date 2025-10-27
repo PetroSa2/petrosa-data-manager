@@ -303,7 +303,7 @@ class TestCorrelationCalculator:
             correlation_calculator.candle_repo, "get_range"
         ) as mock_get_range:
             mock_get_range.side_effect = lambda *args: (
-                sample_candles_btc if "BTC" in args[0] else sample_candles_eth
+                sample_candles_btc if "BTC" in str(args[0]) else sample_candles_eth
             )
 
             # Make concurrent calls
