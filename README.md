@@ -54,6 +54,7 @@ Core documentation (kept up-to-date):
 - `README.md` - Project overview and quick start
 - `QUICK_REFERENCE.md` - Common commands and workflows
 - `DEPLOYMENT_GUIDE.md` - Production deployment
+- `docs/MANUAL_DEPLOYMENT_GUIDE.md` - **Manual deployments without code changes**
 - `CI_CD_PIPELINE.md` - CI/CD reference
 - `TESTING.md` - Testing procedures
 - `MAKEFILE.md` - Makefile commands
