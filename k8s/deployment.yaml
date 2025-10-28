@@ -114,7 +114,7 @@ spec:
             configMapKeyRef:
               name: petrosa-common-config
               key: OTEL_EXPORTER_OTLP_ENDPOINT
-              optional: true
+              optional: false
         
         # From Secrets - Use existing MYSQL_URI and mongodb credentials
         - name: MYSQL_URI

@@ -88,7 +88,11 @@ METRICS_PORT = int(os.getenv("METRICS_PORT", "9090"))
 
 # OpenTelemetry Configuration
 OTEL_ENABLED = os.getenv("OTEL_ENABLED", "true").lower() == "true"
-OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+# Default to common Grafana Alloy endpoint if not set
+OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv(
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "http://grafana-alloy.observability.svc.cluster.local:4317"
+)
 OTEL_SERVICE_NAME = SERVICE_NAME
 
 # Supported trading pairs
