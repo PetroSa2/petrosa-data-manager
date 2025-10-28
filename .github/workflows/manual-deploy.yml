@@ -116,6 +116,12 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
+          # Validate kubeconfig
+          if ! kubectl config view --kubeconfig ~/.kube/config > /dev/null 2>&1; then
+            echo "ERROR: Decoded kubeconfig is invalid or malformed."
+            exit 1
+          fi
+          echo "✅ Kubeconfig validated successfully"
           
       - name: Deploy to Kubernetes
         run: |
@@ -125,7 +131,11 @@ jobs:
           echo "Deploying data-manager version $VERSION to $ENV"
           
           # Update deployment with new image tag
-          # Skip TLS verification since external IP not in certificate SAN
+          # NOTE: --insecure-skip-tls-verify is required due to infrastructure limitation:
+          # External cluster IP (15.235.72.170:35902) is not in certificate SAN.
+          # SECURITY: This is a known limitation. Future improvement: update certificate
+          # to include external IP or use load balancer with proper certificate.
+          # MITIGATION: Workflow runs in trusted GitHub Actions environment.
           kubectl set image deployment/petrosa-data-manager \
             data-manager=ghcr.io/petrosa2/data-manager:$VERSION \
             --namespace=petrosa-apps \
@@ -144,6 +154,9 @@ jobs:
           mkdir -p deployments
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           
+          # NOTE: This log is created in workflow artifacts, not committed to repo.
+          # This is intentional to avoid cluttering git history with deployment records.
+          # AUDIT TRAIL: Access via GitHub Actions artifacts or workflow run logs.
           cat >> deployments/history.log << EOF
           ========================================
           Deployment Record
