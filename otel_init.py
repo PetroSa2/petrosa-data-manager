@@ -42,7 +42,9 @@ def init_telemetry() -> None:
         return
 
     if not constants.OTEL_EXPORTER_OTLP_ENDPOINT:
-        logger.warning("OTEL_EXPORTER_OTLP_ENDPOINT not set, skipping telemetry initialization")
+        logger.warning(
+            "OTEL_EXPORTER_OTLP_ENDPOINT not set, skipping telemetry initialization"
+        )
         return
 
     try:
@@ -57,7 +59,9 @@ def init_telemetry() -> None:
 
         # Initialize tracing
         trace_provider = TracerProvider(resource=resource)
-        trace_exporter = OTLPSpanExporter(endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT)
+        trace_exporter = OTLPSpanExporter(
+            endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT
+        )
         trace_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
         trace.set_tracer_provider(trace_provider)
         logger.info("OpenTelemetry tracing initialized")
@@ -67,7 +71,9 @@ def init_telemetry() -> None:
             OTLPMetricExporter(endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT),
             export_interval_millis=60000,  # Export every 60 seconds
         )
-        meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+        meter_provider = MeterProvider(
+            resource=resource, metric_readers=[metric_reader]
+        )
         metrics.set_meter_provider(meter_provider)
         logger.info("OpenTelemetry metrics initialized")
 
@@ -82,11 +88,15 @@ def init_telemetry() -> None:
             )
 
             logger_provider = LoggerProvider(resource=resource)
-            logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+            logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(log_exporter)
+            )
             _global_logger_provider = logger_provider
 
             logger.info("OpenTelemetry logging export configured")
-            logger.info("   Note: Call attach_logging_handler_simple() in main() to activate")
+            logger.info(
+                "   Note: Call attach_logging_handler_simple() in main() to activate"
+            )
 
         except Exception as e:
             logger.error(f"Failed to set up OpenTelemetry logging export: {e}")

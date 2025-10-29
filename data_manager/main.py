@@ -284,23 +284,15 @@ async def main():
     """Main application entry point."""
     # 1. Setup OpenTelemetry FIRST (before any logging configuration)
     try:
-        from petrosa_otel import attach_logging_handler, initialize_telemetry_standard
-
         if constants.OTEL_ENABLED:
             logger.info(
                 f"Initializing OpenTelemetry with endpoint: {constants.OTEL_EXPORTER_OTLP_ENDPOINT}"
             )
-            initialize_telemetry_standard(
-                service_name=constants.OTEL_SERVICE_NAME,
-                service_type="async",
-                enable_mongodb=True,
-                enable_http=True
-            )
+            # Initialize OpenTelemetry using local otel_init module
+            otel_init.init_telemetry()
             logger.info("OpenTelemetry initialized successfully")
         else:
             logger.warning("OpenTelemetry is disabled (OTEL_ENABLED=false)")
-    except ImportError as e:
-        logger.warning(f"petrosa_otel package not available: {e}")
     except Exception as e:
         logger.error(f"Failed to initialize OpenTelemetry: {e}", exc_info=True)
 
@@ -309,23 +301,31 @@ async def main():
 
     # 3. Attach OTel logging handler LAST (after logging is configured)
     try:
-        from petrosa_otel import attach_logging_handler
         if constants.OTEL_ENABLED and constants.OTEL_EXPORTER_OTLP_ENDPOINT:
             logger.info("Attaching OpenTelemetry logging handler...")
-            attach_logging_handler()
-            logger.info("✅ OpenTelemetry logging handler attached - logs will be exported to Grafana")
+            success = otel_init.attach_logging_handler_simple()
+            if success:
+                logger.info(
+                    "✅ OpenTelemetry logging handler attached - logs will be exported to Grafana"
+                )
+            else:
+                logger.error(
+                    "❌ Failed to attach OpenTelemetry logging handler - logs will NOT be exported to Grafana"
+                )
         else:
             if not constants.OTEL_ENABLED:
-                logger.warning("OpenTelemetry logging handler NOT attached - OTEL_ENABLED is false")
+                logger.warning(
+                    "OpenTelemetry logging handler NOT attached - OTEL_ENABLED is false"
+                )
             if not constants.OTEL_EXPORTER_OTLP_ENDPOINT:
                 logger.error(
                     "❌ OpenTelemetry logging handler NOT attached - OTEL_EXPORTER_OTLP_ENDPOINT is empty! "
                     "Logs will NOT be exported to Grafana."
                 )
-    except ImportError as e:
-        logger.warning(f"petrosa_otel package not available for logging handler: {e}")
     except Exception as e:
-        logger.error(f"Failed to attach OpenTelemetry logging handler: {e}", exc_info=True)
+        logger.error(
+            f"Failed to attach OpenTelemetry logging handler: {e}", exc_info=True
+        )
 
     app = DataManagerApp()
 
