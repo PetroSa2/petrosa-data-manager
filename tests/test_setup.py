@@ -24,9 +24,11 @@ class TestVersionManagement:
         import importlib
 
         import client.version
+
         importlib.reload(client.version)
 
         from client.version import get_version
+
         version = get_version()
         assert version == "2.5.3"
 
@@ -39,14 +41,16 @@ class TestVersionManagement:
         version_content = "1.2.3\n"
 
         # Mock the file read
-        with patch('builtins.open', mock_open(read_data=version_content)):
-            with patch('pathlib.Path.exists', return_value=True):
+        with patch("builtins.open", mock_open(read_data=version_content)):
+            with patch("pathlib.Path.exists", return_value=True):
                 import importlib
 
                 import client.version
+
                 importlib.reload(client.version)
 
                 from client.version import get_version
+
                 version = get_version()
                 assert version == "1.2.3"
 
@@ -59,13 +63,15 @@ class TestVersionManagement:
         def mock_open_error(*args, **kwargs):
             raise FileNotFoundError("VERSION file not found")
 
-        with patch('builtins.open', side_effect=mock_open_error):
+        with patch("builtins.open", side_effect=mock_open_error):
             import importlib
 
             import client.version
+
             importlib.reload(client.version)
 
             from client.version import get_version
+
             version = get_version()
             assert version == "1.0.0"
 
@@ -77,14 +83,16 @@ class TestVersionManagement:
         # Create VERSION file with whitespace
         version_content = "  3.4.5  \n\n"
 
-        with patch('builtins.open', mock_open(read_data=version_content)):
-            with patch('pathlib.Path.exists', return_value=True):
+        with patch("builtins.open", mock_open(read_data=version_content)):
+            with patch("pathlib.Path.exists", return_value=True):
                 import importlib
 
                 import client.version
+
                 importlib.reload(client.version)
 
                 from client.version import get_version
+
                 version = get_version()
                 assert version == "3.4.5"
 
@@ -96,14 +104,16 @@ class TestVersionManagement:
         # Mock VERSION file with different version
         version_content = "1.0.0"
 
-        with patch('builtins.open', mock_open(read_data=version_content)):
-            with patch('pathlib.Path.exists', return_value=True):
+        with patch("builtins.open", mock_open(read_data=version_content)):
+            with patch("pathlib.Path.exists", return_value=True):
                 import importlib
 
                 import client.version
+
                 importlib.reload(client.version)
 
                 from client.version import get_version
+
                 version = get_version()
                 # Env var should take precedence
                 assert version == "5.0.0"
@@ -114,17 +124,18 @@ class TestVersionManagement:
         assert version_file.exists(), "VERSION file should exist in repository root"
 
         # Read and verify content
-        with open(version_file, encoding='utf-8') as f:
+        with open(version_file, encoding="utf-8") as f:
             content = f.read().strip()
             assert content, "VERSION file should not be empty"
             # Should follow semantic versioning pattern (basic check)
-            parts = content.split('.')
+            parts = content.split(".")
             assert len(parts) >= 2, "VERSION should have at least major.minor format"
 
     def test_version_module_has_version_attribute(self):
         """Test that version module exports __version__ attribute."""
         import client.version
-        assert hasattr(client.version, '__version__')
+
+        assert hasattr(client.version, "__version__")
         assert isinstance(client.version.__version__, str)
         assert len(client.version.__version__) > 0
 
@@ -132,6 +143,7 @@ class TestVersionManagement:
         """Test that setup.py can import get_version from client.version."""
         # This tests the import path is correct
         from client.version import get_version
+
         assert callable(get_version)
 
         # Verify it returns a valid version string
@@ -139,7 +151,7 @@ class TestVersionManagement:
         assert isinstance(version, str)
         assert len(version) > 0
         # Should be a valid version format (basic check)
-        assert '.' in version or version.isdigit()
+        assert "." in version or version.isdigit()
 
 
 class TestVersionFormat:
@@ -148,22 +160,30 @@ class TestVersionFormat:
     def test_version_follows_semver_pattern(self):
         """Test that version string follows semantic versioning pattern."""
         from client.version import get_version
+
         version = get_version()
 
         # Basic semver check: should have at least major.minor
-        parts = version.split('.')
-        assert len(parts) >= 2, f"Version '{version}' should have at least major.minor format"
+        parts = version.split(".")
+        assert len(parts) >= 2, (
+            f"Version '{version}' should have at least major.minor format"
+        )
 
         # First two parts should be numeric
         assert parts[0].isdigit(), f"Major version '{parts[0]}' should be numeric"
-        assert parts[1].split('-')[0].isdigit(), f"Minor version '{parts[1]}' should start with numeric"
+        assert parts[1].split("-")[0].isdigit(), (
+            f"Minor version '{parts[1]}' should start with numeric"
+        )
 
     def test_version_is_not_empty(self):
         """Test that version string is never empty."""
         from client.version import get_version
+
         version = get_version()
         assert version, "Version should never be empty"
-        assert version.strip() == version, "Version should not have leading/trailing whitespace"
+        assert version.strip() == version, (
+            "Version should not have leading/trailing whitespace"
+        )
 
 
 class TestSetupPy:
@@ -175,14 +195,16 @@ class TestSetupPy:
 
         setup_path = Path(__file__).parent.parent / "setup.py"
 
-        with open(setup_path, encoding='utf-8') as f:
+        with open(setup_path, encoding="utf-8") as f:
             code = f.read()
 
         # This will raise SyntaxError if invalid
         try:
-            compiled_code = compile(code, str(setup_path), 'exec')
+            compiled_code = compile(code, str(setup_path), "exec")
             # Assert compilation succeeded and returned a code object
-            assert isinstance(compiled_code, types.CodeType), "Compiled code should be a CodeType object"
+            assert isinstance(compiled_code, types.CodeType), (
+                "Compiled code should be a CodeType object"
+            )
         except SyntaxError as e:
             pytest.fail(f"setup.py has syntax error: {e}")
 
@@ -204,6 +226,7 @@ class TestSetupPy:
     def test_version_function_returns_string(self):
         """Test that get_version() returns a string."""
         from client.version import get_version
+
         version = get_version()
         assert isinstance(version, str), "get_version() must return a string"
 
@@ -214,6 +237,7 @@ class TestVersionPriority:
     def test_priority_order_documented(self):
         """Test that version module documents priority order."""
         import client.version
+
         docstring = client.version.get_version.__doc__
 
         assert docstring is not None, "get_version() should have docstring"
@@ -237,5 +261,5 @@ class TestVersionPriority:
         import client.version
 
         source = inspect.getsource(client.version.get_version)
-        assert 'VERSION' in source, "Should reference VERSION file"
-        assert 'parent' in source or '..' in source, "Should look in parent directory"
+        assert "VERSION" in source, "Should reference VERSION file"
+        assert "parent" in source or ".." in source, "Should look in parent directory"

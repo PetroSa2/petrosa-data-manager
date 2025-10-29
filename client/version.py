@@ -25,7 +25,7 @@ def get_version() -> str:
 
     Examples:
         >>> # With env var set
-        >>> os.environ['RELEASE_VERSION'] = '2.5.3'
+        >>> os.environ["RELEASE_VERSION"] = "2.5.3"
         >>> get_version()
         '2.5.3'
 
@@ -56,4 +56,3 @@ def get_version() -> str:
 
 
 __version__ = get_version()
-

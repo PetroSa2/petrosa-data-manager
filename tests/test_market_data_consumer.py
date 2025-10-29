@@ -121,4 +121,3 @@ class TestMarketDataConsumer:
             if "unexpected keyword argument" in str(e):
                 pytest.fail(f"Parameter name mismatch still exists: {e}")
             raise
-

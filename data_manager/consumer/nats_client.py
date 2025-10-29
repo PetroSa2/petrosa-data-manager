@@ -137,7 +137,9 @@ class NATSClient:
             nats_errors.labels(type="publish").inc()
             return False
 
-    async def publish_with_trace_context(self, subject: str, message_dict: dict) -> bool:
+    async def publish_with_trace_context(
+        self, subject: str, message_dict: dict
+    ) -> bool:
         """
         Publish message to a NATS subject with trace context injection.
 

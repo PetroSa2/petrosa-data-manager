@@ -121,9 +121,7 @@ class TestCorrelationCalculator:
             assert result == {}
 
     @pytest.mark.asyncio
-    async def test_calculate_correlation_handles_errors(
-        self, correlation_calculator
-    ):
+    async def test_calculate_correlation_handles_errors(self, correlation_calculator):
         """Test correlation handles errors gracefully."""
         with patch.object(
             correlation_calculator.candle_repo, "get_range"
@@ -157,9 +155,7 @@ class TestCorrelationCalculator:
                 assert isinstance(result, dict)
 
     @pytest.mark.asyncio
-    async def test_calculate_correlation_decimal_handling(
-        self, correlation_calculator
-    ):
+    async def test_calculate_correlation_decimal_handling(self, correlation_calculator):
         """Test correlation handles Decimal values correctly."""
         candles_with_decimals = [
             {
@@ -202,7 +198,8 @@ class TestCorrelationCalculator:
             {
                 "symbol": "ETHUSDT",
                 "close": Decimal("3000.00"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i * 3),  # Different gaps
+                "timestamp": datetime.utcnow()
+                - timedelta(hours=i * 3),  # Different gaps
                 "volume": Decimal("500.0"),
             }
             for i in range(30, 0, -1)
@@ -256,9 +253,7 @@ class TestCorrelationCalculator:
             assert result == {}
 
     @pytest.mark.asyncio
-    async def test_calculate_correlation_with_zero_window(
-        self, correlation_calculator
-    ):
+    async def test_calculate_correlation_with_zero_window(self, correlation_calculator):
         """Test correlation with zero window days."""
         result = await correlation_calculator.calculate_correlation(
             symbols=["BTCUSDT", "ETHUSDT"], timeframe="1h", window_days=0
@@ -308,6 +303,7 @@ class TestCorrelationCalculator:
 
             # Make concurrent calls
             import asyncio
+
             results = await asyncio.gather(
                 correlation_calculator.calculate_correlation(
                     ["BTCUSDT", "ETHUSDT"], "1h", 30

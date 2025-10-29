@@ -12,15 +12,11 @@ from pydantic import BaseModel, Field
 class QueryOptions(BaseModel):
     """Options for querying data."""
 
-    filter: dict[str, Any] | None = Field(
-        None, description="Query filter conditions"
-    )
+    filter: dict[str, Any] | None = Field(None, description="Query filter conditions")
     sort: dict[str, int] | None = Field(None, description="Sort specification")
     limit: int = Field(100, ge=1, le=1000, description="Maximum records to return")
     offset: int = Field(0, ge=0, description="Number of records to skip")
-    fields: list[str] | None = Field(
-        None, description="Fields to include in response"
-    )
+    fields: list[str] | None = Field(None, description="Fields to include in response")
 
 
 class InsertOptions(BaseModel):
