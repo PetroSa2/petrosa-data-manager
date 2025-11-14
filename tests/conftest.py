@@ -3,6 +3,7 @@ Pytest configuration and fixtures.
 """
 
 import os
+from datetime import datetime
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -59,22 +60,26 @@ def mock_mysql_adapter():
 def mock_mongodb_adapter():
     """Mock MongoDB adapter for testing."""
     mock_adapter = Mock()
-    
-    # Mock query_latest to return sample volatility data
+
+    # Mock query_latest to return sample volatility data matching endpoint expectations
     mock_adapter.query_latest = AsyncMock(return_value=[
         {
-            "symbol": "BTCUSDT",
-            "metric": "volatility",
-            "value": 0.05,
-            "timestamp": "2024-01-01T00:00:00Z",
+            "rolling_stddev": 0.05,
+            "annualized_volatility": 0.15,
+            "parkinson": 0.04,
+            "garman_klass": 0.045,
+            "volatility_of_volatility": 0.01,
+            "metadata": {
+                "computed_at": datetime(2024, 1, 1, 0, 0, 0),
+            },
         }
     ])
-    
+
     # Mock query_range to return sample candle data
     mock_adapter.query_range = AsyncMock(return_value=[
         {
             "symbol": "BTCUSDT",
-            "timestamp": "2024-01-01T00:00:00Z",
+            "timestamp": datetime(2024, 1, 1, 0, 0, 0),
             "open": 50000.0,
             "high": 51000.0,
             "low": 49500.0,
@@ -82,13 +87,13 @@ def mock_mongodb_adapter():
             "volume": 1000.0,
         }
     ])
-    
+
     # Mock other common methods
     mock_adapter.find = AsyncMock(return_value=[])
     mock_adapter.insert = AsyncMock(return_value=True)
     mock_adapter.update = AsyncMock(return_value=True)
     mock_adapter.write = AsyncMock(return_value=1)
-    
+
     return mock_adapter
 
 
