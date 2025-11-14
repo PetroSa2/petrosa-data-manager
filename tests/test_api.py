@@ -2,19 +2,22 @@
 Tests for API endpoints.
 """
 
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 
+import data_manager.api.app as api_module
 from data_manager.api.app import create_app
 
 
 @pytest.fixture
-def client():
-    """Create test client."""
+def client(mock_db_manager):
+    """Create test client with mocked database."""
     app = create_app()
-    return TestClient(app)
+    # Inject mock database manager into API module
+    api_module.db_manager = mock_db_manager
+    yield TestClient(app)
+    # Cleanup
+    api_module.db_manager = None
 
 
 def test_root_endpoint(client):
@@ -43,12 +46,11 @@ def test_readiness_endpoint(client):
     assert "components" in data
 
 
-@pytest.mark.skipif(
-    os.getenv("CI") == "true",
-    reason="Requires database connectivity - skipped in CI",
-)
 def test_candles_endpoint(client):
-    """Test candles data endpoint."""
+    """Test candles data endpoint with mocked database."""
+    # The mongodb_adapter.query_range is already mocked in conftest.py
+    # to return candle data, so this test should work directly
+    
     response = client.get("/data/candles?pair=BTCUSDT&period=1h")
     assert response.status_code == 200
     data = response.json()
@@ -58,12 +60,11 @@ def test_candles_endpoint(client):
     assert "metadata" in data
 
 
-@pytest.mark.skipif(
-    os.getenv("CI") == "true",
-    reason="Requires database connectivity - skipped in CI",
-)
 def test_volatility_endpoint(client):
-    """Test volatility analytics endpoint."""
+    """Test volatility analytics endpoint with mocked database."""
+    # The mongodb_adapter.query_latest is already mocked in conftest.py
+    # to return volatility data, so this test should work directly
+    
     response = client.get(
         "/analysis/volatility?pair=BTCUSDT&period=1h&method=rolling_stddev&window=30d"
     )

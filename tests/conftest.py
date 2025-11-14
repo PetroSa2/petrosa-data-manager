@@ -3,6 +3,7 @@ Pytest configuration and fixtures.
 """
 
 import os
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -43,3 +44,59 @@ def sample_candle_data():
         "close": "50500.00",
         "volume": "1000.0",
     }
+
+
+@pytest.fixture
+def mock_mysql_adapter():
+    """Mock MySQL adapter for testing."""
+    mock_adapter = Mock()
+    mock_adapter.query = AsyncMock(return_value=[])
+    mock_adapter.execute = AsyncMock(return_value=True)
+    return mock_adapter
+
+
+@pytest.fixture
+def mock_mongodb_adapter():
+    """Mock MongoDB adapter for testing."""
+    mock_adapter = Mock()
+    
+    # Mock query_latest to return sample volatility data
+    mock_adapter.query_latest = AsyncMock(return_value=[
+        {
+            "symbol": "BTCUSDT",
+            "metric": "volatility",
+            "value": 0.05,
+            "timestamp": "2024-01-01T00:00:00Z",
+        }
+    ])
+    
+    # Mock query_range to return sample candle data
+    mock_adapter.query_range = AsyncMock(return_value=[
+        {
+            "symbol": "BTCUSDT",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "open": 50000.0,
+            "high": 51000.0,
+            "low": 49500.0,
+            "close": 50500.0,
+            "volume": 1000.0,
+        }
+    ])
+    
+    # Mock other common methods
+    mock_adapter.find = AsyncMock(return_value=[])
+    mock_adapter.insert = AsyncMock(return_value=True)
+    mock_adapter.update = AsyncMock(return_value=True)
+    mock_adapter.write = AsyncMock(return_value=1)
+    
+    return mock_adapter
+
+
+@pytest.fixture
+def mock_db_manager(mock_mysql_adapter, mock_mongodb_adapter):
+    """Mock DatabaseManager for API endpoint testing."""
+    mock_manager = Mock()
+    mock_manager.mysql_adapter = mock_mysql_adapter
+    mock_manager.mongodb_adapter = mock_mongodb_adapter
+    mock_manager.is_connected = True
+    return mock_manager
