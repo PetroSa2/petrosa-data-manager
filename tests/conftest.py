@@ -53,6 +53,7 @@ def mock_mysql_adapter():
     mock_adapter = Mock()
     mock_adapter.query = AsyncMock(return_value=[])
     mock_adapter.execute = AsyncMock(return_value=True)
+    mock_adapter.is_connected = Mock(return_value=True)
     return mock_adapter
 
 
@@ -93,6 +94,7 @@ def mock_mongodb_adapter():
     mock_adapter.insert = AsyncMock(return_value=True)
     mock_adapter.update = AsyncMock(return_value=True)
     mock_adapter.write = AsyncMock(return_value=1)
+    mock_adapter.is_connected = Mock(return_value=True)
 
     return mock_adapter
 
@@ -104,4 +106,41 @@ def mock_db_manager(mock_mysql_adapter, mock_mongodb_adapter):
     mock_manager.mysql_adapter = mock_mysql_adapter
     mock_manager.mongodb_adapter = mock_mongodb_adapter
     mock_manager.is_connected = True
+
+    # Add health_check method
+    mock_manager.health_check = Mock(
+        return_value={
+            "mysql": {
+                "connected": True,
+                "type": "mysql",
+                "stats": {},
+                "uptime_seconds": 0,
+            },
+            "mongodb": {
+                "connected": True,
+                "type": "mongodb",
+                "stats": {},
+                "uptime_seconds": 0,
+            },
+            "initialized": True,
+            "last_health_check": None,
+        }
+    )
+
+    # Add connection stats method
+    mock_manager.get_connection_stats = Mock(
+        return_value={
+            "overall": {
+                "initialized": True,
+                "uptime_seconds": 0,
+                "last_health_check": None,
+            },
+            "databases": {},
+        }
+    )
+
+    # Add increment methods
+    mock_manager.increment_query_count = Mock()
+    mock_manager.increment_error_count = Mock()
+
     return mock_manager

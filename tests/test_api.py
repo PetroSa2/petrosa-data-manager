@@ -5,7 +5,7 @@ Tests for API endpoints.
 import pytest
 from fastapi.testclient import TestClient
 
-import data_manager.api.app as api_module
+from data_manager.api import app as api_module
 
 
 @pytest.fixture
