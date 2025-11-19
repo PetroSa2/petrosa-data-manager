@@ -5,9 +5,11 @@ Provides centralized configuration management through the data management servic
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -602,6 +604,141 @@ class ConfigValidationRequest(BaseModel):
         }
 
 
+# Service URLs for cross-service conflict detection
+SERVICE_URLS = {
+    "tradeengine": os.getenv("TRADEENGINE_URL", "http://petrosa-tradeengine:8080"),
+    "ta-bot": os.getenv("TA_BOT_URL", "http://petrosa-ta-bot:8080"),
+    "realtime-strategies": os.getenv(
+        "REALTIME_STRATEGIES_URL", "http://petrosa-realtime-strategies:8080"
+    ),
+}
+
+
+async def detect_cross_service_conflicts(
+    config_type: str,
+    parameters: dict[str, Any],
+    strategy_id: Optional[str] = None,
+    symbol: Optional[str] = None,
+) -> list[CrossServiceConflict]:
+    """
+    Detect cross-service configuration conflicts.
+
+    Queries other services' /api/v1/config/validate endpoints to check for
+    conflicting configurations.
+
+    Args:
+        config_type: Type of configuration ('application' or 'strategy')
+        parameters: Configuration parameters to check
+        strategy_id: Strategy identifier (for strategy configs)
+        symbol: Trading symbol (optional)
+
+    Returns:
+        List of CrossServiceConflict objects
+    """
+    conflicts = []
+    timeout = httpx.Timeout(5.0)  # Short timeout for conflict checks
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # Check tradeengine for conflicts (if configuring trading parameters)
+        if config_type == "application" and any(
+            param in parameters
+            for param in ["min_confidence", "max_confidence", "max_positions"]
+        ):
+            try:
+                # Check if tradeengine has conflicting leverage or position limits
+                # This is a simplified check - can be enhanced
+                if "max_positions" in parameters:
+                    # Query tradeengine's current config to check for conflicts
+                    try:
+                        response = await client.get(
+                            f"{SERVICE_URLS['tradeengine']}/api/v1/config/config/limits/global",
+                            timeout=5.0,
+                        )
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get("success") and data.get("data"):
+                                current_max = data["data"].get("max_position_size")
+                                proposed_max = parameters.get("max_positions")
+                                if current_max and proposed_max:
+                                    # Check if there's a significant mismatch
+                                    if (
+                                        abs(current_max - proposed_max)
+                                        > current_max * 0.2
+                                    ):
+                                        conflicts.append(
+                                            CrossServiceConflict(
+                                                service="tradeengine",
+                                                conflict_type="PARAMETER_CONFLICT",
+                                                description=(
+                                                    f"Position limit mismatch: data-manager proposes "
+                                                    f"{proposed_max} max positions, but tradeengine has "
+                                                    f"max_position_size={current_max}"
+                                                ),
+                                                resolution=(
+                                                    "Align max_positions in data-manager with "
+                                                    "max_position_size in tradeengine"
+                                                ),
+                                            )
+                                        )
+                    except Exception as e:
+                        logger.debug(f"Could not check tradeengine for conflicts: {e}")
+
+            except Exception as e:
+                logger.debug(f"Error checking tradeengine conflicts: {e}")
+
+        # Check ta-bot and realtime-strategies for strategy config conflicts
+        if config_type == "strategy" and strategy_id:
+            for service_name, service_url in [
+                ("ta-bot", SERVICE_URLS["ta-bot"]),
+                ("realtime-strategies", SERVICE_URLS["realtime-strategies"]),
+            ]:
+                try:
+                    # Query the service's validate endpoint with the same parameters
+                    validation_request = {
+                        "parameters": parameters,
+                        "strategy_id": strategy_id,
+                    }
+                    if symbol:
+                        validation_request["symbol"] = symbol
+
+                    response = await client.post(
+                        f"{service_url}/api/v1/config/validate",
+                        json=validation_request,
+                        timeout=5.0,
+                    )
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("success") and data.get("data"):
+                            validation_data = data["data"]
+                            # Check if the service reports conflicts or validation issues
+                            if not validation_data.get("validation_passed", True):
+                                errors = validation_data.get("errors", [])
+                                if errors:
+                                    conflicts.append(
+                                        CrossServiceConflict(
+                                            service=service_name,
+                                            conflict_type="VALIDATION_CONFLICT",
+                                            description=(
+                                                f"{service_name} reports validation errors for "
+                                                f"strategy {strategy_id}: "
+                                                f"{', '.join([e.get('message', '') for e in errors[:2]])}"
+                                            ),
+                                            resolution=(
+                                                f"Review {service_name} validation errors and "
+                                                "ensure parameter compatibility"
+                                            ),
+                                        )
+                                    )
+
+                except httpx.TimeoutException:
+                    logger.debug(f"Timeout checking {service_name} for conflicts")
+                except Exception as e:
+                    logger.debug(f"Error checking {service_name} conflicts: {e}")
+
+    return conflicts
+
+
 def validate_application_config(request: AppConfigRequest) -> tuple[bool, list[str]]:
     """
     Validate application configuration parameters.
@@ -808,8 +945,10 @@ async def validate_config(request: ConfigValidationRequest):
         if any(param in request.parameters for param in high_risk_params):
             estimated_impact["risk_level"] = "medium"
 
-        # Cross-service conflict detection (placeholder - to be implemented)
-        conflicts = []
+        # Cross-service conflict detection
+        conflicts = await detect_cross_service_conflicts(
+            request.config_type, request.parameters, request.strategy_id, request.symbol
+        )
 
         validation_response = ValidationResponse(
             validation_passed=len(validation_errors) == 0,
