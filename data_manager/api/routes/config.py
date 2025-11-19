@@ -6,7 +6,7 @@ Provides centralized configuration management through the data management servic
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -15,7 +15,7 @@ from data_manager.db.database_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/config", tags=["Configuration"])
+router = APIRouter(prefix="/api/v1/config", tags=["Configuration"])
 
 # Global database manager instance
 db_manager: DatabaseManager | None = None
@@ -48,6 +48,9 @@ class AppConfigRequest(BaseModel):
     )
     changed_by: str = Field(..., description="Who is making the change")
     reason: str | None = Field(None, description="Reason for the change")
+    validate_only: bool = Field(
+        False, description="If true, only validate parameters without saving"
+    )
 
 
 class AppConfigResponse(BaseModel):
@@ -72,6 +75,9 @@ class StrategyConfigRequest(BaseModel):
     parameters: dict[str, Any] = Field(..., description="Strategy parameters")
     changed_by: str = Field(..., description="Who is making the change")
     reason: str | None = Field(None, description="Reason for the change")
+    validate_only: bool = Field(
+        False, description="If true, only validate parameters without saving"
+    )
 
 
 class StrategyConfigResponse(BaseModel):
@@ -173,24 +179,31 @@ async def update_application_config(request: AppConfigRequest):
 
     try:
         # Validate configuration
-        if request.min_confidence >= request.max_confidence:
-            raise HTTPException(
-                status_code=400,
-                detail="min_confidence must be less than max_confidence",
-            )
+        is_valid, errors = validate_application_config(request)
+        if not is_valid:
+            if request.validate_only:
+                return {
+                    "success": True,
+                    "data": None,
+                    "metadata": {
+                        "validation": "failed",
+                        "errors": errors,
+                        "message": "Parameters are invalid (validate_only=true)",
+                    },
+                }
+            else:
+                raise HTTPException(status_code=400, detail="; ".join(errors))
 
-        if not request.enabled_strategies:
-            raise HTTPException(
-                status_code=400, detail="enabled_strategies cannot be empty"
-            )
-
-        if not request.symbols:
-            raise HTTPException(status_code=400, detail="symbols cannot be empty")
-
-        if not request.candle_periods:
-            raise HTTPException(
-                status_code=400, detail="candle_periods cannot be empty"
-            )
+        # If validate_only, return early without saving
+        if request.validate_only:
+            return {
+                "success": True,
+                "data": None,
+                "metadata": {
+                    "validation": "passed",
+                    "message": "Parameters are valid but not saved (validate_only=true)",
+                },
+            }
 
         # Prepare configuration document
         config_doc = {
@@ -324,6 +337,34 @@ async def update_strategy_config(
         raise HTTPException(status_code=503, detail="Database manager not available")
 
     try:
+        # Basic validation for strategy config
+        if not request.parameters:
+            if request.validate_only:
+                return {
+                    "success": True,
+                    "data": None,
+                    "metadata": {
+                        "validation": "failed",
+                        "errors": ["parameters cannot be empty"],
+                        "message": "Parameters are invalid (validate_only=true)",
+                    },
+                }
+            else:
+                raise HTTPException(
+                    status_code=400, detail="parameters cannot be empty"
+                )
+
+        # If validate_only, return early without saving
+        if request.validate_only:
+            return {
+                "success": True,
+                "data": None,
+                "metadata": {
+                    "validation": "passed",
+                    "message": "Parameters are valid but not saved (validate_only=true)",
+                },
+            }
+
         # Prepare configuration document
         config_doc = {
             "strategy_id": strategy_id,
@@ -438,3 +479,362 @@ async def refresh_config_cache():
     # This would be implemented if we add caching to the data manager
     # For now, just return success
     return {"message": "Cache refresh requested (no caching implemented yet)"}
+
+
+# -------------------------------------------------------------------------
+# Configuration Validation Models
+# -------------------------------------------------------------------------
+
+
+class ValidationError(BaseModel):
+    """Standardized validation error format."""
+
+    field: str = Field(..., description="Parameter name that failed validation")
+    message: str = Field(..., description="Human-readable error message")
+    code: str = Field(
+        ...,
+        description="Error code (e.g., 'INVALID_TYPE', 'OUT_OF_RANGE', 'UNKNOWN_PARAMETER')",
+    )
+    suggested_value: Optional[Any] = Field(
+        None, description="Suggested correct value if applicable"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "field": "min_confidence",
+                "message": "min_confidence must be less than max_confidence",
+                "code": "VALIDATION_ERROR",
+                "suggested_value": 0.6,
+            }
+        }
+
+
+class CrossServiceConflict(BaseModel):
+    """Cross-service configuration conflict."""
+
+    service: str = Field(..., description="Service name with conflicting configuration")
+    conflict_type: str = Field(
+        ..., description="Type of conflict (e.g., 'PARAMETER_CONFLICT')"
+    )
+    description: str = Field(..., description="Description of the conflict")
+    resolution: str = Field(..., description="Suggested resolution")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "service": "tradeengine",
+                "conflict_type": "PARAMETER_CONFLICT",
+                "description": "Conflicting confidence threshold settings",
+                "resolution": "Use consistent confidence values across all services",
+            }
+        }
+
+
+class ValidationResponse(BaseModel):
+    """Standardized validation response across all services."""
+
+    validation_passed: bool = Field(
+        ..., description="Whether validation passed without errors"
+    )
+    errors: list[ValidationError] = Field(
+        default_factory=list, description="List of validation errors"
+    )
+    warnings: list[str] = Field(
+        default_factory=list, description="Non-blocking warnings"
+    )
+    suggested_fixes: list[str] = Field(
+        default_factory=list, description="Actionable suggestions to fix errors"
+    )
+    estimated_impact: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Estimated impact of configuration changes",
+    )
+    conflicts: list[CrossServiceConflict] = Field(
+        default_factory=list, description="Cross-service conflicts detected"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "validation_passed": True,
+                "errors": [],
+                "warnings": [],
+                "suggested_fixes": [],
+                "estimated_impact": {
+                    "risk_level": "low",
+                    "affected_scope": "application",
+                    "parameter_count": 7,
+                },
+                "conflicts": [],
+            }
+        }
+
+
+class ConfigValidationRequest(BaseModel):
+    """Request model for configuration validation."""
+
+    config_type: str = Field(
+        ..., description="Configuration type: 'application' or 'strategy'"
+    )
+    parameters: dict[str, Any] = Field(
+        ..., description="Configuration parameters to validate"
+    )
+    strategy_id: Optional[str] = Field(
+        None,
+        description="Strategy identifier (required for strategy config validation)",
+    )
+    symbol: Optional[str] = Field(
+        None, description="Trading symbol (optional, for symbol-specific validation)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "config_type": "application",
+                "parameters": {
+                    "enabled_strategies": ["rsi_extreme_reversal"],
+                    "symbols": ["BTCUSDT"],
+                    "min_confidence": 0.6,
+                    "max_confidence": 0.95,
+                },
+            }
+        }
+
+
+def validate_application_config(request: AppConfigRequest) -> tuple[bool, list[str]]:
+    """
+    Validate application configuration parameters.
+
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+
+    if request.min_confidence >= request.max_confidence:
+        errors.append(
+            f"min_confidence ({request.min_confidence}) must be less than max_confidence ({request.max_confidence})"
+        )
+
+    if not request.enabled_strategies:
+        errors.append("enabled_strategies cannot be empty")
+
+    if not request.symbols:
+        errors.append("symbols cannot be empty")
+
+    if not request.candle_periods:
+        errors.append("candle_periods cannot be empty")
+
+    return len(errors) == 0, errors
+
+
+@router.post("/validate", response_model=dict[str, Any])
+async def validate_config(request: ConfigValidationRequest):
+    """
+    Validate configuration without applying changes.
+
+    **For LLM Agents**: Validate configuration parameters without persisting changes.
+
+    This endpoint performs comprehensive validation including:
+    - Parameter type and constraint validation
+    - Dependency validation
+    - Cross-service conflict detection (future)
+    - Impact assessment
+
+    **Example Request**:
+    ```json
+    {
+      "config_type": "application",
+      "parameters": {
+        "enabled_strategies": ["rsi_extreme_reversal"],
+        "symbols": ["BTCUSDT"],
+        "min_confidence": 0.6,
+        "max_confidence": 0.95
+      }
+    }
+    ```
+
+    **Example Response**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "validation_passed": true,
+        "errors": [],
+        "warnings": [],
+        "suggested_fixes": [],
+        "estimated_impact": {
+          "risk_level": "low",
+          "affected_scope": "application"
+        },
+        "conflicts": []
+      }
+    }
+    ```
+    """
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+
+    try:
+        validation_errors = []
+        suggested_fixes = []
+
+        if request.config_type == "application":
+            # Validate application config
+            try:
+                # Create a temporary AppConfigRequest for validation
+                app_config = AppConfigRequest(
+                    enabled_strategies=request.parameters.get("enabled_strategies", []),
+                    symbols=request.parameters.get("symbols", []),
+                    candle_periods=request.parameters.get("candle_periods", []),
+                    min_confidence=request.parameters.get("min_confidence", 0.6),
+                    max_confidence=request.parameters.get("max_confidence", 0.95),
+                    max_positions=request.parameters.get("max_positions", 10),
+                    position_sizes=request.parameters.get(
+                        "position_sizes", [100, 200, 500, 1000]
+                    ),
+                    changed_by="validation_api",
+                    reason="Validation only",
+                    validate_only=True,
+                )
+
+                is_valid, errors = validate_application_config(app_config)
+
+                for error_msg in errors:
+                    # Parse error message to extract field and details
+                    if "min_confidence" in error_msg and "max_confidence" in error_msg:
+                        field = "min_confidence"
+                        code = "VALIDATION_ERROR"
+                        suggested_fixes.append(
+                            "Ensure min_confidence is less than max_confidence"
+                        )
+                        validation_errors.append(
+                            ValidationError(
+                                field=field,
+                                message=error_msg,
+                                code=code,
+                                suggested_value=app_config.max_confidence - 0.1,
+                            )
+                        )
+                    elif "cannot be empty" in error_msg:
+                        field = error_msg.split(" cannot be empty")[0]
+                        code = "VALIDATION_ERROR"
+                        suggested_fixes.append(
+                            f"Provide at least one value for {field}"
+                        )
+                        validation_errors.append(
+                            ValidationError(
+                                field=field,
+                                message=error_msg,
+                                code=code,
+                                suggested_value=None,
+                            )
+                        )
+                    else:
+                        validation_errors.append(
+                            ValidationError(
+                                field="unknown",
+                                message=error_msg,
+                                code="VALIDATION_ERROR",
+                                suggested_value=None,
+                            )
+                        )
+
+            except Exception as e:
+                # Pydantic validation errors
+                error_msg = str(e)
+                if "field required" in error_msg.lower():
+                    field = error_msg.split("Field required")[0].strip()
+                    code = "MISSING_FIELD"
+                    suggested_fixes.append(f"Provide required field: {field}")
+                else:
+                    field = "unknown"
+                    code = "VALIDATION_ERROR"
+                validation_errors.append(
+                    ValidationError(
+                        field=field,
+                        message=error_msg,
+                        code=code,
+                        suggested_value=None,
+                    )
+                )
+
+        elif request.config_type == "strategy":
+            # Validate strategy config
+            if not request.strategy_id:
+                validation_errors.append(
+                    ValidationError(
+                        field="strategy_id",
+                        message="strategy_id is required for strategy config validation",
+                        code="MISSING_FIELD",
+                        suggested_value=None,
+                    )
+                )
+            else:
+                # Strategy config validation is more lenient - just check parameters exist
+                if not request.parameters:
+                    validation_errors.append(
+                        ValidationError(
+                            field="parameters",
+                            message="parameters cannot be empty",
+                            code="VALIDATION_ERROR",
+                            suggested_value=None,
+                        )
+                    )
+
+        else:
+            validation_errors.append(
+                ValidationError(
+                    field="config_type",
+                    message=f"Invalid config_type: {request.config_type}. Must be 'application' or 'strategy'",
+                    code="INVALID_VALUE",
+                    suggested_value="application",
+                )
+            )
+
+        # Estimate impact
+        estimated_impact = {
+            "risk_level": "low",
+            "affected_scope": (
+                request.config_type
+                if not request.strategy_id
+                else f"{request.config_type}:{request.strategy_id}"
+            ),
+            "parameter_count": len(request.parameters),
+        }
+
+        # Add risk assessment based on parameters
+        high_risk_params = ["min_confidence", "max_confidence", "max_positions"]
+        if any(param in request.parameters for param in high_risk_params):
+            estimated_impact["risk_level"] = "medium"
+
+        # Cross-service conflict detection (placeholder - to be implemented)
+        conflicts = []
+
+        validation_response = ValidationResponse(
+            validation_passed=len(validation_errors) == 0,
+            errors=validation_errors,
+            warnings=[],
+            suggested_fixes=suggested_fixes,
+            estimated_impact=estimated_impact,
+            conflicts=conflicts,
+        )
+
+        return {
+            "success": True,
+            "data": validation_response,
+            "metadata": {
+                "validation_mode": "dry_run",
+                "scope": (
+                    request.config_type
+                    if not request.strategy_id
+                    else f"{request.config_type}:{request.strategy_id}"
+                ),
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Error validating config: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate configuration: {str(e)}"
+        )
