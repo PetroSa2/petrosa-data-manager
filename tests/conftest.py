@@ -63,31 +63,35 @@ def mock_mongodb_adapter():
     mock_adapter = Mock()
 
     # Mock query_latest to return sample volatility data matching endpoint expectations
-    mock_adapter.query_latest = AsyncMock(return_value=[
-        {
-            "rolling_stddev": 0.05,
-            "annualized_volatility": 0.15,
-            "parkinson": 0.04,
-            "garman_klass": 0.045,
-            "volatility_of_volatility": 0.01,
-            "metadata": {
-                "computed_at": datetime(2024, 1, 1, 0, 0, 0),
-            },
-        }
-    ])
+    mock_adapter.query_latest = AsyncMock(
+        return_value=[
+            {
+                "rolling_stddev": 0.05,
+                "annualized_volatility": 0.15,
+                "parkinson": 0.04,
+                "garman_klass": 0.045,
+                "volatility_of_volatility": 0.01,
+                "metadata": {
+                    "computed_at": datetime(2024, 1, 1, 0, 0, 0),
+                },
+            }
+        ]
+    )
 
     # Mock query_range to return sample candle data
-    mock_adapter.query_range = AsyncMock(return_value=[
-        {
-            "symbol": "BTCUSDT",
-            "timestamp": datetime(2024, 1, 1, 0, 0, 0),
-            "open": 50000.0,
-            "high": 51000.0,
-            "low": 49500.0,
-            "close": 50500.0,
-            "volume": 1000.0,
-        }
-    ])
+    mock_adapter.query_range = AsyncMock(
+        return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": datetime(2024, 1, 1, 0, 0, 0),
+                "open": 50000.0,
+                "high": 51000.0,
+                "low": 49500.0,
+                "close": 50500.0,
+                "volume": 1000.0,
+            }
+        ]
+    )
 
     # Mock other common methods
     mock_adapter.find = AsyncMock(return_value=[])
