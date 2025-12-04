@@ -105,6 +105,6 @@ def test_get_klines_pagination():
 
 ---
 
-**Master Rules**: See `/Users/yurisa2/petrosa/petrosa_k8s/.cursorrules`  
+**Master Rules**: See `.cursorrules` in `petrosa_k8s` repo  
 **Service Rules**: `.cursorrules` in this repo
 
