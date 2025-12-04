@@ -977,3 +977,85 @@ async def validate_config(request: ConfigValidationRequest):
         raise HTTPException(
             status_code=500, detail=f"Failed to validate configuration: {str(e)}"
         )
+
+
+# Configuration Rollback Proxy Endpoints
+
+
+SERVICE_URLS = {
+    "ta-bot": os.getenv("TA_BOT_URL", "http://ta-bot-service:8000"),
+    "realtime-strategies": os.getenv("REALTIME_STRATEGIES_URL", "http://realtime-strategies:8000"),
+    "tradeengine": os.getenv("TRADEENGINE_URL", "http://tradeengine-service:8000"),
+}
+
+
+@router.post("/{service}/rollback", summary="Rollback service configuration")
+async def rollback_service_config(
+    service: str,
+    version: str = Query(...),
+    reason: str = Query(...),
+    strategy_id: Optional[str] = Query(None),
+    symbol: Optional[str] = Query(None),
+    changed_by: str = Query(default="llm_agent"),
+):
+    """Proxy rollback to service."""
+    if service not in SERVICE_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+
+    base_url = SERVICE_URLS[service]
+    if service == "ta-bot":
+        url = f"{base_url}/api/v1/config/application/rollback"
+        params = {"version": version, "reason": reason, "changed_by": changed_by}
+    else:
+        if not strategy_id:
+            raise HTTPException(status_code=400, detail="strategy_id required")
+        url = f"{base_url}/api/v1/strategies/{strategy_id}/config/rollback"
+        params = {"version": version, "reason": reason, "changed_by": changed_by}
+        if symbol:
+            params["symbol"] = symbol
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, params=params)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail="Service rollback failed")
+    except Exception as e:
+        logger.error(f"Rollback error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to rollback")
+
+
+@router.get("/{service}/history", summary="Get service configuration history")
+async def get_service_config_history(
+    service: str,
+    strategy_id: Optional[str] = Query(None),
+    symbol: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Proxy history request to service."""
+    if service not in SERVICE_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+
+    base_url = SERVICE_URLS[service]
+    if service == "ta-bot":
+        url = f"{base_url}/api/v1/config/application/audit"
+        params = {"limit": limit}
+    else:
+        if not strategy_id:
+            raise HTTPException(status_code=400, detail="strategy_id required")
+        url = f"{base_url}/api/v1/strategies/{strategy_id}/config/audit"
+        params = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail="Service history failed")
+    except Exception as e:
+        logger.error(f"History error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get history")
