@@ -977,3 +977,161 @@ async def validate_config(request: ConfigValidationRequest):
         raise HTTPException(
             status_code=500, detail=f"Failed to validate configuration: {str(e)}"
         )
+
+
+# ============================================================================
+# Configuration Rollback Endpoints (Proxy to Service Endpoints)
+# ============================================================================
+
+
+@router.post(
+    "/{service}/rollback",
+    summary="Rollback service configuration to previous version",
+    description="""
+    **For LLM Agents**: Proxy endpoint to rollback configuration for any service.
+
+    Supports rollback for:
+    - `ta-bot` - TA Bot application configuration
+    - `realtime-strategies` - Strategy configuration
+    - `tradeengine` - Trade Engine configuration
+
+    Proxies to service-specific rollback endpoints.
+
+    **Example**: `POST /api/v1/config/ta-bot/rollback?version=previous&reason=High+latency`
+    """,
+)
+async def rollback_service_config(
+    service: str,
+    version: str = Query(..., description="Target version: 'previous', version number, or audit ID"),
+    reason: str = Query(..., description="Reason for rollback"),
+    strategy_id: Optional[str] = Query(None, description="Strategy ID (for strategies/tradeengine)"),
+    symbol: Optional[str] = Query(None, description="Symbol filter (optional)"),
+    changed_by: str = Query(default="llm_agent", description="Who is performing rollback"),
+):
+    """Proxy rollback request to appropriate service."""
+    try:
+        service_urls = {
+            "ta-bot": os.getenv("TA_BOT_URL", "http://ta-bot-service:8000"),
+            "realtime-strategies": os.getenv(
+                "REALTIME_STRATEGIES_URL", "http://realtime-strategies-service:8000"
+            ),
+            "tradeengine": os.getenv("TRADEENGINE_URL", "http://tradeengine-service:8000"),
+        }
+
+        if service not in service_urls:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown service: {service}. Valid: {list(service_urls.keys())}",
+            )
+
+        # Build rollback URL based on service
+        base_url = service_urls[service]
+
+        if service == "ta-bot":
+            url = f"{base_url}/api/v1/config/application/rollback"
+            params = {"version": version, "reason": reason, "changed_by": changed_by}
+        else:
+            # realtime-strategies and tradeengine
+            if not strategy_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"strategy_id required for {service} rollback",
+                )
+            url = f"{base_url}/api/v1/strategies/{strategy_id}/config/rollback"
+            params = {
+                "version": version,
+                "reason": reason,
+                "symbol": symbol,
+                "changed_by": changed_by,
+            }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+
+        return {
+            "success": True,
+            "data": result.get("data"),
+            "metadata": {
+                "service": service,
+                "rolled_back_to": version,
+                "reason": reason,
+                "proxied_response": result.get("metadata"),
+            },
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Service returned error during rollback: {e}")
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error during config rollback for {service}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to rollback configuration: {str(e)}"
+        )
+
+
+@router.get(
+    "/{service}/history",
+    summary="Get configuration change history for a service",
+    description="""
+    **For LLM Agents**: Proxy endpoint to get configuration history from any service.
+
+    **Example**: `GET /api/v1/config/ta-bot/history?limit=20`
+    """,
+)
+async def get_service_config_history(
+    service: str,
+    strategy_id: Optional[str] = Query(None, description="Strategy ID (for strategies/tradeengine)"),
+    symbol: Optional[str] = Query(None, description="Symbol filter (optional)"),
+    limit: int = Query(20, description="Maximum number of records", ge=1, le=100),
+):
+    """Proxy config history request to appropriate service."""
+    try:
+        service_urls = {
+            "ta-bot": os.getenv("TA_BOT_URL", "http://ta-bot-service:8000"),
+            "realtime-strategies": os.getenv(
+                "REALTIME_STRATEGIES_URL", "http://realtime-strategies-service:8000"
+            ),
+            "tradeengine": os.getenv("TRADEENGINE_URL", "http://tradeengine-service:8000"),
+        }
+
+        if service not in service_urls:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown service: {service}. Valid: {list(service_urls.keys())}",
+            )
+
+        base_url = service_urls[service]
+
+        if service == "ta-bot":
+            url = f"{base_url}/api/v1/config/application/audit"
+            params = {"limit": limit}
+        else:
+            if not strategy_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"strategy_id required for {service} history",
+                )
+            url = f"{base_url}/api/v1/strategies/{strategy_id}/config/history"
+            params = {"symbol": symbol, "limit": limit}
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+
+        return {
+            "success": True,
+            "data": result.get("data"),
+            "metadata": {"service": service, "count": len(result.get("data", []))},
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Service returned error getting history: {e}")
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting config history for {service}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get configuration history: {str(e)}"
+        )
