@@ -162,3 +162,37 @@ jobs:
           fi
           echo "✅ Documentation standards check passed"
 
+  pipeline:
+    name: pipeline
+    runs-on: ubuntu-latest
+    needs: [lint, test, security, documentation-standards]
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      checks: write
+      statuses: write
+    steps:
+      - name: Create pipeline status check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conclusion = '${{ needs.lint.result }}' === 'success' && 
+                              '${{ needs.test.result }}' === 'success' && 
+                              '${{ needs.security.result }}' === 'success' && 
+                              '${{ needs.documentation-standards.result }}' === 'success' 
+                              ? 'success' : 'failure';
+            
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'pipeline',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: conclusion === 'success' ? 'All checks passed' : 'Some checks failed',
+                summary: conclusion === 'success' 
+                  ? 'All CI checks passed successfully.'
+                  : 'One or more CI checks failed. Please review the failed jobs.'
+              }
+            });
+
