@@ -565,4 +565,5 @@ SCHEMA_CACHE_TTL=300
 - For database schemas: **See master § Database Architecture**
 - For deployment patterns: **See master § Data Manager Configuration**
 - For leader election: **See master § Data Manager (leader election patterns)**
+- For pre-merge cleanup: **See master § Pre-Merge Intelligent Cleanup Workflow** - Cursor AI automatically reorganizes files, removes outdated content, and consolidates documentation before merges using semantic understanding
 
