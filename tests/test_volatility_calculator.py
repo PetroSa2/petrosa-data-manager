@@ -2,10 +2,11 @@
 Tests for volatility calculator.
 """
 
-import pytest
 from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock
+
+import pytest
 
 from data_manager.analytics.volatility import VolatilityCalculator
 from data_manager.db.repositories import CandleRepository
@@ -32,7 +33,7 @@ async def test_calculate_volatility_success(volatility_calculator, mock_mongodb_
     candles = []
     base_time = datetime.utcnow() - timedelta(days=30)
     base_price = 50000.0
-    
+
     for i in range(30):
         candles.append({
             "symbol": "BTCUSDT",
@@ -43,13 +44,13 @@ async def test_calculate_volatility_success(volatility_calculator, mock_mongodb_
             "close": Decimal(str(base_price + i * 10 + 20)),
             "volume": Decimal("1000.0")
         })
-    
+
     # Mock repository
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     volatility_calculator.db_manager.mongodb_adapter.write = AsyncMock()
-    
+
     result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
-    
+
     assert result is not None
     assert result.symbol == "BTCUSDT"
     assert result.timeframe == "1h"
@@ -63,9 +64,9 @@ async def test_calculate_volatility_insufficient_data(volatility_calculator):
     """Test volatility calculation with insufficient data."""
     # Mock repository to return insufficient data
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=[])
-    
+
     result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
-    
+
     assert result is None
 
 
@@ -75,7 +76,7 @@ async def test_calculate_volatility_minimum_data(volatility_calculator):
     """Test volatility calculation with minimum required data."""
     candles = []
     base_time = datetime.utcnow() - timedelta(days=1)
-    
+
     # Create exactly 20 candles (minimum required)
     for i in range(20):
         candles.append({
@@ -87,12 +88,12 @@ async def test_calculate_volatility_minimum_data(volatility_calculator):
             "close": Decimal("50500.0"),
             "volume": Decimal("1000.0")
         })
-    
+
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     volatility_calculator.db_manager.mongodb_adapter.write = AsyncMock()
-    
+
     result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
-    
+
     assert result is not None
 
 
@@ -102,9 +103,9 @@ async def test_calculate_volatility_error_handling(volatility_calculator):
     """Test volatility calculation error handling."""
     # Mock repository to raise exception
     volatility_calculator.candle_repo.get_range = AsyncMock(side_effect=Exception("Database error"))
-    
+
     result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
-    
+
     assert result is None
 
 
@@ -114,7 +115,7 @@ async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_m
     """Test that volatility metrics are stored in MongoDB."""
     candles = []
     base_time = datetime.utcnow() - timedelta(days=30)
-    
+
     for i in range(30):
         candles.append({
             "symbol": "BTCUSDT",
@@ -125,12 +126,12 @@ async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_m
             "close": Decimal("50500.0"),
             "volume": Decimal("1000.0")
         })
-    
+
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     mock_mongodb_adapter.write = AsyncMock()
-    
+
     await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
-    
+
     # Verify write was called with metrics and collection name
     assert mock_mongodb_adapter.write.called
     call_args = mock_mongodb_adapter.write.call_args
@@ -144,7 +145,7 @@ async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_m
 def test_volatility_calculator_initialization(mock_db_manager):
     """Test volatility calculator initialization."""
     calculator = VolatilityCalculator(mock_db_manager)
-    
+
     assert calculator.db_manager == mock_db_manager
     assert calculator.candle_repo is not None
     assert isinstance(calculator.candle_repo, CandleRepository)
