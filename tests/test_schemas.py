@@ -240,8 +240,9 @@ def test_get_schema_service_no_db_manager(mock_db_manager):
     try:
         api_module.db_manager = None
         schemas_module.schema_service = None
-        with pytest.raises(Exception):
+        with pytest.raises(Exception) as exc_info:
             schemas_module.get_schema_service()
+        assert exc_info.value is not None
     finally:
         api_module.db_manager = original_db_manager
         schemas_module.schema_service = original_schema_service
