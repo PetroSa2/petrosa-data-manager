@@ -4,7 +4,7 @@ Tests for volatility calculator.
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
