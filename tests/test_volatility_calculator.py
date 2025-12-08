@@ -5,10 +5,9 @@ Tests for volatility calculator.
 import pytest
 from datetime import datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock
 
 from data_manager.analytics.volatility import VolatilityCalculator
-from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 
 
@@ -132,10 +131,13 @@ async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_m
     
     await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
     
-    # Verify write was called
+    # Verify write was called with metrics and collection name
     assert mock_mongodb_adapter.write.called
     call_args = mock_mongodb_adapter.write.call_args
-    assert "analytics_BTCUSDT_volatility" in call_args[0] or call_args[1].get("collection") == "analytics_BTCUSDT_volatility"
+    # write is called as write([metrics], collection) - check first arg is list and second is collection name
+    assert len(call_args[0]) >= 2
+    assert isinstance(call_args[0][0], list)  # First arg is list of metrics
+    assert call_args[0][1] == "analytics_BTCUSDT_volatility"  # Second arg is collection name
 
 
 @pytest.mark.unit

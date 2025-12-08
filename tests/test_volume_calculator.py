@@ -5,10 +5,9 @@ Tests for volume calculator.
 import pytest
 from datetime import datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 from data_manager.analytics.volume import VolumeCalculator
-from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 
 

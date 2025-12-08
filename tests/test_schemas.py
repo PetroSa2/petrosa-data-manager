@@ -9,11 +9,7 @@ from fastapi.testclient import TestClient
 
 import data_manager.api.app as api_module
 from data_manager.models.schemas import (
-    SchemaRegistration,
     SchemaStatus,
-    SchemaUpdate,
-    SchemaValidationRequest,
-    SchemaCompatibilityRequest,
     SchemaBootstrapRequest,
 )
 
@@ -234,16 +230,18 @@ def test_clear_cache(client, mock_schema_service):
 
 
 @pytest.mark.unit
-def test_get_schema_service_no_db_manager():
+def test_get_schema_service_no_db_manager(mock_db_manager):
     """Test get_schema_service when db_manager is not available."""
     import data_manager.api.routes.schemas as schemas_module
     original_db_manager = api_module.db_manager
-    api_module.db_manager = None
+    original_schema_service = schemas_module.schema_service
     
     try:
+        api_module.db_manager = None
         schemas_module.schema_service = None
         with pytest.raises(Exception):
             schemas_module.get_schema_service()
     finally:
         api_module.db_manager = original_db_manager
+        schemas_module.schema_service = original_schema_service
 
