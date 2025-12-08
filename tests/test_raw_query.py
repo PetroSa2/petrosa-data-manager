@@ -2,8 +2,9 @@
 Tests for raw query API endpoints.
 """
 
-import pytest
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 import constants
@@ -23,7 +24,7 @@ def client(mock_db_manager):
 @patch.object(constants, "RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_success(client):
     """Test successful MySQL query execution.
-    
+
     Note: Current implementation returns empty list as MySQL raw query execution
     is not fully implemented (see raw.py line 218).
     """
@@ -32,7 +33,7 @@ def test_execute_mysql_query_success(client):
         "parameters": None,
         "timeout": 30
     }
-    
+
     response = client.post("/api/v1/raw/mysql", json=request)
     assert response.status_code == 200
     data = response.json()
@@ -83,12 +84,12 @@ def test_execute_mongodb_query_success(client, mock_mongodb_adapter):
     mock_cursor.to_list = AsyncMock(return_value=[{"_id": "123", "name": "test"}])
     mock_collection.find = Mock(return_value=mock_cursor)
     mock_mongodb_adapter.db = {"test_collection": mock_collection}
-    
+
     request = {
         "query": '{"collection": "test_collection", "find": {}}',
         "parameters": None
     }
-    
+
     response = client.post("/api/v1/raw/mongodb", json=request)
     assert response.status_code == 200
     data = response.json()
@@ -149,7 +150,7 @@ def test_execute_mongodb_query_no_adapter(client, mock_db_manager):
 @patch.object(constants, "RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_error_handling(client):
     """Test MySQL query error handling.
-    
+
     Note: Current implementation returns empty list without calling adapter,
     so validation errors are tested instead of execution errors.
     """
@@ -163,15 +164,15 @@ def test_execute_mysql_query_error_handling(client):
 @patch.object(constants, "RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_tracks_metrics(client, mock_db_manager):
     """Test that MySQL queries track metrics.
-    
+
     Note: Current implementation returns empty list, but metrics are still tracked
     after successful validation.
     """
     mock_db_manager.increment_query_count = Mock()
-    
+
     request = {"query": "SELECT * FROM test_table LIMIT 10"}
     response = client.post("/api/v1/raw/mysql", json=request)
-    
+
     # Metrics are tracked after successful validation (even if execution returns empty)
     assert response.status_code == 200
     # Note: increment_query_count is called in the endpoint, but current implementation

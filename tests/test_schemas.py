@@ -2,15 +2,16 @@
 Tests for schema registry API endpoints.
 """
 
-import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 import data_manager.api.app as api_module
 from data_manager.models.schemas import (
-    SchemaStatus,
     SchemaBootstrapRequest,
+    SchemaStatus,
 )
 
 
@@ -26,11 +27,11 @@ def client(mock_db_manager):
 @pytest.fixture
 def mock_schema_service():
     """Mock schema service for testing."""
-    from data_manager.services.schema_service import SchemaService
     from data_manager.models.schemas import SchemaDefinition
-    
+    from data_manager.services.schema_service import SchemaService
+
     mock_service = Mock(spec=SchemaService)
-    
+
     # Mock schema definition
     mock_schema_def = Mock(spec=SchemaDefinition)
     mock_schema_def.name = "test_schema"
@@ -42,7 +43,7 @@ def mock_schema_service():
     mock_schema_def.updated_at = datetime.utcnow()
     mock_schema_def.created_by = "test_user"
     mock_schema_def.schema = {"type": "object", "properties": {"id": {"type": "integer"}}}
-    
+
     mock_service.register_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.get_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.get_schema_versions = AsyncMock(return_value=[{"version": 1, "status": "active"}])
@@ -54,7 +55,7 @@ def mock_schema_service():
     mock_service.search_schemas = AsyncMock(return_value=[])
     mock_service.get_cache_stats = Mock(return_value={"hits": 10, "misses": 5})
     mock_service.clear_cache = Mock()
-    
+
     return mock_service
 
 
@@ -235,7 +236,7 @@ def test_get_schema_service_no_db_manager(mock_db_manager):
     import data_manager.api.routes.schemas as schemas_module
     original_db_manager = api_module.db_manager
     original_schema_service = schemas_module.schema_service
-    
+
     try:
         api_module.db_manager = None
         schemas_module.schema_service = None
