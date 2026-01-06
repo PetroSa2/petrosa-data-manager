@@ -21,6 +21,7 @@ The Data Manager is the **central data governance layer**, ensuring data quality
 
 - **Ecosystem Architecture**: See master § System Architecture Overview → Data Ingestion & Storage Layer
 - **Work Tracking**: See master § Centralized Work Tracking with GitHub Projects
+- **GitHub CLI Profile**: See master § Prerequisites & Installation → GitHub CLI Profile Configuration (CRITICAL: Always use `yurisa2` profile)
 - **NATS Topics**: See master § NATS Message Bus → `binance.futures.websocket.data` (input)
 - **Database Architecture**: See master § Database Architecture (PostgreSQL + MongoDB dual architecture)
 - **Deployment Patterns**: See master § Data Manager Configuration
