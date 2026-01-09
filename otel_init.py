@@ -43,7 +43,20 @@ except ImportError:
             super().on_end(span)
 
         def _clean_attributes(self, span):
-            """Remove invalid attribute values from span."""
+            """
+            Remove invalid attribute values from span.
+
+            Note: This fallback is only used when petrosa-otel is not available.
+            In production, petrosa-otel should always be installed.
+
+            The OpenTelemetry SDK doesn't provide a public API to get all attributes
+            (only set_attribute/get_attribute for individual attributes). The _attributes
+            field is the standard way to access attributes in span processors, as used
+            in the main petrosa-otel implementation.
+            """
+            # OpenTelemetry SDK spans use _attributes internally
+            # There's no public get_attributes() method - only set_attribute/get_attribute
+            # Accessing _attributes is the standard pattern for span processors
             if not hasattr(span, "_attributes") or not span._attributes:
                 return
 
@@ -54,8 +67,21 @@ except ImportError:
                     invalid_keys.append(key)
 
             # Remove invalid attributes
-            for key in invalid_keys:
-                del span._attributes[key]
+            # Try using set_attribute(None) first if available, otherwise delete directly
+            if hasattr(span, "set_attribute"):
+                for key in invalid_keys:
+                    try:
+                        # Setting to None may unset the attribute
+                        span.set_attribute(key, None)
+                    except (TypeError, ValueError):
+                        # If None is not accepted, delete directly
+                        if key in span._attributes:
+                            del span._attributes[key]
+            else:
+                # Direct deletion if set_attribute not available
+                for key in invalid_keys:
+                    if key in span._attributes:
+                        del span._attributes[key]
 
 # Import PyMongo instrumentation
 try:
@@ -114,10 +140,13 @@ def init_telemetry() -> None:
         logger.info("OpenTelemetry tracing initialized")
 
         # Enable MongoDB instrumentation
+        # Note: opentelemetry-instrumentation-pymongo works with both PyMongo and Motor
+        # Motor (async MongoDB driver) wraps PyMongo and is automatically instrumented
+        # when PyMongoInstrumentor is enabled. Motor operations will create spans.
         if PYMONGO_INSTRUMENTATION_AVAILABLE:
             try:
                 PymongoInstrumentor().instrument()
-                logger.info("✅ MongoDB instrumentation enabled")
+                logger.info("✅ MongoDB instrumentation enabled (supports PyMongo and Motor)")
             except Exception as e:
                 logger.warning(f"⚠️  Failed to instrument MongoDB: {e}")
         else:
