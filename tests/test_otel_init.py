@@ -110,6 +110,8 @@ class TestMongoDBInstrumentation:
                 init_telemetry()
 
                 # Verify AttributeFilterSpanProcessor was used
+                assert mock_processor_class.called
+                assert mock_tracer_provider.add_span_processor.called
                 mock_processor_class.assert_called()
                 mock_tracer_provider.add_span_processor.assert_called()
 
