@@ -24,6 +24,48 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+# Import AttributeFilterSpanProcessor from petrosa-otel for MongoDB compatibility
+try:
+    from petrosa_otel.processors import AttributeFilterSpanProcessor
+except ImportError:
+    # Fallback: Define locally if petrosa-otel not available
+    class AttributeFilterSpanProcessor(BatchSpanProcessor):
+        """Custom span processor that filters out invalid attribute values."""
+
+        def on_start(self, span, parent_context=None):
+            """Clean attributes when span starts."""
+            super().on_start(span, parent_context)
+            self._clean_attributes(span)
+
+        def on_end(self, span):
+            """Clean attributes when span ends."""
+            self._clean_attributes(span)
+            super().on_end(span)
+
+        def _clean_attributes(self, span):
+            """Remove invalid attribute values from span."""
+            if not hasattr(span, "_attributes") or not span._attributes:
+                return
+
+            # Identify invalid attributes (dict/list values)
+            invalid_keys = []
+            for key, value in span._attributes.items():
+                if isinstance(value, (dict, list)):
+                    invalid_keys.append(key)
+
+            # Remove invalid attributes
+            for key in invalid_keys:
+                del span._attributes[key]
+
+# Import PyMongo instrumentation
+try:
+    from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+
+    PYMONGO_INSTRUMENTATION_AVAILABLE = True
+except ImportError:
+    PymongoInstrumentor = None  # type: ignore
+    PYMONGO_INSTRUMENTATION_AVAILABLE = False
+
 import constants
 
 logger = logging.getLogger(__name__)
@@ -62,9 +104,27 @@ def init_telemetry() -> None:
         trace_exporter = OTLPSpanExporter(
             endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT
         )
-        trace_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
+
+        # Use AttributeFilterSpanProcessor to prevent errors from dict/list attributes
+        # in MongoDB spans (required when MongoDB instrumentation is enabled)
+        trace_provider.add_span_processor(
+            AttributeFilterSpanProcessor(trace_exporter)
+        )
         trace.set_tracer_provider(trace_provider)
         logger.info("OpenTelemetry tracing initialized")
+
+        # Enable MongoDB instrumentation
+        if PYMONGO_INSTRUMENTATION_AVAILABLE:
+            try:
+                PymongoInstrumentor().instrument()
+                logger.info("✅ MongoDB instrumentation enabled")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to instrument MongoDB: {e}")
+        else:
+            logger.warning(
+                "⚠️  opentelemetry-instrumentation-pymongo not installed. "
+                "Install with: pip install opentelemetry-instrumentation-pymongo"
+            )
 
         # Initialize metrics
         metric_reader = PeriodicExportingMetricReader(
