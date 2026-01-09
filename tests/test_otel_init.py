@@ -141,6 +141,7 @@ class TestAttributeFilterSpanProcessorFallback:
             processor._clean_attributes(mock_span)
 
             # Verify set_attribute was called to remove invalid attribute
+            assert mock_span.set_attribute.called
             mock_span.set_attribute.assert_called_with("invalid_dict", None)
 
     def test_fallback_handles_missing_public_api(self):
