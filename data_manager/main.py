@@ -13,7 +13,13 @@ import uvicorn
 from prometheus_client import start_http_server
 
 import constants
-import otel_init
+# Optional OpenTelemetry imports
+try:
+    from petrosa_otel import setup_telemetry, attach_logging_handler
+except ImportError:
+    setup_telemetry = None
+    attach_logging_handler = None
+
 from data_manager.api.app import create_app
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
@@ -155,6 +161,14 @@ class DataManagerApp:
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
 
+        # Flush telemetry first
+        try:
+            from petrosa_otel import flush_telemetry
+            flush_telemetry()
+            logger.info("✅ Telemetry flushed")
+        except ImportError:
+            pass
+
         # Stop leader election
         if self.leader_election:
             await self.leader_election.stop()
@@ -283,27 +297,25 @@ class DataManagerApp:
 async def main():
     """Main application entry point."""
     # 1. Setup OpenTelemetry FIRST (before any logging configuration)
-    try:
-        if constants.OTEL_ENABLED:
-            logger.info(
-                f"Initializing OpenTelemetry with endpoint: {constants.OTEL_EXPORTER_OTLP_ENDPOINT}"
+    if setup_telemetry and not os.getenv("OTEL_NO_AUTO_INIT"):
+        try:
+            setup_telemetry(
+                service_name=constants.OTEL_SERVICE_NAME,
+                service_type="async",
+                enable_mongodb=True,
+                auto_attach_logging=False,  # Will attach manually after setup_logging()
             )
-            # Initialize OpenTelemetry using local otel_init module
-            otel_init.init_telemetry()
-            logger.info("OpenTelemetry initialized successfully")
-        else:
-            logger.warning("OpenTelemetry is disabled (OTEL_ENABLED=false)")
-    except Exception as e:
-        logger.error(f"Failed to initialize OpenTelemetry: {e}", exc_info=True)
+            logger.info("OpenTelemetry telemetry initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenTelemetry: {e}", exc_info=True)
 
     # 2. Setup logging (may call basicConfig)
     # Note: logging is already configured at module level
 
     # 3. Attach OTel logging handler LAST (after logging is configured)
-    try:
-        if constants.OTEL_ENABLED and constants.OTEL_EXPORTER_OTLP_ENDPOINT:
-            logger.info("Attaching OpenTelemetry logging handler...")
-            success = otel_init.attach_logging_handler_simple()
+    if attach_logging_handler:
+        try:
+            success = attach_logging_handler()
             if success:
                 logger.info(
                     "✅ OpenTelemetry logging handler attached - logs will be exported to Grafana"
@@ -312,20 +324,10 @@ async def main():
                 logger.error(
                     "❌ Failed to attach OpenTelemetry logging handler - logs will NOT be exported to Grafana"
                 )
-        else:
-            if not constants.OTEL_ENABLED:
-                logger.warning(
-                    "OpenTelemetry logging handler NOT attached - OTEL_ENABLED is false"
-                )
-            if not constants.OTEL_EXPORTER_OTLP_ENDPOINT:
-                logger.error(
-                    "❌ OpenTelemetry logging handler NOT attached - OTEL_EXPORTER_OTLP_ENDPOINT is empty! "
-                    "Logs will NOT be exported to Grafana."
-                )
-    except Exception as e:
-        logger.error(
-            f"Failed to attach OpenTelemetry logging handler: {e}", exc_info=True
-        )
+        except Exception as e:
+            logger.error(
+                f"Failed to attach OpenTelemetry logging handler: {e}", exc_info=True
+            )
 
     app = DataManagerApp()
 
