@@ -1,6 +1,6 @@
 # Core dependencies
 nats-py>=2.7.0
-fastapi>=0.109.0
+fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 
 # Database drivers
@@ -23,7 +23,7 @@ jsonschema>=4.20.0
 structlog>=24.1.0
 opentelemetry-api>=1.22.0
 opentelemetry-sdk>=1.22.0
-opentelemetry-instrumentation-fastapi>=0.43b0
+opentelemetry-instrumentation-fastapi>=0.110.0
 opentelemetry-instrumentation-logging>=0.41b0
 opentelemetry-exporter-otlp>=1.22.0
 opentelemetry-exporter-otlp-proto-grpc>=1.22.0
@@ -42,3 +42,4 @@ aiofiles>=23.2.1
 # ML and advanced analytics (optional)
 scikit-learn>=1.4.0
 
+starlette>=0.37.0
