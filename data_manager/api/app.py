@@ -25,6 +25,11 @@ from data_manager.api.routes import (
     schemas,
 )
 
+try:
+    from petrosa_otel import config_rate_limit_middleware
+except ImportError:
+    config_rate_limit_middleware = None
+
 logger = logging.getLogger(__name__)
 
 # Global database manager reference (will be set by main app)
@@ -53,6 +58,11 @@ def create_app() -> FastAPI:
     # Add custom middleware (order matters - first added is outermost)
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestLoggerMiddleware)
+
+    # Register configuration rate limit middleware
+    if config_rate_limit_middleware:
+        app.middleware("http")(config_rate_limit_middleware)
+        logger.info("✅ Configuration rate limit middleware registered")
 
     # CORS middleware
     app.add_middleware(

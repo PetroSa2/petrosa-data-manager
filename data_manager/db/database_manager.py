@@ -12,6 +12,7 @@ import constants
 from data_manager.db import get_adapter
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
+from data_manager.db.repositories.configuration_repository import ConfigurationRepository
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class DatabaseManager:
         """Initialize database manager."""
         self.mysql_adapter: MySQLAdapter | None = None
         self.mongodb_adapter: MongoDBAdapter | None = None
+        self.configuration: ConfigurationRepository | None = None
         self._initialized = False
 
         # Connection metrics
@@ -79,6 +81,12 @@ class DatabaseManager:
             self._stats["mongodb"]["connection_count"] += 1
             self._stats["mongodb"]["last_connected"] = datetime.utcnow()
             logger.info("MongoDB connection established")
+
+            # Initialize repositories
+            self.configuration = ConfigurationRepository(
+                mysql_adapter=self.mysql_adapter,
+                mongodb_adapter=self.mongodb_adapter
+            )
 
             self._initialized = True
             logger.info("All database connections initialized successfully")
@@ -300,3 +308,17 @@ class DatabaseManager:
         """Increment error count for a database."""
         if database in self._stats:
             self._stats[database]["error_count"] += 1
+
+    @property
+    def mongodb(self) -> MongoDBAdapter:
+        """Get the MongoDB adapter."""
+        if not self.mongodb_adapter:
+            raise RuntimeError("MongoDB adapter not initialized")
+        return self.mongodb_adapter
+
+    @property
+    def mysql(self) -> MySQLAdapter:
+        """Get the MySQL adapter."""
+        if not self.mysql_adapter:
+            raise RuntimeError("MySQL adapter not initialized")
+        return self.mysql_adapter
