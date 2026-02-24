@@ -12,10 +12,14 @@ class ConfigAudit(BaseModel):
     """Configuration audit record."""
 
     id: str | None = Field(None, alias="_id")
-    config_type: str = Field(..., description="Type of config: 'application' or 'strategy'")
+    config_type: str = Field(
+        ..., description="Type of config: 'application' or 'strategy'"
+    )
     strategy_id: str | None = Field(None, description="Strategy identifier")
     symbol: str | None = Field(None, description="Trading symbol")
-    action: str = Field(..., description="Action: 'CREATE', 'UPDATE', 'DELETE', 'ROLLBACK'")
+    action: str = Field(
+        ..., description="Action: 'CREATE', 'UPDATE', 'DELETE', 'ROLLBACK'"
+    )
     old_parameters: dict[str, Any] | None = Field(None, description="Previous values")
     new_parameters: dict[str, Any] | None = Field(None, description="New values")
     changed_by: str = Field(..., description="Who made the change")

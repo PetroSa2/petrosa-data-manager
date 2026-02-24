@@ -186,7 +186,9 @@ class ConfigurationRepository(BaseRepository):
 
         try:
             collection_name = (
-                "app_config_audit" if config_type == "application" else "strategy_config_audit"
+                "app_config_audit"
+                if config_type == "application"
+                else "strategy_config_audit"
             )
             collection = self.mongodb.db[collection_name]
 
@@ -203,7 +205,9 @@ class ConfigurationRepository(BaseRepository):
 
             for record in records:
                 record["_id"] = str(record["_id"])
-                if "changed_at" in record and isinstance(record["changed_at"], datetime):
+                if "changed_at" in record and isinstance(
+                    record["changed_at"], datetime
+                ):
                     record["changed_at"] = record["changed_at"].isoformat()
 
             return records
@@ -228,7 +232,9 @@ class ConfigurationRepository(BaseRepository):
         try:
             # 1. Find the target version parameters
             collection_name = (
-                "app_config_audit" if config_type == "application" else "strategy_config_audit"
+                "app_config_audit"
+                if config_type == "application"
+                else "strategy_config_audit"
             )
             collection = self.mongodb.db[collection_name]
 
@@ -257,7 +263,9 @@ class ConfigurationRepository(BaseRepository):
                 return False, "Target version has no parameters", None
 
             # 2. Apply the parameters as a new version
-            rollback_reason = reason or f"Rollback to version {target_record.get('version')}"
+            rollback_reason = (
+                reason or f"Rollback to version {target_record.get('version')}"
+            )
 
             if config_type == "application":
                 result = await self.upsert_app_config(

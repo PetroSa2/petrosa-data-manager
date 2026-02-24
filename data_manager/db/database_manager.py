@@ -141,8 +141,12 @@ class DatabaseManager:
         Returns:
             Dictionary with connection status for each database
         """
-        mysql_connected = self.mysql_adapter.is_connected() if self.mysql_adapter else False
-        mongodb_connected = self.mongodb_adapter.is_connected() if self.mongodb_adapter else False
+        mysql_connected = (
+            self.mysql_adapter.is_connected() if self.mysql_adapter else False
+        )
+        mongodb_connected = (
+            self.mongodb_adapter.is_connected() if self.mongodb_adapter else False
+        )
 
         return {
             "mysql": {
@@ -150,7 +154,9 @@ class DatabaseManager:
                 "type": "mysql",
                 "stats": self._stats["mysql"],
                 "uptime_seconds": (
-                    time.time() - self._connection_start_time if self._connection_start_time else 0
+                    time.time() - self._connection_start_time
+                    if self._connection_start_time
+                    else 0
                 ),
             },
             "mongodb": {
@@ -158,7 +164,9 @@ class DatabaseManager:
                 "type": "mongodb",
                 "stats": self._stats["mongodb"],
                 "uptime_seconds": (
-                    time.time() - self._connection_start_time if self._connection_start_time else 0
+                    time.time() - self._connection_start_time
+                    if self._connection_start_time
+                    else 0
                 ),
             },
             "initialized": self._initialized,
@@ -203,7 +211,9 @@ class DatabaseManager:
 
                 # Check MongoDB connection
                 if self.mongodb_adapter and not self.mongodb_adapter.is_connected():
-                    logger.warning("MongoDB connection lost, attempting reconnection...")
+                    logger.warning(
+                        "MongoDB connection lost, attempting reconnection..."
+                    )
                     await self._reconnect_mongodb()
 
             except asyncio.CancelledError:
@@ -222,7 +232,9 @@ class DatabaseManager:
             self._stats["mysql"]["reconnect_attempts"] += 1
 
             # Exponential backoff
-            backoff_delay = constants.DB_RECONNECT_BACKOFF_BASE**self._mysql_reconnect_attempts
+            backoff_delay = (
+                constants.DB_RECONNECT_BACKOFF_BASE**self._mysql_reconnect_attempts
+            )
             await asyncio.sleep(backoff_delay)
 
             # Attempt reconnection
@@ -252,7 +264,9 @@ class DatabaseManager:
             self._stats["mongodb"]["reconnect_attempts"] += 1
 
             # Exponential backoff
-            backoff_delay = constants.DB_RECONNECT_BACKOFF_BASE**self._mongodb_reconnect_attempts
+            backoff_delay = (
+                constants.DB_RECONNECT_BACKOFF_BASE**self._mongodb_reconnect_attempts
+            )
             await asyncio.sleep(backoff_delay)
 
             # Attempt reconnection
@@ -277,7 +291,9 @@ class DatabaseManager:
             "overall": {
                 "initialized": self._initialized,
                 "uptime_seconds": (
-                    time.time() - self._connection_start_time if self._connection_start_time else 0
+                    time.time() - self._connection_start_time
+                    if self._connection_start_time
+                    else 0
                 ),
                 "last_health_check": self._last_health_check,
             },

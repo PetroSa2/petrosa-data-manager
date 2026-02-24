@@ -53,14 +53,18 @@ async def get_volatility(
         values = [
             {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
                 "rolling_stddev": str(r.get("rolling_stddev", "0")),
                 "annualized": str(r.get("annualized_volatility", "0")),
                 "parkinson": str(r.get("parkinson")) if r.get("parkinson") else None,
-                "garman_klass": str(r.get("garman_klass")) if r.get("garman_klass") else None,
+                "garman_klass": str(r.get("garman_klass"))
+                if r.get("garman_klass")
+                else None,
                 "vov": (
                     str(r.get("volatility_of_volatility"))
                     if r.get("volatility_of_volatility")
@@ -113,7 +117,9 @@ async def get_volume(
         values = [
             {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
@@ -188,12 +194,16 @@ async def get_spread(
                 "market_depth_ask": str(r.get("market_depth_ask", "0")),
                 "liquidity_ratio": str(r.get("liquidity_ratio", "0")),
                 "slippage_estimate": (
-                    str(r.get("slippage_estimate")) if r.get("slippage_estimate") else None
+                    str(r.get("slippage_estimate"))
+                    if r.get("slippage_estimate")
+                    else None
                 ),
             },
             "metadata": {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
@@ -230,7 +240,9 @@ async def get_trend(
         values = [
             {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
@@ -283,7 +295,9 @@ async def get_correlation(
 
         # Query correlation matrix
         collection = "analytics_correlation_matrix"
-        results = await api_module.db_manager.mongodb_adapter.query_latest(collection, limit=1)
+        results = await api_module.db_manager.mongodb_adapter.query_latest(
+            collection, limit=1
+        )
 
         if results and results[0].get("matrix"):
             correlation_matrix = results[0].get("matrix")
@@ -354,7 +368,9 @@ async def get_deviation(
             },
             "metadata": {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
@@ -400,15 +416,21 @@ async def get_seasonality(
             "pair": pair,
             "metric": "seasonality",
             "data": {
-                "hourly_pattern": {k: str(v) for k, v in r.get("hourly_pattern", {}).items()},
-                "daily_pattern": {k: str(v) for k, v in r.get("daily_pattern", {}).items()},
+                "hourly_pattern": {
+                    k: str(v) for k, v in r.get("hourly_pattern", {}).items()
+                },
+                "daily_pattern": {
+                    k: str(v) for k, v in r.get("daily_pattern", {}).items()
+                },
                 "seasonal_deviation": str(r.get("seasonal_deviation", "0")),
                 "entropy_index": str(r.get("entropy_index", "0")),
                 "dominant_cycle": r.get("dominant_cycle"),
             },
             "metadata": {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
@@ -462,7 +484,9 @@ async def get_regime(
             },
             "metadata": {
                 "timestamp": (
-                    r.get("metadata", {}).get("computed_at", datetime.utcnow()).isoformat()
+                    r.get("metadata", {})
+                    .get("computed_at", datetime.utcnow())
+                    .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
                 ),
@@ -477,7 +501,9 @@ async def get_regime(
 
 @router.get("/market-overview")
 async def market_overview(
-    pairs: str = Query("BTCUSDT,ETHUSDT", description="Comma-separated list of trading pairs"),
+    pairs: str = Query(
+        "BTCUSDT,ETHUSDT", description="Comma-separated list of trading pairs"
+    ),
     limit: int = Query(
         10,
         ge=1,
@@ -485,7 +511,9 @@ async def market_overview(
         description="Maximum number of pairs to return (default: 10, max: 100)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
-    sort_by: str = Query("symbol", description="Sort by field (symbol, volatility, volume, trend)"),
+    sort_by: str = Query(
+        "symbol", description="Sort by field (symbol, volatility, volume, trend)"
+    ),
     sort_order: str = Query("asc", description="Sort order (asc, desc)"),
 ) -> dict:
     """
@@ -525,7 +553,9 @@ async def market_overview(
                 overview[pair] = {
                     "volatility": {
                         "annualized": (
-                            str(vol_data[0].get("annualized_volatility", "0")) if vol_data else "0"
+                            str(vol_data[0].get("annualized_volatility", "0"))
+                            if vol_data
+                            else "0"
                         ),
                     },
                     "volume": {
@@ -541,14 +571,20 @@ async def market_overview(
                             if trend_data
                             else "neutral"
                         ),
-                        "roc": str(trend_data[0].get("rate_of_change", "0")) if trend_data else "0",
+                        "roc": str(trend_data[0].get("rate_of_change", "0"))
+                        if trend_data
+                        else "0",
                     },
                     "regime": {
                         "classification": (
-                            regime_data[0].get("regime", "unknown") if regime_data else "unknown"
+                            regime_data[0].get("regime", "unknown")
+                            if regime_data
+                            else "unknown"
                         ),
                         "confidence": (
-                            str(regime_data[0].get("confidence", "0")) if regime_data else "0"
+                            str(regime_data[0].get("confidence", "0"))
+                            if regime_data
+                            else "0"
                         ),
                     },
                 }
@@ -564,12 +600,16 @@ async def market_overview(
                 overview_list = list(overview.items())
                 if sort_by == "volatility":
                     overview_list.sort(
-                        key=lambda x: (float(x[1]["volatility"]["annualized"]) if x[1] else 0),
+                        key=lambda x: (
+                            float(x[1]["volatility"]["annualized"]) if x[1] else 0
+                        ),
                         reverse=(sort_order == "desc"),
                     )
                 elif sort_by == "volume":
                     overview_list.sort(
-                        key=lambda x: (float(x[1]["volume"]["spike_ratio"]) if x[1] else 0),
+                        key=lambda x: (
+                            float(x[1]["volume"]["spike_ratio"]) if x[1] else 0
+                        ),
                         reverse=(sort_order == "desc"),
                     )
                 elif sort_by == "trend":

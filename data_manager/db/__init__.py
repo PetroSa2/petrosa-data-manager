@@ -14,7 +14,9 @@ ADAPTERS: dict[str, type[BaseAdapter]] = {
 }
 
 
-def get_adapter(adapter_type: str, connection_string: str | None = None, **kwargs) -> BaseAdapter:
+def get_adapter(
+    adapter_type: str, connection_string: str | None = None, **kwargs
+) -> BaseAdapter:
     """
     Factory function to get the appropriate database adapter.
 

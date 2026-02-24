@@ -62,8 +62,12 @@ async def setup_leader_election_collections():
         # TTL index on last_heartbeat for automatic cleanup
         # Documents will be automatically deleted after timeout * 2 seconds
         ttl_seconds = constants.LEADER_ELECTION_TIMEOUT * 2
-        await leader_collection.create_index("last_heartbeat", expireAfterSeconds=ttl_seconds)
-        logger.info(f"Created TTL index on 'last_heartbeat' (expireAfterSeconds={ttl_seconds})")
+        await leader_collection.create_index(
+            "last_heartbeat", expireAfterSeconds=ttl_seconds
+        )
+        logger.info(
+            f"Created TTL index on 'last_heartbeat' (expireAfterSeconds={ttl_seconds})"
+        )
 
         # Create distributed_locks collection
         logger.info("Setting up distributed_locks collection...")

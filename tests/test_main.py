@@ -27,7 +27,9 @@ async def test_main_otel_enabled_with_endpoint(mock_app_class, mock_constants, c
     # Mock asyncio context to prevent actual app startup
     mock_app_instance.start.side_effect = KeyboardInterrupt()
 
-    with patch("data_manager.main.initialize_telemetry_standard") as mock_init_telemetry:
+    with patch(
+        "data_manager.main.initialize_telemetry_standard"
+    ) as mock_init_telemetry:
         with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
             with caplog.at_level(logging.INFO):
                 # Import and run main
@@ -52,7 +54,9 @@ async def test_main_otel_enabled_with_endpoint(mock_app_class, mock_constants, c
             # Verify logging messages
             log_messages = [record.message for record in caplog.records]
             assert any("Initializing OpenTelemetry" in msg for msg in log_messages)
-            assert any("OpenTelemetry logging handler attached" in msg for msg in log_messages)
+            assert any(
+                "OpenTelemetry logging handler attached" in msg for msg in log_messages
+            )
 
 
 @pytest.mark.asyncio
@@ -73,7 +77,9 @@ async def test_main_otel_disabled(mock_app_class, mock_constants, caplog):
     # Mock asyncio context to prevent actual app startup
     mock_app_instance.start.side_effect = KeyboardInterrupt()
 
-    with patch("data_manager.main.initialize_telemetry_standard") as mock_init_telemetry:
+    with patch(
+        "data_manager.main.initialize_telemetry_standard"
+    ) as mock_init_telemetry:
         with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
             with caplog.at_level(logging.INFO):
                 # Import and run main
@@ -111,7 +117,9 @@ async def test_main_otel_endpoint_missing(mock_app_class, mock_constants, caplog
     # Mock asyncio context to prevent actual app startup
     mock_app_instance.start.side_effect = KeyboardInterrupt()
 
-    with patch("data_manager.main.initialize_telemetry_standard") as mock_init_telemetry:
+    with patch(
+        "data_manager.main.initialize_telemetry_standard"
+    ) as mock_init_telemetry:
         with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
             with caplog.at_level(logging.ERROR):
                 # Import and run main
@@ -130,7 +138,9 @@ async def test_main_otel_endpoint_missing(mock_app_class, mock_constants, caplog
 
             # Verify error message about missing endpoint
             log_messages = [record.message for record in caplog.records]
-            assert any("OTEL_EXPORTER_OTLP_ENDPOINT is empty" in msg for msg in log_messages)
+            assert any(
+                "OTEL_EXPORTER_OTLP_ENDPOINT is empty" in msg for msg in log_messages
+            )
 
 
 @pytest.mark.asyncio

@@ -67,7 +67,9 @@ class NATSClient:
                 "Successfully connected to NATS",
                 extra={
                     "url": constants.NATS_URL,
-                    "server_info": self.nc.connected_server_version if self.nc else None,
+                    "server_info": self.nc.connected_server_version
+                    if self.nc
+                    else None,
                 },
             )
             return True
@@ -115,7 +117,9 @@ class NATSClient:
             return subscription
 
         except Exception as e:
-            logger.error(f"Failed to subscribe to subject {subject}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to subscribe to subject {subject}: {e}", exc_info=True
+            )
             nats_errors.labels(type="subscription").inc()
             return None
 
@@ -133,7 +137,9 @@ class NATSClient:
             nats_errors.labels(type="publish").inc()
             return False
 
-    async def publish_with_trace_context(self, subject: str, message_dict: dict) -> bool:
+    async def publish_with_trace_context(
+        self, subject: str, message_dict: dict
+    ) -> bool:
         """
         Publish message to a NATS subject with trace context injection.
 

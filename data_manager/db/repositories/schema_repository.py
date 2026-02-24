@@ -54,7 +54,8 @@ class SchemaRepository:
             name=name,
             version=registration.version,
             schema=registration.schema,
-            compatibility_mode=registration.compatibility_mode or CompatibilityMode.BACKWARD,
+            compatibility_mode=registration.compatibility_mode
+            or CompatibilityMode.BACKWARD,
             status=SchemaStatus.ACTIVE,
             description=registration.description,
             created_by=registration.created_by,
@@ -134,7 +135,9 @@ class SchemaRepository:
 
         return all_schemas, total_count
 
-    async def get_schema_versions(self, database: str, name: str) -> list[SchemaVersion]:
+    async def get_schema_versions(
+        self, database: str, name: str
+    ) -> list[SchemaVersion]:
         """
         Get all versions of a schema.
 
@@ -220,7 +223,9 @@ class SchemaRepository:
 
     # MySQL-specific methods
 
-    async def _register_mysql_schema(self, schema_id: str, schema_def: SchemaDefinition) -> None:
+    async def _register_mysql_schema(
+        self, schema_id: str, schema_def: SchemaDefinition
+    ) -> None:
         """Register schema in MySQL."""
         try:
             # Convert to dictionary for insertion
@@ -264,7 +269,9 @@ class SchemaRepository:
                 )
                 # Filter by name and version
                 matching = [
-                    s for s in schemas if s.get("name") == name and s.get("version") == version
+                    s
+                    for s in schemas
+                    if s.get("name") == name and s.get("version") == version
                 ]
             else:
                 # Get latest version
@@ -305,7 +312,9 @@ class SchemaRepository:
     ) -> tuple[list[SchemaDefinition], int]:
         """List schemas from MySQL."""
         try:
-            schemas = self.mysql_adapter.query_range("schemas", datetime.min, datetime.max, None)
+            schemas = self.mysql_adapter.query_range(
+                "schemas", datetime.min, datetime.max, None
+            )
 
             # Apply filters
             filtered_schemas = []
@@ -319,7 +328,9 @@ class SchemaRepository:
                     name=schema_data["name"],
                     version=schema_data["version"],
                     schema=json.loads(schema_data["schema_json"]),
-                    compatibility_mode=CompatibilityMode(schema_data["compatibility_mode"]),
+                    compatibility_mode=CompatibilityMode(
+                        schema_data["compatibility_mode"]
+                    ),
                     status=SchemaStatus(schema_data["status"]),
                     description=schema_data.get("description"),
                     created_at=schema_data["created_at"],
@@ -344,7 +355,9 @@ class SchemaRepository:
     async def _get_mysql_schema_versions(self, name: str) -> list[SchemaVersion]:
         """Get all versions of a MySQL schema."""
         try:
-            schemas = self.mysql_adapter.query_range("schemas", datetime.min, datetime.max, None)
+            schemas = self.mysql_adapter.query_range(
+                "schemas", datetime.min, datetime.max, None
+            )
 
             # Filter by name
             matching = [s for s in schemas if s.get("name") == name]
@@ -354,7 +367,9 @@ class SchemaRepository:
                 version = SchemaVersion(
                     version=schema_data["version"],
                     schema=json.loads(schema_data["schema_json"]),
-                    compatibility_mode=CompatibilityMode(schema_data["compatibility_mode"]),
+                    compatibility_mode=CompatibilityMode(
+                        schema_data["compatibility_mode"]
+                    ),
                     status=SchemaStatus(schema_data["status"]),
                     description=schema_data.get("description"),
                     created_at=schema_data["created_at"],
@@ -389,7 +404,9 @@ class SchemaRepository:
     async def _search_mysql_schemas(self, query: str) -> list[SchemaDefinition]:
         """Search MySQL schemas."""
         try:
-            schemas = self.mysql_adapter.query_range("schemas", datetime.min, datetime.max, None)
+            schemas = self.mysql_adapter.query_range(
+                "schemas", datetime.min, datetime.max, None
+            )
 
             results = []
             for schema_data in schemas:
@@ -402,7 +419,9 @@ class SchemaRepository:
                         name=schema_data["name"],
                         version=schema_data["version"],
                         schema=json.loads(schema_data["schema_json"]),
-                        compatibility_mode=CompatibilityMode(schema_data["compatibility_mode"]),
+                        compatibility_mode=CompatibilityMode(
+                            schema_data["compatibility_mode"]
+                        ),
                         status=SchemaStatus(schema_data["status"]),
                         description=schema_data.get("description"),
                         created_at=schema_data["created_at"],
@@ -419,7 +438,9 @@ class SchemaRepository:
 
     # MongoDB-specific methods
 
-    async def _register_mongodb_schema(self, schema_id: str, schema_def: SchemaDefinition) -> None:
+    async def _register_mongodb_schema(
+        self, schema_id: str, schema_def: SchemaDefinition
+    ) -> None:
         """Register schema in MongoDB."""
         try:
             schema_doc = {
@@ -460,7 +481,9 @@ class SchemaRepository:
                 )
                 # Filter by name and version
                 matching = [
-                    s for s in schemas if s.get("name") == name and s.get("version") == version
+                    s
+                    for s in schemas
+                    if s.get("name") == name and s.get("version") == version
                 ]
             else:
                 # Get latest version
@@ -517,7 +540,9 @@ class SchemaRepository:
                     name=schema_data["name"],
                     version=schema_data["version"],
                     schema=schema_data["schema"],
-                    compatibility_mode=CompatibilityMode(schema_data["compatibility_mode"]),
+                    compatibility_mode=CompatibilityMode(
+                        schema_data["compatibility_mode"]
+                    ),
                     status=SchemaStatus(schema_data["status"]),
                     description=schema_data.get("description"),
                     created_at=schema_data["created_at"],
@@ -554,7 +579,9 @@ class SchemaRepository:
                 version = SchemaVersion(
                     version=schema_data["version"],
                     schema=schema_data["schema"],
-                    compatibility_mode=CompatibilityMode(schema_data["compatibility_mode"]),
+                    compatibility_mode=CompatibilityMode(
+                        schema_data["compatibility_mode"]
+                    ),
                     status=SchemaStatus(schema_data["status"]),
                     description=schema_data.get("description"),
                     created_at=schema_data["created_at"],
@@ -604,7 +631,9 @@ class SchemaRepository:
                         name=schema_data["name"],
                         version=schema_data["version"],
                         schema=schema_data["schema"],
-                        compatibility_mode=CompatibilityMode(schema_data["compatibility_mode"]),
+                        compatibility_mode=CompatibilityMode(
+                            schema_data["compatibility_mode"]
+                        ),
                         status=SchemaStatus(schema_data["status"]),
                         description=schema_data.get("description"),
                         created_at=schema_data["created_at"],

@@ -120,7 +120,9 @@ async def get_candles(
                 "low": str(c.get("low")),
                 "close": str(c.get("close")),
                 "volume": str(c.get("volume")),
-                "quote_volume": str(c.get("quote_volume")) if c.get("quote_volume") else None,
+                "quote_volume": str(c.get("quote_volume"))
+                if c.get("quote_volume")
+                else None,
                 "trades_count": c.get("trades_count"),
             }
             for c in paginated_candles

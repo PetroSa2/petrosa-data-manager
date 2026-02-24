@@ -67,7 +67,9 @@ class TradeRepository(BaseRepository):
             logger.error(f"Failed to insert trade batch: {e}")
             return 0
 
-    async def get_range(self, symbol: str, start: datetime, end: datetime) -> list[dict]:
+    async def get_range(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> list[dict]:
         """
         Get trades within time range.
 

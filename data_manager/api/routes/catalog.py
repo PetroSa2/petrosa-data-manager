@@ -79,7 +79,9 @@ async def list_datasets(
         description="Maximum number of results (default: 50, max: 500)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
-    sort_by: str = Query("name", description="Sort by field (name, created_at, updated_at)"),
+    sort_by: str = Query(
+        "name", description="Sort by field (name, created_at, updated_at)"
+    ),
     sort_order: str = Query("asc", description="Sort order (asc, desc)"),
 ) -> dict:
     """
@@ -122,7 +124,8 @@ async def list_datasets(
             datasets = [
                 d
                 for d in datasets
-                if search_lower in d.name.lower() or search_lower in d.description.lower()
+                if search_lower in d.name.lower()
+                or search_lower in d.description.lower()
             ]
 
         total_count = len(datasets)

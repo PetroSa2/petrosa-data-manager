@@ -165,13 +165,15 @@ class TestVersionFormat:
 
         # Basic semver check: should have at least major.minor
         parts = version.split(".")
-        assert len(parts) >= 2, f"Version '{version}' should have at least major.minor format"
+        assert len(parts) >= 2, (
+            f"Version '{version}' should have at least major.minor format"
+        )
 
         # First two parts should be numeric
         assert parts[0].isdigit(), f"Major version '{parts[0]}' should be numeric"
-        assert (
-            parts[1].split("-")[0].isdigit()
-        ), f"Minor version '{parts[1]}' should start with numeric"
+        assert parts[1].split("-")[0].isdigit(), (
+            f"Minor version '{parts[1]}' should start with numeric"
+        )
 
     def test_version_is_not_empty(self):
         """Test that version string is never empty."""
@@ -179,7 +181,9 @@ class TestVersionFormat:
 
         version = get_version()
         assert version, "Version should never be empty"
-        assert version.strip() == version, "Version should not have leading/trailing whitespace"
+        assert version.strip() == version, (
+            "Version should not have leading/trailing whitespace"
+        )
 
 
 class TestSetupPy:
@@ -198,9 +202,9 @@ class TestSetupPy:
         try:
             compiled_code = compile(code, str(setup_path), "exec")
             # Assert compilation succeeded and returned a code object
-            assert isinstance(
-                compiled_code, types.CodeType
-            ), "Compiled code should be a CodeType object"
+            assert isinstance(compiled_code, types.CodeType), (
+                "Compiled code should be a CodeType object"
+            )
         except SyntaxError as e:
             pytest.fail(f"setup.py has syntax error: {e}")
 

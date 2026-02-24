@@ -99,7 +99,9 @@ async def test_calculate_volume_minimum_data(volume_calculator):
 async def test_calculate_volume_error_handling(volume_calculator):
     """Test volume calculation error handling."""
     # Mock repository to raise exception
-    volume_calculator.candle_repo.get_range = AsyncMock(side_effect=Exception("Database error"))
+    volume_calculator.candle_repo.get_range = AsyncMock(
+        side_effect=Exception("Database error")
+    )
 
     result = await volume_calculator.calculate_volume("BTCUSDT", "1h", 24)
 

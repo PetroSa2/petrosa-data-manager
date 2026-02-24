@@ -106,10 +106,15 @@ async def start_backfill(
 async def list_backfill_jobs(
     status: str | None = Query(None, description="Filter by status"),
     symbol: str | None = Query(None, description="Filter by trading symbol"),
-    data_type: str
-    | None = Query(None, description="Filter by data type (candles, trades, depth, funding)"),
-    from_time: datetime | None = Query(None, alias="from", description="Start time for filtering"),
-    to_time: datetime | None = Query(None, alias="to", description="End time for filtering"),
+    data_type: str | None = Query(
+        None, description="Filter by data type (candles, trades, depth, funding)"
+    ),
+    from_time: datetime | None = Query(
+        None, alias="from", description="Start time for filtering"
+    ),
+    to_time: datetime | None = Query(
+        None, alias="to", description="End time for filtering"
+    ),
     limit: int = Query(
         100,
         ge=1,

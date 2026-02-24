@@ -35,13 +35,21 @@ def set_database_manager(manager: DatabaseManager) -> None:
 class AppConfigRequest(BaseModel):
     """Application configuration request model."""
 
-    enabled_strategies: list[str] = Field(..., description="List of enabled strategy IDs")
+    enabled_strategies: list[str] = Field(
+        ..., description="List of enabled strategy IDs"
+    )
     symbols: list[str] = Field(..., description="List of trading symbols")
     candle_periods: list[str] = Field(..., description="List of timeframes")
-    min_confidence: float = Field(0.6, ge=0.0, le=1.0, description="Minimum confidence threshold")
-    max_confidence: float = Field(0.95, ge=0.0, le=1.0, description="Maximum confidence threshold")
+    min_confidence: float = Field(
+        0.6, ge=0.0, le=1.0, description="Minimum confidence threshold"
+    )
+    max_confidence: float = Field(
+        0.95, ge=0.0, le=1.0, description="Maximum confidence threshold"
+    )
     max_positions: int = Field(10, ge=1, description="Maximum concurrent positions")
-    position_sizes: list[int] = Field([100, 200, 500, 1000], description="Available position sizes")
+    position_sizes: list[int] = Field(
+        [100, 200, 500, 1000], description="Available position sizes"
+    )
     changed_by: str = Field(..., description="Who is making the change")
     reason: str | None = Field(None, description="Reason for the change")
     validate_only: bool = Field(
@@ -90,7 +98,9 @@ class StrategyConfigResponse(BaseModel):
 class RollbackRequest(BaseModel):
     """Request model for rolling back configuration."""
 
-    target_version: int | None = Field(None, description="Specific version to rollback to")
+    target_version: int | None = Field(
+        None, description="Specific version to rollback to"
+    )
     changed_by: str = Field(..., description="Who is performing the rollback")
     reason: str | None = Field(None, description="Reason for rollback")
 
@@ -177,7 +187,9 @@ async def update_application_config(request: AppConfigRequest):
         )
 
         if not config:
-            raise HTTPException(status_code=500, detail="Failed to update configuration")
+            raise HTTPException(
+                status_code=500, detail="Failed to update configuration"
+            )
 
         return AppConfigResponse(
             **parameters,
@@ -206,7 +218,9 @@ async def get_strategy_config(
         raise HTTPException(status_code=503, detail="Database manager not available")
 
     try:
-        config = await db_manager.configuration.get_strategy_config(strategy_id, symbol, side)
+        config = await db_manager.configuration.get_strategy_config(
+            strategy_id, symbol, side
+        )
         if not config:
             return StrategyConfigResponse(
                 parameters={},
@@ -262,7 +276,9 @@ async def update_strategy_config(
         )
 
         if not config:
-            raise HTTPException(status_code=500, detail="Failed to update configuration")
+            raise HTTPException(
+                status_code=500, detail="Failed to update configuration"
+            )
 
         return StrategyConfigResponse(
             parameters=config["parameters"],
@@ -284,7 +300,9 @@ async def update_strategy_config(
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy_config(
     strategy_id: str,
-    symbol: str | None = Query(None, description="Symbol-specific configuration to delete"),
+    symbol: str | None = Query(
+        None, description="Symbol-specific configuration to delete"
+    ),
     side: str | None = Query(None, description="Side-specific configuration to delete"),
 ):
     """
@@ -371,7 +389,9 @@ async def rollback_app_config(request: RollbackRequest):
     return await get_application_config()
 
 
-@router.post("/rollback/strategies/{strategy_id}", response_model=StrategyConfigResponse)
+@router.post(
+    "/rollback/strategies/{strategy_id}", response_model=StrategyConfigResponse
+)
 async def rollback_strategy_config(
     strategy_id: str,
     request: RollbackRequest,
@@ -412,14 +432,18 @@ class ValidationError(BaseModel):
         ...,
         description="Error code (e.g., 'INVALID_TYPE', 'OUT_OF_RANGE', 'UNKNOWN_PARAMETER')",
     )
-    suggested_value: Any | None = Field(None, description="Suggested correct value if applicable")
+    suggested_value: Any | None = Field(
+        None, description="Suggested correct value if applicable"
+    )
 
 
 class CrossServiceConflict(BaseModel):
     """Cross-service configuration conflict."""
 
     service: str = Field(..., description="Service name with conflicting configuration")
-    conflict_type: str = Field(..., description="Type of conflict (e.g., 'PARAMETER_CONFLICT')")
+    conflict_type: str = Field(
+        ..., description="Type of conflict (e.g., 'PARAMETER_CONFLICT')"
+    )
     description: str = Field(..., description="Description of the conflict")
     resolution: str = Field(..., description="Suggested resolution")
 
@@ -427,11 +451,15 @@ class CrossServiceConflict(BaseModel):
 class ValidationResponse(BaseModel):
     """Standardized validation response across all services."""
 
-    validation_passed: bool = Field(..., description="Whether validation passed without errors")
+    validation_passed: bool = Field(
+        ..., description="Whether validation passed without errors"
+    )
     errors: list[ValidationError] = Field(
         default_factory=list, description="List of validation errors"
     )
-    warnings: list[str] = Field(default_factory=list, description="Non-blocking warnings")
+    warnings: list[str] = Field(
+        default_factory=list, description="Non-blocking warnings"
+    )
     suggested_fixes: list[str] = Field(
         default_factory=list, description="Actionable suggestions to fix errors"
     )
@@ -447,8 +475,12 @@ class ValidationResponse(BaseModel):
 class ConfigValidationRequest(BaseModel):
     """Request model for configuration validation."""
 
-    config_type: str = Field(..., description="Configuration type: 'application' or 'strategy'")
-    parameters: dict[str, Any] = Field(..., description="Configuration parameters to validate")
+    config_type: str = Field(
+        ..., description="Configuration type: 'application' or 'strategy'"
+    )
+    parameters: dict[str, Any] = Field(
+        ..., description="Configuration parameters to validate"
+    )
     strategy_id: str | None = Field(
         None,
         description="Strategy identifier (required for strategy config validation)",
@@ -461,7 +493,9 @@ class ConfigValidationRequest(BaseModel):
 
 # Service URLs for cross-service conflict detection
 SERVICE_URLS = {
-    "tradeengine": os.getenv("TRADEENGINE_URL", "http://petrosa-tradeengine-service:80"),
+    "tradeengine": os.getenv(
+        "TRADEENGINE_URL", "http://petrosa-tradeengine-service:80"
+    ),
     "ta-bot": os.getenv("TA_BOT_URL", "http://petrosa-ta-bot-service:80"),
     "realtime-strategies": os.getenv(
         "REALTIME_STRATEGIES_URL", "http://petrosa-realtime-strategies:80"
@@ -512,8 +546,14 @@ async def validate_config(request: ConfigValidationRequest):
 
         if request.config_type == "application":
             # Basic validation for application config
-            if "min_confidence" in request.parameters and "max_confidence" in request.parameters:
-                if request.parameters["min_confidence"] >= request.parameters["max_confidence"]:
+            if (
+                "min_confidence" in request.parameters
+                and "max_confidence" in request.parameters
+            ):
+                if (
+                    request.parameters["min_confidence"]
+                    >= request.parameters["max_confidence"]
+                ):
                     validation_errors.append(
                         ValidationError(
                             field="min_confidence",

@@ -49,7 +49,9 @@ def mock_schema_service():
 
     mock_service.register_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.get_schema = AsyncMock(return_value=mock_schema_def)
-    mock_service.get_schema_versions = AsyncMock(return_value=[{"version": 1, "status": "active"}])
+    mock_service.get_schema_versions = AsyncMock(
+        return_value=[{"version": 1, "status": "active"}]
+    )
     mock_service.update_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.deprecate_schema = AsyncMock(return_value=True)
     mock_service.list_schemas = AsyncMock(return_value=([mock_schema_def], 1))

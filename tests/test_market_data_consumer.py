@@ -77,7 +77,9 @@ class TestMarketDataConsumer:
         assert len(spans) >= 1
 
         # Verify the span has the correct kind (CONSUMER)
-        process_span = next((s for s in spans if s.name == "process_nats_message"), None)
+        process_span = next(
+            (s for s in spans if s.name == "process_nats_message"), None
+        )
         assert process_span is not None
         assert process_span.kind == trace.SpanKind.CONSUMER
 

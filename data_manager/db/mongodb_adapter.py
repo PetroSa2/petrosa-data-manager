@@ -40,7 +40,9 @@ class MongoDBAdapter(BaseAdapter):
             **kwargs: Additional MongoDB client options
         """
         if not MOTOR_AVAILABLE:
-            raise ImportError("Motor is required for MongoDB. Install with: pip install motor")
+            raise ImportError(
+                "Motor is required for MongoDB. Install with: pip install motor"
+            )
 
         super().__init__(connection_string, **kwargs)
 
@@ -237,7 +239,9 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("name", ASCENDING)]),
                     IndexModel([("version", ASCENDING)]),
                     IndexModel([("status", ASCENDING)]),
-                    IndexModel([("name", ASCENDING), ("version", ASCENDING)], unique=True),
+                    IndexModel(
+                        [("name", ASCENDING), ("version", ASCENDING)], unique=True
+                    ),
                     IndexModel([("created_at", ASCENDING)]),
                 ]
             else:
@@ -248,7 +252,9 @@ class MongoDBAdapter(BaseAdapter):
                 ]
 
             await coll.create_indexes(indexes)
-            logger.info(f"Indexes created/verified for MongoDB collection: {collection}")
+            logger.info(
+                f"Indexes created/verified for MongoDB collection: {collection}"
+            )
 
         except PyMongoError as e:
             logger.warning(f"Failed to ensure indexes for {collection}: {e}")
@@ -388,7 +394,9 @@ class MongoDBAdapter(BaseAdapter):
             return None
 
         try:
-            config = await self.db.strategy_configs_global.find_one({"strategy_id": strategy_id})
+            config = await self.db.strategy_configs_global.find_one(
+                {"strategy_id": strategy_id}
+            )
             return config
         except Exception as e:
             logger.error(f"Error fetching global config for {strategy_id}: {e}")
@@ -426,7 +434,9 @@ class MongoDBAdapter(BaseAdapter):
             )
 
             if result.upserted_id:
-                logger.info(f"Created global config for {strategy_id}: {result.upserted_id}")
+                logger.info(
+                    f"Created global config for {strategy_id}: {result.upserted_id}"
+                )
                 return str(result.upserted_id)
             else:
                 logger.info(f"Updated global config for {strategy_id}")
@@ -456,7 +466,9 @@ class MongoDBAdapter(BaseAdapter):
             )
             return config
         except Exception as e:
-            logger.error(f"Error fetching symbol config for {strategy_id}/{symbol}: {e}")
+            logger.error(
+                f"Error fetching symbol config for {strategy_id}/{symbol}: {e}"
+            )
             return None
 
     async def upsert_symbol_config(
@@ -502,7 +514,9 @@ class MongoDBAdapter(BaseAdapter):
                 return "updated"
 
         except Exception as e:
-            logger.error(f"Error upserting symbol config for {strategy_id}/{symbol}: {e}")
+            logger.error(
+                f"Error upserting symbol config for {strategy_id}/{symbol}: {e}"
+            )
             return None
 
     async def delete_global_config(self, strategy_id: str) -> bool:
@@ -519,7 +533,9 @@ class MongoDBAdapter(BaseAdapter):
             return False
 
         try:
-            result = await self.db.strategy_configs_global.delete_one({"strategy_id": strategy_id})
+            result = await self.db.strategy_configs_global.delete_one(
+                {"strategy_id": strategy_id}
+            )
             return result.deleted_count > 0
         except Exception as e:
             logger.error(f"Error deleting global config for {strategy_id}: {e}")
@@ -545,7 +561,9 @@ class MongoDBAdapter(BaseAdapter):
             )
             return result.deleted_count > 0
         except Exception as e:
-            logger.error(f"Error deleting symbol config for {strategy_id}/{symbol}: {e}")
+            logger.error(
+                f"Error deleting symbol config for {strategy_id}/{symbol}: {e}"
+            )
             return False
 
     async def list_all_strategy_ids(self) -> list[str]:

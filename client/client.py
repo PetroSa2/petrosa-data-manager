@@ -75,7 +75,9 @@ class DataManagerClient:
         self.api_key = api_key
 
         # Create HTTP client with connection pooling
-        limits = httpx.Limits(max_keepalive_connections=pool_size, max_connections=pool_size * 2)
+        limits = httpx.Limits(
+            max_keepalive_connections=pool_size, max_connections=pool_size * 2
+        )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
             limits=limits,

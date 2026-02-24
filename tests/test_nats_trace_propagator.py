@@ -246,7 +246,9 @@ class TestNATSTracePropagator(unittest.TestCase):
         ctx = NATSTracePropagator.extract_context(message_with_trace)
         self.assertIsNotNone(ctx, "Should extract valid context")
 
-        with self.tracer.start_as_current_span("consumer_span", context=ctx) as consumer_span:
+        with self.tracer.start_as_current_span(
+            "consumer_span", context=ctx
+        ) as consumer_span:
             consumer_trace_id = consumer_span.get_span_context().trace_id
             consumer_span_context = consumer_span.get_span_context()
 

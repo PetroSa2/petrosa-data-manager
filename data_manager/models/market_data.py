@@ -85,7 +85,9 @@ class MarkPrice(BaseModel):
     timestamp: datetime = Field(..., description="Mark price timestamp")
     mark_price: Decimal = Field(..., description="Mark price")
     index_price: Decimal | None = Field(None, description="Index price")
-    estimated_settle_price: Decimal | None = Field(None, description="Estimated settle price")
+    estimated_settle_price: Decimal | None = Field(
+        None, description="Estimated settle price"
+    )
     last_funding_rate: Decimal | None = Field(None, description="Last funding rate")
 
     class Config:

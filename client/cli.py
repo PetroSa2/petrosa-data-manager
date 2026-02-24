@@ -13,7 +13,9 @@ from data_manager_client import DataManagerClient
 
 
 @click.group()
-@click.option("--base-url", default="http://localhost:8000", help="Data Manager API base URL")
+@click.option(
+    "--base-url", default="http://localhost:8000", help="Data Manager API base URL"
+)
 @click.option("--timeout", default=30, help="Request timeout in seconds")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
@@ -47,7 +49,9 @@ def query(
     """Query records from a database collection."""
 
     async def _query():
-        client = DataManagerClient(base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"])
+        client = DataManagerClient(
+            base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"]
+        )
 
         try:
             filter_dict = json.loads(filter) if filter else None
@@ -90,7 +94,9 @@ def insert(
     """Insert records into a database collection."""
 
     async def _insert():
-        client = DataManagerClient(base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"])
+        client = DataManagerClient(
+            base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"]
+        )
 
         try:
             data_dict = json.loads(data)
@@ -117,7 +123,9 @@ def insert(
 @click.option("--end", help="End timestamp (ISO format)")
 @click.option("--limit", default=100, help="Maximum candles to return")
 @click.option("--offset", default=0, help="Number of candles to skip")
-@click.option("--sort-order", default="asc", type=click.Choice(["asc", "desc"]), help="Sort order")
+@click.option(
+    "--sort-order", default="asc", type=click.Choice(["asc", "desc"]), help="Sort order"
+)
 @click.pass_context
 def candles(
     ctx,
@@ -132,7 +140,9 @@ def candles(
     """Get OHLCV candle data for a trading pair."""
 
     async def _candles():
-        client = DataManagerClient(base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"])
+        client = DataManagerClient(
+            base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"]
+        )
 
         try:
             start_dt = datetime.fromisoformat(start) if start else None
@@ -162,7 +172,9 @@ def candles(
 @click.option("--end", help="End timestamp (ISO format)")
 @click.option("--limit", default=100, help="Maximum trades to return")
 @click.option("--offset", default=0, help="Number of trades to skip")
-@click.option("--sort-order", default="asc", type=click.Choice(["asc", "desc"]), help="Sort order")
+@click.option(
+    "--sort-order", default="asc", type=click.Choice(["asc", "desc"]), help="Sort order"
+)
 @click.pass_context
 def trades(
     ctx,
@@ -176,7 +188,9 @@ def trades(
     """Get individual trade data for a trading pair."""
 
     async def _trades():
-        client = DataManagerClient(base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"])
+        client = DataManagerClient(
+            base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"]
+        )
 
         try:
             start_dt = datetime.fromisoformat(start) if start else None
@@ -206,7 +220,9 @@ def depth(ctx, pair: str):
     """Get current order book depth for a trading pair."""
 
     async def _depth():
-        client = DataManagerClient(base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"])
+        client = DataManagerClient(
+            base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"]
+        )
 
         try:
             result = await client.get_depth(pair=pair)
@@ -224,7 +240,9 @@ def health(ctx):
     """Check Data Manager API health status."""
 
     async def _health():
-        client = DataManagerClient(base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"])
+        client = DataManagerClient(
+            base_url=ctx.obj["base_url"], timeout=ctx.obj["timeout"]
+        )
 
         try:
             result = await client.health()

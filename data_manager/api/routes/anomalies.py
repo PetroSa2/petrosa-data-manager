@@ -18,9 +18,15 @@ router = APIRouter()
 async def get_anomalies(
     pair: str = Query(..., description="Trading pair symbol"),
     severity: str | None = Query(None, description="Filter by severity"),
-    status: str | None = Query(None, description="Filter by status (new, acknowledged, resolved)"),
-    from_time: datetime | None = Query(None, alias="from", description="Start time for filtering"),
-    to_time: datetime | None = Query(None, alias="to", description="End time for filtering"),
+    status: str | None = Query(
+        None, description="Filter by status (new, acknowledged, resolved)"
+    ),
+    from_time: datetime | None = Query(
+        None, alias="from", description="Start time for filtering"
+    ),
+    to_time: datetime | None = Query(
+        None, alias="to", description="End time for filtering"
+    ),
     limit: int = Query(
         100,
         ge=1,
@@ -28,7 +34,9 @@ async def get_anomalies(
         description="Maximum number of anomalies (default: 100, max: 1000)",
     ),
     offset: int = Query(0, ge=0, description="Pagination offset (default: 0)"),
-    sort_by: str = Query("timestamp", description="Sort by field (timestamp, severity)"),
+    sort_by: str = Query(
+        "timestamp", description="Sort by field (timestamp, severity)"
+    ),
     sort_order: str = Query("desc", description="Sort order (asc, desc)"),
 ) -> dict:
     """
@@ -75,7 +83,8 @@ async def get_anomalies(
                     isinstance(a["timestamp"], datetime)
                     and a["timestamp"] >= from_time
                     or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00")) >= from_time
+                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00"))
+                    >= from_time
                 )
             ]
 
@@ -88,7 +97,8 @@ async def get_anomalies(
                     isinstance(a["timestamp"], datetime)
                     and a["timestamp"] <= to_time
                     or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00")) <= to_time
+                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00"))
+                    <= to_time
                 )
             ]
 
@@ -155,7 +165,9 @@ async def get_anomalies(
 async def trigger_anomaly_detection(
     pair: str = Query(..., description="Trading pair symbol"),
     timeframe: str = Query("1h", description="Timeframe"),
-    method: str = Query("zscore", description="Detection method (zscore, mad, isolation_forest)"),
+    method: str = Query(
+        "zscore", description="Detection method (zscore, mad, isolation_forest)"
+    ),
 ) -> dict:
     """
     Trigger on-demand anomaly detection.

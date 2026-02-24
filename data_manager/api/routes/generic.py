@@ -65,7 +65,9 @@ async def _validate_data_against_schema(
         raise
     except Exception as e:
         logger.error(f"Schema validation error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Schema validation error: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Schema validation error: {str(e)}"
+        )
 
 
 class QueryRequest(BaseModel):
@@ -88,7 +90,9 @@ class QueryRequest(BaseModel):
 class InsertRequest(BaseModel):
     """Generic insert request model."""
 
-    data: dict[str, Any] | list[dict[str, Any]] = Field(..., description="Data to insert")
+    data: dict[str, Any] | list[dict[str, Any]] = Field(
+        ..., description="Data to insert"
+    )
     schema: str | None = Field(None, description="Schema name for validation")
     validate: bool = Field(False, description="Enable schema validation")
 
@@ -96,7 +100,9 @@ class InsertRequest(BaseModel):
 class UpdateRequest(BaseModel):
     """Generic update request model."""
 
-    filter: dict[str, Any] = Field(..., description="Filter to identify records to update")
+    filter: dict[str, Any] = Field(
+        ..., description="Filter to identify records to update"
+    )
     data: dict[str, Any] = Field(..., description="Data to update")
     upsert: bool = Field(False, description="Create record if not found")
     schema: str | None = Field(None, description="Schema name for validation")
@@ -106,13 +112,17 @@ class UpdateRequest(BaseModel):
 class DeleteRequest(BaseModel):
     """Generic delete request model."""
 
-    filter: dict[str, Any] = Field(..., description="Filter to identify records to delete")
+    filter: dict[str, Any] = Field(
+        ..., description="Filter to identify records to delete"
+    )
 
 
 class BatchRequest(BaseModel):
     """Generic batch operation request model."""
 
-    operations: list[dict[str, Any]] = Field(..., description="List of operations to perform")
+    operations: list[dict[str, Any]] = Field(
+        ..., description="List of operations to perform"
+    )
 
 
 @router.get("/api/v1/{database}/{collection}")
@@ -122,9 +132,13 @@ async def get_records(
     request: Request,
     filter: str | None = Query(None, description="JSON filter conditions"),
     sort: str | None = Query(None, description="JSON sort specification"),
-    limit: int = Query(constants.API_DEFAULT_PAGE_SIZE, ge=1, le=constants.API_MAX_PAGE_SIZE),
+    limit: int = Query(
+        constants.API_DEFAULT_PAGE_SIZE, ge=1, le=constants.API_MAX_PAGE_SIZE
+    ),
     offset: int = Query(0, ge=0),
-    fields: str | None = Query(None, description="Comma-separated list of fields to include"),
+    fields: str | None = Query(
+        None, description="Comma-separated list of fields to include"
+    ),
 ) -> dict[str, Any]:
     """
     Query records from a database collection.
@@ -195,7 +209,9 @@ async def get_records(
         }
 
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON in query parameters: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid JSON in query parameters: {e}"
+        )
     except Exception as e:
         logger.error(f"Error querying {database}.{collection}: {e}", exc_info=True)
         api_module.db_manager.increment_error_count(database)
@@ -262,7 +278,9 @@ async def insert_records(
         }
 
     except Exception as e:
-        logger.error(f"Error inserting into {database}.{collection}: {e}", exc_info=True)
+        logger.error(
+            f"Error inserting into {database}.{collection}: {e}", exc_info=True
+        )
         api_module.db_manager.increment_error_count(database)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -462,7 +480,9 @@ async def batch_operations(
 
                 # Query and update records
                 if database == "mysql":
-                    records = adapter.query_range(collection, datetime.min, datetime.max, None)
+                    records = adapter.query_range(
+                        collection, datetime.min, datetime.max, None
+                    )
                 else:
                     records = await adapter.query_range(
                         collection, datetime.min, datetime.max, None
@@ -480,7 +500,9 @@ async def batch_operations(
                 filter_dict = operation.get("filter", {})
 
                 if database == "mysql":
-                    records = adapter.query_range(collection, datetime.min, datetime.max, None)
+                    records = adapter.query_range(
+                        collection, datetime.min, datetime.max, None
+                    )
                 else:
                     records = await adapter.query_range(
                         collection, datetime.min, datetime.max, None
@@ -504,7 +526,9 @@ async def batch_operations(
         }
 
     except Exception as e:
-        logger.error(f"Error in batch operation on {database}.{collection}: {e}", exc_info=True)
+        logger.error(
+            f"Error in batch operation on {database}.{collection}: {e}", exc_info=True
+        )
         api_module.db_manager.increment_error_count(database)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -543,7 +567,9 @@ def _apply_filter(
     return filtered
 
 
-def _apply_sort(records: list[dict[str, Any]], sort_dict: dict[str, int]) -> list[dict[str, Any]]:
+def _apply_sort(
+    records: list[dict[str, Any]], sort_dict: dict[str, int]
+) -> list[dict[str, Any]]:
     """Apply sorting to records."""
     if not sort_dict:
         return records
@@ -564,7 +590,9 @@ def _apply_field_selection(
 
     filtered_records = []
     for record in records:
-        filtered_record = {field: record.get(field) for field in fields if field in record}
+        filtered_record = {
+            field: record.get(field) for field in fields if field in record
+        }
         filtered_records.append(filtered_record)
 
     return filtered_records

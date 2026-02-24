@@ -70,7 +70,9 @@ class AuditScheduler:
             backfill_orchestrator: Backfill orchestrator for auto-backfill (optional)
         """
         self.db_manager = db_manager
-        self.gap_detector = GapDetector(db_manager, backfill_orchestrator=backfill_orchestrator)
+        self.gap_detector = GapDetector(
+            db_manager, backfill_orchestrator=backfill_orchestrator
+        )
         self.duplicate_detector = DuplicateDetector(db_manager)
         self.health_scorer = HealthScorer(db_manager)
         self.leader_election = leader_election
@@ -83,7 +85,9 @@ class AuditScheduler:
         # Check if leader election is enabled and required
         if constants.ENABLE_LEADER_ELECTION:
             if not self.leader_election:
-                logger.error("Leader election is enabled but no LeaderElectionManager provided")
+                logger.error(
+                    "Leader election is enabled but no LeaderElectionManager provided"
+                )
                 return
 
             # Check if this pod is the leader
@@ -96,7 +100,8 @@ class AuditScheduler:
                 return
 
             logger.info(
-                f"Pod {self.leader_election.pod_id} is the LEADER. " f"Starting audit scheduler."
+                f"Pod {self.leader_election.pod_id} is the LEADER. "
+                f"Starting audit scheduler."
             )
             audit_leader_status.set(1)
         else:
@@ -116,7 +121,9 @@ class AuditScheduler:
                     and self.leader_election
                     and not self.leader_election.is_leader
                 ):
-                    logger.warning("Lost leadership! Stopping audit scheduler on this pod.")
+                    logger.warning(
+                        "Lost leadership! Stopping audit scheduler on this pod."
+                    )
                     audit_leader_status.set(0)
                     break
 
@@ -152,15 +159,19 @@ class AuditScheduler:
             for timeframe in constants.SUPPORTED_TIMEFRAMES:
                 try:
                     # Detect gaps
-                    gaps = await self.gap_detector.detect_gaps(symbol, timeframe, start, end)
+                    gaps = await self.gap_detector.detect_gaps(
+                        symbol, timeframe, start, end
+                    )
                     total_gaps += len(gaps)
 
                     if gaps:
-                        logger.warning(f"Found {len(gaps)} gaps for {symbol} {timeframe}")
-                        # Update metrics
-                        audit_gaps_detected.labels(symbol=symbol, timeframe=timeframe).inc(
-                            len(gaps)
+                        logger.warning(
+                            f"Found {len(gaps)} gaps for {symbol} {timeframe}"
                         )
+                        # Update metrics
+                        audit_gaps_detected.labels(
+                            symbol=symbol, timeframe=timeframe
+                        ).inc(len(gaps))
 
                     # Detect duplicates
                     duplicates = await self.duplicate_detector.detect_duplicates(
@@ -169,11 +180,13 @@ class AuditScheduler:
                     total_duplicates += duplicates
 
                     if duplicates > 0:
-                        logger.warning(f"Found {duplicates} duplicates for {symbol} {timeframe}")
-                        # Update metrics
-                        audit_duplicates_detected.labels(symbol=symbol, timeframe=timeframe).inc(
-                            duplicates
+                        logger.warning(
+                            f"Found {duplicates} duplicates for {symbol} {timeframe}"
                         )
+                        # Update metrics
+                        audit_duplicates_detected.labels(
+                            symbol=symbol, timeframe=timeframe
+                        ).inc(duplicates)
 
                     # Calculate health metrics (now includes gaps and duplicates)
                     health = await self.health_scorer.calculate_health(
@@ -227,7 +240,9 @@ class AuditScheduler:
         """
         status = {
             "running": self.running,
-            "last_audit_time": self.last_audit_time.isoformat() if self.last_audit_time else None,
+            "last_audit_time": self.last_audit_time.isoformat()
+            if self.last_audit_time
+            else None,
         }
 
         if self.leader_election:
