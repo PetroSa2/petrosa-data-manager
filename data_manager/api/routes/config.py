@@ -8,10 +8,10 @@ Includes auditing and rollback capabilities.
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Path, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
 
 from data_manager.db.database_manager import DatabaseManager
@@ -98,9 +98,9 @@ class StrategyConfigResponse(BaseModel):
 class RollbackRequest(BaseModel):
     """Request model for rolling back configuration."""
 
-    target_version: Optional[int] = Field(None, description="Specific version to rollback to")
+    target_version: int | None = Field(None, description="Specific version to rollback to")
     changed_by: str = Field(..., description="Who is performing the rollback")
-    reason: Optional[str] = Field(None, description="Reason for rollback")
+    reason: str | None = Field(None, description="Reason for rollback")
 
 
 @router.get("/application", response_model=AppConfigResponse)

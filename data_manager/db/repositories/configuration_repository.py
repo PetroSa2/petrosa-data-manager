@@ -4,7 +4,7 @@ Repository for configuration management and audit trails.
 
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.config import ConfigAudit, ConfigurationDocument
@@ -19,7 +19,7 @@ class ConfigurationRepository(BaseRepository):
     Provides auditing and rollback capabilities.
     """
 
-    async def get_app_config(self) -> Optional[dict[str, Any]]:
+    async def get_app_config(self) -> dict[str, Any] | None:
         """Get the current application configuration."""
         if not self.mongodb or not self.mongodb.is_connected:
             return None
@@ -38,8 +38,8 @@ class ConfigurationRepository(BaseRepository):
         self, 
         parameters: dict[str, Any], 
         changed_by: str, 
-        reason: Optional[str] = None
-    ) -> Optional[dict[str, Any]]:
+        reason: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Update application configuration and create audit record.
         """
@@ -90,9 +90,9 @@ class ConfigurationRepository(BaseRepository):
     async def get_strategy_config(
         self, 
         strategy_id: str, 
-        symbol: Optional[str] = None,
-        side: Optional[str] = None
-    ) -> Optional[dict[str, Any]]:
+        symbol: str | None = None,
+        side: str | None = None
+    ) -> dict[str, Any] | None:
         """Get strategy configuration (global, symbol, or symbol-side)."""
         if not self.mongodb or not self.mongodb.is_connected:
             return None
@@ -114,11 +114,11 @@ class ConfigurationRepository(BaseRepository):
         strategy_id: str,
         parameters: dict[str, Any],
         changed_by: str,
-        symbol: Optional[str] = None,
-        side: Optional[str] = None,
-        reason: Optional[str] = None,
+        symbol: str | None = None,
+        side: str | None = None,
+        reason: str | None = None,
         action: str = "UPDATE"
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Update strategy configuration and create audit record."""
         if not self.mongodb or not self.mongodb.is_connected:
             return None
@@ -177,9 +177,9 @@ class ConfigurationRepository(BaseRepository):
     async def get_audit_trail(
         self,
         config_type: str,
-        strategy_id: Optional[str] = None,
-        symbol: Optional[str] = None,
-        side: Optional[str] = None,
+        strategy_id: str | None = None,
+        symbol: str | None = None,
+        side: str | None = None,
         limit: int = 100
     ) -> list[dict[str, Any]]:
         """Get audit trail for a configuration."""
@@ -215,12 +215,12 @@ class ConfigurationRepository(BaseRepository):
         self,
         config_type: str,
         changed_by: str,
-        strategy_id: Optional[str] = None,
-        symbol: Optional[str] = None,
-        side: Optional[str] = None,
-        target_version: Optional[int] = None,
-        reason: Optional[str] = None
-    ) -> tuple[bool, Optional[str], Optional[dict[str, Any]]]:
+        strategy_id: str | None = None,
+        symbol: str | None = None,
+        side: str | None = None,
+        target_version: int | None = None,
+        reason: str | None = None
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Rollback configuration to a previous version."""
         if not self.mongodb or not self.mongodb.is_connected:
             return False, "Database not connected", None
