@@ -46,7 +46,6 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Copy application code
 COPY constants.py .
-COPY otel_init.py .
 COPY data_manager/ data_manager/
 
 # Create non-root user
@@ -64,4 +63,3 @@ EXPOSE 8000
 
 # Run the application
 CMD ["python", "-m", "data_manager.main"]
-
