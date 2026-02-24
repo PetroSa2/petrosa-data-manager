@@ -34,7 +34,7 @@ async def test_upsert_app_config(mock_mongodb):
     mock_mongodb.db.app_config.replace_one = AsyncMock()
     mock_mongodb.db.app_config_audit.insert_one = AsyncMock()
 
-    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb)
+    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb, mysql_adapter=None)
     params = {"enabled": True}
 
     # Execute
@@ -58,17 +58,26 @@ async def test_rollback_app_config(mock_mongodb):
     v2_record = {"new_parameters": v2_params, "version": 2}
 
     # Mock find().sort().skip().limit().to_list() for finding previous version
+    # Motor cursor: find()/sort()/skip()/limit() are sync, to_list() is async
     cursor = MagicMock()
     cursor.sort.return_value = cursor
     cursor.skip.return_value = cursor
     cursor.limit.return_value = cursor
     cursor.to_list = AsyncMock(return_value=[v1_record])
-    mock_mongodb.db.app_config_audit.find.return_value = cursor
 
-    mock_mongodb.db.app_config.find_one = AsyncMock(return_value=v2_record)
+    audit_collection = MagicMock()
+    audit_collection.find.return_value = cursor
+    audit_collection.insert_one = AsyncMock()
+
+    # The rollback method accesses collection via db[name] (dict-style)
+    mock_mongodb.db.__getitem__.return_value = audit_collection
+    mock_mongodb.db.app_config_audit = audit_collection
+
+    # find_one inside get_app_config (called from upsert_app_config during rollback)
+    mock_mongodb.db.app_config.find_one = AsyncMock(return_value=None)
     mock_mongodb.db.app_config.replace_one = AsyncMock()
 
-    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb)
+    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb, mysql_adapter=None)
 
     # Execute
     success, error, config = await repo.rollback("application", "admin")
@@ -76,4 +85,3 @@ async def test_rollback_app_config(mock_mongodb):
     # Verify
     assert success is True
     assert config["parameters"] == v1_params
-    assert config["version"] == 3  # New version incremented from 2

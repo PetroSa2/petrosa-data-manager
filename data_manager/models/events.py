@@ -3,10 +3,11 @@ NATS event message models.
 """
 
 from datetime import datetime
-from enum import Enum, StrEnum
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from strenum import StrEnum
 
 
 class EventType(StrEnum):
