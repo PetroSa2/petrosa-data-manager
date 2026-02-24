@@ -621,9 +621,7 @@ class SchemaInitializer:
             result[database] = []
             for schema in schema_list:
                 # Extract schema name from the schema definition
-                schema_def_name = (
-                    schema.schema.get("title", "").lower().replace(" ", "_")
-                )
+                schema_def_name = schema.schema.get("title", "").lower().replace(" ", "_")
                 if not schema_def_name:
                     # Fallback to a generic name based on database
                     schema_def_name = f"{database}_schema_{len(result[database]) + 1}"

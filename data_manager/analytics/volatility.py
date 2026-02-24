@@ -27,9 +27,7 @@ class VolatilityCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_volatility(
         self,
@@ -87,8 +85,7 @@ class VolatilityCalculator:
             # Parkinson volatility (high-low range based)
             df["hl_ratio"] = np.log(df["high"] / df["low"])
             parkinson_series = np.sqrt(
-                (1 / (4 * np.log(2)))
-                * (df["hl_ratio"] ** 2).rolling(window=rolling_window).mean()
+                (1 / (4 * np.log(2))) * (df["hl_ratio"] ** 2).rolling(window=rolling_window).mean()
             )
             parkinson = parkinson_series.iloc[-1] if len(parkinson_series) > 0 else None
 
@@ -123,9 +120,7 @@ class VolatilityCalculator:
                 symbol=symbol,
                 timeframe=timeframe,
                 rolling_stddev=(
-                    Decimal(str(rolling_stddev))
-                    if not np.isnan(rolling_stddev)
-                    else Decimal("0")
+                    Decimal(str(rolling_stddev)) if not np.isnan(rolling_stddev) else Decimal("0")
                 ),
                 annualized_volatility=(
                     Decimal(str(annualized_volatility))
@@ -133,18 +128,14 @@ class VolatilityCalculator:
                     else Decimal("0")
                 ),
                 parkinson=(
-                    Decimal(str(parkinson))
-                    if parkinson and not np.isnan(parkinson)
-                    else None
+                    Decimal(str(parkinson)) if parkinson and not np.isnan(parkinson) else None
                 ),
                 garman_klass=(
                     Decimal(str(garman_klass))
                     if garman_klass and not np.isnan(garman_klass)
                     else None
                 ),
-                volatility_of_volatility=Decimal(str(vov))
-                if not np.isnan(vov)
-                else None,
+                volatility_of_volatility=Decimal(str(vov)) if not np.isnan(vov) else None,
                 metadata=metadata,
             )
 

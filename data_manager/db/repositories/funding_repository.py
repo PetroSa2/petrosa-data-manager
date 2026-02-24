@@ -67,9 +67,7 @@ class FundingRepository(BaseRepository):
             logger.error(f"Failed to insert funding rate batch: {e}")
             return 0
 
-    async def get_range(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> list[dict]:
+    async def get_range(self, symbol: str, start: datetime, end: datetime) -> list[dict]:
         """
         Get funding rates within time range.
 

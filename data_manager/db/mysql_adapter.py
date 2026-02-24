@@ -56,8 +56,7 @@ class MySQLAdapter(BaseAdapter):
         """
         if not SQLALCHEMY_AVAILABLE:
             raise ImportError(
-                "SQLAlchemy and MySQL driver required. "
-                "Install: pip install sqlalchemy pymysql"
+                "SQLAlchemy and MySQL driver required. " "Install: pip install sqlalchemy pymysql"
             )
 
         # Use provided connection string or build from constants
@@ -91,16 +90,10 @@ class MySQLAdapter(BaseAdapter):
     def _build_connection_string(self) -> str:
         """Build MySQL connection string from constants."""
         user = constants.MYSQL_USER if hasattr(constants, "MYSQL_USER") else "root"
-        password = (
-            constants.MYSQL_PASSWORD if hasattr(constants, "MYSQL_PASSWORD") else ""
-        )
+        password = constants.MYSQL_PASSWORD if hasattr(constants, "MYSQL_PASSWORD") else ""
         host = constants.MYSQL_HOST if hasattr(constants, "MYSQL_HOST") else "localhost"
         port = constants.MYSQL_PORT if hasattr(constants, "MYSQL_PORT") else 3306
-        database = (
-            constants.MYSQL_DB
-            if hasattr(constants, "MYSQL_DB")
-            else "petrosa_data_manager"
-        )
+        database = constants.MYSQL_DB if hasattr(constants, "MYSQL_DB") else "petrosa_data_manager"
 
         return f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 
@@ -264,13 +257,9 @@ class MySQLAdapter(BaseAdapter):
                     record = instance.model_dump()
                     # Ensure datetime fields are proper datetime objects
                     for key, value in record.items():
-                        if isinstance(value, str) and key.endswith(
-                            ("_at", "timestamp")
-                        ):
+                        if isinstance(value, str) and key.endswith(("_at", "timestamp")):
                             try:
-                                record[key] = datetime.fromisoformat(
-                                    value.replace("Z", "+00:00")
-                                )
+                                record[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
                             except (ValueError, TypeError):
                                 pass
                     records.append(record)
@@ -335,9 +324,7 @@ class MySQLAdapter(BaseAdapter):
             table = self._get_table(collection)
 
             # Build query
-            query = select(table).where(
-                and_(table.c.timestamp >= start, table.c.timestamp < end)
-            )
+            query = select(table).where(and_(table.c.timestamp >= start, table.c.timestamp < end))
 
             if symbol:
                 query = query.where(table.c.symbol == symbol)

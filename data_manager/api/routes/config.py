@@ -35,21 +35,13 @@ def set_database_manager(manager: DatabaseManager) -> None:
 class AppConfigRequest(BaseModel):
     """Application configuration request model."""
 
-    enabled_strategies: list[str] = Field(
-        ..., description="List of enabled strategy IDs"
-    )
+    enabled_strategies: list[str] = Field(..., description="List of enabled strategy IDs")
     symbols: list[str] = Field(..., description="List of trading symbols")
     candle_periods: list[str] = Field(..., description="List of timeframes")
-    min_confidence: float = Field(
-        0.6, ge=0.0, le=1.0, description="Minimum confidence threshold"
-    )
-    max_confidence: float = Field(
-        0.95, ge=0.0, le=1.0, description="Maximum confidence threshold"
-    )
+    min_confidence: float = Field(0.6, ge=0.0, le=1.0, description="Minimum confidence threshold")
+    max_confidence: float = Field(0.95, ge=0.0, le=1.0, description="Maximum confidence threshold")
     max_positions: int = Field(10, ge=1, description="Maximum concurrent positions")
-    position_sizes: list[int] = Field(
-        [100, 200, 500, 1000], description="Available position sizes"
-    )
+    position_sizes: list[int] = Field([100, 200, 500, 1000], description="Available position sizes")
     changed_by: str = Field(..., description="Who is making the change")
     reason: str | None = Field(None, description="Reason for the change")
     validate_only: bool = Field(
@@ -140,8 +132,12 @@ async def get_application_config():
             position_sizes=params.get("position_sizes", [100, 200, 500, 1000]),
             version=config.get("version", 0),
             source="mongodb",
-            created_at=config.get("created_at").isoformat() if isinstance(config.get("created_at"), datetime) else config.get("created_at", ""),
-            updated_at=config.get("updated_at").isoformat() if isinstance(config.get("updated_at"), datetime) else config.get("updated_at", ""),
+            created_at=config.get("created_at").isoformat()
+            if isinstance(config.get("created_at"), datetime)
+            else config.get("created_at", ""),
+            updated_at=config.get("updated_at").isoformat()
+            if isinstance(config.get("updated_at"), datetime)
+            else config.get("updated_at", ""),
         )
 
     except Exception as e:
@@ -177,9 +173,7 @@ async def update_application_config(request: AppConfigRequest):
         }
 
         config = await db_manager.configuration.upsert_app_config(
-            parameters=parameters,
-            changed_by=request.changed_by,
-            reason=request.reason
+            parameters=parameters, changed_by=request.changed_by, reason=request.reason
         )
 
         if not config:
@@ -189,8 +183,12 @@ async def update_application_config(request: AppConfigRequest):
             **parameters,
             version=config["version"],
             source="mongodb",
-            created_at=config["created_at"].isoformat() if isinstance(config["created_at"], datetime) else config["created_at"],
-            updated_at=config["updated_at"].isoformat() if isinstance(config["updated_at"], datetime) else config["updated_at"]
+            created_at=config["created_at"].isoformat()
+            if isinstance(config["created_at"], datetime)
+            else config["created_at"],
+            updated_at=config["updated_at"].isoformat()
+            if isinstance(config["updated_at"], datetime)
+            else config["updated_at"],
         )
     except Exception as e:
         logger.error(f"Error updating application config: {e}")
@@ -224,8 +222,12 @@ async def get_strategy_config(
             version=config.get("version", 0),
             source="mongodb",
             is_override=bool(symbol or side),
-            created_at=config.get("created_at").isoformat() if isinstance(config.get("created_at"), datetime) else config.get("created_at", ""),
-            updated_at=config.get("updated_at").isoformat() if isinstance(config.get("updated_at"), datetime) else config.get("updated_at", ""),
+            created_at=config.get("created_at").isoformat()
+            if isinstance(config.get("created_at"), datetime)
+            else config.get("created_at", ""),
+            updated_at=config.get("updated_at").isoformat()
+            if isinstance(config.get("updated_at"), datetime)
+            else config.get("updated_at", ""),
         )
     except Exception as e:
         logger.error(f"Error fetching strategy config: {e}")
@@ -256,7 +258,7 @@ async def update_strategy_config(
             changed_by=request.changed_by,
             symbol=symbol,
             side=side,
-            reason=request.reason
+            reason=request.reason,
         )
 
         if not config:
@@ -267,8 +269,12 @@ async def update_strategy_config(
             version=config["version"],
             source="mongodb",
             is_override=bool(symbol or side),
-            created_at=config["created_at"].isoformat() if isinstance(config["created_at"], datetime) else config["created_at"],
-            updated_at=config["updated_at"].isoformat() if isinstance(config["updated_at"], datetime) else config["updated_at"]
+            created_at=config["created_at"].isoformat()
+            if isinstance(config["created_at"], datetime)
+            else config["created_at"],
+            updated_at=config["updated_at"].isoformat()
+            if isinstance(config["updated_at"], datetime)
+            else config["updated_at"],
         )
     except Exception as e:
         logger.error(f"Error updating strategy config: {e}")
@@ -278,9 +284,7 @@ async def update_strategy_config(
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy_config(
     strategy_id: str,
-    symbol: str | None = Query(
-        None, description="Symbol-specific configuration to delete"
-    ),
+    symbol: str | None = Query(None, description="Symbol-specific configuration to delete"),
     side: str | None = Query(None, description="Side-specific configuration to delete"),
 ):
     """
@@ -338,7 +342,7 @@ async def get_strategy_audit_trail(
     strategy_id: str,
     symbol: str | None = Query(None),
     side: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=1000)
+    limit: int = Query(100, ge=1, le=1000),
 ):
     """Get strategy configuration audit trail."""
     if not db_manager or not db_manager.configuration:
@@ -358,7 +362,7 @@ async def rollback_app_config(request: RollbackRequest):
         config_type="application",
         changed_by=request.changed_by,
         target_version=request.target_version,
-        reason=request.reason
+        reason=request.reason,
     )
 
     if not success:
@@ -372,7 +376,7 @@ async def rollback_strategy_config(
     strategy_id: str,
     request: RollbackRequest,
     symbol: str | None = Query(None),
-    side: str | None = Query(None)
+    side: str | None = Query(None),
 ):
     """Rollback strategy configuration."""
     if not db_manager or not db_manager.configuration:
@@ -385,7 +389,7 @@ async def rollback_strategy_config(
         side=side,
         changed_by=request.changed_by,
         target_version=request.target_version,
-        reason=request.reason
+        reason=request.reason,
     )
 
     if not success:
@@ -408,18 +412,14 @@ class ValidationError(BaseModel):
         ...,
         description="Error code (e.g., 'INVALID_TYPE', 'OUT_OF_RANGE', 'UNKNOWN_PARAMETER')",
     )
-    suggested_value: Optional[Any] = Field(
-        None, description="Suggested correct value if applicable"
-    )
+    suggested_value: Any | None = Field(None, description="Suggested correct value if applicable")
 
 
 class CrossServiceConflict(BaseModel):
     """Cross-service configuration conflict."""
 
     service: str = Field(..., description="Service name with conflicting configuration")
-    conflict_type: str = Field(
-        ..., description="Type of conflict (e.g., 'PARAMETER_CONFLICT')"
-    )
+    conflict_type: str = Field(..., description="Type of conflict (e.g., 'PARAMETER_CONFLICT')")
     description: str = Field(..., description="Description of the conflict")
     resolution: str = Field(..., description="Suggested resolution")
 
@@ -427,15 +427,11 @@ class CrossServiceConflict(BaseModel):
 class ValidationResponse(BaseModel):
     """Standardized validation response across all services."""
 
-    validation_passed: bool = Field(
-        ..., description="Whether validation passed without errors"
-    )
+    validation_passed: bool = Field(..., description="Whether validation passed without errors")
     errors: list[ValidationError] = Field(
         default_factory=list, description="List of validation errors"
     )
-    warnings: list[str] = Field(
-        default_factory=list, description="Non-blocking warnings"
-    )
+    warnings: list[str] = Field(default_factory=list, description="Non-blocking warnings")
     suggested_fixes: list[str] = Field(
         default_factory=list, description="Actionable suggestions to fix errors"
     )
@@ -451,22 +447,16 @@ class ValidationResponse(BaseModel):
 class ConfigValidationRequest(BaseModel):
     """Request model for configuration validation."""
 
-    config_type: str = Field(
-        ..., description="Configuration type: 'application' or 'strategy'"
-    )
-    parameters: dict[str, Any] = Field(
-        ..., description="Configuration parameters to validate"
-    )
-    strategy_id: Optional[str] = Field(
+    config_type: str = Field(..., description="Configuration type: 'application' or 'strategy'")
+    parameters: dict[str, Any] = Field(..., description="Configuration parameters to validate")
+    strategy_id: str | None = Field(
         None,
         description="Strategy identifier (required for strategy config validation)",
     )
-    symbol: Optional[str] = Field(
+    symbol: str | None = Field(
         None, description="Trading symbol (optional, for symbol-specific validation)"
     )
-    side: Optional[str] = Field(
-        None, description="Side-specific validation"
-    )
+    side: str | None = Field(None, description="Side-specific validation")
 
 
 # Service URLs for cross-service conflict detection
@@ -482,8 +472,8 @@ SERVICE_URLS = {
 async def detect_cross_service_conflicts(
     config_type: str,
     parameters: dict[str, Any],
-    strategy_id: Optional[str] = None,
-    symbol: Optional[str] = None,
+    strategy_id: str | None = None,
+    symbol: str | None = None,
 ) -> list[CrossServiceConflict]:
     """Detect cross-service configuration conflicts."""
     conflicts = []
@@ -500,7 +490,9 @@ def validate_application_config(request: AppConfigRequest) -> tuple[bool, list[s
     """Validate application configuration parameters."""
     errors = []
     if request.min_confidence >= request.max_confidence:
-        errors.append(f"min_confidence ({request.min_confidence}) must be less than max_confidence ({request.max_confidence})")
+        errors.append(
+            f"min_confidence ({request.min_confidence}) must be less than max_confidence ({request.max_confidence})"
+        )
     if not request.enabled_strategies:
         errors.append("enabled_strategies cannot be empty")
     if not request.symbols:
@@ -522,11 +514,13 @@ async def validate_config(request: ConfigValidationRequest):
             # Basic validation for application config
             if "min_confidence" in request.parameters and "max_confidence" in request.parameters:
                 if request.parameters["min_confidence"] >= request.parameters["max_confidence"]:
-                    validation_errors.append(ValidationError(
-                        field="min_confidence",
-                        message="min_confidence must be less than max_confidence",
-                        code="VALIDATION_ERROR"
-                    ))
+                    validation_errors.append(
+                        ValidationError(
+                            field="min_confidence",
+                            message="min_confidence must be less than max_confidence",
+                            code="VALIDATION_ERROR",
+                        )
+                    )
 
         validation_response = ValidationResponse(
             validation_passed=len(validation_errors) == 0,

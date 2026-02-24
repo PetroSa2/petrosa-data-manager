@@ -18,9 +18,7 @@ class BaseRepository:
     Subclasses should specify whether they use MySQL or MongoDB.
     """
 
-    def __init__(
-        self, mysql_adapter: MySQLAdapter | None, mongodb_adapter: MongoDBAdapter | None
-    ):
+    def __init__(self, mysql_adapter: MySQLAdapter | None, mongodb_adapter: MongoDBAdapter | None):
         """
         Initialize repository with database adapters.
 

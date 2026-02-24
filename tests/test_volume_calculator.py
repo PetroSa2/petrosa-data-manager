@@ -27,15 +27,17 @@ async def test_calculate_volume_success(volume_calculator, mock_mongodb_adapter)
     base_time = datetime.utcnow() - timedelta(hours=24)
 
     for i in range(24):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal(str(1000.0 + i * 10))
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal(str(1000.0 + i * 10)),
+            }
+        )
 
     # Mock repository
     volume_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
@@ -72,15 +74,17 @@ async def test_calculate_volume_minimum_data(volume_calculator):
 
     # Create exactly 5 candles (minimum required)
     for i in range(5):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     volume_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     volume_calculator.db_manager.mongodb_adapter.write = AsyncMock()
@@ -110,15 +114,17 @@ async def test_calculate_volume_stores_metrics(volume_calculator, mock_mongodb_a
     base_time = datetime.utcnow() - timedelta(hours=24)
 
     for i in range(24):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     volume_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     mock_mongodb_adapter.write = AsyncMock()
@@ -149,15 +155,17 @@ async def test_calculate_volume_spike_ratio(volume_calculator):
     # Create candles with a spike at the end
     for i in range(24):
         volume = Decimal("1000.0") if i < 23 else Decimal("5000.0")  # Spike at end
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": volume
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": volume,
+            }
+        )
 
     volume_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     volume_calculator.db_manager.mongodb_adapter.write = AsyncMock()
@@ -166,4 +174,3 @@ async def test_calculate_volume_spike_ratio(volume_calculator):
 
     assert result is not None
     assert result.volume_spike_ratio > Decimal("1.0")  # Should detect spike
-

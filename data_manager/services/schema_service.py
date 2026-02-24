@@ -57,13 +57,9 @@ class SchemaService:
         self._validate_schema_json(registration.schema)
 
         # Check for existing schema with same name and version
-        existing = await self.repository.get_schema(
-            database, name, registration.version
-        )
+        existing = await self.repository.get_schema(database, name, registration.version)
         if existing:
-            raise ValueError(
-                f"Schema {name} version {registration.version} already exists"
-            )
+            raise ValueError(f"Schema {name} version {registration.version} already exists")
 
         # Check version constraints
         await self._validate_version_constraints(database, name, registration.version)
@@ -136,13 +132,9 @@ class SchemaService:
         Returns:
             Tuple of (schemas, total_count)
         """
-        return await self.repository.list_schemas(
-            database, name_pattern, status, page, page_size
-        )
+        return await self.repository.list_schemas(database, name_pattern, status, page, page_size)
 
-    async def get_schema_versions(
-        self, database: str, name: str
-    ) -> list[dict[str, Any]]:
+    async def get_schema_versions(self, database: str, name: str) -> list[dict[str, Any]]:
         """
         Get all versions of a schema.
 
@@ -187,9 +179,7 @@ class SchemaService:
             self._validate_schema_json(update.schema)
 
         # Update schema
-        updated_schema = await self.repository.update_schema(
-            database, name, version, update
-        )
+        updated_schema = await self.repository.update_schema(database, name, version, update)
 
         if updated_schema:
             # Clear cache
@@ -221,9 +211,7 @@ class SchemaService:
 
         return success
 
-    async def validate_data(
-        self, request: SchemaValidationRequest
-    ) -> SchemaValidationResponse:
+    async def validate_data(self, request: SchemaValidationRequest) -> SchemaValidationResponse:
         """
         Validate data against a schema.
 
@@ -251,9 +239,7 @@ class SchemaService:
                 )
 
             # Prepare data for validation
-            data_list = (
-                request.data if isinstance(request.data, list) else [request.data]
-            )
+            data_list = request.data if isinstance(request.data, list) else [request.data]
 
             # Validate each item
             errors = []
@@ -350,9 +336,7 @@ class SchemaService:
                 if field not in new_required:
                     breaking_changes.append(f"Required field '{field}' removed")
                 elif field not in new_props:
-                    breaking_changes.append(
-                        f"Required field '{field}' no longer defined"
-                    )
+                    breaking_changes.append(f"Required field '{field}' no longer defined")
 
             # Check for new required fields
             for field in new_required:
@@ -376,9 +360,7 @@ class SchemaService:
             for field in old_props:
                 if field not in new_props:
                     warnings.append(f"Field '{field}' removed")
-                    migration_suggestions.append(
-                        f"Consider data migration for field '{field}'"
-                    )
+                    migration_suggestions.append(f"Consider data migration for field '{field}'")
 
             # Determine compatibility
             is_compatible = len(breaking_changes) == 0
@@ -410,9 +392,7 @@ class SchemaService:
                 migration_suggestions=[],
             )
 
-    async def search_schemas(
-        self, query: str, database: str | None = None
-    ) -> list[dict[str, Any]]:
+    async def search_schemas(self, query: str, database: str | None = None) -> list[dict[str, Any]]:
         """
         Search schemas by name or description.
 
@@ -456,9 +436,7 @@ class SchemaService:
         except Exception as e:
             raise ValueError(f"Schema validation error: {str(e)}")
 
-    async def _validate_version_constraints(
-        self, database: str, name: str, version: int
-    ) -> None:
+    async def _validate_version_constraints(self, database: str, name: str, version: int) -> None:
         """
         Validate version constraints.
 

@@ -40,21 +40,15 @@ class DatasetMetadata(BaseModel):
     dataset_id: str = Field(..., description="Dataset identifier")
     name: str = Field(..., description="Dataset name")
     description: str = Field(..., description="Dataset description")
-    category: str = Field(
-        ..., description="Dataset category (e.g., 'market_data', 'analytics')"
-    )
+    category: str = Field(..., description="Dataset category (e.g., 'market_data', 'analytics')")
     schema_id: str = Field(..., description="Schema identifier")
     storage_type: str = Field(..., description="Storage type (postgresql/mongodb)")
     table_name: str | None = Field(None, description="Table/collection name")
     owner: str = Field(..., description="Dataset owner/maintainer")
     update_frequency: str = Field(..., description="Expected update frequency")
-    retention_days: int | None = Field(
-        None, description="Data retention period in days"
-    )
+    retention_days: int | None = Field(None, description="Data retention period in days")
     tags: list[str] = Field(default_factory=list, description="Dataset tags")
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     created_at: datetime = Field(..., description="Dataset creation timestamp")
     updated_at: datetime = Field(..., description="Dataset last update timestamp")
 

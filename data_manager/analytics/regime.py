@@ -48,9 +48,7 @@ class RegimeClassifier:
             )
 
             if not volatility_data or not volume_data:
-                logger.warning(
-                    f"Insufficient metrics for regime classification: {symbol}"
-                )
+                logger.warning(f"Insufficient metrics for regime classification: {symbol}")
                 return None
 
             # Extract metric values

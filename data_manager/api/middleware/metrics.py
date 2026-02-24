@@ -169,9 +169,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         duration = time.time() - start_time
 
         # Record request metrics
-        REQUEST_COUNT.labels(
-            method=method, endpoint=endpoint, status_code=str(status_code)
-        ).inc()
+        REQUEST_COUNT.labels(method=method, endpoint=endpoint, status_code=str(status_code)).inc()
         REQUEST_DURATION.labels(method=method, endpoint=endpoint).observe(duration)
         REQUEST_SIZE.labels(method=method, endpoint=endpoint).observe(request_size)
         RESPONSE_SIZE.labels(method=method, endpoint=endpoint).observe(response_size)
@@ -179,9 +177,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         # Record error rate (0 for successful requests)
         if status_code >= 400:
             error_type = "client_error" if status_code < 500 else "server_error"
-            ERROR_RATE.labels(
-                method=method, endpoint=endpoint, error_type=error_type
-            ).inc()
+            ERROR_RATE.labels(method=method, endpoint=endpoint, error_type=error_type).inc()
 
     def _record_error_metrics(
         self,
@@ -201,21 +197,13 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         REQUEST_SIZE.labels(method=method, endpoint=endpoint).observe(request_size)
 
 
-def record_database_operation(
-    database: str, operation: str, status: str, duration: float
-) -> None:
+def record_database_operation(database: str, operation: str, status: str, duration: float) -> None:
     """Record database operation metrics."""
-    DATABASE_OPERATIONS.labels(
-        database=database, operation=operation, status=status
-    ).inc()
-    DATABASE_OPERATION_DURATION.labels(database=database, operation=operation).observe(
-        duration
-    )
+    DATABASE_OPERATIONS.labels(database=database, operation=operation, status=status).inc()
+    DATABASE_OPERATION_DURATION.labels(database=database, operation=operation).observe(duration)
 
 
-def update_connection_pool_metrics(
-    database: str, active: int, idle: int, waiting: int
-) -> None:
+def update_connection_pool_metrics(database: str, active: int, idle: int, waiting: int) -> None:
     """Update connection pool metrics."""
     CONNECTION_POOL_SIZE.labels(database=database, state="active").set(active)
     CONNECTION_POOL_SIZE.labels(database=database, state="idle").set(idle)

@@ -22,9 +22,7 @@ class QueryOptions(BaseModel):
 class InsertOptions(BaseModel):
     """Options for inserting data."""
 
-    data: dict[str, Any] | list[dict[str, Any]] = Field(
-        ..., description="Data to insert"
-    )
+    data: dict[str, Any] | list[dict[str, Any]] = Field(..., description="Data to insert")
     schema: str | None = Field(None, description="Schema name for validation")
     validate: bool = Field(False, description="Enable schema validation")
 
@@ -32,9 +30,7 @@ class InsertOptions(BaseModel):
 class UpdateOptions(BaseModel):
     """Options for updating data."""
 
-    filter: dict[str, Any] = Field(
-        ..., description="Filter to identify records to update"
-    )
+    filter: dict[str, Any] = Field(..., description="Filter to identify records to update")
     data: dict[str, Any] = Field(..., description="Data to update")
     upsert: bool = Field(False, description="Create record if not found")
     schema: str | None = Field(None, description="Schema name for validation")
@@ -44,9 +40,7 @@ class UpdateOptions(BaseModel):
 class DeleteOptions(BaseModel):
     """Options for deleting data."""
 
-    filter: dict[str, Any] = Field(
-        ..., description="Filter to identify records to delete"
-    )
+    filter: dict[str, Any] = Field(..., description="Filter to identify records to delete")
 
 
 class CandleData(BaseModel):

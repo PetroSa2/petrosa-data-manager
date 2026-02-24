@@ -72,9 +72,7 @@ async def readiness() -> ReadinessStatus:
     if api_module.db_manager:
         health = api_module.db_manager.health_check()
         components["mysql"] = "healthy" if health["mysql"]["connected"] else "unhealthy"
-        components["mongodb"] = (
-            "healthy" if health["mongodb"]["connected"] else "unhealthy"
-        )
+        components["mongodb"] = "healthy" if health["mongodb"]["connected"] else "unhealthy"
     else:
         components["mysql"] = "not_configured"
         components["mongodb"] = "not_configured"

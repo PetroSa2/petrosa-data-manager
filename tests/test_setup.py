@@ -165,9 +165,7 @@ class TestVersionFormat:
 
         # Basic semver check: should have at least major.minor
         parts = version.split(".")
-        assert (
-            len(parts) >= 2
-        ), f"Version '{version}' should have at least major.minor format"
+        assert len(parts) >= 2, f"Version '{version}' should have at least major.minor format"
 
         # First two parts should be numeric
         assert parts[0].isdigit(), f"Major version '{parts[0]}' should be numeric"
@@ -181,9 +179,7 @@ class TestVersionFormat:
 
         version = get_version()
         assert version, "Version should never be empty"
-        assert (
-            version.strip() == version
-        ), "Version should not have leading/trailing whitespace"
+        assert version.strip() == version, "Version should not have leading/trailing whitespace"
 
 
 class TestSetupPy:

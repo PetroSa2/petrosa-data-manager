@@ -14,9 +14,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # NATS Configuration
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
-NATS_CONSUMER_SUBJECT = os.getenv(
-    "NATS_CONSUMER_SUBJECT", "binance.futures.websocket.data"
-)
+NATS_CONSUMER_SUBJECT = os.getenv("NATS_CONSUMER_SUBJECT", "binance.futures.websocket.data")
 NATS_CLIENT_NAME = f"{SERVICE_NAME}-consumer"
 NATS_CONNECT_TIMEOUT = int(os.getenv("NATS_CONNECT_TIMEOUT", "10"))
 NATS_MAX_RECONNECT_ATTEMPTS = int(os.getenv("NATS_MAX_RECONNECT_ATTEMPTS", "10"))
@@ -96,9 +94,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv(
 OTEL_SERVICE_NAME = SERVICE_NAME
 
 # Supported trading pairs
-SUPPORTED_PAIRS = os.getenv(
-    "SUPPORTED_PAIRS", "BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,SOLUSDT"
-).split(",")
+SUPPORTED_PAIRS = os.getenv("SUPPORTED_PAIRS", "BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,SOLUSDT").split(",")
 
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -112,17 +108,11 @@ LEADER_ELECTION_TIMEOUT = int(os.getenv("LEADER_ELECTION_TIMEOUT", "30"))  # sec
 
 # Auto-Backfill Configuration
 ENABLE_AUTO_BACKFILL = os.getenv("ENABLE_AUTO_BACKFILL", "false").lower() == "true"
-MIN_AUTO_BACKFILL_GAP = int(
-    os.getenv("MIN_AUTO_BACKFILL_GAP", "3600")
-)  # seconds (1 hour)
-MAX_AUTO_BACKFILL_JOBS = int(
-    os.getenv("MAX_AUTO_BACKFILL_JOBS", "5")
-)  # concurrent jobs
+MIN_AUTO_BACKFILL_GAP = int(os.getenv("MIN_AUTO_BACKFILL_GAP", "3600"))  # seconds (1 hour)
+MAX_AUTO_BACKFILL_JOBS = int(os.getenv("MAX_AUTO_BACKFILL_JOBS", "5"))  # concurrent jobs
 
 # Duplicate Handling Configuration
-ENABLE_DUPLICATE_REMOVAL = (
-    os.getenv("ENABLE_DUPLICATE_REMOVAL", "false").lower() == "true"
-)
+ENABLE_DUPLICATE_REMOVAL = os.getenv("ENABLE_DUPLICATE_REMOVAL", "false").lower() == "true"
 DUPLICATE_RESOLUTION_STRATEGY = os.getenv(
     "DUPLICATE_RESOLUTION_STRATEGY", "keep_newest"
 )  # keep_newest, keep_oldest, manual
@@ -130,9 +120,7 @@ DUPLICATE_RESOLUTION_STRATEGY = os.getenv(
 # Connection Management Configuration
 DB_HEALTH_CHECK_INTERVAL = int(os.getenv("DB_HEALTH_CHECK_INTERVAL", "30"))  # seconds
 DB_RECONNECT_MAX_ATTEMPTS = int(os.getenv("DB_RECONNECT_MAX_ATTEMPTS", "10"))
-DB_RECONNECT_BACKOFF_BASE = int(
-    os.getenv("DB_RECONNECT_BACKOFF_BASE", "2")
-)  # exponential backoff
+DB_RECONNECT_BACKOFF_BASE = int(os.getenv("DB_RECONNECT_BACKOFF_BASE", "2"))  # exponential backoff
 DB_CONNECTION_TIMEOUT = int(os.getenv("DB_CONNECTION_TIMEOUT", "30"))  # seconds
 
 # API Limits Configuration
@@ -152,9 +140,7 @@ LOG_RESPONSE_DETAILS = os.getenv("LOG_RESPONSE_DETAILS", "true").lower() == "tru
 LOG_QUERY_DETAILS = os.getenv("LOG_QUERY_DETAILS", "false").lower() == "true"
 
 # Schema Registry Configuration
-SCHEMA_VALIDATION_ENABLED = (
-    os.getenv("SCHEMA_VALIDATION_ENABLED", "true").lower() == "true"
-)
+SCHEMA_VALIDATION_ENABLED = os.getenv("SCHEMA_VALIDATION_ENABLED", "true").lower() == "true"
 SCHEMA_STRICT_MODE = os.getenv("SCHEMA_STRICT_MODE", "false").lower() == "true"
 SCHEMA_CACHE_TTL = int(os.getenv("SCHEMA_CACHE_TTL", "300"))  # seconds
 SCHEMA_AUTO_REGISTER = os.getenv("SCHEMA_AUTO_REGISTER", "false").lower() == "true"

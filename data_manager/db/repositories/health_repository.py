@@ -15,9 +15,7 @@ logger = logging.getLogger(__name__)
 class HealthRepository(BaseRepository):
     """Repository for managing health metrics in MySQL."""
 
-    async def insert(
-        self, dataset_id: str, symbol: str, metrics: DataHealthMetrics
-    ) -> bool:
+    async def insert(self, dataset_id: str, symbol: str, metrics: DataHealthMetrics) -> bool:
         """
         Insert health metrics.
 

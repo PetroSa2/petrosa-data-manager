@@ -278,7 +278,7 @@ The client provides full type hints for better IDE support:
 from typing import List, Dict, Any
 from datetime import datetime
 
-async def process_candles(pair: str) -> List[Dict[str, Any]]:
+async def process_candles(pair: str) -> list[dict[str, Any]]:
     client = DataManagerClient(base_url="http://data-manager:8000")
     
     response = await client.get_candles(

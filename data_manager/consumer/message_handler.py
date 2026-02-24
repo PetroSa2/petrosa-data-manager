@@ -45,9 +45,7 @@ class MessageHandler:
         # - Trades, candles, depth, tickers, funding → binance-data-extractor handles this
         # - Data-manager only tracks metrics and persists analytics/audit results
         # - Repositories are not needed for message handling
-        logger.info(
-            "Message handler initialized (tracking mode only - no raw data persistence)"
-        )
+        logger.info("Message handler initialized (tracking mode only - no raw data persistence)")
 
         # Register handlers for each event type
         self._handlers = {

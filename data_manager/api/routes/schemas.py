@@ -36,9 +36,7 @@ def get_schema_service():
     global schema_service
     if schema_service is None:
         if not api_module.db_manager:
-            raise HTTPException(
-                status_code=503, detail="Database manager not available"
-            )
+            raise HTTPException(status_code=503, detail="Database manager not available")
 
         schema_repository = SchemaRepository(
             api_module.db_manager.mysql_adapter,
@@ -69,9 +67,7 @@ async def register_schema(
         Registered schema information
     """
     if database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -116,18 +112,14 @@ async def get_schema(
         Schema definition
     """
     if database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
         schema_def = await service.get_schema(database, name, version)
 
         if not schema_def:
-            raise HTTPException(
-                status_code=404, detail=f"Schema {name} not found in {database}"
-            )
+            raise HTTPException(status_code=404, detail=f"Schema {name} not found in {database}")
 
         return {
             "name": schema_def.name,
@@ -165,9 +157,7 @@ async def get_schema_versions(
         List of schema versions
     """
     if database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -213,9 +203,7 @@ async def get_schema_version(
         Schema version definition
     """
     if database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -267,9 +255,7 @@ async def update_schema(
         Updated schema information
     """
     if database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -319,9 +305,7 @@ async def deprecate_schema(
         Deprecation result
     """
     if database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -347,9 +331,8 @@ async def deprecate_schema(
 
 @router.get("/schemas")
 async def list_schemas(
-    database: str | None = Query(
-        None, description="Database filter ('mysql', 'mongodb', or None for both)"
-    ),
+    database: str
+    | None = Query(None, description="Database filter ('mysql', 'mongodb', or None for both)"),
     name_pattern: str | None = Query(None, description="Name pattern filter"),
     status: SchemaStatus | None = Query(None, description="Status filter"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -369,9 +352,7 @@ async def list_schemas(
         List of schemas with pagination info
     """
     if database and database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -467,9 +448,7 @@ async def search_schemas(
         List of matching schemas
     """
     if database and database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -494,9 +473,7 @@ async def bootstrap_schemas(
         Bootstrap response
     """
     if request.database not in ["mysql", "mongodb"]:
-        raise HTTPException(
-            status_code=400, detail="Database must be 'mysql' or 'mongodb'"
-        )
+        raise HTTPException(status_code=400, detail="Database must be 'mysql' or 'mongodb'")
 
     try:
         service = get_schema_service()
@@ -517,9 +494,7 @@ async def bootstrap_schemas(
                     continue
 
                 # Register schema
-                await service.register_schema(
-                    request.database, schema_reg.name, schema_reg
-                )
+                await service.register_schema(request.database, schema_reg.name, schema_reg)
                 registered_count += 1
                 registered_schemas.append(schema_reg.name)
 

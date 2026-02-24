@@ -28,9 +28,7 @@ class CorrelationCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_correlation(
         self,
@@ -59,9 +57,7 @@ class CorrelationCalculator:
             all_candles = {}
             for symbol in symbols:
                 try:
-                    candles = await self.candle_repo.get_range(
-                        symbol, timeframe, start, end
-                    )
+                    candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
                     if candles and len(candles) > 20:
                         all_candles[symbol] = pd.DataFrame(candles)
                 except Exception as e:
@@ -78,9 +74,7 @@ class CorrelationCalculator:
                     lambda x: float(x) if isinstance(x, Decimal) else float(str(x))
                 )
                 df["timestamp"] = pd.to_datetime(df["timestamp"])
-                df_pivot = df.set_index("timestamp")[["close"]].rename(
-                    columns={"close": symbol}
-                )
+                df_pivot = df.set_index("timestamp")[["close"]].rename(columns={"close": symbol})
 
                 if merged is None:
                     merged = df_pivot
@@ -115,9 +109,7 @@ class CorrelationCalculator:
                 # Rolling correlation to benchmark
                 rolling_correlation = Decimal("0")
                 if symbol != benchmark and benchmark in merged.columns:
-                    rolling_corr_series = (
-                        merged[symbol].rolling(window=30).corr(merged[benchmark])
-                    )
+                    rolling_corr_series = merged[symbol].rolling(window=30).corr(merged[benchmark])
                     if not rolling_corr_series.empty:
                         rolling_correlation = Decimal(str(rolling_corr_series.iloc[-1]))
 

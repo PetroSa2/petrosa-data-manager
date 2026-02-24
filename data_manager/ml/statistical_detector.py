@@ -30,12 +30,8 @@ class StatisticalAnomalyDetector:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.audit_repo = AuditRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.audit_repo = AuditRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def detect_anomalies(
         self,
@@ -63,9 +59,7 @@ class StatisticalAnomalyDetector:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 30:
-                logger.warning(
-                    f"Insufficient data for anomaly detection: {len(candles)}"
-                )
+                logger.warning(f"Insufficient data for anomaly detection: {len(candles)}")
                 return []
 
             # Convert to DataFrame
@@ -113,9 +107,7 @@ class StatisticalAnomalyDetector:
             logger.error(f"Error detecting anomalies: {e}", exc_info=True)
             return []
 
-    def _detect_zscore_anomalies(
-        self, data: pd.Series, threshold: float = 3.0
-    ) -> np.ndarray:
+    def _detect_zscore_anomalies(self, data: pd.Series, threshold: float = 3.0) -> np.ndarray:
         """
         Detect anomalies using Z-score method.
 
@@ -131,9 +123,7 @@ class StatisticalAnomalyDetector:
         z_scores = np.abs((data - mean) / std)
         return z_scores > threshold
 
-    def _detect_mad_anomalies(
-        self, data: pd.Series, threshold: float = 3.5
-    ) -> np.ndarray:
+    def _detect_mad_anomalies(self, data: pd.Series, threshold: float = 3.5) -> np.ndarray:
         """
         Detect anomalies using MAD (Median Absolute Deviation).
 

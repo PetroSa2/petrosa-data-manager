@@ -24,9 +24,7 @@ class DatasetRegistry:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.catalog_repo = CatalogRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.catalog_repo = CatalogRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def discover_and_register(self) -> int:
         """

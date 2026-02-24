@@ -12,9 +12,7 @@ import structlog
 from structlog.stdlib import LoggerFactory
 
 
-def setup_logging(
-    level: str = "INFO", format_type: str = "json"
-) -> structlog.BoundLogger:
+def setup_logging(level: str = "INFO", format_type: str = "json") -> structlog.BoundLogger:
     """
     Set up structured logging for the service.
 
@@ -101,9 +99,7 @@ def get_logger(name: str | None = None) -> structlog.BoundLogger:
         return structlog.get_logger("data-manager")
 
 
-def add_correlation_id(
-    logger: structlog.BoundLogger, correlation_id: str
-) -> structlog.BoundLogger:
+def add_correlation_id(logger: structlog.BoundLogger, correlation_id: str) -> structlog.BoundLogger:
     """
     Add correlation ID to logger context.
 
@@ -117,9 +113,7 @@ def add_correlation_id(
     return logger.bind(correlation_id=correlation_id)
 
 
-def add_request_context(
-    logger: structlog.BoundLogger, **kwargs
-) -> structlog.BoundLogger:
+def add_request_context(logger: structlog.BoundLogger, **kwargs) -> structlog.BoundLogger:
     """
     Add request context to logger.
 

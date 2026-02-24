@@ -164,9 +164,7 @@ def _validate_mongodb_query(query_obj: dict[str, Any]) -> None:
     """Validate MongoDB query for safety."""
     # Check for dangerous operations
     if "drop" in str(query_obj).lower():
-        raise HTTPException(
-            status_code=400, detail="Drop operations not allowed in raw queries"
-        )
+        raise HTTPException(status_code=400, detail="Drop operations not allowed in raw queries")
 
     # Check for system collection access
     system_collections = ["system.", "admin.", "config.", "local."]
@@ -196,13 +194,9 @@ def _parse_mongodb_query(query: str) -> dict[str, Any]:
                 query_obj["collection"] = collection
                 return query_obj
             except json.JSONDecodeError:
-                raise HTTPException(
-                    status_code=400, detail="Invalid MongoDB query format"
-                )
+                raise HTTPException(status_code=400, detail="Invalid MongoDB query format")
         else:
-            raise HTTPException(
-                status_code=400, detail="MongoDB query must be JSON format"
-            )
+            raise HTTPException(status_code=400, detail="MongoDB query must be JSON format")
 
 
 async def _execute_mysql_query(

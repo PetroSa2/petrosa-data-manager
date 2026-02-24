@@ -29,9 +29,7 @@ class SeasonalityCalculator:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
 
     async def calculate_seasonality(
         self,
@@ -83,9 +81,7 @@ class SeasonalityCalculator:
             for hour in range(24):
                 hour_data = df[df["hour"] == hour]["close"]
                 hourly_pattern[hour] = (
-                    Decimal(str(hour_data.mean()))
-                    if len(hour_data) > 0
-                    else Decimal("0")
+                    Decimal(str(hour_data.mean())) if len(hour_data) > 0 else Decimal("0")
                 )
 
             # Daily pattern (0-6: Monday-Sunday)

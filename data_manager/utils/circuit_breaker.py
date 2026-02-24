@@ -70,9 +70,7 @@ class DatabaseCircuitBreaker:
         """
         if self.state == CircuitBreakerState.OPEN:
             if self._should_attempt_reset():
-                logger.info(
-                    f"Circuit breaker {self.name}: Attempting reset to HALF_OPEN"
-                )
+                logger.info(f"Circuit breaker {self.name}: Attempting reset to HALF_OPEN")
                 self.state = CircuitBreakerState.HALF_OPEN
             else:
                 raise Exception(
@@ -109,9 +107,7 @@ class DatabaseCircuitBreaker:
         self.last_failure_time = time.time()
 
         if self.state == CircuitBreakerState.HALF_OPEN:
-            logger.warning(
-                f"Circuit breaker {self.name}: Reopening circuit after failure"
-            )
+            logger.warning(f"Circuit breaker {self.name}: Reopening circuit after failure")
             self.state = CircuitBreakerState.OPEN
             self.success_count = 0
         elif self.failure_count >= self.failure_threshold:

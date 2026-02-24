@@ -31,7 +31,7 @@ def test_execute_mysql_query_success(client):
     request = {
         "query": "SELECT * FROM test_table LIMIT 10",
         "parameters": None,
-        "timeout": 30
+        "timeout": 30,
     }
 
     response = client.post("/api/v1/raw/mysql", json=request)
@@ -87,7 +87,7 @@ def test_execute_mongodb_query_success(client, mock_mongodb_adapter):
 
     request = {
         "query": '{"collection": "test_collection", "find": {}}',
-        "parameters": None
+        "parameters": None,
     }
 
     response = client.post("/api/v1/raw/mongodb", json=request)
@@ -177,4 +177,3 @@ def test_execute_mysql_query_tracks_metrics(client, mock_db_manager):
     assert response.status_code == 200
     # Note: increment_query_count is called in the endpoint, but current implementation
     # returns empty list, so we verify the endpoint succeeded
-

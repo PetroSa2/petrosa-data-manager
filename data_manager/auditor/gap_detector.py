@@ -40,12 +40,8 @@ class GapDetector:
             backfill_orchestrator: Optional backfill orchestrator for auto-backfill
         """
         self.db_manager = db_manager
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.audit_repo = AuditRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.audit_repo = AuditRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
         self.backfill_orchestrator = backfill_orchestrator
 
     async def detect_gaps(
@@ -68,9 +64,7 @@ class GapDetector:
             List of GapInfo objects
         """
         try:
-            logger.debug(
-                f"Detecting gaps for {symbol} {timeframe} from {start} to {end}"
-            )
+            logger.debug(f"Detecting gaps for {symbol} {timeframe} from {start} to {end}")
 
             # Get all candles in range
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
@@ -82,9 +76,7 @@ class GapDetector:
                     start_time=start,
                     end_time=end,
                     duration_seconds=int((end - start).total_seconds()),
-                    expected_records=self._calculate_expected_records(
-                        start, end, timeframe
-                    ),
+                    expected_records=self._calculate_expected_records(start, end, timeframe),
                 )
                 await self._log_gap(symbol, timeframe, gap)
                 return [gap]
@@ -159,14 +151,10 @@ class GapDetector:
             return gaps
 
         except Exception as e:
-            logger.error(
-                f"Error detecting gaps for {symbol} {timeframe}: {e}", exc_info=True
-            )
+            logger.error(f"Error detecting gaps for {symbol} {timeframe}: {e}", exc_info=True)
             return []
 
-    def _calculate_expected_records(
-        self, start: datetime, end: datetime, timeframe: str
-    ) -> int:
+    def _calculate_expected_records(self, start: datetime, end: datetime, timeframe: str) -> int:
         """Calculate expected number of records."""
         interval_seconds = parse_timeframe_to_seconds(timeframe)
         duration_seconds = (end - start).total_seconds()
@@ -215,9 +203,7 @@ class GapDetector:
 
             # Check if backfill orchestrator is available
             if not self.backfill_orchestrator:
-                logger.warning(
-                    "Auto-backfill enabled but no backfill orchestrator available"
-                )
+                logger.warning("Auto-backfill enabled but no backfill orchestrator available")
                 return
 
             # Create backfill request

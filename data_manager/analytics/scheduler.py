@@ -91,9 +91,7 @@ class AnalyticsScheduler:
                         metrics_calculated += 1
 
                     # Calculate trend
-                    trend = await self.trend_calc.calculate_trend(
-                        symbol, timeframe, window_days=30
-                    )
+                    trend = await self.trend_calc.calculate_trend(symbol, timeframe, window_days=30)
                     if trend:
                         metrics_calculated += 1
 
@@ -113,9 +111,7 @@ class AnalyticsScheduler:
                             metrics_calculated += 1
 
                 except Exception as e:
-                    logger.warning(
-                        f"Error calculating analytics for {symbol} {timeframe}: {e}"
-                    )
+                    logger.warning(f"Error calculating analytics for {symbol} {timeframe}: {e}")
 
             # Calculate spread (uses latest depth, not timeframe-specific)
             try:
@@ -143,6 +139,4 @@ class AnalyticsScheduler:
         except Exception as e:
             logger.warning(f"Error calculating correlations: {e}")
 
-        logger.info(
-            f"Analytics cycle complete: calculated {metrics_calculated} metrics"
-        )
+        logger.info(f"Analytics cycle complete: calculated {metrics_calculated} metrics")

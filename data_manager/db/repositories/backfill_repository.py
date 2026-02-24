@@ -56,9 +56,7 @@ class BackfillRepository(BaseRepository):
             logger.error(f"Failed to get backfill job: {e}")
             return None
 
-    async def update_status(
-        self, job_id: str, status: str, error: str | None = None
-    ) -> bool:
+    async def update_status(self, job_id: str, status: str, error: str | None = None) -> bool:
         """
         Update job status.
 

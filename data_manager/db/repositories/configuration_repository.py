@@ -35,10 +35,7 @@ class ConfigurationRepository(BaseRepository):
             return None
 
     async def upsert_app_config(
-        self,
-        parameters: dict[str, Any],
-        changed_by: str,
-        reason: str | None = None
+        self, parameters: dict[str, Any], changed_by: str, reason: str | None = None
     ) -> dict[str, Any] | None:
         """
         Update application configuration and create audit record.
@@ -61,7 +58,7 @@ class ConfigurationRepository(BaseRepository):
                 "created_at": created_at,
                 "updated_at": now,
                 "changed_by": changed_by,
-                "reason": reason
+                "reason": reason,
             }
 
             # Update current config
@@ -76,10 +73,12 @@ class ConfigurationRepository(BaseRepository):
                 changed_by=changed_by,
                 changed_at=now,
                 reason=reason,
-                version=version
+                version=version,
             )
 
-            await self.mongodb.db.app_config_audit.insert_one(audit_record.model_dump(by_alias=True))
+            await self.mongodb.db.app_config_audit.insert_one(
+                audit_record.model_dump(by_alias=True)
+            )
 
             return config_doc
 
@@ -88,10 +87,7 @@ class ConfigurationRepository(BaseRepository):
             return None
 
     async def get_strategy_config(
-        self,
-        strategy_id: str,
-        symbol: str | None = None,
-        side: str | None = None
+        self, strategy_id: str, symbol: str | None = None, side: str | None = None
     ) -> dict[str, Any] | None:
         """Get strategy configuration (global, symbol, or symbol-side)."""
         if not self.mongodb or not self.mongodb.is_connected:
@@ -117,7 +113,7 @@ class ConfigurationRepository(BaseRepository):
         symbol: str | None = None,
         side: str | None = None,
         reason: str | None = None,
-        action: str = "UPDATE"
+        action: str = "UPDATE",
     ) -> dict[str, Any] | None:
         """Update strategy configuration and create audit record."""
         if not self.mongodb or not self.mongodb.is_connected:
@@ -141,14 +137,14 @@ class ConfigurationRepository(BaseRepository):
                 "created_at": created_at,
                 "updated_at": now,
                 "changed_by": changed_by,
-                "reason": reason
+                "reason": reason,
             }
 
             # Update current config
             await self.mongodb.db.strategy_configs.replace_one(
                 {"strategy_id": strategy_id, "symbol": symbol, "side": side},
                 config_doc,
-                upsert=True
+                upsert=True,
             )
 
             # Create audit record
@@ -163,10 +159,12 @@ class ConfigurationRepository(BaseRepository):
                 changed_by=changed_by,
                 changed_at=now,
                 reason=reason,
-                version=version
+                version=version,
             )
 
-            await self.mongodb.db.strategy_config_audit.insert_one(audit_record.model_dump(by_alias=True))
+            await self.mongodb.db.strategy_config_audit.insert_one(
+                audit_record.model_dump(by_alias=True)
+            )
 
             return config_doc
 
@@ -180,14 +178,16 @@ class ConfigurationRepository(BaseRepository):
         strategy_id: str | None = None,
         symbol: str | None = None,
         side: str | None = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Get audit trail for a configuration."""
         if not self.mongodb or not self.mongodb.is_connected:
             return []
 
         try:
-            collection_name = "app_config_audit" if config_type == "application" else "strategy_config_audit"
+            collection_name = (
+                "app_config_audit" if config_type == "application" else "strategy_config_audit"
+            )
             collection = self.mongodb.db[collection_name]
 
             query = {}
@@ -219,7 +219,7 @@ class ConfigurationRepository(BaseRepository):
         symbol: str | None = None,
         side: str | None = None,
         target_version: int | None = None,
-        reason: str | None = None
+        reason: str | None = None,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Rollback configuration to a previous version."""
         if not self.mongodb or not self.mongodb.is_connected:
@@ -227,7 +227,9 @@ class ConfigurationRepository(BaseRepository):
 
         try:
             # 1. Find the target version parameters
-            collection_name = "app_config_audit" if config_type == "application" else "strategy_config_audit"
+            collection_name = (
+                "app_config_audit" if config_type == "application" else "strategy_config_audit"
+            )
             collection = self.mongodb.db[collection_name]
 
             query = {}
@@ -261,7 +263,7 @@ class ConfigurationRepository(BaseRepository):
                 result = await self.upsert_app_config(
                     parameters=target_params,
                     changed_by=changed_by,
-                    reason=rollback_reason
+                    reason=rollback_reason,
                 )
             else:
                 result = await self.upsert_strategy_config(
@@ -271,7 +273,7 @@ class ConfigurationRepository(BaseRepository):
                     symbol=symbol,
                     side=side,
                     reason=rollback_reason,
-                    action="ROLLBACK"
+                    action="ROLLBACK",
                 )
 
             if result:

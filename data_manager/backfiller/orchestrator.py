@@ -36,12 +36,8 @@ class BackfillOrchestrator:
         """
         self.db_manager = db_manager
         self.binance_client = BinanceClient()
-        self.candle_repo = CandleRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
-        self.funding_repo = FundingRepository(
-            db_manager.mysql_adapter, db_manager.mongodb_adapter
-        )
+        self.candle_repo = CandleRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
+        self.funding_repo = FundingRepository(db_manager.mysql_adapter, db_manager.mongodb_adapter)
         self.backfill_repo = BackfillRepository(
             db_manager.mysql_adapter, db_manager.mongodb_adapter
         )
@@ -103,9 +99,7 @@ class BackfillOrchestrator:
 
             # Execute backfill based on data type
             if data_type == "candles":
-                await self._backfill_candles(
-                    job_id, symbol, timeframe, start_time, end_time
-                )
+                await self._backfill_candles(job_id, symbol, timeframe, start_time, end_time)
             elif data_type == "funding":
                 await self._backfill_funding(job_id, symbol, start_time, end_time)
             else:
@@ -133,8 +127,7 @@ class BackfillOrchestrator:
     ) -> None:
         """Backfill candle data."""
         logger.info(
-            f"Backfilling candles for {symbol} {timeframe} "
-            f"from {start_time} to {end_time}"
+            f"Backfilling candles for {symbol} {timeframe} " f"from {start_time} to {end_time}"
         )
 
         # Create chunks (Binance API limit is 1000 per request)
@@ -184,9 +177,7 @@ class BackfillOrchestrator:
                 )
 
             except Exception as e:
-                logger.error(
-                    f"Error backfilling chunk {chunk_start} to {chunk_end}: {e}"
-                )
+                logger.error(f"Error backfilling chunk {chunk_start} to {chunk_end}: {e}")
 
         logger.info(
             f"Backfill complete for {symbol} {timeframe}: "
@@ -201,9 +192,7 @@ class BackfillOrchestrator:
         end_time: datetime,
     ) -> None:
         """Backfill funding rate data."""
-        logger.info(
-            f"Backfilling funding rates for {symbol} from {start_time} to {end_time}"
-        )
+        logger.info(f"Backfilling funding rates for {symbol} from {start_time} to {end_time}")
 
         try:
             # Fetch from Binance

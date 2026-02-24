@@ -35,15 +35,17 @@ async def test_calculate_volatility_success(volatility_calculator, mock_mongodb_
     base_price = 50000.0
 
     for i in range(30):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal(str(base_price + i * 10)),
-            "high": Decimal(str(base_price + i * 10 + 50)),
-            "low": Decimal(str(base_price + i * 10 - 50)),
-            "close": Decimal(str(base_price + i * 10 + 20)),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal(str(base_price + i * 10)),
+                "high": Decimal(str(base_price + i * 10 + 50)),
+                "low": Decimal(str(base_price + i * 10 - 50)),
+                "close": Decimal(str(base_price + i * 10 + 20)),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     # Mock repository
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
@@ -79,15 +81,17 @@ async def test_calculate_volatility_minimum_data(volatility_calculator):
 
     # Create exactly 20 candles (minimum required)
     for i in range(20):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     volatility_calculator.db_manager.mongodb_adapter.write = AsyncMock()
@@ -117,15 +121,17 @@ async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_m
     base_time = datetime.utcnow() - timedelta(days=30)
 
     for i in range(30):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     mock_mongodb_adapter.write = AsyncMock()
@@ -149,4 +155,3 @@ def test_volatility_calculator_initialization(mock_db_manager):
     assert calculator.db_manager == mock_db_manager
     assert calculator.candle_repo is not None
     assert isinstance(calculator.candle_repo, CandleRepository)
-
