@@ -7,9 +7,10 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, validator
+from strenum import StrEnum
 
 
-class SchemaStatus(str, Enum):
+class SchemaStatus(StrEnum):
     """Schema status enumeration."""
 
     ACTIVE = "ACTIVE"
@@ -17,7 +18,7 @@ class SchemaStatus(str, Enum):
     DELETED = "DELETED"
 
 
-class CompatibilityMode(str, Enum):
+class CompatibilityMode(StrEnum):
     """Schema compatibility mode enumeration."""
 
     BACKWARD = "BACKWARD"  # New schema can read data written with old schema

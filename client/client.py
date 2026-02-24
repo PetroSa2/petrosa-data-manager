@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
@@ -254,7 +254,7 @@ class DataManagerClient:
         self,
         database: str,
         collection: str,
-        data: Union[dict[str, Any], list[dict[str, Any]]],
+        data: dict[str, Any] | list[dict[str, Any]],
         schema: str | None = None,
         validate: bool = False,
     ) -> dict[str, Any]:

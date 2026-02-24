@@ -7,9 +7,10 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from strenum import StrEnum
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """Market data event types."""
 
     TRADE = "trade"

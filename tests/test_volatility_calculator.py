@@ -27,7 +27,9 @@ def volatility_calculator(mock_db_manager):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_calculate_volatility_success(volatility_calculator, mock_mongodb_adapter):
+async def test_calculate_volatility_success(
+    volatility_calculator, mock_mongodb_adapter
+):
     """Test successful volatility calculation."""
     # Create sample candle data
     candles = []
@@ -35,15 +37,17 @@ async def test_calculate_volatility_success(volatility_calculator, mock_mongodb_
     base_price = 50000.0
 
     for i in range(30):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal(str(base_price + i * 10)),
-            "high": Decimal(str(base_price + i * 10 + 50)),
-            "low": Decimal(str(base_price + i * 10 - 50)),
-            "close": Decimal(str(base_price + i * 10 + 20)),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal(str(base_price + i * 10)),
+                "high": Decimal(str(base_price + i * 10 + 50)),
+                "low": Decimal(str(base_price + i * 10 - 50)),
+                "close": Decimal(str(base_price + i * 10 + 20)),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     # Mock repository
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
@@ -79,15 +83,17 @@ async def test_calculate_volatility_minimum_data(volatility_calculator):
 
     # Create exactly 20 candles (minimum required)
     for i in range(20):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     volatility_calculator.db_manager.mongodb_adapter.write = AsyncMock()
@@ -102,7 +108,9 @@ async def test_calculate_volatility_minimum_data(volatility_calculator):
 async def test_calculate_volatility_error_handling(volatility_calculator):
     """Test volatility calculation error handling."""
     # Mock repository to raise exception
-    volatility_calculator.candle_repo.get_range = AsyncMock(side_effect=Exception("Database error"))
+    volatility_calculator.candle_repo.get_range = AsyncMock(
+        side_effect=Exception("Database error")
+    )
 
     result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
 
@@ -111,21 +119,25 @@ async def test_calculate_volatility_error_handling(volatility_calculator):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_mongodb_adapter):
+async def test_calculate_volatility_stores_metrics(
+    volatility_calculator, mock_mongodb_adapter
+):
     """Test that volatility metrics are stored in MongoDB."""
     candles = []
     base_time = datetime.utcnow() - timedelta(days=30)
 
     for i in range(30):
-        candles.append({
-            "symbol": "BTCUSDT",
-            "timestamp": base_time + timedelta(hours=i),
-            "open": Decimal("50000.0"),
-            "high": Decimal("51000.0"),
-            "low": Decimal("49000.0"),
-            "close": Decimal("50500.0"),
-            "volume": Decimal("1000.0")
-        })
+        candles.append(
+            {
+                "symbol": "BTCUSDT",
+                "timestamp": base_time + timedelta(hours=i),
+                "open": Decimal("50000.0"),
+                "high": Decimal("51000.0"),
+                "low": Decimal("49000.0"),
+                "close": Decimal("50500.0"),
+                "volume": Decimal("1000.0"),
+            }
+        )
 
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
     mock_mongodb_adapter.write = AsyncMock()
@@ -138,7 +150,9 @@ async def test_calculate_volatility_stores_metrics(volatility_calculator, mock_m
     # write is called as write([metrics], collection) - check first arg is list and second is collection name
     assert len(call_args[0]) >= 2
     assert isinstance(call_args[0][0], list)  # First arg is list of metrics
-    assert call_args[0][1] == "analytics_BTCUSDT_volatility"  # Second arg is collection name
+    assert (
+        call_args[0][1] == "analytics_BTCUSDT_volatility"
+    )  # Second arg is collection name
 
 
 @pytest.mark.unit
@@ -149,4 +163,3 @@ def test_volatility_calculator_initialization(mock_db_manager):
     assert calculator.db_manager == mock_db_manager
     assert calculator.candle_repo is not None
     assert isinstance(calculator.candle_repo, CandleRepository)
-

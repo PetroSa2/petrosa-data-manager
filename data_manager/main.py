@@ -4,6 +4,7 @@ Main application entry point for Petrosa Data Manager.
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from typing import TYPE_CHECKING
@@ -13,12 +14,18 @@ import uvicorn
 from prometheus_client import start_http_server
 
 import constants
+
 # Optional OpenTelemetry imports
 try:
-    from petrosa_otel import setup_telemetry, attach_logging_handler
+    from petrosa_otel import (
+        ConfigRateLimiter,
+        attach_logging_handler,
+        setup_telemetry,
+    )
 except ImportError:
     setup_telemetry = None
     attach_logging_handler = None
+    ConfigRateLimiter = None
 
 from data_manager.api.app import create_app
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
@@ -164,6 +171,7 @@ class DataManagerApp:
         # Flush telemetry first
         try:
             from petrosa_otel import flush_telemetry
+
             flush_telemetry()
             logger.info("✅ Telemetry flushed")
         except ImportError:
@@ -207,6 +215,17 @@ class DataManagerApp:
         api.app.db_manager = self.db_manager
         backfill.backfill_orchestrator = getattr(self, "backfill_orchestrator", None)
         config.set_database_manager(self.db_manager)
+
+        # Initialize and set configuration rate limiter
+        if ConfigRateLimiter:
+            rate_limiter = ConfigRateLimiter(
+                mongodb_client=self.db_manager.mongodb_adapter,
+                service_name="data-manager",
+                per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
+                cooldown_seconds=int(os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")),
+            )
+            app.state.rate_limiter = rate_limiter
+            logger.info("✅ Configuration rate limiter initialized")
 
         config = uvicorn.Config(
             app,

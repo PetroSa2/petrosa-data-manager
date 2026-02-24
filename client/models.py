@@ -4,7 +4,7 @@ Data models for Data Manager Client requests and responses.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ class QueryOptions(BaseModel):
 class InsertOptions(BaseModel):
     """Options for inserting data."""
 
-    data: Union[dict[str, Any], list[dict[str, Any]]] = Field(
+    data: dict[str, Any] | list[dict[str, Any]] = Field(
         ..., description="Data to insert"
     )
     schema: str | None = Field(None, description="Schema name for validation")

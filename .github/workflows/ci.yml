@@ -78,9 +78,11 @@ jobs:
 
       - name: Checkout petrosa_k8s
         uses: actions/checkout@v4
+        continue-on-error: true
         with:
           repository: PetroSa2/petrosa_k8s
           path: petrosa_k8s
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

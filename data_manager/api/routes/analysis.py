@@ -600,16 +600,16 @@ async def market_overview(
                 overview_list = list(overview.items())
                 if sort_by == "volatility":
                     overview_list.sort(
-                        key=lambda x: float(x[1]["volatility"]["annualized"])
-                        if x[1]
-                        else 0,
+                        key=lambda x: (
+                            float(x[1]["volatility"]["annualized"]) if x[1] else 0
+                        ),
                         reverse=(sort_order == "desc"),
                     )
                 elif sort_by == "volume":
                     overview_list.sort(
-                        key=lambda x: float(x[1]["volume"]["spike_ratio"])
-                        if x[1]
-                        else 0,
+                        key=lambda x: (
+                            float(x[1]["volume"]["spike_ratio"]) if x[1] else 0
+                        ),
                         reverse=(sort_order == "desc"),
                     )
                 elif sort_by == "trend":
