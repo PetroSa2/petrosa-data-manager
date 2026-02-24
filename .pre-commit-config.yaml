@@ -3,6 +3,16 @@
 # Replaces: black, isort, flake8 with Ruff
 
 repos:
+  # Local hooks (No external dependencies needed)
+  - repo: local
+    hooks:
+      - id: check-test-assertions
+        name: 🧪 Check tests have assertions
+        entry: python3 scripts/check-test-assertions.py
+        language: system
+        pass_filenames: true
+        types: [python]
+        files: ^(tests/|test_|.*_test.py)
   # ==================================================================
   # CODE QUALITY - Ruff (All-in-one)
   # ==================================================================
