@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class ConfigurationRepository(BaseRepository):
     """
     Repository for managing application and strategy configurations in MongoDB.
-    
+
     Provides auditing and rollback capabilities.
     """
 
@@ -23,7 +23,7 @@ class ConfigurationRepository(BaseRepository):
         """Get the current application configuration."""
         if not self.mongodb or not self.mongodb.is_connected:
             return None
-            
+
         try:
             # Application config is a single document in app_config collection
             config = await self.mongodb.db.app_config.find_one({})
@@ -35,9 +35,9 @@ class ConfigurationRepository(BaseRepository):
             return None
 
     async def upsert_app_config(
-        self, 
-        parameters: dict[str, Any], 
-        changed_by: str, 
+        self,
+        parameters: dict[str, Any],
+        changed_by: str,
         reason: str | None = None
     ) -> dict[str, Any] | None:
         """
@@ -49,7 +49,7 @@ class ConfigurationRepository(BaseRepository):
         try:
             now = datetime.utcnow()
             existing = await self.get_app_config()
-            
+
             old_params = existing.get("parameters") if existing else None
             version = (existing.get("version", 0) + 1) if existing else 1
             created_at = existing.get("created_at", now) if existing else now
@@ -78,9 +78,9 @@ class ConfigurationRepository(BaseRepository):
                 reason=reason,
                 version=version
             )
-            
+
             await self.mongodb.db.app_config_audit.insert_one(audit_record.model_dump(by_alias=True))
-            
+
             return config_doc
 
         except Exception as e:
@@ -88,8 +88,8 @@ class ConfigurationRepository(BaseRepository):
             return None
 
     async def get_strategy_config(
-        self, 
-        strategy_id: str, 
+        self,
+        strategy_id: str,
         symbol: str | None = None,
         side: str | None = None
     ) -> dict[str, Any] | None:
@@ -100,7 +100,7 @@ class ConfigurationRepository(BaseRepository):
         try:
             query = {"strategy_id": strategy_id, "symbol": symbol, "side": side}
             collection = self.mongodb.db.strategy_configs
-            
+
             config = await collection.find_one(query)
             if config:
                 config.pop("_id", None)
@@ -126,7 +126,7 @@ class ConfigurationRepository(BaseRepository):
         try:
             now = datetime.utcnow()
             existing = await self.get_strategy_config(strategy_id, symbol, side)
-            
+
             old_params = existing.get("parameters") if existing else None
             version = (existing.get("version", 0) + 1) if existing else 1
             created_at = existing.get("created_at", now) if existing else now
@@ -165,9 +165,9 @@ class ConfigurationRepository(BaseRepository):
                 reason=reason,
                 version=version
             )
-            
+
             await self.mongodb.db.strategy_config_audit.insert_one(audit_record.model_dump(by_alias=True))
-            
+
             return config_doc
 
         except Exception as e:
@@ -189,7 +189,7 @@ class ConfigurationRepository(BaseRepository):
         try:
             collection_name = "app_config_audit" if config_type == "application" else "strategy_config_audit"
             collection = self.mongodb.db[collection_name]
-            
+
             query = {}
             if strategy_id:
                 query["strategy_id"] = strategy_id
@@ -197,15 +197,15 @@ class ConfigurationRepository(BaseRepository):
                 query["symbol"] = symbol
             if side:
                 query["side"] = side
-                
+
             cursor = collection.find(query).sort("changed_at", -1).limit(limit)
             records = await cursor.to_list(length=limit)
-            
+
             for record in records:
                 record["_id"] = str(record["_id"])
                 if "changed_at" in record and isinstance(record["changed_at"], datetime):
                     record["changed_at"] = record["changed_at"].isoformat()
-                    
+
             return records
         except Exception as e:
             logger.error(f"Error fetching audit trail: {e}")
@@ -229,7 +229,7 @@ class ConfigurationRepository(BaseRepository):
             # 1. Find the target version parameters
             collection_name = "app_config_audit" if config_type == "application" else "strategy_config_audit"
             collection = self.mongodb.db[collection_name]
-            
+
             query = {}
             if strategy_id:
                 query["strategy_id"] = strategy_id
@@ -237,7 +237,7 @@ class ConfigurationRepository(BaseRepository):
                 query["symbol"] = symbol
             if side:
                 query["side"] = side
-                
+
             if target_version:
                 query["version"] = target_version
                 target_record = await collection.find_one(query)
@@ -256,7 +256,7 @@ class ConfigurationRepository(BaseRepository):
 
             # 2. Apply the parameters as a new version
             rollback_reason = reason or f"Rollback to version {target_record.get('version')}"
-            
+
             if config_type == "application":
                 result = await self.upsert_app_config(
                     parameters=target_params,

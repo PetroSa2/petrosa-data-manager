@@ -12,7 +12,9 @@ import constants
 from data_manager.db import get_adapter
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
-from data_manager.db.repositories.configuration_repository import ConfigurationRepository
+from data_manager.db.repositories.configuration_repository import (
+    ConfigurationRepository,
+)
 
 logger = logging.getLogger(__name__)
 

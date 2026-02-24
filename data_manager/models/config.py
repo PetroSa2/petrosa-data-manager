@@ -11,16 +11,16 @@ from pydantic import BaseModel, Field
 class ConfigAudit(BaseModel):
     """Configuration audit record."""
 
-    id: Optional[str] = Field(None, alias="_id")
+    id: str | None = Field(None, alias="_id")
     config_type: str = Field(..., description="Type of config: 'application' or 'strategy'")
-    strategy_id: Optional[str] = Field(None, description="Strategy identifier")
-    symbol: Optional[str] = Field(None, description="Trading symbol")
+    strategy_id: str | None = Field(None, description="Strategy identifier")
+    symbol: str | None = Field(None, description="Trading symbol")
     action: str = Field(..., description="Action: 'CREATE', 'UPDATE', 'DELETE', 'ROLLBACK'")
-    old_parameters: Optional[dict[str, Any]] = Field(None, description="Previous values")
-    new_parameters: Optional[dict[str, Any]] = Field(None, description="New values")
+    old_parameters: dict[str, Any] | None = Field(None, description="Previous values")
+    new_parameters: dict[str, Any] | None = Field(None, description="New values")
     changed_by: str = Field(..., description="Who made the change")
     changed_at: datetime = Field(default_factory=datetime.utcnow)
-    reason: Optional[str] = Field(None, description="Reason for change")
+    reason: str | None = Field(None, description="Reason for change")
     version: int = Field(..., description="Configuration version after change")
 
 
@@ -28,11 +28,11 @@ class ConfigurationDocument(BaseModel):
     """Generic configuration document for storage."""
 
     config_type: str
-    strategy_id: Optional[str] = None
-    symbol: Optional[str] = None
+    strategy_id: str | None = None
+    symbol: str | None = None
     parameters: dict[str, Any]
     version: int = 1
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     changed_by: str
-    reason: Optional[str] = None
+    reason: str | None = None

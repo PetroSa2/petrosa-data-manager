@@ -13,6 +13,7 @@ import uvicorn
 from prometheus_client import start_http_server
 
 import constants
+
 # Optional OpenTelemetry imports
 try:
     from petrosa_otel import (

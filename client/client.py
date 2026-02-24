@@ -254,7 +254,7 @@ class DataManagerClient:
         self,
         database: str,
         collection: str,
-        data: Union[dict[str, Any], list[dict[str, Any]]],
+        data: dict[str, Any] | list[dict[str, Any]],
         schema: str | None = None,
         validate: bool = False,
     ) -> dict[str, Any]:

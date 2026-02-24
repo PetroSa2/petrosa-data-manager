@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 # Disable OpenTelemetry auto-initialization during tests

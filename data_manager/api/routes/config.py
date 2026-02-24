@@ -353,17 +353,17 @@ async def rollback_app_config(request: RollbackRequest):
     """Rollback application configuration."""
     if not db_manager or not db_manager.configuration:
         raise HTTPException(status_code=503, detail="Database manager not available")
-    
+
     success, error, config = await db_manager.configuration.rollback(
         config_type="application",
         changed_by=request.changed_by,
         target_version=request.target_version,
         reason=request.reason
     )
-    
+
     if not success:
         raise HTTPException(status_code=400, detail=error)
-        
+
     return await get_application_config()
 
 
@@ -377,7 +377,7 @@ async def rollback_strategy_config(
     """Rollback strategy configuration."""
     if not db_manager or not db_manager.configuration:
         raise HTTPException(status_code=503, detail="Database manager not available")
-    
+
     success, error, config = await db_manager.configuration.rollback(
         config_type="strategy",
         strategy_id=strategy_id,
@@ -387,10 +387,10 @@ async def rollback_strategy_config(
         target_version=request.target_version,
         reason=request.reason
     )
-    
+
     if not success:
         raise HTTPException(status_code=400, detail=error)
-        
+
     return await get_strategy_config(strategy_id, symbol, side)
 
 

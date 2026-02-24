@@ -3,13 +3,13 @@ Pydantic models for schema registry operations.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, validator
 
 
-class SchemaStatus(str, Enum):
+class SchemaStatus(StrEnum):
     """Schema status enumeration."""
 
     ACTIVE = "ACTIVE"
@@ -17,7 +17,7 @@ class SchemaStatus(str, Enum):
     DELETED = "DELETED"
 
 
-class CompatibilityMode(str, Enum):
+class CompatibilityMode(StrEnum):
     """Schema compatibility mode enumeration."""
 
     BACKWARD = "BACKWARD"  # New schema can read data written with old schema

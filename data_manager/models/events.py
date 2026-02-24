@@ -3,13 +3,13 @@ NATS event message models.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """Market data event types."""
 
     TRADE = "trade"
