@@ -36,9 +36,10 @@ def mock_nats_client():
 @pytest.fixture
 def mock_mongodb_client():
     """Create a mock MongoDB client."""
-    client = Mock()
-    db = Mock()
-    collection = Mock()
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    db = MagicMock()
+    collection = MagicMock()
 
     # Setup standard return values
     collection.find_one.return_value = None
@@ -56,10 +57,11 @@ def mock_mongodb_client():
 @pytest.fixture
 def mock_mysql_connection():
     """Create a mock MySQL connection."""
-    connection = Mock()
-    cursor = Mock()
+    from unittest.mock import MagicMock
+    connection = MagicMock()
+    cursor = MagicMock()
 
-    cursor.execute = Mock()
+    cursor.execute = MagicMock()
     cursor.fetchall.return_value = []
     cursor.fetchone.return_value = None
 
@@ -116,3 +118,18 @@ def sample_klines_data():
             "volume": 150.0,
         },
     ]
+
+
+@pytest.fixture
+def mock_db_manager(mock_mongodb_client, mock_mysql_connection):
+    """Create a mock database manager."""
+    manager = Mock()
+    manager.mongodb = mock_mongodb_client
+    manager.mysql = mock_mysql_connection
+    manager.initialize = AsyncMock()
+    manager.close = AsyncMock()
+
+    # Mock configuration repository
+    manager.configuration = AsyncMock()
+
+    return manager

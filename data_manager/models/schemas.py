@@ -3,11 +3,10 @@ Pydantic models for schema registry operations.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, validator
-from strenum import StrEnum
 
 
 class SchemaStatus(StrEnum):

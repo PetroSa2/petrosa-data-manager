@@ -580,3 +580,152 @@ async def validate_config(request: ConfigValidationRequest):
     except Exception as e:
         logger.error(f"Error validating config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Configuration Rollback Proxy Endpoints ---
+
+
+@router.post("/{service}/rollback", summary="Proxy configuration rollback to service")
+async def proxy_rollback(
+    service: str,
+    request: RollbackRequest,
+    strategy_id: str | None = Query(None),
+    symbol: str | None = Query(None),
+    side: str | None = Query(None),
+):
+    """
+    Proxy configuration rollback to a specific service.
+
+    Supported services: ta-bot, realtime-strategies, tradeengine
+    """
+    if service not in SERVICE_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+
+    base_url = SERVICE_URLS[service]
+
+    # Map service to its specific rollback endpoint
+    if service == "ta-bot":
+        if strategy_id:
+            url = f"{base_url}/api/v1/strategies/{strategy_id}/rollback"
+        else:
+            url = f"{base_url}/api/v1/config/application/rollback"
+    elif service == "tradeengine":
+        url = f"{base_url}/api/v1/config/rollback"
+    elif service == "realtime-strategies":
+        if not strategy_id:
+            raise HTTPException(
+                status_code=400,
+                detail="strategy_id is required for realtime-strategies",
+            )
+        url = f"{base_url}/api/v1/strategies/{strategy_id}/rollback"
+
+    # Prepare query parameters
+    params = {}
+    if symbol:
+        params["symbol"] = symbol
+    if side:
+        params["side"] = side
+
+    logger.info(f"Proxying rollback request to {service} at {url} (params: {params})")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=request.model_dump(), params=params)
+
+            if response.status_code >= 400:
+                logger.error(
+                    f"Proxy rollback to {service} failed with {response.status_code}: {response.text}"
+                )
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Service {service} returned error: {response.text}",
+                )
+
+            logger.info(f"Proxy rollback to {service} successful")
+            return response.json()
+
+    except httpx.TimeoutException:
+        logger.error(f"Timeout while proxying rollback to {service}")
+        raise HTTPException(
+            status_code=504, detail=f"Timeout connecting to {service} service"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error proxying rollback to {service}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to proxy rollback to {service}: {str(e)}"
+        )
+
+
+@router.get("/{service}/history", summary="Proxy configuration history to service")
+async def proxy_history(
+    service: str,
+    strategy_id: str | None = Query(None),
+    symbol: str | None = Query(None),
+    side: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """
+    Proxy configuration history request to a specific service.
+
+    Supported services: ta-bot, realtime-strategies, tradeengine
+    """
+    if service not in SERVICE_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+
+    base_url = SERVICE_URLS[service]
+
+    # Map service to its specific history/audit endpoint
+    if service == "ta-bot":
+        if strategy_id:
+            url = f"{base_url}/api/v1/strategies/{strategy_id}/audit"
+        else:
+            url = f"{base_url}/api/v1/config/application/audit"
+    elif service == "tradeengine":
+        url = f"{base_url}/api/v1/config/history"
+    elif service == "realtime-strategies":
+        if not strategy_id:
+            raise HTTPException(
+                status_code=400,
+                detail="strategy_id is required for realtime-strategies",
+            )
+        url = f"{base_url}/api/v1/strategies/{strategy_id}/audit"
+
+    # Prepare query parameters
+    params = {"limit": limit}
+    if symbol:
+        params["symbol"] = symbol
+    if side:
+        params["side"] = side
+
+    logger.info(f"Proxying history request to {service} at {url} (params: {params})")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params)
+
+            if response.status_code >= 400:
+                logger.error(
+                    f"Proxy history to {service} failed with {response.status_code}: {response.text}"
+                )
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Service {service} returned error: {response.text}",
+                )
+
+            logger.info(f"Proxy history to {service} successful")
+            return response.json()
+
+    except httpx.TimeoutException:
+        logger.error(f"Timeout while proxying history to {service}")
+        raise HTTPException(
+            status_code=504, detail=f"Timeout connecting to {service} service"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error proxying history to {service}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to proxy history to {service}: {str(e)}"
+        )

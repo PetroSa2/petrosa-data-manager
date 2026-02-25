@@ -28,7 +28,7 @@ async def test_main_otel_enabled_with_endpoint(mock_app_class, mock_constants, c
     mock_app_instance.start.side_effect = KeyboardInterrupt()
 
     with patch(
-        "data_manager.main.initialize_telemetry_standard"
+        "data_manager.main.setup_telemetry"
     ) as mock_init_telemetry:
         with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
             with caplog.at_level(logging.INFO):
@@ -78,7 +78,7 @@ async def test_main_otel_disabled(mock_app_class, mock_constants, caplog):
     mock_app_instance.start.side_effect = KeyboardInterrupt()
 
     with patch(
-        "data_manager.main.initialize_telemetry_standard"
+        "data_manager.main.setup_telemetry"
     ) as mock_init_telemetry:
         with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
             with caplog.at_level(logging.INFO):
@@ -118,7 +118,7 @@ async def test_main_otel_endpoint_missing(mock_app_class, mock_constants, caplog
     mock_app_instance.start.side_effect = KeyboardInterrupt()
 
     with patch(
-        "data_manager.main.initialize_telemetry_standard"
+        "data_manager.main.setup_telemetry"
     ) as mock_init_telemetry:
         with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
             with caplog.at_level(logging.ERROR):
@@ -163,7 +163,7 @@ async def test_main_otel_import_error(mock_app_class, mock_constants, caplog):
 
     # Mock ImportError for petrosa_otel
     with patch(
-        "data_manager.main.initialize_telemetry_standard",
+        "data_manager.main.setup_telemetry",
         side_effect=ImportError("No module named 'petrosa_otel'"),
     ):
         with caplog.at_level(logging.WARNING):
