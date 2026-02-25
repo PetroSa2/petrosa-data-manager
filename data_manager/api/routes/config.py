@@ -101,9 +101,6 @@ class RollbackRequest(BaseModel):
     target_version: int | None = Field(
         None, description="Specific version to rollback to"
     )
-    rollback_id: str | None = Field(
-        None, description="Specific audit record ID to rollback to"
-    )
     changed_by: str = Field(..., description="Who is performing the rollback")
     reason: str | None = Field(None, description="Reason for rollback")
 
@@ -621,10 +618,6 @@ async def proxy_rollback(
                 detail="strategy_id is required for realtime-strategies",
             )
         url = f"{base_url}/api/v1/strategies/{strategy_id}/rollback"
-    else:
-        raise HTTPException(
-            status_code=400, detail=f"Proxy not implemented for: {service}"
-        )
 
     # Prepare query parameters
     params = {}
@@ -698,10 +691,6 @@ async def proxy_history(
                 detail="strategy_id is required for realtime-strategies",
             )
         url = f"{base_url}/api/v1/strategies/{strategy_id}/audit"
-    else:
-        raise HTTPException(
-            status_code=400, detail=f"Proxy not implemented for: {service}"
-        )
 
     # Prepare query parameters
     params = {"limit": limit}
