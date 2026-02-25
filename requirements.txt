@@ -35,6 +35,7 @@ petrosa-otel>=1.0.0
 
 # HTTP client
 httpx>=0.26.0
+tenacity>=8.2.0
 
 # File operations
 aiofiles>=23.2.1
