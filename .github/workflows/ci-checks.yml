@@ -132,8 +132,6 @@ jobs:
           pip install bandit[toml]
           bandit -r . \
             --configfile .bandit \
-            --severity-level medium \
-            --confidence-level medium \
             --format json \
             --output bandit-report.json
           echo "📊 Bandit Results:"

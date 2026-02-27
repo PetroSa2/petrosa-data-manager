@@ -14,3 +14,7 @@ exclude_dirs:
 ### Skips
 # B104: hardcoded_bind_all_interfaces
 skips: ['B104']
+
+### Levels
+severity: medium
+confidence: medium
