@@ -11,50 +11,24 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-tags: true
-    - name: Configure Git
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-    - name: Generate Semantic Version
+    - name: Set version
       id: version
       run: |
-        LATEST_VERSION=$(git tag --sort=-version:refname | grep '^v[0-9]' | head -1)
-        if [ -z "$LATEST_VERSION" ]; then
-          VERSION="v1.0.0"
-        else
-          if [[ "$LATEST_VERSION" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            MAJOR="${BASH_REMATCH[1]}"
-            MINOR="${BASH_REMATCH[2]}"
-            PATCH="${BASH_REMATCH[3]}"
-            NEW_PATCH=$((PATCH + 1))
-            VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-          else
-            VERSION="v1.0.0"
-          fi
-        fi
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        echo "Final generated version: ${VERSION}"
-    - name: Create and Push Tag
-      id: create-tag
+        BASE_VERSION="v1.2.14"
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        VERSION="${BASE_VERSION}-r${{ github.run_number }}-${SHORT_SHA}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Release version: $VERSION"
+
+    - name: Create tag
       run: |
         VERSION="${{ steps.version.outputs.version }}"
-        if git rev-parse "$VERSION" >/dev/null 2>&1; then
-          git tag -d "$VERSION"
-          git push origin ":refs/tags/$VERSION" || echo "Tag deletion from remote failed (may not exist remotely)"
-        fi
-        git tag "$VERSION"
+        git config --global user.email "action@github.com"
+        git config --global user.name "GitHub Action"
+        git tag -a "$VERSION" -m "Release $VERSION"
         git push origin "$VERSION"
 
   build-and-push:
