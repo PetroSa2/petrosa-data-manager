@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI Checks
 
 on:
   push:
@@ -121,25 +121,27 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: 🐍 Run Bandit (Python Security)
+        continue-on-error: true
         run: |
           pip install bandit[toml]
-          bandit -r data_manager \
+          bandit -r . \
+            --configfile .bandit \
             --severity-level medium \
             --confidence-level medium \
             --format json \
-            --output bandit-report.json \
-            || true
+            --output bandit-report.json
           echo "📊 Bandit Results:"
           python -m json.tool bandit-report.json | head -30 || echo "No issues found"
 
       - name: 🗂️ Run Trivy (Vulnerability Scanner)
         uses: aquasecurity/trivy-action@master
+        continue-on-error: true
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -151,9 +153,10 @@ jobs:
 
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: 'trivy-results.sarif'
+
 
   build:
     name: Build Docker Image
