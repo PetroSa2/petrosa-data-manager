@@ -41,8 +41,7 @@ def mock_async_client():
         mock_class.return_value = mock_instance
         yield mock_instance
 
-@pytest.mark.asyncio
-async def test_proxy_rollback_ta_bot_app(client, rollback_request, mock_async_client):
+def test_proxy_rollback_ta_bot_app(client, rollback_request, mock_async_client):
     """Test proxying app rollback to ta-bot."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -59,8 +58,7 @@ async def test_proxy_rollback_ta_bot_app(client, rollback_request, mock_async_cl
     assert "petrosa-ta-bot-service" in args[0]
     assert "application/rollback" in args[0]
 
-@pytest.mark.asyncio
-async def test_proxy_rollback_realtime_strategies(client, rollback_request, mock_async_client):
+def test_proxy_rollback_realtime_strategies(client, rollback_request, mock_async_client):
     """Test proxying strategy rollback to realtime-strategies."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -92,8 +90,7 @@ def test_proxy_rollback_missing_strategy_id(client, rollback_request):
     assert response.status_code == 400
     assert "strategy_id is required" in response.json()["detail"]
 
-@pytest.mark.asyncio
-async def test_proxy_history_tradeengine(client, mock_async_client):
+def test_proxy_history_tradeengine(client, mock_async_client):
     """Test proxying history request to tradeengine."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -110,8 +107,7 @@ async def test_proxy_history_tradeengine(client, mock_async_client):
     assert "config/history" in args[0]
     assert kwargs["params"]["limit"] == 10
 
-@pytest.mark.asyncio
-async def test_proxy_timeout_handling(client, rollback_request, mock_async_client):
+def test_proxy_timeout_handling(client, rollback_request, mock_async_client):
     """Test timeout handling."""
     mock_async_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
 
@@ -119,8 +115,7 @@ async def test_proxy_timeout_handling(client, rollback_request, mock_async_clien
     assert response.status_code == 504
     assert "Timeout connecting" in response.json()["detail"]
 
-@pytest.mark.asyncio
-async def test_proxy_downstream_error_propagation(client, rollback_request, mock_async_client):
+def test_proxy_downstream_error_propagation(client, rollback_request, mock_async_client):
     """Test propagation of downstream errors."""
     mock_response = MagicMock()
     mock_response.status_code = 403

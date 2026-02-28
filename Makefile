@@ -55,18 +55,18 @@ clean: ## Clean up cache and temporary files
 # Code Quality
 format: ## Format code with ruff (replaces black + isort)
 	@echo "🎨 Formatting code with ruff..."
-	python3 -m ruff format .
-	python3 -m ruff check . --select I --fix
+	$(PYTHON) -m ruff format .
+	$(PYTHON) -m ruff check . --select I --fix
 	@echo "✅ Code formatting completed!"
 
 lint: ## Run linting checks with ruff (replaces flake8)
 	@echo "✨ Running linting checks..."
-	python3 -m ruff check . --fix
+	$(PYTHON) -m ruff check . --fix
 	@echo "✅ Linting completed!"
 
 type-check: ## Run type checking with mypy
 	@echo "🔍 Running type checking with mypy..."
-	python3 -m mypy . --ignore-missing-imports || echo "⚠️  Type checking found issues (non-blocking)"
+	$(PYTHON) -m mypy . --ignore-missing-imports || echo "⚠️  Type checking found issues (non-blocking)"
 	@echo "✅ Type checking completed!"
 
 pre-commit: ## Run pre-commit hooks on all files
@@ -115,7 +115,7 @@ security: ## Run comprehensive security scans (gitleaks, detect-secrets, bandit,
 	fi
 	@echo ""
 	@echo "3️⃣ Bandit (Python Security)..."
-	@python3 -m bandit -r . -f json -o bandit-report.json --configfile .bandit
+	@$(PYTHON) -m bandit -r . -f json -o bandit-report.json --configfile .bandit
 	@if [ -f bandit-report.json ]; then \
 		echo "📊 Bandit found issues. Check bandit-report.json"; \
 		python -m json.tool bandit-report.json | grep -A 5 '"issue_severity"' | head -20 || true; \
