@@ -171,8 +171,9 @@ jobs:
         id: generate-token
         with:
           app_id: ${{ secrets.GITOPS_APP_ID }}
-          installation_id: ${{ secrets.GITOPS_APP_INSTALLATION_ID }}
           private_key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          installation_retrieval_mode: id
+          installation_retrieval_payload: ${{ secrets.GITOPS_APP_INSTALLATION_ID }}
 
       - name: Checkout petrosa_k8s
         uses: actions/checkout@v4
