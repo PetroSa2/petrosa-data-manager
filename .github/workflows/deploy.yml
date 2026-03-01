@@ -152,88 +152,51 @@ jobs:
         password: ${{ secrets.PYPI_TOKEN }}
         verbose: true
 
-  deploy:
-    name: Deploy to Kubernetes
+  gitops-update:
+    name: GitOps Update
     needs: [build-and-push, create-release]
     runs-on: ubuntu-latest
-    environment: production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    - name: Install kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'v1.28.0'
-    - name: Configure kubectl for MicroK8s
-      run: |
-        mkdir -p $HOME/.kube
-        echo "${{ secrets.KUBE_CONFIG_DATA }}" | base64 --decode > $HOME/.kube/config
-        chmod 600 $HOME/.kube/config
-        kubectl cluster-info --insecure-skip-tls-verify
-        kubectl get nodes --insecure-skip-tls-verify
-    - name: Update Image Tags in Manifests
-      run: |
-        IMAGE_TAG="${{ needs.build-and-push.outputs.version }}"
-        
-        echo "Using image tag: ${IMAGE_TAG}"
-        
-        # Update the image tag in Kubernetes manifests
-        # Replace VERSION_PLACEHOLDER with the actual version tag
-        find k8s/ -name "*.yaml" -o -name "*.yml" | xargs sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g"
-        
-        # Also replace the image name to use the correct format with secrets
-        find k8s/ -name "*.yaml" -o -name "*.yml" | xargs sed -i "s|petrosa-data-manager:VERSION_PLACEHOLDER|${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager:${IMAGE_TAG}|g"
-        
-        echo "Updated manifests with image: ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager:${IMAGE_TAG}"
-        
-        # Verify the changes
-        echo "Verifying image tag updates:"
-        grep -r "image:.*petrosa-data-manager" k8s/ || echo "No image references found"
-        
-        # Double-check that no VERSION_PLACEHOLDER remain
-        PLACEHOLDER_COUNT=$(grep -r "VERSION_PLACEHOLDER" k8s/ | wc -l || echo "0")
-        if [ "$PLACEHOLDER_COUNT" -gt 0 ]; then
-          echo "⚠️ Warning: Found $PLACEHOLDER_COUNT references to VERSION_PLACEHOLDER"
-          grep -r "VERSION_PLACEHOLDER" k8s/
-        else
-          echo "✅ All image references updated to versioned tag: ${IMAGE_TAG}"
-        fi
-    
-    - name: Apply Kubernetes Manifests
-      run: |
-        # Apply all manifests from this repository's k8s/ directory
-        kubectl apply --insecure-skip-tls-verify -f k8s/ -n ${{ env.NAMESPACE }}
-        echo "✅ Kubernetes manifests applied"
-    - name: Wait for deployment to be ready
-      run: |
-        kubectl rollout status deployment/petrosa-data-manager -n ${{ env.NAMESPACE }} --timeout=300s --insecure-skip-tls-verify
+      - name: Checkout petrosa_k8s
+        uses: actions/checkout@v4
+        with:
+          repository: PetroSa2/petrosa_k8s
+          ref: main
+          token: ${{ secrets.GITOPS_BOT_TOKEN }}
+          path: petrosa_k8s
 
-    - name: Verify deployment
-      run: |
-        echo "🔍 Verifying deployment..."
-        kubectl get pods -n ${{ env.NAMESPACE }} -l app=data-manager --insecure-skip-tls-verify
-        kubectl get svc -n ${{ env.NAMESPACE }} -l app=data-manager --insecure-skip-tls-verify
+      - name: Rebase on main
+        run: ./scripts/gitops-rebase-main.sh
+        working-directory: petrosa_k8s
 
-        echo ""
-        echo "📊 Deployment Summary:"
-        echo "  ✅ Kubernetes resources deployed successfully"
-        echo "  🐳 Image: ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager:${{ needs.build-and-push.outputs.version }}"
-        echo "  📍 Namespace: ${{ env.NAMESPACE }}"
-        echo "  🔗 Service: petrosa-data-manager"
-        echo ""
-        echo "🔍 Next steps:"
-        echo "  1. Check that pods are running: kubectl get pods -n ${{ env.NAMESPACE }} --insecure-skip-tls-verify"
-        echo "  2. Verify service is accessible: kubectl get svc -n ${{ env.NAMESPACE }} --insecure-skip-tls-verify"
-        echo "  3. Check health: kubectl port-forward svc/petrosa-data-manager 8000:80 -n ${{ env.NAMESPACE }}"
-        echo "  4. Test API: curl http://localhost:8000/health/liveness"
-        echo "  5. Monitor logs: kubectl logs -l app=data-manager -n ${{ env.NAMESPACE }} --tail=100"
-        echo ""
-        echo "🔍 Verify deployed image version:"
-        echo "  kubectl get deployment petrosa-data-manager -n ${{ env.NAMESPACE }} --insecure-skip-tls-verify -o jsonpath='{.spec.template.spec.containers[*].image}'"
+      - name: Update data-manager image tag in GitOps manifests
+        run: |
+          VERSION="${{ needs.build-and-push.outputs.version }}"
+          # Update the image tag in manifests
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/VERSION_PLACEHOLDER/$VERSION/g"
+          
+          # Also update the version label if needed
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/version: VERSION_PLACEHOLDER/version: $VERSION/g"
+          
+          echo "Updated data-manager image tag to $VERSION in petrosa_k8s/k8s/data-manager/"
+
+      - name: Commit and push to petrosa_k8s
+        working-directory: petrosa_k8s
+        run: |
+          git config user.name "gitops-bot"
+          git config user.email "gitops-bot@users.noreply.github.com"
+          git add k8s/data-manager/
+          if git diff --staged --quiet; then
+            echo "No changes to commit (version might already be up to date)"
+          else
+            git commit -m "gitops: data-manager image ${{ needs.build-and-push.outputs.version }}"
+            git push origin main
+          fi
 
   notify:
     name: notify
-    needs: [build-and-push, deploy, create-release]
+    needs: [build-and-push, gitops-update, create-release]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -241,15 +204,18 @@ jobs:
       run: |
         VERSION="${{ needs.create-release.outputs.version }}"
         IMAGE_TAG="${{ needs.build-and-push.outputs.version }}"
-        if [ "${{ needs.deploy.result }}" == "success" ]; then
-          echo "✅ Deployment successful!"
+        
+        if [ "${{ needs.gitops-update.result }}" == "success" ]; then
+          echo "✅ Build, Push, and GitOps Update successful!"
           echo "📦 Version: ${VERSION}"
-          echo "🐳 Image Tag: ${IMAGE_TAG}"
-          echo "🚀 petrosa-data-manager deployed to MicroK8s"
+          echo "🚀 Deployed via petrosa_k8s hub"
+        elif [ "${{ needs.gitops-update.result }}" == "skipped" ] && [ "${{ github.event_name }}" == "pull_request" ]; then
+          echo "ℹ️ Pull Request: Build and Push successful (GitOps update skipped for PR)"
+          echo "📦 Version: ${VERSION}"
         else
-          echo "❌ Deployment failed!"
+          echo "❌ GitOps Update failed (or was unsuccessful)!"
           echo "📦 Version: ${VERSION}"
-          echo "🐳 Image Tag: ${IMAGE_TAG}"
+          echo "🐳 Image pushed, but manifest update in petrosa_k8s failed."
         fi
 
   cleanup:

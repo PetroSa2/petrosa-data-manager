@@ -3,14 +3,7 @@ name: Manual Deployment with Version Bump
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'Target environment'
-        required: true
-        type: choice
-        options:
-          - staging
-          - production
-        default: staging
+
       version_bump:
         description: 'Version bump type'
         required: true
@@ -61,15 +54,17 @@ jobs:
           git tag -a "${{ steps.bump_version.outputs.new_version }}" -m "Manual deployment: ${{ inputs.reason }}"
           git push origin "${{ steps.bump_version.outputs.new_version }}"
           
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
           
-      - name: Login to GitHub Container Registry
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
           
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -77,77 +72,46 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/petrosa2/data-manager:${{ steps.bump_version.outputs.new_version }}
-            ghcr.io/petrosa2/data-manager:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager:${{ steps.bump_version.outputs.new_version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           
-      - name: Update deployment manifest with new version
-        run: |
-          VERSION="${{ steps.bump_version.outputs.new_version }}"
-          ENV="${{ inputs.environment }}"
-          
-          echo "Updating manifests for data-manager in $ENV environment with version $VERSION"
-          
-          # Find and update deployment manifests
-          find k8s/ -name "*.yaml" -type f | while read -r file; do
-            echo "Checking $file"
-            if grep -q "VERSION_PLACEHOLDER" "$file"; then
-              sed -i "s/VERSION_PLACEHOLDER/$VERSION/g" "$file"
-              echo "Updated VERSION_PLACEHOLDER in $file to $VERSION"
-            fi
-          done
-          
-          # Show what was changed
-          if git diff --quiet; then
-            echo "No VERSION_PLACEHOLDER found in manifests (this is OK for manual deployments)"
-          else
-            echo "Changes made:"
-            git diff k8s/
-          fi
-          
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
+      - name: Checkout petrosa_k8s
+        uses: actions/checkout@v4
         with:
-          version: 'latest'
-          
-      - name: Configure kubeconfig
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-          # Validate kubeconfig
-          if ! kubectl config view --kubeconfig ~/.kube/config > /dev/null 2>&1; then
-            echo "ERROR: Decoded kubeconfig is invalid or malformed."
-            exit 1
-          fi
-          echo "✅ Kubeconfig validated successfully"
-          
-      - name: Deploy to Kubernetes
+          repository: PetroSa2/petrosa_k8s
+          ref: main
+          token: ${{ secrets.GITOPS_BOT_TOKEN }}
+          path: petrosa_k8s
+
+      - name: Rebase on main
+        run: ./scripts/gitops-rebase-main.sh
+        working-directory: petrosa_k8s
+
+      - name: Update data-manager image tag in GitOps manifests
         run: |
           VERSION="${{ steps.bump_version.outputs.new_version }}"
-          ENV="${{ inputs.environment }}"
+          # Update the image tag in manifests
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/VERSION_PLACEHOLDER/$VERSION/g"
           
-          echo "Deploying data-manager version $VERSION to $ENV"
+          # Also update the version label if needed
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/version: VERSION_PLACEHOLDER/version: $VERSION/g"
           
-          # Update deployment with new image tag
-          # NOTE: --insecure-skip-tls-verify is required due to infrastructure limitation:
-          # External cluster IP (15.235.72.170:35902) is not in certificate SAN.
-          # SECURITY: This is a known limitation. Future improvement: update certificate
-          # to include external IP or use load balancer with proper certificate.
-          # MITIGATION: Workflow runs in trusted GitHub Actions environment.
-          kubectl set image deployment/petrosa-data-manager \
-            data-manager=ghcr.io/petrosa2/data-manager:$VERSION \
-            --namespace=petrosa-apps \
-            --insecure-skip-tls-verify
-          
-      - name: Wait for rollout
+          echo "Updated data-manager image tag to $VERSION in petrosa_k8s/k8s/data-manager/"
+
+      - name: Commit and push to petrosa_k8s
+        working-directory: petrosa_k8s
         run: |
-          echo "Waiting for rollout to complete..."
-          kubectl rollout status deployment/petrosa-data-manager \
-            --namespace=petrosa-apps \
-            --timeout=5m \
-            --insecure-skip-tls-verify
+          git config user.name "gitops-bot"
+          git config user.email "gitops-bot@users.noreply.github.com"
+          git add k8s/data-manager/
+          if git diff --staged --quiet; then
+            echo "No changes to commit (version might already be up to date)"
+          else
+            git commit -m "gitops: data-manager image ${{ steps.bump_version.outputs.new_version }}"
+            git push origin main
+          fi
           
       - name: Create deployment record
         run: |
@@ -162,7 +126,6 @@ jobs:
           Deployment Record
           ========================================
           Service: data-manager
-          Environment: ${{ inputs.environment }}
           Version: ${{ steps.bump_version.outputs.new_version }}
           Previous Version: ${{ steps.current_version.outputs.version }}
           Triggered by: ${{ github.actor }}
@@ -178,29 +141,32 @@ jobs:
       - name: Create summary
         run: |
           cat >> $GITHUB_STEP_SUMMARY << EOF
-          # Deployment Successful ✅
+          # GitOps Push Successful ✅
           
           ## Details
-          - **Service**: \`data-manager\`
-          - **Environment**: \`${{ inputs.environment }}\`
-          - **Version**: \`${{ steps.current_version.outputs.version }}\` → \`${{ steps.bump_version.outputs.new_version }}\`
-          - **Bump Type**: \`${{ inputs.version_bump }}\`
+          - **Service**: `data-manager`
+          - **Version**: `${{ steps.current_version.outputs.version }}` → `${{ steps.bump_version.outputs.new_version }}`
+          - **Bump Type**: `${{ inputs.version_bump }}`
           - **Triggered by**: @${{ github.actor }}
           - **Reason**: ${{ inputs.reason }}
           
+          ## GitOps Transition
+          The new image tag has been pushed to [PetroSa2/petrosa_k8s](https://github.com/PetroSa2/petrosa_k8s). 
+
+          The centralized GitOps workflow in `petrosa_k8s` will now:
+          1. Detect the change in `k8s/data-manager/`
+          2. Validate the manifests
+          3. Apply the changes to the Kubernetes cluster
+
           ## Verification
-          
-          Check deployment status:
-          \`\`\`bash
-          kubectl get pods -n petrosa-apps -l app=data-manager
-          kubectl logs -n petrosa-apps -l app=data-manager --tail=50
-          \`\`\`
-          
-          ## Rollback (if needed)
-          
-          \`\`\`bash
-          kubectl rollout undo deployment/petrosa-data-manager -n petrosa-apps
-          \`\`\`
+
+          Monitor the apply progress here:
+          - [petrosa_k8s Actions](https://github.com/PetroSa2/petrosa_k8s/actions/workflows/apply-k8s-changes.yml)
+
+          Once the `apply-k8s-changes` workflow finishes, you can verify on the cluster:
+          ```bash
+          kubectl get deployment petrosa-data-manager -n petrosa-apps
+          ```
           EOF
           
       - name: Notify on failure
@@ -211,7 +177,6 @@ jobs:
           
           ## Details
           - **Service**: \`data-manager\`
-          - **Environment**: \`${{ inputs.environment }}\`
           - **Version**: \`${{ steps.bump_version.outputs.new_version }}\`
           - **Triggered by**: @${{ github.actor }}
           
