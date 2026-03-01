@@ -118,7 +118,7 @@ jobs:
           RUN_NUMBER="${BASH_REMATCH[1]}"
           SHORT_SHA="${BASH_REMATCH[2]}"
           BASE_VERSION="${PYPI_SAFE_VERSION%-r${RUN_NUMBER}-${SHORT_SHA}}"
-          PYPI_SAFE_VERSION="${BASE_VERSION}.post${RUN_NUMBER}+${SHORT_SHA}"
+          PYPI_SAFE_VERSION="${BASE_VERSION}.post${RUN_NUMBER}"
         fi
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "pypi_version=${PYPI_VERSION}" >> $GITHUB_OUTPUT
