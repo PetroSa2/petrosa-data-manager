@@ -113,16 +113,24 @@ jobs:
         VERSION="${{ needs.create-release.outputs.version }}"
         # Strip 'v' prefix for PyPI version
         PYPI_VERSION="${VERSION#v}"
+        PYPI_SAFE_VERSION="${PYPI_VERSION}"
+        if [[ "$PYPI_SAFE_VERSION" =~ -r([0-9]+)-([0-9a-f]+)$ ]]; then
+          RUN_NUMBER="${BASH_REMATCH[1]}"
+          SHORT_SHA="${BASH_REMATCH[2]}"
+          BASE_VERSION="${PYPI_SAFE_VERSION%-r${RUN_NUMBER}-${SHORT_SHA}}"
+          PYPI_SAFE_VERSION="${BASE_VERSION}.post${RUN_NUMBER}+${SHORT_SHA}"
+        fi
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "pypi_version=${PYPI_VERSION}" >> $GITHUB_OUTPUT
-        echo "Using PyPI version: ${PYPI_VERSION}"
+        echo "pypi_safe_version=${PYPI_SAFE_VERSION}" >> $GITHUB_OUTPUT
+        echo "Using PyPI version: ${PYPI_SAFE_VERSION}"
     - name: Install Build Tools
       run: |
         python -m pip install --upgrade pip
         python -m pip install --upgrade build twine setuptools wheel
     - name: Build Package
       run: |
-        PYPI_VERSION="${{ steps.version.outputs.pypi_version }}"
+        PYPI_VERSION="${{ steps.version.outputs.pypi_safe_version }}"
         echo "Building client package with version: $PYPI_VERSION"
         
         # Write version to VERSION file (read by setup.py)
@@ -228,4 +236,3 @@ jobs:
       run: |
         echo "Cleaning up old Docker images..."
         echo "Docker Hub cleanup would happen here"
-
