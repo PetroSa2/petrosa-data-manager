@@ -190,11 +190,11 @@ jobs:
       - name: Update data-manager image tag in GitOps manifests
         run: |
           VERSION="${{ needs.build-and-push.outputs.version }}"
-          # Update the image tag in manifests
+          # Update the image tag and version labels in manifests robustly
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/image: .*\/petrosa-data-manager:.*/image: yurisa2\/petrosa-data-manager:$VERSION/g"
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/version: .*/version: $VERSION/g"
+          # Also handle any lingering placeholders
           find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/VERSION_PLACEHOLDER/$VERSION/g"
-          
-          # Also update the version label if needed
-          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/version: VERSION_PLACEHOLDER/version: $VERSION/g"
           
           echo "Updated data-manager image tag to $VERSION in petrosa_k8s/k8s/data-manager/"
 
