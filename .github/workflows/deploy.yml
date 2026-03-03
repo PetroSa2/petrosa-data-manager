@@ -194,12 +194,11 @@ jobs:
           find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -E -i "s|(image:[[:space:]]*[^[:space:]]*/petrosa-data-manager):[^[:space:]]*|\1:$VERSION|g"
           
           # Update version labels specifically (targets common label patterns)
-          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/app.kubernetes.io\/version: .*/app.kubernetes.io\/version: $VERSION/g"
-          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/version: VERSION_PLACEHOLDER/version: $VERSION/g"
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -E -i "s/(version|app.kubernetes.io\/version):.*/\1: $VERSION/g"
           
           # Also handle any lingering placeholders for backward compatibility
           find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -i "s/VERSION_PLACEHOLDER/$VERSION/g"
-          
+
           echo "Updated data-manager image tag to $VERSION in petrosa_k8s/k8s/data-manager/"
 
       - name: Commit and push to petrosa_k8s
