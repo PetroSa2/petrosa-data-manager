@@ -9,24 +9,32 @@ import signal
 import sys
 from typing import TYPE_CHECKING
 
+# 1. Setup OpenTelemetry FIRST (before any other imports that might use it)
+try:
+    from petrosa_otel import (
+        attach_logging_handler,
+        setup_telemetry,
+    )
+
+    if os.getenv("OTEL_NO_AUTO_INIT"):
+        # We need to import constants here or use env vars
+        # Since we want to be before local imports, let's use env vars or hardcoded defaults
+        service_name = os.getenv("OTEL_SERVICE_NAME", "data-manager")
+        setup_telemetry(
+            service_name=service_name,
+            service_type="async",
+            enable_mongodb=True,
+            auto_attach_logging=False,
+        )
+except ImportError:
+    setup_telemetry = None
+    attach_logging_handler = None
+
 import structlog
 import uvicorn
 from prometheus_client import start_http_server
 
 import constants
-
-# Optional OpenTelemetry imports
-try:
-    from petrosa_otel import (
-        ConfigRateLimiter,
-        attach_logging_handler,
-        setup_telemetry,
-    )
-except ImportError:
-    setup_telemetry = None
-    attach_logging_handler = None
-    ConfigRateLimiter = None
-
 from data_manager.api.app import create_app
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
@@ -217,15 +225,24 @@ class DataManagerApp:
         config.set_database_manager(self.db_manager)
 
         # Initialize and set configuration rate limiter
-        if ConfigRateLimiter:
-            rate_limiter = ConfigRateLimiter(
-                mongodb_client=self.db_manager.mongodb_adapter,
-                service_name="data-manager",
-                per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
-                cooldown_seconds=int(os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")),
+        try:
+            from petrosa_otel import ConfigRateLimiter
+
+            if ConfigRateLimiter:
+                rate_limiter = ConfigRateLimiter(
+                    mongodb_client=self.db_manager.mongodb_adapter,
+                    service_name="data-manager",
+                    per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
+                    cooldown_seconds=int(
+                        os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")
+                    ),
+                )
+                app.state.rate_limiter = rate_limiter
+                logger.info("✅ Configuration rate limiter initialized")
+        except ImportError:
+            logger.warning(
+                "petrosa_otel not found, skipping rate limiter initialization."
             )
-            app.state.rate_limiter = rate_limiter
-            logger.info("✅ Configuration rate limiter initialized")
 
         config = uvicorn.Config(
             app,
@@ -315,22 +332,6 @@ class DataManagerApp:
 
 async def main():
     """Main application entry point."""
-    # 1. Setup OpenTelemetry FIRST (before any logging configuration)
-    if setup_telemetry and not os.getenv("OTEL_NO_AUTO_INIT"):
-        try:
-            setup_telemetry(
-                service_name=constants.OTEL_SERVICE_NAME,
-                service_type="async",
-                enable_mongodb=True,
-                auto_attach_logging=False,  # Will attach manually after setup_logging()
-            )
-            logger.info("OpenTelemetry telemetry initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenTelemetry: {e}", exc_info=True)
-
-    # 2. Setup logging (may call basicConfig)
-    # Note: logging is already configured at module level
-
     # 3. Attach OTel logging handler LAST (after logging is configured)
     if attach_logging_handler:
         try:
