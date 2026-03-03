@@ -16,7 +16,7 @@ try:
         setup_telemetry,
     )
 
-    if os.getenv("OTEL_NO_AUTO_INIT"):
+    if not os.getenv("OTEL_NO_AUTO_INIT"):
         # We need to import constants here or use env vars
         # Since we want to be before local imports, let's use env vars or hardcoded defaults
         service_name = os.getenv("OTEL_SERVICE_NAME", "data-manager")
@@ -229,16 +229,27 @@ class DataManagerApp:
             from petrosa_otel import ConfigRateLimiter
 
             if ConfigRateLimiter:
-                rate_limiter = ConfigRateLimiter(
-                    mongodb_client=self.db_manager.mongodb_adapter,
-                    service_name="data-manager",
-                    per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
-                    cooldown_seconds=int(
-                        os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")
-                    ),
+                mongodb_client = (
+                    self.db_manager.mongodb_adapter
+                    if self.db_manager and getattr(self.db_manager, "mongodb_adapter", None)
+                    else None
                 )
-                app.state.rate_limiter = rate_limiter
-                logger.info("✅ Configuration rate limiter initialized")
+                if mongodb_client is not None:
+                    rate_limiter = ConfigRateLimiter(
+                        mongodb_client=mongodb_client,
+                        service_name="data-manager",
+                        per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
+                        cooldown_seconds=int(
+                            os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")
+                        ),
+                    )
+                    app.state.rate_limiter = rate_limiter
+                    logger.info("✅ Configuration rate limiter initialized")
+                else:
+                    logger.warning(
+                        "Database manager or MongoDB adapter not available; "
+                        "skipping configuration rate limiter initialization."
+                    )
         except ImportError:
             logger.warning(
                 "petrosa_otel not found, skipping rate limiter initialization."
