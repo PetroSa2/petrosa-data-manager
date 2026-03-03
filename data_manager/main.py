@@ -16,7 +16,9 @@ try:
         setup_telemetry,
     )
 
-    if not os.getenv("OTEL_NO_AUTO_INIT"):
+    # Inverted logic: call setup_telemetry() manually ONLY if auto-init is disabled
+    # via OTEL_NO_AUTO_INIT=1. This avoids conflicts with opentelemetry-instrument auto-init.
+    if os.getenv("OTEL_NO_AUTO_INIT"):
         # We need to import constants here or use env vars
         # Since we want to be before local imports, let's use env vars or hardcoded defaults
         service_name = os.getenv("OTEL_SERVICE_NAME", "data-manager")
