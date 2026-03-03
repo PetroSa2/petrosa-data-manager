@@ -57,11 +57,11 @@ class MarketDataEvent(BaseModel):
             event_name = actual_data.get("e", "").lower()
             if event_name == "trade" or event_name == "aggtrade":
                 event_type = EventType.TRADE
-            elif event_name == "24hrticker":
+            elif event_name in ("24hrticker", "24hrminiticker"):
                 event_type = EventType.TICKER
-            elif event_name == "depthlevel" or event_name == "depthupdate":
+            elif event_name in ("depthlevel", "depthupdate"):
                 event_type = EventType.DEPTH
-            elif event_name == "markpriceupdpdate":
+            elif event_name == "markpriceupdate":
                 event_type = EventType.MARK_PRICE
             elif event_name == "kline":
                 event_type = EventType.CANDLE
