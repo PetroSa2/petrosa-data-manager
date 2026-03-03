@@ -61,7 +61,7 @@ class MarketDataEvent(BaseModel):
                 event_type = EventType.TICKER
             elif event_name in ("depthlevel", "depthupdate"):
                 event_type = EventType.DEPTH
-            elif event_name == "markpriceupdate": # Fixed typo
+            elif event_name == "markpriceupdate":
                 event_type = EventType.MARK_PRICE
             elif event_name == "kline":
                 event_type = EventType.CANDLE
