@@ -203,7 +203,6 @@ jobs:
 
   pipeline:
     name: pipeline
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     needs: [lint, test, test-quality, security, documentation-standards]
     if: always() && (github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'pull_request'
