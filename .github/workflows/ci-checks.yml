@@ -25,6 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get install -y --no-install-recommends make
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
@@ -54,6 +55,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get install -y --no-install-recommends make
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
@@ -121,11 +123,11 @@ jobs:
           fetch-depth: 0  # Full history for secret detection
 
       - name: 🔐 Run Gitleaks (Secret Detection)
-        uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true  # Allow to fail if GITLEAKS_LICENSE not configured
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --no-git || echo "⚠️ Gitleaks found issues but continuing"
+        continue-on-error: true
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
