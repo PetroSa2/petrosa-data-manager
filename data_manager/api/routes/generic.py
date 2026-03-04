@@ -18,6 +18,147 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ---------------------------------------------------------------------------
+# Shared Internal Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _execute_query_internal(
+    database: str,
+    collection: str,
+    filter_dict: dict[str, Any] | None,
+    sort_dict: dict[str, int] | None,
+    limit: int,
+    offset: int,
+    field_list: list[str] | None,
+) -> dict[str, Any]:
+    """Internal helper to execute a query against a database and collection."""
+    if not api_module.db_manager:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+
+    adapter = _get_adapter(database)
+
+    # Execute query
+    if database == "mysql":
+        records = adapter.query_range(
+            collection=collection,
+            start=datetime.min,  # Get all records
+            end=datetime.max,
+            symbol=None,  # No symbol filtering for generic queries
+        )
+    else:  # MongoDB
+        records = await adapter.query_range(
+            collection=collection, start=datetime.min, end=datetime.max, symbol=None
+        )
+
+    # Apply filtering (basic implementation)
+    if filter_dict:
+        records = _apply_filter(records, filter_dict)
+
+    # Apply sorting
+    if sort_dict:
+        records = _apply_sort(records, sort_dict)
+
+    # Apply field selection
+    if field_list:
+        records = _apply_field_selection(records, field_list)
+
+    # Apply pagination
+    total_count = len(records)
+    paginated_records = records[offset : offset + limit]
+
+    # Track metrics
+    api_module.db_manager.increment_query_count(database)
+
+    return {
+        "data": paginated_records,
+        "pagination": {
+            "total": total_count,
+            "limit": limit,
+            "offset": offset,
+            "page": (offset // limit) + 1 if limit > 0 else 1,
+            "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
+            "has_next": offset + limit < total_count,
+            "has_previous": offset > 0,
+        },
+        "metadata": {
+            "database": database,
+            "collection": collection,
+            "records_returned": len(paginated_records),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Legacy Endpoints for Backward Compatibility
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/v1/data/query")
+async def legacy_query(request: dict[str, Any]) -> dict[str, Any]:
+    """
+    Legacy query endpoint used by older versions of data-extractor.
+    Forwards to generic CRUD logic.
+    """
+    database = request.get("database", "mongodb")
+    collection = request.get("collection")
+    if not collection:
+        raise HTTPException(status_code=400, detail="Collection name required")
+
+    try:
+        # Extract parameters from POST body
+        filter_dict = request.get("filter")
+        sort_dict = request.get("sort")
+        limit = request.get("limit", constants.API_DEFAULT_PAGE_SIZE)
+        offset = request.get("offset", 0)
+        fields = request.get("fields")
+
+        # Reuse shared query logic
+        return await _execute_query_internal(
+            database=database,
+            collection=collection,
+            filter_dict=filter_dict,
+            sort_dict=sort_dict,
+            limit=limit,
+            offset=offset,
+            field_list=fields,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Legacy query error: {e}", exc_info=True)
+        if api_module.db_manager:
+            api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/data/insert")
+async def legacy_insert(request: dict[str, Any]) -> dict[str, Any]:
+    """
+    Legacy insert endpoint used by older versions of data-extractor.
+    Forwards to generic insert_records logic.
+    """
+    database = request.get("database", "mongodb")
+    collection = request.get("collection")
+    records = request.get("records", [])
+
+    if not collection:
+        raise HTTPException(status_code=400, detail="Collection name required")
+
+    # Create InsertRequest object
+    insert_request = InsertRequest(data=records)
+
+    # Call the new generic implementation with explicit parameters
+    return await insert_records(
+        database=database,
+        collection=collection,
+        request=insert_request,
+        schema=None,
+        validate=False,
+    )
+
+
 async def _validate_data_against_schema(
     database: str, schema_name: str, data_list: list[dict[str, Any]]
 ) -> None:
@@ -154,59 +295,16 @@ async def get_records(
         sort_dict = json.loads(sort) if sort else {}
         field_list = fields.split(",") if fields else None
 
-        # Get appropriate adapter
-        adapter = _get_adapter(database)
-
-        # Execute query
-        if database == "mysql":
-            records = adapter.query_range(
-                collection=collection,
-                start=datetime.min,  # Get all records
-                end=datetime.max,
-                symbol=None,  # No symbol filtering for generic queries
-            )
-        else:  # MongoDB
-            records = await adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
-            )
-
-        # Apply filtering (basic implementation)
-        if filter_dict:
-            records = _apply_filter(records, filter_dict)
-
-        # Apply sorting
-        if sort_dict:
-            records = _apply_sort(records, sort_dict)
-
-        # Apply field selection
-        if field_list:
-            records = _apply_field_selection(records, field_list)
-
-        # Apply pagination
-        total_count = len(records)
-        paginated_records = records[offset : offset + limit]
-
-        # Track metrics
-        api_module.db_manager.increment_query_count(database)
-
-        return {
-            "data": paginated_records,
-            "pagination": {
-                "total": total_count,
-                "limit": limit,
-                "offset": offset,
-                "page": (offset // limit) + 1 if limit > 0 else 1,
-                "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
-                "has_next": offset + limit < total_count,
-                "has_previous": offset > 0,
-            },
-            "metadata": {
-                "database": database,
-                "collection": collection,
-                "records_returned": len(paginated_records),
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        }
+        # Use shared query logic
+        return await _execute_query_internal(
+            database=database,
+            collection=collection,
+            filter_dict=filter_dict,
+            sort_dict=sort_dict,
+            limit=limit,
+            offset=offset,
+            field_list=field_list,
+        )
 
     except json.JSONDecodeError as e:
         raise HTTPException(
