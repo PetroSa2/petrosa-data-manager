@@ -41,7 +41,7 @@ jobs:
   build-and-push:
     name: Build & Push
     needs: create-release
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
