@@ -10,11 +10,12 @@ name: Request Copilot Review
 
 on:
   pull_request:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     types: [opened, reopened, synchronize]
 
 jobs:
   request-copilot-review:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     permissions:
       pull-requests: write

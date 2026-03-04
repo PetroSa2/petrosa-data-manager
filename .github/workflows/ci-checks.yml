@@ -2,14 +2,16 @@ name: CI Checks
 
 on:
   push:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     branches: [ main, develop ]
   pull_request:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     branches: [ main, develop ]
 
 jobs:
   lint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Lint & Format Check
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
@@ -35,8 +37,8 @@ jobs:
         continue-on-error: true  # Allow type check failures initially
 
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test & Coverage
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     env:
       OTEL_NO_AUTO_INIT: 1
@@ -72,8 +74,8 @@ jobs:
           fail_ci_if_error: false
 
   test-quality:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test Quality Check
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     steps:
       - name: Checkout service code
@@ -105,8 +107,8 @@ jobs:
           echo "✅ All tests have assertions"
 
   security:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Security Scan
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     permissions:
       contents: read
@@ -161,8 +163,8 @@ jobs:
 
 
   build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Build Docker Image
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     needs: [lint, test]
     steps:
@@ -182,8 +184,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   documentation-standards:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Documentation Standards Check
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
@@ -205,7 +207,7 @@ jobs:
     name: pipeline
     runs-on: petrosa-org-runners
     needs: [lint, test, test-quality, security, documentation-standards]
-    if: always() && (github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'pull_request'
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - name: Validate upstream job results
         run: |
