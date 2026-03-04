@@ -409,3 +409,103 @@ async def get_funding(
     except Exception as e:
         logger.error(f"Error fetching funding rates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Legacy Endpoints for Backward Compatibility
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/v1/query")
+async def legacy_query(request: dict[str, Any]) -> dict[str, Any]:
+    """
+    Legacy query endpoint used by older versions of data-extractor.
+    Forwards to generic get_records logic.
+    """
+    from data_manager.api.routes.generic import get_records
+
+    database = request.get("database", "mongodb")
+    collection = request.get("collection")
+    if not collection:
+        raise HTTPException(status_code=400, detail="Collection name required")
+
+    # Extract parameters from POST body
+    # get_records expects them as Query parameters or strings
+    # We'll call it with a mock Request or extract logic
+    
+    # For now, let's just implement the logic here to avoid dependency issues
+    from data_manager.api.routes.generic import _get_adapter, _apply_filter, _apply_sort, _apply_field_selection
+    
+    try:
+        adapter = _get_adapter(database)
+        
+        # Query parameters from body
+        filter_dict = request.get("filter")
+        sort_dict = request.get("sort")
+        limit = request.get("limit", 100)
+        offset = request.get("offset", 0)
+        fields = request.get("fields")
+
+        # Execute query
+        if database == "mysql":
+            records = adapter.query_range(
+                collection=collection, start=datetime.min, end=datetime.max, symbol=None
+            )
+        else:  # MongoDB
+            records = await adapter.query_range(
+                collection=collection, start=datetime.min, end=datetime.max, symbol=None
+            )
+
+        # Apply operations
+        filtered_records = _apply_filter(records, filter_dict)
+        sorted_records = _apply_sort(filtered_records, sort_dict)
+        
+        total_count = len(sorted_records)
+        paginated_records = sorted_records[offset : offset + limit]
+        
+        final_records = _apply_field_selection(paginated_records, fields)
+
+        api_module.db_manager.increment_query_count(database)
+
+        return {
+            "data": final_records,
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+            },
+            "metadata": {
+                "database": database,
+                "collection": collection,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        }
+    except Exception as e:
+        logger.error(f"Legacy query error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/insert")
+async def legacy_insert(request: dict[str, Any]) -> dict[str, Any]:
+    """
+    Legacy insert endpoint used by older versions of data-extractor.
+    Forwards to generic insert_records logic.
+    """
+    from data_manager.api.routes.generic import insert_records, InsertRequest
+    
+    database = request.get("database", "mongodb")
+    collection = request.get("collection")
+    records = request.get("records", [])
+    
+    if not collection:
+        raise HTTPException(status_code=400, detail="Collection name required")
+        
+    # Create InsertRequest object
+    insert_request = InsertRequest(data=records)
+    
+    # Call the new generic implementation
+    return await insert_records(
+        database=database,
+        collection=collection,
+        request=insert_request
+    )
