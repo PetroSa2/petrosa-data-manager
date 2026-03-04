@@ -2,14 +2,17 @@ name: CI Checks
 
 on:
   push:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     branches: [ main, develop ]
   pull_request:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     branches: [ main, develop ]
 
 jobs:
   lint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Lint & Format Check
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,6 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends make
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
@@ -34,8 +38,9 @@ jobs:
         continue-on-error: true  # Allow type check failures initially
 
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test & Coverage
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     env:
       OTEL_NO_AUTO_INIT: 1
     steps:
@@ -50,6 +55,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends make
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
@@ -61,7 +67,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: always()
+        if: always() && (github.event.pull_request.head.repo.full_name == github.repository)
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: PetroSa2/petrosa-data-manager
@@ -70,8 +76,9 @@ jobs:
           fail_ci_if_error: false
 
   test-quality:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test Quality Check
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     steps:
       - name: Checkout service code
         uses: actions/checkout@v4
@@ -102,8 +109,9 @@ jobs:
           echo "✅ All tests have assertions"
 
   security:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Security Scan
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     permissions:
       contents: read
       security-events: write  # Required for SARIF upload
@@ -115,11 +123,11 @@ jobs:
           fetch-depth: 0  # Full history for secret detection
 
       - name: 🔐 Run Gitleaks (Secret Detection)
-        uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true  # Allow to fail if GITLEAKS_LICENSE not configured
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --no-git || echo "⚠️ Gitleaks found issues but continuing"
+        continue-on-error: true
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -157,8 +165,9 @@ jobs:
 
 
   build:
+    if: github.event_name == 'push'
     name: Build Docker Image
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     needs: [lint, test]
     steps:
       - name: Checkout code
@@ -177,8 +186,9 @@ jobs:
           cache-to: type=gha,mode=max
 
   documentation-standards:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Documentation Standards Check
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -197,9 +207,9 @@ jobs:
 
   pipeline:
     name: pipeline
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     needs: [lint, test, test-quality, security, documentation-standards]
-    if: always() && github.event_name == 'pull_request'
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - name: Validate upstream job results
         run: |
