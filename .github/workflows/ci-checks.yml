@@ -9,6 +9,7 @@ on:
 jobs:
   lint:
     name: Lint & Format Check
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
@@ -35,6 +36,7 @@ jobs:
 
   test:
     name: Test & Coverage
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     env:
       OTEL_NO_AUTO_INIT: 1
@@ -61,7 +63,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: always()
+        if: always() && (github.event.pull_request.head.repo.full_name == github.repository)
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: PetroSa2/petrosa-data-manager
@@ -71,6 +73,7 @@ jobs:
 
   test-quality:
     name: Test Quality Check
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     steps:
       - name: Checkout service code
@@ -103,6 +106,7 @@ jobs:
 
   security:
     name: Security Scan
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     permissions:
       contents: read
@@ -158,6 +162,7 @@ jobs:
 
   build:
     name: Build Docker Image
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     needs: [lint, test]
     steps:
@@ -178,6 +183,7 @@ jobs:
 
   documentation-standards:
     name: Documentation Standards Check
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
@@ -197,9 +203,10 @@ jobs:
 
   pipeline:
     name: pipeline
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: petrosa-org-runners
     needs: [lint, test, test-quality, security, documentation-standards]
-    if: always() && github.event_name == 'pull_request'
+    if: always() && (github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'pull_request'
     steps:
       - name: Validate upstream job results
         run: |
