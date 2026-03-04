@@ -165,7 +165,7 @@ jobs:
 
 
   build:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'push'
     name: Build Docker Image
     runs-on: petrosa-org-runners
     needs: [lint, test]
