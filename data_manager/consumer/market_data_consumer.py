@@ -202,14 +202,11 @@ class MarketDataConsumer:
                 # Skip invalid messages (missing or invalid symbol)
                 if event is None:
                     span.set_attribute("message.invalid", True)
-                    # DEBUG: Log sample message to understand format
                     logger.warning(
-                        "Skipping message with missing or invalid symbol",
+                        "invalid_message_received",
                         extra={
-                            "data_keys": list(data.keys()),
-                            "sample_data": str(data)[
-                                :500
-                            ],  # First 500 chars of message
+                            "subject": msg.subject,
+                            "raw_data": data,
                         },
                     )
                     messages_received.labels(event_type="invalid").inc()

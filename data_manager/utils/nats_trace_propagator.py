@@ -10,7 +10,6 @@ import logging
 from typing import Any
 
 from opentelemetry import context, trace
-from opentelemetry.propagate import extract, inject
 from opentelemetry.trace import SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
@@ -50,8 +49,8 @@ class NATSTracePropagator:
             # Create carrier for trace context
             carrier: dict[str, str] = {}
 
-            # Inject current context into carrier
-            inject(carrier)
+            # Inject current context into carrier using explicit W3C propagator
+            propagator.inject(carrier)
 
             # Add trace headers to message (only if context was injected)
             if carrier:
@@ -97,8 +96,8 @@ class NATSTracePropagator:
                 logger.debug("No trace context found in message")
                 return None
 
-            # Extract context from carrier
-            ctx = extract(carrier)
+            # Extract context from carrier using explicit W3C propagator
+            ctx = propagator.extract(carrier)
 
             logger.debug(
                 "Extracted trace context from message",

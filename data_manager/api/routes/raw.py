@@ -38,7 +38,7 @@ class RawQueryResponse(BaseModel):
     metadata: dict[str, Any]
 
 
-@router.post("/api/v1/raw/mysql", response_model=RawQueryResponse)
+@router.post("/mysql", response_model=RawQueryResponse)
 async def execute_mysql_query(request: RawQueryRequest) -> RawQueryResponse:
     """
     Execute raw SQL queries on MySQL database.
@@ -52,10 +52,6 @@ async def execute_mysql_query(request: RawQueryRequest) -> RawQueryResponse:
         raise HTTPException(status_code=503, detail="MySQL adapter not available")
 
     try:
-        # Validate query safety
-        _validate_mysql_query(request.query)
-
-        # Execute query
         adapter = api_module.db_manager.mysql_adapter
         results = await _execute_mysql_query(adapter, request.query, request.parameters)
 
@@ -72,13 +68,15 @@ async def execute_mysql_query(request: RawQueryRequest) -> RawQueryResponse:
             },
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error executing MySQL query: {e}", exc_info=True)
         api_module.db_manager.increment_error_count("mysql")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/v1/raw/mongodb", response_model=RawQueryResponse)
+@router.post("/mongodb", response_model=RawQueryResponse)
 async def execute_mongodb_query(request: RawQueryRequest) -> RawQueryResponse:
     """
     Execute raw MongoDB queries/aggregations.
@@ -92,11 +90,7 @@ async def execute_mongodb_query(request: RawQueryRequest) -> RawQueryResponse:
         raise HTTPException(status_code=503, detail="MongoDB adapter not available")
 
     try:
-        # Parse and validate MongoDB query
         query_obj = _parse_mongodb_query(request.query)
-        _validate_mongodb_query(query_obj)
-
-        # Execute query
         adapter = api_module.db_manager.mongodb_adapter
         results = await _execute_mongodb_query(adapter, query_obj, request.parameters)
 
@@ -113,6 +107,8 @@ async def execute_mongodb_query(request: RawQueryRequest) -> RawQueryResponse:
             },
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error executing MongoDB query: {e}", exc_info=True)
         api_module.db_manager.increment_error_count("mongodb")
@@ -150,7 +146,7 @@ def _validate_mysql_query(query: str) -> None:
     # Check for system database access
     system_dbs = ["mysql", "information_schema", "performance_schema", "sys"]
     for db in system_dbs:
-        if f"FROM {db}." in query_upper or f"JOIN {db}." in query_upper:
+        if f"{db}.".upper() in query_upper:
             raise HTTPException(
                 status_code=400, detail=f"Access to system database '{db}' not allowed"
             )
@@ -209,13 +205,17 @@ async def _execute_mysql_query(
     adapter, query: str, parameters: dict[str, Any] | None
 ) -> list[dict[str, Any]]:
     """Execute MySQL query safely."""
-    # This is a simplified implementation
-    # In a real implementation, you'd use proper SQL execution with parameter binding
-
-    # For now, we'll return empty results
-    # The actual implementation would execute the query through the adapter
-    logger.warning("MySQL raw query execution not fully implemented")
-    return []
+    try:
+        # This is a simplified implementation
+        # In a real implementation, you'd use proper SQL execution with parameter binding
+        _validate_mysql_query(query)
+        logger.warning("MySQL raw query execution not fully implemented")
+        return []
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error executing MySQL query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 async def _execute_mongodb_query(
@@ -223,6 +223,7 @@ async def _execute_mongodb_query(
 ) -> list[dict[str, Any]]:
     """Execute MongoDB query safely."""
     try:
+        _validate_mongodb_query(query_obj)
         collection_name = query_obj.get("collection", "default")
 
         if "aggregate" in query_obj:
@@ -251,6 +252,8 @@ async def _execute_mongodb_query(
 
         return results
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error executing MongoDB query: {e}")
         raise

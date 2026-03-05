@@ -2,9 +2,10 @@
 Tests for the message handler.
 """
 
-import pytest
-from unittest.mock import AsyncMock, patch
 from datetime import datetime
+from unittest.mock import ANY, AsyncMock, patch
+
+import pytest
 
 from data_manager.consumer.message_handler import MessageHandler
 from data_manager.models.events import EventType, MarketDataEvent
@@ -22,7 +23,7 @@ async def test_message_handler_initialization(message_handler):
     assert not message_handler.initialized
     await message_handler.initialize()
     assert message_handler.initialized
-    
+
     # Check stats
     stats = message_handler.get_stats()
     assert stats["unknown"] == 0
@@ -33,7 +34,7 @@ async def test_message_handler_initialization(message_handler):
 async def test_handle_unknown_event(message_handler):
     """Test handling of unknown events with structured logging."""
     await message_handler.initialize()
-    
+
     # Create an unknown event
     event = MarketDataEvent(
         event_type=EventType.UNKNOWN,
@@ -41,16 +42,16 @@ async def test_handle_unknown_event(message_handler):
         timestamp=datetime.utcnow(),
         data={"strange_key": "some_value"},
         exchange="binance",
-        stream="mystream"
+        stream="mystream",
     )
-    
+
     with patch("data_manager.consumer.message_handler.logger") as mock_logger:
         await message_handler._handle_unknown(event)
-        
+
         # Verify stats updated
         stats = message_handler.get_stats()
         assert stats["unknown"] == 1
-        
+
         # Verify structured logger called correctly
         mock_logger.warning.assert_called_once_with(
             "received_unknown_event",
@@ -58,15 +59,19 @@ async def test_handle_unknown_event(message_handler):
                 "subject": "mystream",
                 "event_type": "unknown",
                 "symbol": "BTCUSDT",
+                "exchange": "binance",
+                "timestamp": ANY,
                 "data_keys": ["strange_key"],
-            }
+                "raw_data": {"strange_key": "some_value"},
+            },
         )
+
 
 @pytest.mark.asyncio
 async def test_handle_unknown_event_no_stream(message_handler):
     """Test handling of unknown events without a stream."""
     await message_handler.initialize()
-    
+
     # Create an unknown event with no stream
     event = MarketDataEvent(
         event_type=EventType.UNKNOWN,
@@ -74,16 +79,16 @@ async def test_handle_unknown_event_no_stream(message_handler):
         timestamp=datetime.utcnow(),
         data={"another_key": 123},
         exchange="binance",
-        stream=None
+        stream=None,
     )
-    
+
     with patch("data_manager.consumer.message_handler.logger") as mock_logger:
         await message_handler._handle_unknown(event)
-        
+
         # Verify stats updated
         stats = message_handler.get_stats()
         assert stats["unknown"] == 1
-        
+
         # Verify structured logger called correctly with "unknown" fallback subject
         mock_logger.warning.assert_called_once_with(
             "received_unknown_event",
@@ -91,6 +96,9 @@ async def test_handle_unknown_event_no_stream(message_handler):
                 "subject": "unknown",
                 "event_type": "unknown",
                 "symbol": "BTCUSDT",
+                "exchange": "binance",
+                "timestamp": ANY,
                 "data_keys": ["another_key"],
-            }
+                "raw_data": {"another_key": 123},
+            },
         )

@@ -15,19 +15,6 @@ try:
         attach_logging_handler,
         setup_telemetry,
     )
-
-    # Inverted logic: call setup_telemetry() manually ONLY if auto-init is disabled
-    # via OTEL_NO_AUTO_INIT=1. This avoids conflicts with opentelemetry-instrument auto-init.
-    if os.getenv("OTEL_NO_AUTO_INIT"):
-        # We need to import constants here or use env vars
-        # Since we want to be before local imports, let's use env vars or hardcoded defaults
-        service_name = os.getenv("OTEL_SERVICE_NAME", "data-manager")
-        setup_telemetry(
-            service_name=service_name,
-            service_type="async",
-            enable_mongodb=True,
-            auto_attach_logging=False,
-        )
 except ImportError:
     setup_telemetry = None
     attach_logging_handler = None
@@ -233,14 +220,17 @@ class DataManagerApp:
             if ConfigRateLimiter:
                 mongodb_client = (
                     self.db_manager.mongodb_adapter
-                    if self.db_manager and getattr(self.db_manager, "mongodb_adapter", None)
+                    if self.db_manager
+                    and getattr(self.db_manager, "mongodb_adapter", None)
                     else None
                 )
                 if mongodb_client is not None:
                     rate_limiter = ConfigRateLimiter(
                         mongodb_client=mongodb_client,
                         service_name="data-manager",
-                        per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
+                        per_agent_limit=int(
+                            os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")
+                        ),
                         cooldown_seconds=int(
                             os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")
                         ),
@@ -345,8 +335,23 @@ class DataManagerApp:
 
 async def main():
     """Main application entry point."""
+    # 1. Setup OpenTelemetry
+    if constants.OTEL_ENABLED and setup_telemetry:
+        try:
+            logger.info("Initializing OpenTelemetry")
+            setup_telemetry(
+                service_name=constants.OTEL_SERVICE_NAME,
+                service_type="async",
+                enable_mongodb=True,
+                enable_http=True,
+            )
+        except Exception as e:
+            logger.warning(
+                f"petrosa_otel package not available or failed to initialize: {e}"
+            )
+
     # 3. Attach OTel logging handler LAST (after logging is configured)
-    if attach_logging_handler:
+    if constants.OTEL_ENABLED and attach_logging_handler:
         try:
             success = attach_logging_handler()
             if success:

@@ -215,7 +215,10 @@ class MessageHandler:
                 "subject": event.stream or "unknown",
                 "event_type": event.event_type.value,
                 "symbol": event.symbol,
+                "exchange": event.exchange,
+                "timestamp": event.timestamp.isoformat() if event.timestamp else None,
                 "data_keys": list(event.data.keys()),
+                "raw_data": event.data,
             },
         )
 

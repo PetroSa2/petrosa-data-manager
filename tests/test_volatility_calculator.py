@@ -27,9 +27,7 @@ def volatility_calculator(mock_db_manager):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_calculate_volatility_success(
-    volatility_calculator, mock_mongodb_adapter
-):
+async def test_calculate_volatility_success(volatility_calculator, mock_db_manager):
     """Test successful volatility calculation."""
     # Create sample candle data
     candles = []
@@ -120,7 +118,7 @@ async def test_calculate_volatility_error_handling(volatility_calculator):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_calculate_volatility_stores_metrics(
-    volatility_calculator, mock_mongodb_adapter
+    volatility_calculator, mock_db_manager
 ):
     """Test that volatility metrics are stored in MongoDB."""
     candles = []
@@ -140,13 +138,13 @@ async def test_calculate_volatility_stores_metrics(
         )
 
     volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
-    mock_mongodb_adapter.write = AsyncMock()
+    mock_db_manager.mongodb_adapter.write = AsyncMock()
 
     await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
 
     # Verify write was called with metrics and collection name
-    assert mock_mongodb_adapter.write.called
-    call_args = mock_mongodb_adapter.write.call_args
+    assert mock_db_manager.mongodb_adapter.write.called
+    call_args = mock_db_manager.mongodb_adapter.write.call_args
     # write is called as write([metrics], collection) - check first arg is list and second is collection name
     assert len(call_args[0]) >= 2
     assert isinstance(call_args[0][0], list)  # First arg is list of metrics
