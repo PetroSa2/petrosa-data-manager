@@ -50,13 +50,38 @@ def mock_schema_service():
     mock_service.register_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.get_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.get_schema_versions = AsyncMock(
-        return_value=[{"version": 1, "status": "active"}]
+        return_value=[
+            {
+                "version": 1,
+                "status": "ACTIVE",
+                "schema": {"type": "object"},
+                "compatibility_mode": "BACKWARD",
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        ]
     )
     mock_service.update_schema = AsyncMock(return_value=mock_schema_def)
     mock_service.deprecate_schema = AsyncMock(return_value=True)
     mock_service.list_schemas = AsyncMock(return_value=([mock_schema_def], 1))
-    mock_service.validate_data = AsyncMock(return_value={"valid": True, "errors": []})
-    mock_service.check_compatibility = AsyncMock(return_value={"compatible": True})
+    mock_service.validate_data = AsyncMock(
+        return_value={
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+            "schema_used": "test_schema:1",
+            "validated_count": 1,
+            "validation_time_ms": 1.5,
+        }
+    )
+    mock_service.check_compatibility = AsyncMock(
+        return_value={
+            "compatible": True,
+            "compatibility_mode": "BACKWARD",
+            "breaking_changes": [],
+            "warnings": [],
+            "migration_suggestions": [],
+        }
+    )
     mock_service.search_schemas = AsyncMock(return_value=[])
     mock_service.get_cache_stats = Mock(return_value={"hits": 10, "misses": 5})
     mock_service.clear_cache = Mock()
@@ -72,13 +97,14 @@ def test_register_schema_success(client, mock_schema_service):
         return_value=mock_schema_service,
     ):
         registration = {
+            "name": "test_schema",
             "version": 1,
             "schema": {"type": "object", "properties": {"id": {"type": "integer"}}},
             "compatibility_mode": "BACKWARD",
             "description": "Test schema",
             "created_by": "test_user",
         }
-        response = client.post("/schemas/mysql/test_schema", json=registration)
+        response = client.post("/api/v1/registry/schemas/mysql/test_schema", json=registration)
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
@@ -89,10 +115,14 @@ def test_register_schema_success(client, mock_schema_service):
 @pytest.mark.unit
 def test_register_schema_invalid_database(client):
     """Test schema registration with invalid database."""
-    registration = {"version": 1, "schema": {}}
-    response = client.post("/schemas/invalid/test_schema", json=registration)
+    registration = {
+        "name": "test_schema",
+        "version": 1,
+        "schema": {"type": "object"},
+    }
+    response = client.post("/api/v1/registry/schemas/invalid/test_schema", json=registration)
     assert response.status_code == 400
-    assert "mysql or mongodb" in response.json()["detail"].lower()
+    assert "database must be 'mysql' or 'mongodb'" in response.json()["detail"].lower()
 
 
 @pytest.mark.unit
@@ -102,7 +132,7 @@ def test_get_schema_success(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/schemas/mysql/test_schema")
+        response = client.get("/api/v1/registry/schemas/mysql/test_schema")
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "test_schema"
@@ -117,7 +147,7 @@ def test_get_schema_not_found(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/schemas/mysql/nonexistent")
+        response = client.get("/api/v1/registry/schemas/mysql/nonexistent")
         assert response.status_code == 404
 
 
@@ -128,7 +158,7 @@ def test_get_schema_versions(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/schemas/mysql/test_schema/versions")
+        response = client.get("/api/v1/registry/schemas/mysql/test_schema/versions")
         assert response.status_code == 200
         data = response.json()
         assert "versions" in data
@@ -143,7 +173,7 @@ def test_update_schema(client, mock_schema_service):
         return_value=mock_schema_service,
     ):
         update = {"description": "Updated description", "status": "ACTIVE"}
-        response = client.put("/schemas/mysql/test_schema/versions/1", json=update)
+        response = client.put("/api/v1/registry/schemas/mysql/test_schema/versions/1", json=update)
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
@@ -156,7 +186,7 @@ def test_deprecate_schema(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.delete("/schemas/mysql/test_schema/versions/1")
+        response = client.delete("/api/v1/registry/schemas/mysql/test_schema/versions/1")
         assert response.status_code == 200
         data = response.json()
         assert data["deprecated"] is True
@@ -169,7 +199,7 @@ def test_list_schemas(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/schemas?database=mysql&page=1&page_size=10")
+        response = client.get("/api/v1/registry/schemas?database=mysql&page=1&page_size=10")
         assert response.status_code == 200
         data = response.json()
         assert "schemas" in data
@@ -184,7 +214,7 @@ def test_validate_data(client, mock_schema_service):
         return_value=mock_schema_service,
     ):
         request = {"database": "mysql", "schema_name": "test_schema", "data": {"id": 1}}
-        response = client.post("/schemas/validate", json=request)
+        response = client.post("/api/v1/registry/schemas/validate", json=request)
         assert response.status_code == 200
         data = response.json()
         assert "valid" in data
@@ -200,10 +230,10 @@ def test_check_compatibility(client, mock_schema_service):
         request = {
             "database": "mysql",
             "schema_name": "test_schema",
-            "version1": 1,
-            "version2": 2,
+            "old_version": 1,
+            "new_version": 2,
         }
-        response = client.post("/schemas/compatibility", json=request)
+        response = client.post("/api/v1/registry/schemas/compatibility", json=request)
         assert response.status_code == 200
         data = response.json()
         assert "compatible" in data
@@ -216,7 +246,7 @@ def test_search_schemas(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/schemas/search?query=test")
+        response = client.get("/api/v1/registry/schemas/search?query=test")
         assert response.status_code == 200
         assert isinstance(response.json(), list)
 
@@ -240,7 +270,7 @@ def test_bootstrap_schemas(client, mock_schema_service):
             ],
             "overwrite_existing": False,
         }
-        response = client.post("/schemas/bootstrap", json=request)
+        response = client.post("/api/v1/registry/schemas/bootstrap", json=request)
         assert response.status_code == 200
         data = response.json()
         assert "registered_count" in data
@@ -253,7 +283,7 @@ def test_get_cache_stats(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/schemas/cache/stats")
+        response = client.get("/api/v1/registry/cache/stats")
         assert response.status_code == 200
         data = response.json()
         assert "hits" in data
@@ -266,7 +296,7 @@ def test_clear_cache(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.post("/schemas/cache/clear")
+        response = client.post("/api/v1/registry/cache/clear")
         assert response.status_code == 200
         data = response.json()
         assert data["cleared"] is True

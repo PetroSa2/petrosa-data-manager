@@ -83,8 +83,8 @@ async def register_schema(
                 "name": schema_def.name,
                 "version": schema_def.version,
                 "database": database,
-                "status": schema_def.status.value,
-                "compatibility_mode": schema_def.compatibility_mode.value,
+                "status": getattr(schema_def.status, "value", schema_def.status),
+                "compatibility_mode": getattr(schema_def.compatibility_mode, "value", schema_def.compatibility_mode),
                 "description": schema_def.description,
                 "created_at": schema_def.created_at.isoformat(),
                 "created_by": schema_def.created_by,
@@ -134,8 +134,8 @@ async def get_schema(
             "version": schema_def.version,
             "database": database,
             "schema": schema_def.schema,
-            "compatibility_mode": schema_def.compatibility_mode.value,
-            "status": schema_def.status.value,
+            "compatibility_mode": getattr(schema_def.compatibility_mode, "value", schema_def.compatibility_mode),
+            "status": getattr(schema_def.status, "value", schema_def.status),
             "description": schema_def.description,
             "created_at": schema_def.created_at.isoformat(),
             "updated_at": schema_def.updated_at.isoformat(),
@@ -232,8 +232,8 @@ async def get_schema_version(
             "version": schema_def.version,
             "database": database,
             "schema": schema_def.schema,
-            "compatibility_mode": schema_def.compatibility_mode.value,
-            "status": schema_def.status.value,
+            "compatibility_mode": getattr(schema_def.compatibility_mode, "value", schema_def.compatibility_mode),
+            "status": getattr(schema_def.status, "value", schema_def.status),
             "description": schema_def.description,
             "created_at": schema_def.created_at.isoformat(),
             "updated_at": schema_def.updated_at.isoformat(),
@@ -287,8 +287,8 @@ async def update_schema(
                 "name": updated_schema.name,
                 "version": updated_schema.version,
                 "database": database,
-                "status": updated_schema.status.value,
-                "compatibility_mode": updated_schema.compatibility_mode.value,
+                "status": getattr(updated_schema.status, "value", updated_schema.status),
+                "compatibility_mode": getattr(updated_schema.compatibility_mode, "value", updated_schema.compatibility_mode),
                 "description": updated_schema.description,
                 "updated_at": updated_schema.updated_at.isoformat(),
             },
@@ -384,8 +384,8 @@ async def list_schemas(
                 "name": s.name,
                 "version": s.version,
                 "database": database or "unknown",
-                "status": s.status.value,
-                "compatibility_mode": s.compatibility_mode.value,
+                "status": getattr(s.status, "value", s.status),
+                "compatibility_mode": getattr(s.compatibility_mode, "value", s.compatibility_mode),
                 "description": s.description,
                 "created_at": s.created_at.isoformat(),
                 "created_by": s.created_by,
@@ -541,7 +541,7 @@ async def bootstrap_schemas(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/schemas/cache/stats")
+@router.get("/cache/stats")
 async def get_cache_stats() -> dict[str, Any]:
     """
     Get schema cache statistics.
@@ -558,7 +558,7 @@ async def get_cache_stats() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/schemas/cache/clear")
+@router.post("/cache/clear")
 async def clear_cache() -> dict[str, Any]:
     """
     Clear schema cache.

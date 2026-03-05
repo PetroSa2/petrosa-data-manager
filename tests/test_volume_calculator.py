@@ -20,7 +20,7 @@ def volume_calculator(mock_db_manager):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_calculate_volume_success(volume_calculator, mock_mongodb_adapter):
+async def test_calculate_volume_success(volume_calculator, mock_db_manager):
     """Test successful volume calculation."""
     # Create sample candle data
     candles = []
@@ -110,7 +110,7 @@ async def test_calculate_volume_error_handling(volume_calculator):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_calculate_volume_stores_metrics(volume_calculator, mock_mongodb_adapter):
+async def test_calculate_volume_stores_metrics(volume_calculator, mock_db_manager):
     """Test that volume metrics are stored in MongoDB."""
     candles = []
     base_time = datetime.utcnow() - timedelta(hours=24)
@@ -129,12 +129,12 @@ async def test_calculate_volume_stores_metrics(volume_calculator, mock_mongodb_a
         )
 
     volume_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
-    mock_mongodb_adapter.write = AsyncMock()
+    mock_db_manager.mongodb_adapter.write = AsyncMock()
 
     await volume_calculator.calculate_volume("BTCUSDT", "1h", 24)
 
     # Verify write was called
-    assert mock_mongodb_adapter.write.called
+    assert mock_db_manager.mongodb_adapter.write.called
 
 
 @pytest.mark.unit

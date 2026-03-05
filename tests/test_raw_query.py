@@ -21,7 +21,7 @@ def client(mock_db_manager):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_success(client):
     """Test successful MySQL query execution.
 
@@ -44,8 +44,11 @@ def test_execute_mysql_query_success(client):
     assert isinstance(data["data"], list)
 
 
+
+
+
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", False)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", False)
 def test_execute_mysql_query_disabled(client):
     """Test MySQL query when raw queries are disabled."""
     request = {"query": "SELECT * FROM test_table"}
@@ -55,7 +58,7 @@ def test_execute_mysql_query_disabled(client):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_dangerous_operation(client):
     """Test MySQL query with dangerous operation."""
     request = {"query": "DROP TABLE test_table"}
@@ -65,25 +68,27 @@ def test_execute_mysql_query_dangerous_operation(client):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_system_database(client):
     """Test MySQL query accessing system database."""
-    request = {"query": "SELECT * FROM mysql.user"}
+    request = {"query": "SELECT * FROM information_schema.tables"}
     response = client.post("/api/v1/raw/mysql", json=request)
+    assert response.status_code == 400
+    assert "system database" in response.json()["detail"].lower()
     assert response.status_code == 400
     assert "system database" in response.json()["detail"].lower()
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
-def test_execute_mongodb_query_success(client, mock_mongodb_adapter):
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
+def test_execute_mongodb_query_success(client, mock_db_manager):
     """Test successful MongoDB query execution."""
     # Mock the MongoDB adapter's db access pattern used in _execute_mongodb_query
     mock_collection = Mock()
     mock_cursor = AsyncMock()
     mock_cursor.to_list = AsyncMock(return_value=[{"_id": "123", "name": "test"}])
     mock_collection.find = Mock(return_value=mock_cursor)
-    mock_mongodb_adapter.db = {"test_collection": mock_collection}
+    mock_db_manager.mongodb_adapter.db = {"test_collection": mock_collection}
 
     request = {
         "query": '{"collection": "test_collection", "find": {}}',
@@ -99,7 +104,7 @@ def test_execute_mongodb_query_success(client, mock_mongodb_adapter):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", False)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", False)
 def test_execute_mongodb_query_disabled(client):
     """Test MongoDB query when raw queries are disabled."""
     request = {"query": '{"collection": "test"}'}
@@ -109,7 +114,7 @@ def test_execute_mongodb_query_disabled(client):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mongodb_query_system_collection(client):
     """Test MongoDB query accessing system collection."""
     request = {"query": '{"collection": "system.users"}'}
@@ -119,7 +124,7 @@ def test_execute_mongodb_query_system_collection(client):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_no_adapter(client, mock_db_manager):
     """Test MySQL query when adapter is not available."""
     original_adapter = mock_db_manager.mysql_adapter
@@ -133,7 +138,7 @@ def test_execute_mysql_query_no_adapter(client, mock_db_manager):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mongodb_query_no_adapter(client, mock_db_manager):
     """Test MongoDB query when adapter is not available."""
     original_adapter = mock_db_manager.mongodb_adapter
@@ -147,7 +152,7 @@ def test_execute_mongodb_query_no_adapter(client, mock_db_manager):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_error_handling(client):
     """Test MySQL query error handling.
 
@@ -161,7 +166,7 @@ def test_execute_mysql_query_error_handling(client):
 
 
 @pytest.mark.unit
-@patch.object(constants, "RAW_QUERY_ENABLED", True)
+@patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", True)
 def test_execute_mysql_query_tracks_metrics(client, mock_db_manager):
     """Test that MySQL queries track metrics.
 

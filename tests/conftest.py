@@ -127,7 +127,25 @@ def mock_db_manager(mock_mongodb_client, mock_mysql_connection):
     manager.mongodb = mock_mongodb_client
     manager.mysql = mock_mysql_connection
     manager.initialize = AsyncMock()
-    manager.close = AsyncMock()
+    manager.shutdown = AsyncMock()
+    manager.is_healthy = Mock(return_value=True)
+    manager.health_check = Mock(
+        return_value={
+            "mysql": {"connected": True, "latency_ms": 1.5},
+            "mongodb": {"connected": True, "latency_ms": 2.1},
+        }
+    )
+
+    # Mock adapters
+    manager.mongodb_adapter = Mock()
+    manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
+    manager.mongodb_adapter.query_latest = AsyncMock(return_value=[])
+    manager.mongodb_adapter.write = AsyncMock()
+
+    manager.mysql_adapter = Mock()
+    manager.mysql_adapter.query_range = Mock(return_value=[])
+    manager.mysql_adapter.query_latest = Mock(return_value={})
+    manager.mysql_adapter.write = Mock()
 
     # Mock configuration repository
     manager.configuration = AsyncMock()

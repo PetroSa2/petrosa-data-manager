@@ -59,6 +59,7 @@ async def test_handle_unknown_event(message_handler):
                 "event_type": "unknown",
                 "symbol": "BTCUSDT",
                 "data_keys": ["strange_key"],
+                "raw_data": {"strange_key": "some_value"},
             }
         )
 
@@ -92,5 +93,6 @@ async def test_handle_unknown_event_no_stream(message_handler):
                 "event_type": "unknown",
                 "symbol": "BTCUSDT",
                 "data_keys": ["another_key"],
+                "raw_data": {"another_key": 123},
             }
         )

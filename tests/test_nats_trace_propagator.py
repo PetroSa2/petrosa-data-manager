@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 # Set OTEL_NO_AUTO_INIT before importing any modules that might initialize OpenTelemetry
 os.environ["OTEL_NO_AUTO_INIT"] = "1"
+os.environ["OTEL_SDK_DISABLED"] = "false"
 
 from opentelemetry import trace  # noqa: E402
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
@@ -29,14 +30,8 @@ class TestNATSTracePropagator(unittest.TestCase):
         self.tracer_provider = TracerProvider()
         self.tracer_provider.add_span_processor(SimpleSpanProcessor(self.exporter))
 
-        # Only set tracer provider if not already set
-        current_provider = trace.get_tracer_provider()
-        if not hasattr(current_provider, "_atexit_handler"):
-            trace.set_tracer_provider(self.tracer_provider)
-        else:
-            # Use existing global provider for tests
-            self.tracer_provider = current_provider
-
+        # Force set tracer provider for tests
+        trace.set_tracer_provider(self.tracer_provider)
         self.tracer = trace.get_tracer(__name__)
 
     def tearDown(self):
@@ -203,7 +198,7 @@ class TestNATSTracePropagator(unittest.TestCase):
 
         # Mock inject to raise an exception
         with patch(
-            "data_manager.utils.nats_trace_propagator.inject",
+            "data_manager.utils.nats_trace_propagator.propagator.inject",
             side_effect=Exception("Test error"),
         ):
             # Should not raise, should log warning
@@ -221,7 +216,7 @@ class TestNATSTracePropagator(unittest.TestCase):
 
         # Mock extract to raise an exception
         with patch(
-            "data_manager.utils.nats_trace_propagator.extract",
+            "data_manager.utils.nats_trace_propagator.propagator.extract",
             side_effect=Exception("Test error"),
         ):
             # Should not raise, should log warning and return None

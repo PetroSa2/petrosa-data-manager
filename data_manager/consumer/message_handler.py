@@ -216,6 +216,7 @@ class MessageHandler:
                 "event_type": event.event_type.value,
                 "symbol": event.symbol,
                 "data_keys": list(event.data.keys()),
+                "raw_data": event.data,
             },
         )
 
