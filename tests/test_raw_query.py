@@ -72,8 +72,6 @@ def test_execute_mysql_query_system_database(client):
     response = client.post("/api/v1/raw/mysql", json=request)
     assert response.status_code == 400
     assert "system database" in response.json()["detail"].lower()
-    assert response.status_code == 400
-    assert "system database" in response.json()["detail"].lower()
 
 
 @pytest.mark.unit

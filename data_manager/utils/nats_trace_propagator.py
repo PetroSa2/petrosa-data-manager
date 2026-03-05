@@ -10,7 +10,6 @@ import logging
 from typing import Any
 
 from opentelemetry import context, trace
-from opentelemetry.propagate import extract, inject
 from opentelemetry.trace import SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 

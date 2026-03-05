@@ -5,7 +5,7 @@ FastAPI application factory.
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
@@ -48,7 +48,6 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
-    from fastapi import HTTPException
 
     app = FastAPI(
         title="Petrosa Data Manager API",
@@ -85,6 +84,10 @@ def create_app() -> FastAPI:
     app.include_router(raw.router, prefix="/api/v1/raw", tags=["Raw Queries"])
     app.include_router(
         schemas.router, prefix="/api/v1/registry", tags=["Schema Registry"]
+    )
+    # Legacy schema registry routes for backward compatibility
+    app.include_router(
+        schemas.router, prefix="/schemas", tags=["Schema Registry (legacy)"]
     )
     app.include_router(data.router, prefix="/data", tags=["Data"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])

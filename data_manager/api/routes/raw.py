@@ -252,6 +252,8 @@ async def _execute_mongodb_query(
 
         return results
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error executing MongoDB query: {e}")
         raise

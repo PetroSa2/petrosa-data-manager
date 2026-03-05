@@ -3,7 +3,7 @@ Tests for the message handler.
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, patch, ANY
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 

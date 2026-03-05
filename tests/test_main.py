@@ -11,8 +11,14 @@ import pytest
 
 @pytest.mark.asyncio
 @patch("data_manager.main.DataManagerApp")
-async def test_main_otel_enabled_with_endpoint(mock_app_class, caplog):
+@patch("data_manager.main.constants")
+async def test_main_otel_enabled_with_endpoint(mock_constants, mock_app_class, caplog):
     """Test main() with OTEL enabled and endpoint configured."""
+    # Setup constants
+    mock_constants.OTEL_ENABLED = True
+    mock_constants.OTEL_EXPORTER_OTLP_ENDPOINT = "http://grafana-alloy:4317"
+    mock_constants.OTEL_SERVICE_NAME = "petrosa-data-manager"
+
     # Setup environment variables directly
     with patch.dict(
         os.environ,

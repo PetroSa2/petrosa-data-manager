@@ -558,6 +558,7 @@ async def bootstrap_schemas(
 
 
 @router.get("/cache/stats")
+@router.get("/schemas/cache/stats", include_in_schema=False)
 async def get_cache_stats() -> dict[str, Any]:
     """
     Get schema cache statistics.
@@ -575,6 +576,7 @@ async def get_cache_stats() -> dict[str, Any]:
 
 
 @router.post("/cache/clear")
+@router.post("/schemas/cache/clear", include_in_schema=False)
 async def clear_cache() -> dict[str, Any]:
     """
     Clear schema cache.

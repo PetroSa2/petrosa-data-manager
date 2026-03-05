@@ -88,7 +88,9 @@ class SchemaVersion(BaseModel):
 class SchemaRegistration(BaseModel):
     """Schema registration request model."""
 
-    name: str = Field(..., description="Schema name", min_length=1, max_length=100)
+    name: str | None = Field(
+        default=None, description="Schema name", min_length=1, max_length=100
+    )
     version: int = Field(..., description="Schema version", ge=1)
     schema: dict[str, Any] = Field(..., description="JSON Schema definition")
     compatibility_mode: CompatibilityMode | None = Field(
