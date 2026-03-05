@@ -31,10 +31,10 @@ async def test_main_otel_enabled_with_endpoint(mock_app_class, caplog):
         # Mock asyncio context to prevent actual app startup
         mock_app_instance.start.side_effect = KeyboardInterrupt()
 
-        with patch(
-            "data_manager.main.setup_telemetry"
-        ) as mock_init_telemetry:
-            with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
+        with patch("data_manager.main.setup_telemetry") as mock_init_telemetry:
+            with patch(
+                "data_manager.main.attach_logging_handler"
+            ) as mock_attach_handler:
                 with caplog.at_level(logging.INFO):
                     # Import and run main
                     from data_manager.main import main
@@ -54,7 +54,6 @@ async def test_main_otel_enabled_with_endpoint(mock_app_class, caplog):
 
                 # Verify logging handler was attached
                 mock_attach_handler.assert_called_once()
-
 
                 # Verify logging messages
                 log_messages = [record.message for record in caplog.records]
@@ -88,7 +87,9 @@ async def test_main_otel_disabled(mock_app_class, caplog):
         with patch("data_manager.main.constants.OTEL_ENABLED", False):
             with patch("data_manager.main.constants.OTEL_EXPORTER_OTLP_ENDPOINT", ""):
                 with patch("data_manager.main.setup_telemetry") as mock_init_telemetry:
-                    with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
+                    with patch(
+                        "data_manager.main.attach_logging_handler"
+                    ) as mock_attach_handler:
                         with caplog.at_level(logging.INFO):
                             # Import and run main
                             from data_manager.main import main
@@ -130,7 +131,9 @@ async def test_main_otel_endpoint_missing(mock_app_class, caplog):
         with patch("data_manager.main.constants.OTEL_ENABLED", True):
             with patch("data_manager.main.constants.OTEL_EXPORTER_OTLP_ENDPOINT", ""):
                 with patch("data_manager.main.setup_telemetry") as mock_init_telemetry:
-                    with patch("data_manager.main.attach_logging_handler") as mock_attach_handler:
+                    with patch(
+                        "data_manager.main.attach_logging_handler"
+                    ) as mock_attach_handler:
                         # Mock attach_logging_handler to return False, simulating failure due to missing endpoint
                         mock_attach_handler.return_value = False
                         with caplog.at_level(logging.ERROR):

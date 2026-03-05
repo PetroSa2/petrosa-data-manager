@@ -37,6 +37,7 @@ def mock_nats_client():
 def mock_mongodb_client():
     """Create a mock MongoDB client."""
     from unittest.mock import MagicMock
+
     client = MagicMock()
     db = MagicMock()
     collection = MagicMock()
@@ -58,6 +59,7 @@ def mock_mongodb_client():
 def mock_mysql_connection():
     """Create a mock MySQL connection."""
     from unittest.mock import MagicMock
+
     connection = MagicMock()
     cursor = MagicMock()
 

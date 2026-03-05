@@ -44,9 +44,6 @@ def test_execute_mysql_query_success(client):
     assert isinstance(data["data"], list)
 
 
-
-
-
 @pytest.mark.unit
 @patch("data_manager.api.routes.raw.constants.RAW_QUERY_ENABLED", False)
 def test_execute_mysql_query_disabled(client):

@@ -27,9 +27,7 @@ def volatility_calculator(mock_db_manager):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_calculate_volatility_success(
-    volatility_calculator, mock_db_manager
-):
+async def test_calculate_volatility_success(volatility_calculator, mock_db_manager):
     """Test successful volatility calculation."""
     # Create sample candle data
     candles = []

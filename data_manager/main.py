@@ -220,14 +220,17 @@ class DataManagerApp:
             if ConfigRateLimiter:
                 mongodb_client = (
                     self.db_manager.mongodb_adapter
-                    if self.db_manager and getattr(self.db_manager, "mongodb_adapter", None)
+                    if self.db_manager
+                    and getattr(self.db_manager, "mongodb_adapter", None)
                     else None
                 )
                 if mongodb_client is not None:
                     rate_limiter = ConfigRateLimiter(
                         mongodb_client=mongodb_client,
                         service_name="data-manager",
-                        per_agent_limit=int(os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")),
+                        per_agent_limit=int(
+                            os.getenv("CONFIG_RATE_LIMIT_PER_AGENT", "10")
+                        ),
                         cooldown_seconds=int(
                             os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")
                         ),
@@ -343,7 +346,9 @@ async def main():
                 enable_http=True,
             )
         except Exception as e:
-            logger.warning(f"petrosa_otel package not available or failed to initialize: {e}")
+            logger.warning(
+                f"petrosa_otel package not available or failed to initialize: {e}"
+            )
 
     # 3. Attach OTel logging handler LAST (after logging is configured)
     if constants.OTEL_ENABLED and attach_logging_handler:

@@ -30,18 +30,18 @@ help: ## Show this help message
 setup: ## Complete environment setup with dependencies and pre-commit
 	@echo "🚀 Setting up development environment..."
 	$(PYTHON) -m pip install --upgrade pip
-	pip install -r requirements.txt
-	pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install -r requirements-dev.txt
 	pre-commit install
 	@echo "✅ Setup completed!"
 
 install: ## Install production dependencies only
 	@echo "📦 Installing production dependencies..."
-	pip install -r requirements.txt
+	$(PYTHON) -m pip install -r requirements.txt
 
 install-dev: ## Install development dependencies
 	@echo "🔧 Installing development dependencies..."
-	pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install -r requirements-dev.txt
 
 clean: ## Clean up cache and temporary files
 	@echo "🧹 Cleaning up cache and temporary files..."

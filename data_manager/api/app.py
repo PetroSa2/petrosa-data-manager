@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
     from fastapi import HTTPException
+
     app = FastAPI(
         title="Petrosa Data Manager API",
         description="Data integrity, intelligence, and distribution hub",
@@ -82,7 +83,9 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/health", tags=["Health"])
     app.include_router(config.router, tags=["Configuration"])
     app.include_router(raw.router, prefix="/api/v1/raw", tags=["Raw Queries"])
-    app.include_router(schemas.router, prefix="/api/v1/registry", tags=["Schema Registry"])
+    app.include_router(
+        schemas.router, prefix="/api/v1/registry", tags=["Schema Registry"]
+    )
     app.include_router(data.router, prefix="/data", tags=["Data"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(catalog.router, prefix="/catalog", tags=["Catalog"])

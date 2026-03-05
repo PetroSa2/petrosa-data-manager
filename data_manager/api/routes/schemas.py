@@ -84,7 +84,11 @@ async def register_schema(
                 "version": schema_def.version,
                 "database": database,
                 "status": getattr(schema_def.status, "value", schema_def.status),
-                "compatibility_mode": getattr(schema_def.compatibility_mode, "value", schema_def.compatibility_mode),
+                "compatibility_mode": getattr(
+                    schema_def.compatibility_mode,
+                    "value",
+                    schema_def.compatibility_mode,
+                ),
                 "description": schema_def.description,
                 "created_at": schema_def.created_at.isoformat(),
                 "created_by": schema_def.created_by,
@@ -134,7 +138,9 @@ async def get_schema(
             "version": schema_def.version,
             "database": database,
             "schema": schema_def.schema,
-            "compatibility_mode": getattr(schema_def.compatibility_mode, "value", schema_def.compatibility_mode),
+            "compatibility_mode": getattr(
+                schema_def.compatibility_mode, "value", schema_def.compatibility_mode
+            ),
             "status": getattr(schema_def.status, "value", schema_def.status),
             "description": schema_def.description,
             "created_at": schema_def.created_at.isoformat(),
@@ -232,7 +238,9 @@ async def get_schema_version(
             "version": schema_def.version,
             "database": database,
             "schema": schema_def.schema,
-            "compatibility_mode": getattr(schema_def.compatibility_mode, "value", schema_def.compatibility_mode),
+            "compatibility_mode": getattr(
+                schema_def.compatibility_mode, "value", schema_def.compatibility_mode
+            ),
             "status": getattr(schema_def.status, "value", schema_def.status),
             "description": schema_def.description,
             "created_at": schema_def.created_at.isoformat(),
@@ -287,8 +295,14 @@ async def update_schema(
                 "name": updated_schema.name,
                 "version": updated_schema.version,
                 "database": database,
-                "status": getattr(updated_schema.status, "value", updated_schema.status),
-                "compatibility_mode": getattr(updated_schema.compatibility_mode, "value", updated_schema.compatibility_mode),
+                "status": getattr(
+                    updated_schema.status, "value", updated_schema.status
+                ),
+                "compatibility_mode": getattr(
+                    updated_schema.compatibility_mode,
+                    "value",
+                    updated_schema.compatibility_mode,
+                ),
                 "description": updated_schema.description,
                 "updated_at": updated_schema.updated_at.isoformat(),
             },
@@ -385,7 +399,9 @@ async def list_schemas(
                 "version": s.version,
                 "database": database or "unknown",
                 "status": getattr(s.status, "value", s.status),
-                "compatibility_mode": getattr(s.compatibility_mode, "value", s.compatibility_mode),
+                "compatibility_mode": getattr(
+                    s.compatibility_mode, "value", s.compatibility_mode
+                ),
                 "description": s.description,
                 "created_at": s.created_at.isoformat(),
                 "created_by": s.created_by,

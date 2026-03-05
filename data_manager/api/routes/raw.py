@@ -68,6 +68,8 @@ async def execute_mysql_query(request: RawQueryRequest) -> RawQueryResponse:
             },
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error executing MySQL query: {e}", exc_info=True)
         api_module.db_manager.increment_error_count("mysql")
@@ -105,6 +107,8 @@ async def execute_mongodb_query(request: RawQueryRequest) -> RawQueryResponse:
             },
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error executing MongoDB query: {e}", exc_info=True)
         api_module.db_manager.increment_error_count("mongodb")
@@ -142,7 +146,7 @@ def _validate_mysql_query(query: str) -> None:
     # Check for system database access
     system_dbs = ["mysql", "information_schema", "performance_schema", "sys"]
     for db in system_dbs:
-        if f"{db}." in query_upper:
+        if f"{db}.".upper() in query_upper:
             raise HTTPException(
                 status_code=400, detail=f"Access to system database '{db}' not allowed"
             )

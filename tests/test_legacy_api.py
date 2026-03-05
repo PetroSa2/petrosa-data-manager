@@ -36,7 +36,7 @@ def test_legacy_query_endpoint(client):
         "database": "mongodb",
         "collection": "candles_BTCUSDT_1h",
         "filter": {"symbol": "BTCUSDT"},
-        "limit": 10
+        "limit": 10,
     }
     response = client.post("/api/v1/data/query", json=payload)
     assert response.status_code == 200
@@ -51,9 +51,7 @@ def test_legacy_insert_endpoint(client):
     payload = {
         "database": "mongodb",
         "collection": "candles_BTCUSDT_1h",
-        "records": [
-            {"symbol": "BTCUSDT", "open": 50000, "close": 51000}
-        ]
+        "records": [{"symbol": "BTCUSDT", "open": 50000, "close": 51000}],
     }
     response = client.post("/api/v1/data/insert", json=payload)
     assert response.status_code == 200
@@ -64,10 +62,7 @@ def test_legacy_insert_endpoint(client):
 
 def test_legacy_query_missing_collection(client):
     """Test legacy query with missing collection name."""
-    payload = {
-        "database": "mongodb",
-        "filter": {}
-    }
+    payload = {"database": "mongodb", "filter": {}}
     response = client.post("/api/v1/data/query", json=payload)
     assert response.status_code == 400
     assert "Collection name required" in response.json()["detail"]

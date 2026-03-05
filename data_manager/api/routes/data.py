@@ -409,4 +409,3 @@ async def get_funding(
     except Exception as e:
         logger.error(f"Error fetching funding rates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-

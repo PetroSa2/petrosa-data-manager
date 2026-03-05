@@ -104,7 +104,9 @@ def test_register_schema_success(client, mock_schema_service):
             "description": "Test schema",
             "created_by": "test_user",
         }
-        response = client.post("/api/v1/registry/schemas/mysql/test_schema", json=registration)
+        response = client.post(
+            "/api/v1/registry/schemas/mysql/test_schema", json=registration
+        )
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
@@ -120,7 +122,9 @@ def test_register_schema_invalid_database(client):
         "version": 1,
         "schema": {"type": "object"},
     }
-    response = client.post("/api/v1/registry/schemas/invalid/test_schema", json=registration)
+    response = client.post(
+        "/api/v1/registry/schemas/invalid/test_schema", json=registration
+    )
     assert response.status_code == 400
     assert "database must be 'mysql' or 'mongodb'" in response.json()["detail"].lower()
 
@@ -173,7 +177,9 @@ def test_update_schema(client, mock_schema_service):
         return_value=mock_schema_service,
     ):
         update = {"description": "Updated description", "status": "ACTIVE"}
-        response = client.put("/api/v1/registry/schemas/mysql/test_schema/versions/1", json=update)
+        response = client.put(
+            "/api/v1/registry/schemas/mysql/test_schema/versions/1", json=update
+        )
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
@@ -186,7 +192,9 @@ def test_deprecate_schema(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.delete("/api/v1/registry/schemas/mysql/test_schema/versions/1")
+        response = client.delete(
+            "/api/v1/registry/schemas/mysql/test_schema/versions/1"
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["deprecated"] is True
@@ -199,7 +207,9 @@ def test_list_schemas(client, mock_schema_service):
         "data_manager.api.routes.schemas.get_schema_service",
         return_value=mock_schema_service,
     ):
-        response = client.get("/api/v1/registry/schemas?database=mysql&page=1&page_size=10")
+        response = client.get(
+            "/api/v1/registry/schemas?database=mysql&page=1&page_size=10"
+        )
         assert response.status_code == 200
         data = response.json()
         assert "schemas" in data
