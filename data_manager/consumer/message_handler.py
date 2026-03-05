@@ -210,8 +210,9 @@ class MessageHandler:
         """Handle unknown event type."""
         self._stats["unknown"] += 1
         logger.warning(
-            "Received unknown event type",
+            "received_unknown_event",
             extra={
+                "subject": event.stream or "unknown",
                 "event_type": event.event_type.value,
                 "symbol": event.symbol,
                 "data_keys": list(event.data.keys()),
