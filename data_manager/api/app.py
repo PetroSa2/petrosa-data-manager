@@ -74,6 +74,29 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Legacy configuration path redirect middleware (Internal redirect)
+    @app.middleware("http")
+    async def redirect_legacy_config_paths(request, call_next):
+        """
+        Internally redirect legacy config paths to versioned ones.
+        Example: /config/application -> /api/v1/config/application
+        Also handles redundant version prefixes for robustness.
+        Example: /api/v1/api/v1/config -> /api/v1/config
+        """
+        path = request.url.path
+        if path.startswith("/config/") and not path.startswith("/api/v1/config/"):
+            new_path = f"/api/v1{path}"
+            logger.info(f"Redirecting legacy config path: {path} -> {new_path}")
+            # Modify the path in the scope for internal routing
+            request.scope["path"] = new_path
+        elif "/api/v1/api/v1/" in path:
+            new_path = path.replace("/api/v1/api/v1/", "/api/v1/")
+            logger.info(f"Fixing redundant version prefix: {path} -> {new_path}")
+            # Modify the path in the scope for internal routing
+            request.scope["path"] = new_path
+
+        return await call_next(request)
+
     # Mount Prometheus metrics
     metrics_app = make_asgi_app()
     app.mount("/metrics", metrics_app)

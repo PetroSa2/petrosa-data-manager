@@ -105,7 +105,7 @@ class RollbackRequest(BaseModel):
     reason: str | None = Field(None, description="Reason for rollback")
 
 
-@router.get("/application", response_model=AppConfigResponse)
+@router.get("/application", response_model=dict[str, Any])
 async def get_application_config():
     """
     Get application configuration.
@@ -117,45 +117,49 @@ async def get_application_config():
         config = await db_manager.configuration.get_app_config()
         if not config:
             # Return defaults if no config found
-            return AppConfigResponse(
-                enabled_strategies=[],
-                symbols=[],
-                candle_periods=[],
-                min_confidence=0.6,
-                max_confidence=0.95,
-                max_positions=10,
-                position_sizes=[100, 200, 500, 1000],
-                version=0,
-                source="default",
-                created_at=datetime.utcnow().isoformat(),
-                updated_at=datetime.utcnow().isoformat(),
-            )
+            return {
+                "success": True,
+                "data": {
+                    "enabled_strategies": [],
+                    "symbols": [],
+                    "candle_periods": [],
+                    "min_confidence": 0.6,
+                    "max_confidence": 0.95,
+                    "max_positions": 10,
+                    "position_sizes": [100, 200, 500, 1000],
+                    "version": 0,
+                    "source": "default",
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            }
 
         params = config.get("parameters", {})
-        return AppConfigResponse(
-            enabled_strategies=params.get("enabled_strategies", []),
-            symbols=params.get("symbols", []),
-            candle_periods=params.get("candle_periods", []),
-            min_confidence=params.get("min_confidence", 0.6),
-            max_confidence=params.get("max_confidence", 0.95),
-            max_positions=params.get("max_positions", 10),
-            position_sizes=params.get("position_sizes", [100, 200, 500, 1000]),
-            version=config.get("version", 0),
-            source="mongodb",
-            created_at=config.get("created_at").isoformat()
+        data = {
+            "enabled_strategies": params.get("enabled_strategies", []),
+            "symbols": params.get("symbols", []),
+            "candle_periods": params.get("candle_periods", []),
+            "min_confidence": params.get("min_confidence", 0.6),
+            "max_confidence": params.get("max_confidence", 0.95),
+            "max_positions": params.get("max_positions", 10),
+            "position_sizes": params.get("position_sizes", [100, 200, 500, 1000]),
+            "version": config.get("version", 0),
+            "source": "mongodb",
+            "created_at": config.get("created_at").isoformat()
             if isinstance(config.get("created_at"), datetime)
             else config.get("created_at", ""),
-            updated_at=config.get("updated_at").isoformat()
+            "updated_at": config.get("updated_at").isoformat()
             if isinstance(config.get("updated_at"), datetime)
             else config.get("updated_at", ""),
-        )
+        }
+        return {"success": True, "data": data}
 
     except Exception as e:
         logger.error(f"Error fetching application config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/application", response_model=AppConfigResponse)
+@router.post("/application", response_model=dict[str, Any])
 async def update_application_config(request: AppConfigRequest):
     """
     Update application configuration with auditing.
@@ -169,7 +173,7 @@ async def update_application_config(request: AppConfigRequest):
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
     if request.validate_only:
-        return await get_application_config()  # Return current as placeholder
+        return await get_application_config()
 
     try:
         parameters = {
@@ -191,23 +195,24 @@ async def update_application_config(request: AppConfigRequest):
                 status_code=500, detail="Failed to update configuration"
             )
 
-        return AppConfigResponse(
+        data = {
             **parameters,
-            version=config["version"],
-            source="mongodb",
-            created_at=config["created_at"].isoformat()
+            "version": config["version"],
+            "source": "mongodb",
+            "created_at": config["created_at"].isoformat()
             if isinstance(config["created_at"], datetime)
             else config["created_at"],
-            updated_at=config["updated_at"].isoformat()
+            "updated_at": config["updated_at"].isoformat()
             if isinstance(config["updated_at"], datetime)
             else config["updated_at"],
-        )
+        }
+        return {"success": True, "data": data}
     except Exception as e:
         logger.error(f"Error updating application config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/strategies/{strategy_id}", response_model=StrategyConfigResponse)
+@router.get("/strategies/{strategy_id}", response_model=dict[str, Any])
 async def get_strategy_config(
     strategy_id: str,
     symbol: str | None = Query(None, description="Symbol-specific configuration"),
@@ -222,33 +227,37 @@ async def get_strategy_config(
             strategy_id, symbol, side
         )
         if not config:
-            return StrategyConfigResponse(
-                parameters={},
-                version=0,
-                source="none",
-                is_override=bool(symbol or side),
-                created_at=datetime.utcnow().isoformat(),
-                updated_at=datetime.utcnow().isoformat(),
-            )
+            return {
+                "success": True,
+                "data": {
+                    "parameters": {},
+                    "version": 0,
+                    "source": "none",
+                    "is_override": bool(symbol or side),
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            }
 
-        return StrategyConfigResponse(
-            parameters=config.get("parameters", {}),
-            version=config.get("version", 0),
-            source="mongodb",
-            is_override=bool(symbol or side),
-            created_at=config.get("created_at").isoformat()
+        data = {
+            "parameters": config.get("parameters", {}),
+            "version": config.get("version", 0),
+            "source": "mongodb",
+            "is_override": bool(symbol or side),
+            "created_at": config.get("created_at").isoformat()
             if isinstance(config.get("created_at"), datetime)
             else config.get("created_at", ""),
-            updated_at=config.get("updated_at").isoformat()
+            "updated_at": config.get("updated_at").isoformat()
             if isinstance(config.get("updated_at"), datetime)
             else config.get("updated_at", ""),
-        )
+        }
+        return {"success": True, "data": data}
     except Exception as e:
         logger.error(f"Error fetching strategy config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/strategies/{strategy_id}", response_model=StrategyConfigResponse)
+@router.post("/strategies/{strategy_id}", response_model=dict[str, Any])
 async def update_strategy_config(
     strategy_id: str,
     request: StrategyConfigRequest,
@@ -280,18 +289,19 @@ async def update_strategy_config(
                 status_code=500, detail="Failed to update configuration"
             )
 
-        return StrategyConfigResponse(
-            parameters=config["parameters"],
-            version=config["version"],
-            source="mongodb",
-            is_override=bool(symbol or side),
-            created_at=config["created_at"].isoformat()
+        data = {
+            "parameters": config["parameters"],
+            "version": config["version"],
+            "source": "mongodb",
+            "is_override": bool(symbol or side),
+            "created_at": config["created_at"].isoformat()
             if isinstance(config["created_at"], datetime)
             else config["created_at"],
-            updated_at=config["updated_at"].isoformat()
+            "updated_at": config["updated_at"].isoformat()
             if isinstance(config["updated_at"], datetime)
             else config["updated_at"],
-        )
+        }
+        return {"success": True, "data": data}
     except Exception as e:
         logger.error(f"Error updating strategy config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
