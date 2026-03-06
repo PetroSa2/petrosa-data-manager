@@ -302,9 +302,6 @@ async def update_strategy_config(
             else config["updated_at"],
         }
         return {"success": True, "data": data}
-            if isinstance(config["updated_at"], datetime)
-            else config["updated_at"],
-        )
     except Exception as e:
         logger.error(f"Error updating strategy config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
