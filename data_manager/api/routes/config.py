@@ -257,7 +257,7 @@ async def get_strategy_config(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/strategies/{strategy_id}", response_model=StrategyConfigResponse)
+@router.post("/strategies/{strategy_id}", response_model=dict[str, Any])
 async def update_strategy_config(
     strategy_id: str,
     request: StrategyConfigRequest,
@@ -289,15 +289,19 @@ async def update_strategy_config(
                 status_code=500, detail="Failed to update configuration"
             )
 
-        return StrategyConfigResponse(
-            parameters=config["parameters"],
-            version=config["version"],
-            source="mongodb",
-            is_override=bool(symbol or side),
-            created_at=config["created_at"].isoformat()
+        data = {
+            "parameters": config["parameters"],
+            "version": config["version"],
+            "source": "mongodb",
+            "is_override": bool(symbol or side),
+            "created_at": config["created_at"].isoformat()
             if isinstance(config["created_at"], datetime)
             else config["created_at"],
-            updated_at=config["updated_at"].isoformat()
+            "updated_at": config["updated_at"].isoformat()
+            if isinstance(config["updated_at"], datetime)
+            else config["updated_at"],
+        }
+        return {"success": True, "data": data}
             if isinstance(config["updated_at"], datetime)
             else config["updated_at"],
         )
