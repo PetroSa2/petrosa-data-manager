@@ -24,8 +24,16 @@ class CandleRepository(BaseRepository):
         return f"candles_{symbol}_{timeframe}"
 
     def _get_mysql_table_name(self, timeframe: str) -> str:
-        """Map timeframe to MySQL table name."""
-        return f"klines_{timeframe}"
+        """
+        Map timeframe to MySQL table name.
+        Converts '1h' to 'klines_h1', '15m' to 'klines_m15', etc.
+        """
+        if not timeframe:
+            return "klines_unknown"
+            
+        unit = timeframe[-1]
+        value = timeframe[:-1]
+        return f"klines_{unit}{value}"
 
     async def insert(self, candle: Candle) -> bool:
         """
