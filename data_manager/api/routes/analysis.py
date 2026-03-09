@@ -98,7 +98,8 @@ async def get_volatility(
 async def get_strategy_performance(strategy_id: str):
     """
     Returns historical performance metrics for a specific strategy.
-    Ground-truth analytical data for the CIO reasoning loop.
+    Currently returns an initialized healthy baseline while historical
+    trade aggregation logic is being finalized.
     """
     try:
         # TODO: Integrate with trade_history collection for real WR/PnL calculation
@@ -113,11 +114,11 @@ async def get_strategy_performance(strategy_id: str):
             "metadata": {
                 "strategy_id": strategy_id,
                 "calculated_at": datetime.utcnow().isoformat(),
-                "source": "data-manager-analysis"
+                "source": "data-manager-analysis-baseline"
             }
         }
     except Exception as e:
-        logger.error(f"Error getting strategy performance for {strategy_id}: {e}")
+        logger.error(f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

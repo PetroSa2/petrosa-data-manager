@@ -83,3 +83,15 @@ def test_catalog_datasets_endpoint(client):
     assert "total" in data["pagination"]
     assert "limit" in data["pagination"]
     assert "offset" in data["pagination"]
+
+
+def test_strategy_performance_endpoint(client):
+    """Test strategy performance analytics endpoint."""
+    strategy_id = "test_momentum_v1"
+    response = client.get(f"/analysis/performance/{strategy_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert "stats" in data
+    assert "win_rate" in data["stats"]
+    assert data["metadata"]["strategy_id"] == strategy_id
+    assert data["metadata"]["source"] == "data-manager-analysis-baseline"
