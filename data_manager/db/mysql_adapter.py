@@ -240,11 +240,20 @@ class MySQLAdapter(BaseAdapter):
             logger.info("MySQL tables created/verified")
 
     def _get_table(self, collection: str) -> "Table":
-        """Get table object for collection."""
+        """Get table object for collection. Dynamically reflect if not already loaded."""
         if collection in self.tables:
             return self.tables[collection]
-        else:
-            raise DatabaseError(f"Unknown collection: {collection}")
+
+        # Try to reflect the table dynamically if it exists in the database
+        try:
+            engine = self._ensure_connected()
+            table = Table(collection, self.metadata, autoload_with=engine)
+            self.tables[collection] = table
+            logger.info(f"Dynamically reflected table: {collection}")
+            return table
+        except Exception as e:
+            logger.error(f"Failed to reflect table {collection}: {e}")
+            raise DatabaseError(f"Unknown collection or failed to reflect: {collection}")
 
     def write(self, model_instances: list[BaseModel], collection: str) -> int:
         """Write model instances to MySQL table with circuit breaker protection."""
