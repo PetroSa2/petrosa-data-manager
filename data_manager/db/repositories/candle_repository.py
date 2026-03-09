@@ -12,11 +12,19 @@ logger = logging.getLogger(__name__)
 
 
 class CandleRepository(BaseRepository):
-    """Repository for managing candle data in MongoDB."""
+    """
+    Repository for managing candle data.
+    Supports both MongoDB (collection per pair/timeframe) and 
+    MySQL (one table per timeframe with symbol column).
+    """
 
     def _get_collection_name(self, symbol: str, timeframe: str) -> str:
-        """Get collection name for symbol and timeframe."""
+        """Get collection name for symbol and timeframe (MongoDB specific)."""
         return f"candles_{symbol}_{timeframe}"
+
+    def _get_mysql_table_name(self, timeframe: str) -> str:
+        """Map timeframe to MySQL table name."""
+        return f"klines_{timeframe}"
 
     async def insert(self, candle: Candle) -> bool:
         """
@@ -29,9 +37,14 @@ class CandleRepository(BaseRepository):
             True if successful, False otherwise
         """
         try:
-            collection = self._get_collection_name(candle.symbol, candle.timeframe)
-            count = await self.mongodb.write([candle], collection)
-            return count > 0
+            if constants.CANDLE_DATABASE_TYPE == "mysql":
+                table = self._get_mysql_table_name(candle.timeframe)
+                count = self.mysql.write([candle], table)
+                return count > 0
+            else:
+                collection = self._get_collection_name(candle.symbol, candle.timeframe)
+                count = await self.mongodb.write([candle], collection)
+                return count > 0
         except Exception as e:
             logger.error(
                 f"Failed to insert candle for {candle.symbol} {candle.timeframe}: {e}"
@@ -52,22 +65,38 @@ class CandleRepository(BaseRepository):
             return 0
 
         try:
-            # Group candles by symbol and timeframe
-            candles_by_collection = {}
-            for candle in candles:
-                collection = self._get_collection_name(candle.symbol, candle.timeframe)
-                if collection not in candles_by_collection:
-                    candles_by_collection[collection] = []
-                candles_by_collection[collection].append(candle)
+            if constants.CANDLE_DATABASE_TYPE == "mysql":
+                # Group candles by timeframe
+                candles_by_table = {}
+                for candle in candles:
+                    table = self._get_mysql_table_name(candle.timeframe)
+                    if table not in candles_by_table:
+                        candles_by_table[table] = []
+                    candles_by_table[table].append(candle)
 
-            # Insert each collection's candles
-            total_inserted = 0
-            for collection, collection_candles in candles_by_collection.items():
-                count = await self.mongodb.write(collection_candles, collection)
-                total_inserted += count
-                logger.debug(f"Inserted {count} candles to {collection}")
+                total_inserted = 0
+                for table, table_candles in candles_by_table.items():
+                    count = self.mysql.write_batch(table_candles, table)
+                    total_inserted += count
+                    logger.debug(f"Inserted {count} candles to {table}")
+                return total_inserted
+            else:
+                # Group candles by symbol and timeframe
+                candles_by_collection = {}
+                for candle in candles:
+                    collection = self._get_collection_name(candle.symbol, candle.timeframe)
+                    if collection not in candles_by_collection:
+                        candles_by_collection[collection] = []
+                    candles_by_collection[collection].append(candle)
 
-            return total_inserted
+                # Insert each collection's candles
+                total_inserted = 0
+                for collection, collection_candles in candles_by_collection.items():
+                    count = await self.mongodb.write(collection_candles, collection)
+                    total_inserted += count
+                    logger.debug(f"Inserted {count} candles to {collection}")
+
+                return total_inserted
 
         except Exception as e:
             logger.error(f"Failed to insert candle batch: {e}")
@@ -89,8 +118,12 @@ class CandleRepository(BaseRepository):
             List of candle dictionaries
         """
         try:
-            collection = self._get_collection_name(symbol, timeframe)
-            return await self.mongodb.query_range(collection, start, end, symbol)
+            if constants.CANDLE_DATABASE_TYPE == "mysql":
+                table = self._get_mysql_table_name(timeframe)
+                return self.mysql.query_range(table, start, end, symbol)
+            else:
+                collection = self._get_collection_name(symbol, timeframe)
+                return await self.mongodb.query_range(collection, start, end, symbol)
         except Exception as e:
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             return []
@@ -110,8 +143,12 @@ class CandleRepository(BaseRepository):
             List of candle dictionaries
         """
         try:
-            collection = self._get_collection_name(symbol, timeframe)
-            return await self.mongodb.query_latest(collection, symbol, limit)
+            if constants.CANDLE_DATABASE_TYPE == "mysql":
+                table = self._get_mysql_table_name(timeframe)
+                return self.mysql.query_latest(table, symbol, limit)
+            else:
+                collection = self._get_collection_name(symbol, timeframe)
+                return await self.mongodb.query_latest(collection, symbol, limit)
         except Exception as e:
             logger.error(
                 f"Failed to query latest candles for {symbol} {timeframe}: {e}"
@@ -138,22 +175,30 @@ class CandleRepository(BaseRepository):
             Number of matching candles
         """
         try:
-            collection = self._get_collection_name(symbol, timeframe)
-            return await self.mongodb.get_record_count(collection, start, end, symbol)
+            if constants.CANDLE_DATABASE_TYPE == "mysql":
+                table = self._get_mysql_table_name(timeframe)
+                return self.mysql.get_record_count(table, start, end, symbol)
+            else:
+                collection = self._get_collection_name(symbol, timeframe)
+                return await self.mongodb.get_record_count(collection, start, end, symbol)
         except Exception as e:
             logger.error(f"Failed to count candles for {symbol} {timeframe}: {e}")
             return 0
 
     async def ensure_indexes(self, symbol: str, timeframe: str) -> None:
         """
-        Ensure indexes exist for collection.
+        Ensure indexes exist for collection/table.
 
         Args:
             symbol: Trading pair symbol
             timeframe: Timeframe (e.g., '1m', '1h')
         """
         try:
-            collection = self._get_collection_name(symbol, timeframe)
-            await self.mongodb.ensure_indexes(collection)
+            if constants.CANDLE_DATABASE_TYPE == "mysql":
+                # MySQL indexes handled during table creation
+                pass
+            else:
+                collection = self._get_collection_name(symbol, timeframe)
+                await self.mongodb.ensure_indexes(collection)
         except Exception as e:
             logger.warning(f"Failed to ensure indexes for {symbol} {timeframe}: {e}")
