@@ -7,9 +7,9 @@ metadata:
   labels:
     app: data-manager
     component: data-intelligence
-    version: VERSION_PLACEHOLDER
+    version: 1.2.15
 spec:
-  replicas: 3
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -23,7 +23,7 @@ spec:
       labels:
         app: data-manager
         component: data-intelligence
-        version: VERSION_PLACEHOLDER
+        version: 1.2.15
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
@@ -36,7 +36,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: data-manager
-        image: yurisa2/petrosa-data-manager:VERSION_PLACEHOLDER
+        image: yurisa2/petrosa-data-manager:1.2.15
         imagePullPolicy: Always
         ports:
         - name: http
@@ -102,6 +102,11 @@ spec:
             configMapKeyRef:
               name: petrosa-data-manager-config
               key: ANALYTICS_INTERVAL
+        - name: CANDLE_DATABASE_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-data-manager-config
+              key: CANDLE_DATABASE_TYPE
         
         # From Common ConfigMap
         - name: NATS_URL
