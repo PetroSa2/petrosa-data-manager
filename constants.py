@@ -100,6 +100,9 @@ SUPPORTED_PAIRS = os.getenv(
     "SUPPORTED_PAIRS", "BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,SOLUSDT"
 ).split(",")
 
+# Candle Database Configuration
+CANDLE_DATABASE_TYPE = os.getenv("CANDLE_DATABASE_TYPE", "mongodb").lower()
+
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
