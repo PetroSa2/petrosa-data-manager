@@ -247,7 +247,12 @@ class MySQLAdapter(BaseAdapter):
         # Try to reflect the table dynamically if it exists in the database
         try:
             engine = self._ensure_connected()
-            table = Table(collection, self.metadata, autoload_with=engine)
+            # Check if table already exists in metadata before creating new Table object
+            if collection in self.metadata.tables:
+                table = self.metadata.tables[collection]
+            else:
+                table = Table(collection, self.metadata, autoload_with=engine)
+            
             self.tables[collection] = table
             logger.info(f"Dynamically reflected table: {collection}")
             return table
