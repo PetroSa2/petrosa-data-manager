@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class CandleRepository(BaseRepository):
     """
     Repository for managing candle data.
-    Supports both MongoDB (collection per pair/timeframe) and 
+    Supports both MongoDB (collection per pair/timeframe) and
     MySQL (one table per timeframe with symbol column).
     """
 
@@ -85,7 +85,9 @@ class CandleRepository(BaseRepository):
                 # Group candles by symbol and timeframe
                 candles_by_collection = {}
                 for candle in candles:
-                    collection = self._get_collection_name(candle.symbol, candle.timeframe)
+                    collection = self._get_collection_name(
+                        candle.symbol, candle.timeframe
+                    )
                     if collection not in candles_by_collection:
                         candles_by_collection[collection] = []
                     candles_by_collection[collection].append(candle)
@@ -181,7 +183,9 @@ class CandleRepository(BaseRepository):
                 return self.mysql.get_record_count(table, start, end, symbol)
             else:
                 collection = self._get_collection_name(symbol, timeframe)
-                return await self.mongodb.get_record_count(collection, start, end, symbol)
+                return await self.mongodb.get_record_count(
+                    collection, start, end, symbol
+                )
         except Exception as e:
             logger.error(f"Failed to count candles for {symbol} {timeframe}: {e}")
             return 0
