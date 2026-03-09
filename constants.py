@@ -101,7 +101,9 @@ SUPPORTED_PAIRS = os.getenv(
 ).split(",")
 
 # Candle Database Configuration
-CANDLE_DATABASE_TYPE = os.getenv("CANDLE_DATABASE_TYPE", "mongodb").lower()
+CANDLE_DATABASE_TYPE = os.getenv(
+    "CANDLE_DATABASE_TYPE", os.getenv("DB_ADAPTER", os.getenv("EXTRACTOR_DB_ADAPTER", "mongodb"))
+).lower()
 
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
