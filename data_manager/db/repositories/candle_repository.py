@@ -131,7 +131,22 @@ class CandleRepository(BaseRepository):
         try:
             if constants.CANDLE_DATABASE_TYPE == "mysql":
                 table = self._get_mysql_table_name(timeframe)
-                return self.mysql.query_range(table, start, end, symbol)
+                rows = self.mysql.query_range(table, start, end, symbol)
+                # Map MySQL columns to expected keys
+                return [
+                    {
+                        "open": row.get("open_price"),
+                        "high": row.get("high_price"),
+                        "low": row.get("low_price"),
+                        "close": row.get("close_price"),
+                        "volume": row.get("volume"),
+                        "timestamp": row.get("timestamp"),
+                        "symbol": row.get("symbol"),
+                        "interval": row.get("interval"),
+                        # Include other fields if needed, or update consumers to use standard keys
+                    }
+                    for row in rows
+                ]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
                 return await self.mongodb.query_range(collection, start, end, symbol)
@@ -156,7 +171,21 @@ class CandleRepository(BaseRepository):
         try:
             if constants.CANDLE_DATABASE_TYPE == "mysql":
                 table = self._get_mysql_table_name(timeframe)
-                return self.mysql.query_latest(table, symbol, limit)
+                rows = self.mysql.query_latest(table, symbol, limit)
+                # Map MySQL columns to expected keys
+                return [
+                    {
+                        "open": row.get("open_price"),
+                        "high": row.get("high_price"),
+                        "low": row.get("low_price"),
+                        "close": row.get("close_price"),
+                        "volume": row.get("volume"),
+                        "timestamp": row.get("timestamp"),
+                        "symbol": row.get("symbol"),
+                        "interval": row.get("interval"),
+                    }
+                    for row in rows
+                ]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
                 return await self.mongodb.query_latest(collection, symbol, limit)
