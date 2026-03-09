@@ -5,6 +5,7 @@ Repository for candle/kline data operations.
 import logging
 from datetime import datetime
 
+import constants
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import Candle
 
