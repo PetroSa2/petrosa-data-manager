@@ -127,10 +127,10 @@ class SeasonalityMetrics(BaseModel):
 
     symbol: str = Field(..., description="Trading pair symbol")
     timeframe: str = Field(..., description="Data timeframe")
-    hourly_pattern: dict[int, Decimal] = Field(
+    hourly_pattern: dict[str, Decimal] = Field(
         ..., description="Hourly recurring patterns (0-23)"
     )
-    daily_pattern: dict[int, Decimal] = Field(..., description="Daily patterns (0-6)")
+    daily_pattern: dict[str, Decimal] = Field(..., description="Daily patterns (0-6)")
     seasonal_deviation: Decimal = Field(..., description="Deviation from seasonal mean")
     entropy_index: Decimal = Field(..., description="Entropy/randomness index")
     dominant_cycle: int | None = Field(

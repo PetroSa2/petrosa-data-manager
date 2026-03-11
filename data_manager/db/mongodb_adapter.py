@@ -297,19 +297,21 @@ class MongoDBAdapter(BaseAdapter):
     @staticmethod
     def _convert_decimals_to_float(doc: dict) -> dict:
         """
-        Recursively convert Decimal objects to float in a dictionary.
+        Recursively convert Decimal objects to float and ensure keys are strings.
 
-        MongoDB Motor doesn't support Decimal type, so we need to convert them.
+        MongoDB Motor doesn't support Decimal type, and BSON requires string keys.
         """
         from decimal import Decimal
 
+        new_doc = {}
         for key, value in doc.items():
+            str_key = str(key)
             if isinstance(value, Decimal):
-                doc[key] = float(value)
+                new_doc[str_key] = float(value)
             elif isinstance(value, dict):
-                doc[key] = MongoDBAdapter._convert_decimals_to_float(value)
+                new_doc[str_key] = MongoDBAdapter._convert_decimals_to_float(value)
             elif isinstance(value, list):
-                doc[key] = [
+                new_doc[str_key] = [
                     (
                         MongoDBAdapter._convert_decimals_to_float(item)
                         if isinstance(item, dict)
@@ -319,7 +321,9 @@ class MongoDBAdapter(BaseAdapter):
                     )
                     for item in value
                 ]
-        return doc
+            else:
+                new_doc[str_key] = value
+        return new_doc
 
     # -------------------------------------------------------------------------
     # Configuration Management Methods
