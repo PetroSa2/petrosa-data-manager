@@ -82,7 +82,7 @@ class SeasonalityCalculator:
             hourly_pattern = {}
             for hour in range(24):
                 hour_data = df[df["hour"] == hour]["close"]
-                hourly_pattern[hour] = (
+                hourly_pattern[str(hour)] = (
                     Decimal(str(hour_data.mean()))
                     if len(hour_data) > 0
                     else Decimal("0")
@@ -92,13 +92,13 @@ class SeasonalityCalculator:
             daily_pattern = {}
             for day in range(7):
                 day_data = df[df["day_of_week"] == day]["close"]
-                daily_pattern[day] = (
+                daily_pattern[str(day)] = (
                     Decimal(str(day_data.mean())) if len(day_data) > 0 else Decimal("0")
                 )
 
             # Seasonal deviation (current vs seasonal average)
             current_hour = datetime.utcnow().hour
-            seasonal_avg = float(hourly_pattern.get(current_hour, Decimal("0")))
+            seasonal_avg = float(hourly_pattern.get(str(current_hour), Decimal("0")))
             current_price = df["close"].iloc[-1]
             seasonal_deviation = (
                 Decimal(str((current_price - seasonal_avg) / seasonal_avg * 100))

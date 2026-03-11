@@ -98,7 +98,7 @@ class MongoDBAdapter(BaseAdapter):
                     doc["_id"] = f"{doc['symbol']}_{timestamp_ms}"
 
                 # Convert Decimal to float for MongoDB compatibility
-                doc = self._convert_decimals_to_float(doc)
+                doc = self._prepare_for_bson(doc)
                 documents.append(doc)
 
             # Insert with ordered=False to continue on duplicates
@@ -295,23 +295,32 @@ class MongoDBAdapter(BaseAdapter):
             raise DatabaseError(f"Failed to list collections: {e}") from e
 
     @staticmethod
-    def _convert_decimals_to_float(doc: dict) -> dict:
+    def _prepare_for_bson(doc: dict) -> dict:
         """
-        Recursively convert Decimal objects to float in a dictionary.
+        Recursively convert Decimal objects to float and ensure keys are strings.
 
-        MongoDB Motor doesn't support Decimal type, so we need to convert them.
+        MongoDB Motor doesn't support Decimal type, and BSON requires string keys.
         """
         from decimal import Decimal
 
+        new_doc = {}
         for key, value in doc.items():
+            str_key = str(key)
+            if str_key in new_doc:
+                logger.warning(
+                    "Key collision detected during BSON preparation: '%s' "
+                    "already exists in document. Data may be overwritten.",
+                    str_key,
+                )
+
             if isinstance(value, Decimal):
-                doc[key] = float(value)
+                new_doc[str_key] = float(value)
             elif isinstance(value, dict):
-                doc[key] = MongoDBAdapter._convert_decimals_to_float(value)
+                new_doc[str_key] = MongoDBAdapter._prepare_for_bson(value)
             elif isinstance(value, list):
-                doc[key] = [
+                new_doc[str_key] = [
                     (
-                        MongoDBAdapter._convert_decimals_to_float(item)
+                        MongoDBAdapter._prepare_for_bson(item)
                         if isinstance(item, dict)
                         else float(item)
                         if isinstance(item, Decimal)
@@ -319,7 +328,9 @@ class MongoDBAdapter(BaseAdapter):
                     )
                     for item in value
                 ]
-        return doc
+            else:
+                new_doc[str_key] = value
+        return new_doc
 
     # -------------------------------------------------------------------------
     # Configuration Management Methods
