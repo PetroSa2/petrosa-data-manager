@@ -131,7 +131,7 @@ async def get_application_config():
                     "source": "default",
                     "created_at": datetime.utcnow().isoformat(),
                     "updated_at": datetime.utcnow().isoformat(),
-                }
+                },
             }
 
         params = config.get("parameters", {})
@@ -236,7 +236,7 @@ async def get_strategy_config(
                     "is_override": bool(symbol or side),
                     "created_at": datetime.utcnow().isoformat(),
                     "updated_at": datetime.utcnow().isoformat(),
-                }
+                },
             }
 
         data = {

@@ -30,7 +30,7 @@ class CandleRepository(BaseRepository):
         """
         if not timeframe:
             return "klines_unknown"
-            
+
         unit = timeframe[-1]
         value = timeframe[:-1]
         return f"klines_{unit}{value}"
