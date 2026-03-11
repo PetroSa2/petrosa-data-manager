@@ -342,6 +342,9 @@ async def main():
             setup_telemetry(
                 service_name=constants.OTEL_SERVICE_NAME,
                 service_type="async",
+                otlp_endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT,
+                protocol=constants.OTEL_EXPORTER_OTLP_PROTOCOL,
+                enable_mysql=True,
                 enable_mongodb=True,
                 enable_http=True,
             )
