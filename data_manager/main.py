@@ -6,10 +6,6 @@ import asyncio
 import logging
 import os
 import signal
-import sys
-from typing import TYPE_CHECKING
-
-# 1. Setup OpenTelemetry FIRST (before any other imports that might use it)
 try:
     from petrosa_otel import (
         attach_logging_handler,
@@ -28,7 +24,10 @@ from data_manager.api.app import create_app
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
 
-if TYPE_CHECKING:
+logger = structlog.get_logger(__name__)
+
+
+class DataManagerApp:
     from data_manager.backfiller.orchestrator import BackfillOrchestrator
     from data_manager.leader_election import LeaderElectionManager
 
@@ -336,14 +335,16 @@ class DataManagerApp:
 async def main():
     """Main application entry point."""
     # 1. Setup OpenTelemetry
-    if constants.OTEL_ENABLED and setup_telemetry:
+    if (
+        constants.OTEL_ENABLED
+        and setup_telemetry
+        and os.getenv("OTEL_NO_AUTO_INIT", "").lower() not in ("1", "true", "yes", "on")
+    ):
         try:
             logger.info("Initializing OpenTelemetry")
             setup_telemetry(
                 service_name=constants.OTEL_SERVICE_NAME,
                 service_type="async",
-                otlp_endpoint=constants.OTEL_EXPORTER_OTLP_ENDPOINT,
-                protocol=constants.OTEL_EXPORTER_OTLP_PROTOCOL,
                 enable_mysql=True,
                 enable_mongodb=True,
                 enable_http=True,
@@ -354,7 +355,11 @@ async def main():
             )
 
     # 3. Attach OTel logging handler LAST (after logging is configured)
-    if constants.OTEL_ENABLED and attach_logging_handler:
+    if (
+        constants.OTEL_ENABLED
+        and attach_logging_handler
+        and os.getenv("OTEL_NO_AUTO_INIT", "").lower() not in ("1", "true", "yes", "on")
+    ):
         try:
             success = attach_logging_handler()
             if success:

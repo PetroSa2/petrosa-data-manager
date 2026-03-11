@@ -77,7 +77,7 @@ class ConfigurationRepository(BaseRepository):
             )
 
             await self.mongodb.db.app_config_audit.insert_one(
-                audit_record.model_dump(by_alias=True)
+                audit_record.model_dump(by_alias=True, exclude_none=True)
             )
 
             return config_doc
@@ -163,7 +163,7 @@ class ConfigurationRepository(BaseRepository):
             )
 
             await self.mongodb.db.strategy_config_audit.insert_one(
-                audit_record.model_dump(by_alias=True)
+                audit_record.model_dump(by_alias=True, exclude_none=True)
             )
 
             return config_doc
