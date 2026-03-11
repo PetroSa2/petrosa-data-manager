@@ -252,13 +252,15 @@ class MySQLAdapter(BaseAdapter):
                 table = self.metadata.tables[collection]
             else:
                 table = Table(collection, self.metadata, autoload_with=engine)
-            
+
             self.tables[collection] = table
             logger.info(f"Dynamically reflected table: {collection}")
             return table
         except Exception as e:
             logger.error(f"Failed to reflect table {collection}: {e}")
-            raise DatabaseError(f"Unknown collection or failed to reflect: {collection}")
+            raise DatabaseError(
+                f"Unknown collection or failed to reflect: {collection}"
+            )
 
     def write(self, model_instances: list[BaseModel], collection: str) -> int:
         """Write model instances to MySQL table with circuit breaker protection."""

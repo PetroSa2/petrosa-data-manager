@@ -109,16 +109,18 @@ async def get_strategy_performance(strategy_id: str):
                 "win_rate": 0.62,
                 "win_rate_delta": 0.02,
                 "consecutive_losses": 0,
-                "recent_pnl_trend": "positive"
+                "recent_pnl_trend": "positive",
             },
             "metadata": {
                 "strategy_id": strategy_id,
                 "calculated_at": datetime.utcnow().isoformat(),
-                "source": "data-manager-analysis-baseline"
-            }
+                "source": "data-manager-analysis-baseline",
+            },
         }
     except Exception as e:
-        logger.error(f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True)
+        logger.error(
+            f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
