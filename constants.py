@@ -93,6 +93,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "http://grafana-alloy.observability.svc.cluster.local:4317",
 )
+OTEL_EXPORTER_OTLP_PROTOCOL = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
 OTEL_SERVICE_NAME = SERVICE_NAME
 
 # Supported trading pairs
