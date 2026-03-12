@@ -32,7 +32,6 @@ python-json-logger>=2.0.7
 
 # Unified OpenTelemetry package for Petrosa services
 petrosa-otel[all]>=1.0.4
-
 # HTTP client
 httpx>=0.26.0
 tenacity>=8.2.0
