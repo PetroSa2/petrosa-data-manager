@@ -120,7 +120,27 @@ spec:
               name: petrosa-common-config
               key: OTEL_EXPORTER_OTLP_ENDPOINT
               optional: false
-        
+        - name: OTEL_METRICS_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-common-config
+              key: OTEL_METRICS_EXPORTER
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-common-config
+              key: OTEL_TRACES_EXPORTER
+        - name: OTEL_LOGS_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: petrosa-common-config
+              key: OTEL_LOGS_EXPORTER
+        - name: OTEL_EXPORTER_OTLP_HEADERS
+          valueFrom:
+            secretKeyRef:
+              name: petrosa-sensitive-credentials
+              key: OTEL_EXPORTER_OTLP_HEADERS
+
         # From Secrets - Use existing MYSQL_URI and mongodb credentials
         - name: MYSQL_URI
           valueFrom:
