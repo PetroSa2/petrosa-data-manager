@@ -227,8 +227,7 @@ class GapDetector:
                 timeframe=timeframe,
                 start_time=gap.start_time,
                 end_time=gap.end_time,
-                priority="high" if severity == "high" else "medium",
-                triggered_by="auto_gap_detection",
+                priority=1 if severity == "high" else 5,
             )
 
             logger.info(

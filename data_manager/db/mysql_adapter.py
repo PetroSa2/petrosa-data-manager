@@ -239,10 +239,79 @@ class MySQLAdapter(BaseAdapter):
             self.metadata.create_all(self.engine)
             logger.info("MySQL tables created/verified")
 
+    def _create_klines_table(self, interval: str, collection_name: str | None = None) -> "Table":
+        """Create or reflect a klines table for specific interval."""
+        # Map binance interval to table suffix (e.g., 1h -> h1)
+        suffix = interval
+        if interval.endswith("m"):
+            suffix = f"m{interval[:-1]}"
+        elif interval.endswith("h"):
+            suffix = f"h{interval[:-1]}"
+        elif interval.endswith("d"):
+            suffix = f"d{interval[:-1]}"
+            
+        physical_table_name = f"klines_{suffix}"
+        # Use requested collection name as the Table object name if provided
+        object_name = collection_name or physical_table_name
+
+        if object_name in self.tables:
+            return self.tables[object_name]
+
+        table = Table(
+            physical_table_name,
+            self.metadata,
+            Column("id", String(64), primary_key=True),
+            Column("symbol", String(20), nullable=False),
+            Column("timestamp", DateTime, nullable=False),
+            Column("open_time", DateTime, nullable=False),
+            Column("close_time", DateTime, nullable=False),
+            Column("interval", String(10), nullable=False),
+            Column("open_price", Numeric(20, 8), nullable=False),
+            Column("high_price", Numeric(20, 8), nullable=False),
+            Column("low_price", Numeric(20, 8), nullable=False),
+            Column("close_price", Numeric(20, 8), nullable=False),
+            Column("volume", Numeric(20, 8), nullable=False),
+            Column("quote_asset_volume", Numeric(20, 8), nullable=False),
+            Column("number_of_trades", Integer, nullable=False),
+            Column("taker_buy_base_asset_volume", Numeric(20, 8), nullable=False),
+            Column("taker_buy_quote_asset_volume", Numeric(20, 8), nullable=False),
+            Column("price_change", Numeric(20, 8), nullable=True),
+            Column("price_change_percent", Numeric(10, 4), nullable=True),
+            Column("extracted_at", DateTime, nullable=False),
+            Column("extractor_version", String(20), nullable=False),
+            Column("source", String(50), nullable=False),
+            Index(f"idx_{physical_table_name}_symbol_timestamp", "symbol", "timestamp"),
+            Index(f"idx_{physical_table_name}_timestamp", "timestamp"),
+            Index(f"idx_{physical_table_name}_open_time", "open_time"),
+            extend_existing=True
+        )
+
+        self.tables[object_name] = table
+        if self.engine is not None:
+            table.create(self.engine, checkfirst=True)
+            logger.info(f"Created/Verified table: {physical_table_name} (mapped to {object_name})")
+        return table
+
     def _get_table(self, collection: str) -> "Table":
-        """Get table object for collection. Dynamically reflect if not already loaded."""
+        """Get table object for collection. Dynamically create or reflect."""
         if collection in self.tables:
             return self.tables[collection]
+
+        # Handle klines tables specially (e.g., klines_1h -> maps to physical klines_h1)
+        if collection.startswith("klines_"):
+            suffix = collection.replace("klines_", "")
+            interval = suffix
+            # Detect if it's already in financial style (e.g. h1) or binance style (e.g. 1h)
+            if any(suffix.startswith(x) for x in ['m', 'h', 'd']):
+                # Already financial style (m15, h1, etc.)
+                if suffix.startswith("m"):
+                    interval = f"{suffix[1:]}m"
+                elif suffix.startswith("h"):
+                    interval = f"{suffix[1:]}h"
+                elif suffix.startswith("d"):
+                    interval = f"{suffix[1:]}d"
+            
+            return self._create_klines_table(interval, collection_name=collection)
 
         # Try to reflect the table dynamically if it exists in the database
         try:

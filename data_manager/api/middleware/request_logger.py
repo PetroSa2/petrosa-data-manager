@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from opentelemetry import trace
 
 import constants
 
@@ -25,8 +26,13 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request and response with detailed logging."""
-        # Generate request ID for tracing
-        request_id = str(uuid.uuid4())
+        # Get trace ID from OpenTelemetry
+        span = trace.get_current_span()
+        span_context = span.get_span_context()
+        if span_context.is_valid:
+            trace_id = format(span_context.trace_id, "032x")
+        else:
+            trace_id = str(uuid.uuid4())
 
         # Start timing
         start_time = time.time()
@@ -56,13 +62,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
             return
 
         try:
-            # Get request body size
+            # Skip body logging in middleware to avoid potential deadlocks/hangs
+            # with BaseHTTPMiddleware
             body_size = 0
-            if hasattr(request, "_body"):
-                body_size = len(request._body)
-            elif hasattr(request, "body"):
-                body = await request.body()
-                body_size = len(body)
 
             # Build request log
             request_log = {
