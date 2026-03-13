@@ -373,12 +373,9 @@ async def get_deviation(
         )
 
         if not results:
-            return {
-                "pair": pair,
-                "metric": "deviation",
-                "data": None,
-                "metadata": {"message": "No deviation data available"},
-            }
+            raise HTTPException(
+                status_code=404, detail=f"No deviation data available for {pair}"
+            )
 
         r = results[0]
 
@@ -433,12 +430,9 @@ async def get_seasonality(
         )
 
         if not results:
-            return {
-                "pair": pair,
-                "metric": "seasonality",
-                "data": None,
-                "metadata": {"message": "No seasonality data available"},
-            }
+            raise HTTPException(
+                status_code=404, detail=f"No seasonality data available for {pair}"
+            )
 
         r = results[0]
 
@@ -493,12 +487,9 @@ async def get_regime(
         )
 
         if not results:
-            return {
-                "pair": pair,
-                "metric": "regime",
-                "data": None,
-                "metadata": {"message": "No regime data available"},
-            }
+            raise HTTPException(
+                status_code=404, detail=f"No regime data available for {pair}"
+            )
 
         r = results[0]
 
