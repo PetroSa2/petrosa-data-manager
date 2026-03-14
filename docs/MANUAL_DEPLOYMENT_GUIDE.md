@@ -23,23 +23,23 @@ The manual deployment workflow allows you to:
 
 1. **Navigate to Actions tab**
    - Go to: https://github.com/PetroSa2/petrosa-data-manager/actions
-   
+
 2. **Select the workflow**
    - Click on "Manual Deployment with Version Bump" in the left sidebar
-   
+
 3. **Click "Run workflow"**
    - Click the "Run workflow" button (top right)
-   
+
 4. **Fill in parameters**:
    - **Environment**: Select target environment
      - `staging` (default)
      - `production`
-   
+
    - **Version bump type**: Select how to increment version
      - `patch` (default) - Bug fixes (1.2.3 → 1.2.4)
      - `minor` - New features (1.2.3 → 1.3.0)
      - `major` - Breaking changes (1.2.3 → 2.0.0)
-   
+
    - **Reason**: Explain why deployment is needed
      - Example: "Update ConfigMap with new RSI thresholds"
      - Example: "Redeploy after infrastructure changes"
@@ -302,4 +302,3 @@ For issues or questions:
 - Review this documentation
 - Contact DevOps team
 - Create GitHub issue with details
-

@@ -1,7 +1,7 @@
 # GitHub Actions Deploy Workflow Fix
 
-**Issue**: Deploy workflow fails when trying to checkout `petrosa_k8s` repository  
-**Error**: `Not Found - https://docs.github.com/rest/repos/repos#get-a-repository`  
+**Issue**: Deploy workflow fails when trying to checkout `petrosa_k8s` repository
+**Error**: `Not Found - https://docs.github.com/rest/repos/repos#get-a-repository`
 **Status**: ⚠️ Manual fix required (GitHub settings/permissions)
 
 ---
@@ -15,7 +15,7 @@ The Deploy workflow in `.github/workflows/deploy.yml` attempts to:
 4. ❌ Update manifests in `petrosa_k8s` - **SKIPPED**
 5. ❌ Deploy to Kubernetes - **SKIPPED**
 
-**Root Cause:**  
+**Root Cause:**
 The default `GITHUB_TOKEN` doesn't have permission to access other repositories in the organization.
 
 ---
@@ -46,9 +46,9 @@ The default `GITHUB_TOKEN` doesn't have permission to access other repositories 
    ```
 
 3. **Update Deploy Workflow**
-   
+
    Edit `.github/workflows/deploy.yml` around line 64:
-   
+
    ```yaml
    # BEFORE:
    - name: Checkout petrosa_k8s repository
@@ -56,7 +56,7 @@ The default `GITHUB_TOKEN` doesn't have permission to access other repositories 
      with:
        repository: PetroSa2/petrosa_k8s
        path: petrosa_k8s
-   
+
    # AFTER:
    - name: Checkout petrosa_k8s repository
      uses: actions/checkout@v4
@@ -154,8 +154,8 @@ gh run watch
 
 ## Recommended Action
 
-**Priority: Medium**  
-**Effort: 5 minutes**  
+**Priority: Medium**
+**Effort: 5 minutes**
 **Impact: Improved workflow**
 
 Implement **Option 1 (PAT)** for quick fix, then consider GitHub App for long-term security.
@@ -180,7 +180,7 @@ That's it! Two small changes for full CI/CD automation.
 
 ```
 ✅ CI Pipeline: PASSING
-✅ Build & Push: PASSING  
+✅ Build & Push: PASSING
 ✅ Security Scan: PASSING
 ✅ Code Quality: PASSING
 ❌ Auto-Deploy: FAILING (needs PAT)
@@ -196,4 +196,3 @@ Workaround: Manual deployment (working fine)
 - It can access the current repository but not other repos in the organization
 - This is a security feature to prevent unauthorized access
 - PAT or GitHub App is the standard solution for cross-repo access
-

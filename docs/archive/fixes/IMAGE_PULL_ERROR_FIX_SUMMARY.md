@@ -137,4 +137,3 @@ petrosa-data-manager-6ff469578b-dqswk   1/1     Running   0          30s
 2. Monitor application logs for any other runtime issues
 3. Consider adding CI/CD pipeline improvements to catch these issues earlier
 4. Update documentation to reflect the k8s directory requirement
-

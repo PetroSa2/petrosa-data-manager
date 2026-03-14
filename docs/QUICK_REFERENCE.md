@@ -229,4 +229,3 @@ curl http://localhost:9090/metrics
 kubectl --kubeconfig=k8s/kubeconfig.yaml -n petrosa-apps port-forward svc/petrosa-data-manager 9090:9090
 curl http://localhost:9090/metrics
 ```
-

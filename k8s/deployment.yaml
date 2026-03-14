@@ -107,7 +107,7 @@ spec:
             configMapKeyRef:
               name: petrosa-data-manager-config
               key: CANDLE_DATABASE_TYPE
-        
+
         # From Common ConfigMap
         - name: NATS_URL
           valueFrom:
@@ -164,7 +164,7 @@ spec:
               name: petrosa-sensitive-credentials
               key: BINANCE_API_SECRET
               optional: true
-        
+
         resources:
           requests:
             memory: "512Mi"
@@ -172,7 +172,7 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
-        
+
         livenessProbe:
           httpGet:
             path: /health/liveness
@@ -181,7 +181,7 @@ spec:
           periodSeconds: 30
           timeoutSeconds: 5
           failureThreshold: 3
-        
+
         readinessProbe:
           httpGet:
             path: /health/readiness
@@ -190,7 +190,7 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
-        
+
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: false
@@ -199,7 +199,6 @@ spec:
           capabilities:
             drop:
             - ALL
-      
+
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
-

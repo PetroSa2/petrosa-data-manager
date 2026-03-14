@@ -44,4 +44,3 @@ spec:
         value: 2
         periodSeconds: 30
       selectPolicy: Max
-

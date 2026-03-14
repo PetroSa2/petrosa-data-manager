@@ -28,7 +28,7 @@ async def main():
         timeout=30,
         max_retries=3
     )
-    
+
     try:
         # Get candle data
         candles = await client.get_candles(
@@ -37,7 +37,7 @@ async def main():
             limit=200
         )
         print(f"Retrieved {len(candles['data'])} candles")
-        
+
         # Insert trade data
         result = await client.insert(
             database="mongodb",
@@ -50,7 +50,7 @@ async def main():
             }
         )
         print(f"Inserted {result['inserted_count']} records")
-        
+
     finally:
         await client.close()
 
@@ -280,13 +280,13 @@ from datetime import datetime
 
 async def process_candles(pair: str) -> list[dict[str, Any]]:
     client = DataManagerClient(base_url="http://data-manager:8000")
-    
+
     response = await client.get_candles(
         pair=pair,
         period="15m",
         limit=100
     )
-    
+
     return response["data"]
 ```
 
@@ -304,10 +304,10 @@ async def test_get_candles():
             url="http://data-manager:8000/data/candles",
             json={"data": [{"timestamp": "2024-01-01T00:00:00Z", "close": "50000"}]}
         )
-        
+
         client = DataManagerClient(base_url="http://data-manager:8000")
         result = await client.get_candles("BTCUSDT", "15m")
-        
+
         assert len(result["data"]) == 1
         assert result["data"][0]["close"] == "50000"
 ```

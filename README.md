@@ -604,7 +604,7 @@ All CRUD operations support optional schema validation:
 # Insert with validation
 POST /api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true
 
-# Update with validation  
+# Update with validation
 PUT /api/v1/mysql/orders?schema=order_v1&validate=true
 
 # Batch operations with validation
@@ -799,4 +799,3 @@ MIT License - Petrosa Systems
 ## 👥 Authors
 
 Petrosa Systems - Trading Infrastructure Team
-

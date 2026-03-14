@@ -120,7 +120,7 @@ tracer = trace.get_tracer(__name__)
 
 async def handle_message(msg):
     data = json.loads(msg.data.decode())
-    
+
     # Create span with extracted context
     with NATSTracePropagator.create_span_from_message(
         tracer,
@@ -143,10 +143,10 @@ tracer = trace.get_tracer(__name__)
 
 async def handle_message(msg):
     data = json.loads(msg.data.decode())
-    
+
     # Extract context
     ctx = NATSTracePropagator.extract_context(data)
-    
+
     # Create span as child of extracted context
     with tracer.start_as_current_span(
         "process_market_data",
@@ -155,7 +155,7 @@ async def handle_message(msg):
     ) as span:
         span.set_attribute("messaging.system", "nats")
         span.set_attribute("symbol", data.get("symbol"))
-        
+
         # Process message
         await process_data(data)
 ```
@@ -335,4 +335,3 @@ logging.getLogger("data_manager.utils.nats_trace_propagator").setLevel(logging.D
 2. **NATS Native Headers**: Migrate to NATS 2.2+ native headers for cleaner separation
 3. **Sampling**: Implement trace sampling for high-volume messages
 4. **Compression**: Compress trace headers if message size becomes an issue
-

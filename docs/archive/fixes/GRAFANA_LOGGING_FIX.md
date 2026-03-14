@@ -67,7 +67,7 @@ After applying these changes:
    ```bash
    kubectl logs -n petrosa-apps -l app=data-manager --tail=50 | grep -i otel
    ```
-   
+
    Expected output:
    ```
    Initializing OpenTelemetry with endpoint: http://grafana-alloy.observability.svc.cluster.local:4317
@@ -129,4 +129,3 @@ kubectl logs -n petrosa-apps -l app=data-manager --tail=20
 - OpenTelemetry Logging: https://opentelemetry.io/docs/specs/otel/logs/
 - Grafana Alloy: https://grafana.com/docs/alloy/
 - petrosa-otel package: `/Users/yurisa2/petrosa/petrosa_k8s/petrosa-otel/`
-
