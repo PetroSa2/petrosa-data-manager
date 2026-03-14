@@ -134,6 +134,3 @@ kubectl --context=petrosa --insecure-skip-tls-verify get nodes
 - See `../k8s/` for Kubernetes manifests
 - Check `.cursorrules` for repository-specific conventions
 - Refer to `petrosa_k8s/docs/KUBERNETES_SETUP.md` for detailed cluster management
-
-
-

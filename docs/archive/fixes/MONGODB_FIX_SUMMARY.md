@@ -4,7 +4,7 @@
 
 The `petrosa-data-manager` was unable to connect to MongoDB, showing errors like:
 ```
-Failed to write to MongoDB: mongodb-service.petrosa-apps.svc.cluster.local:27017: 
+Failed to write to MongoDB: mongodb-service.petrosa-apps.svc.cluster.local:27017:
 [Errno -2] Name or service not known
 ```
 
@@ -63,13 +63,13 @@ Databases: ['admin', 'config', 'local', 'petrosa_data_manager']
 
 ### Before Fix
 ```
-Failed to insert trade: mongodb-service.petrosa-apps.svc.cluster.local:27017: 
+Failed to insert trade: mongodb-service.petrosa-apps.svc.cluster.local:27017:
 [Errno -2] Name or service not known
 ```
 
 ### After Fix
 ```
-Failed to insert trade for UNKNOWN: Invalid document ... 
+Failed to insert trade for UNKNOWN: Invalid document ...
 cannot encode object: Decimal('0'), of type: <class 'decimal.Decimal'>
 ```
 
@@ -146,4 +146,3 @@ mongodb://mongodb-service.petrosa-apps.svc.cluster.local:27017
 2. **Network policies are critical** - Even with correct services, network policies must allow traffic
 3. **Test connectivity** - Use `kubectl exec` to test connections from within pods
 4. **Check all layers**: DNS → Network Policy → Service → Pod
-

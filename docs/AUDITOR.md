@@ -545,4 +545,3 @@ At 5-minute intervals: ~0.4 queries/second (negligible load).
 - [Health Scoring Methodology](health_scorer.py)
 - [Kubernetes Deployment](../k8s/deployment.yaml)
 - [Configuration Reference](../k8s/configmap.yaml)
-

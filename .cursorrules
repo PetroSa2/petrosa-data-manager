@@ -105,16 +105,16 @@ petrosa-data-manager/
 ```python
 class DatabaseManager:
     """Manage connections to both databases."""
-    
+
     def __init__(self):
         self.postgres = PostgreSQLAdapter(POSTGRES_URL)
         self.mongodb = MongoDBAdapter(MONGODB_URL)
-    
+
     async def initialize(self):
         """Initialize both database connections."""
         await self.postgres.connect()
         await self.mongodb.connect()
-        
+
         # Test connections
         assert await self.postgres.ping()
         assert await self.mongodb.ping()
@@ -150,7 +150,7 @@ class AuditorScheduler:
     Periodic data integrity checks.
     Only runs on leader replica.
     """
-    
+
     async def run(self):
         """Run audit cycle."""
         while self.is_leader:
@@ -158,16 +158,16 @@ class AuditorScheduler:
             gaps = await self.gap_detector.detect_gaps()
             if gaps:
                 await self.trigger_backfill(gaps)
-            
+
             # Duplicate detection
             duplicates = await self.duplicate_detector.find_duplicates()
             if duplicates and self.config.ENABLE_DUPLICATE_REMOVAL:
                 await self.remove_duplicates(duplicates)
-            
+
             # Health scoring
             scores = await self.health_scorer.calculate_scores()
             await self.store_health_scores(scores)
-            
+
             await asyncio.sleep(300)  # 5 minutes
 ```
 
@@ -297,7 +297,7 @@ curl -X POST http://data-manager:8000/api/v1/mongodb/candles_BTCUSDT_1m/batch \
 ```python
 class GapDetector:
     """Detect missing data ranges."""
-    
+
     async def detect_gaps(
         self,
         symbol: str,
@@ -305,11 +305,11 @@ class GapDetector:
     ) -> List[Gap]:
         """
         Find gaps in time-series data.
-        
+
         Returns list of (start_time, end_time) tuples.
         """
         query = """
-        SELECT 
+        SELECT
             close_time + INTERVAL 1 MINUTE as gap_start,
             LEAD(open_time) OVER (ORDER BY open_time) as gap_end
         FROM klines
@@ -324,11 +324,11 @@ class GapDetector:
 ```python
 class DuplicateDetector:
     """Find and optionally remove duplicate records."""
-    
+
     async def find_duplicates(self, collection: str) -> List[Duplicate]:
         """
         Find duplicate records in MongoDB collection.
-        
+
         Uses aggregation to group by key fields.
         """
         pipeline = [
@@ -351,7 +351,7 @@ class DuplicateDetector:
 ```python
 class HealthScorer:
     """Calculate data quality scores."""
-    
+
     async def calculate_score(
         self,
         symbol: str,
@@ -368,15 +368,15 @@ class HealthScorer:
         gaps = await self.detect_gaps(symbol, interval)
         duplicates = await self.count_duplicates(symbol, interval)
         last_update = await self.get_last_update(symbol, interval)
-        
+
         # Calculate component scores
         gap_score = max(0, 100 - (len(gaps) / total_records * 100 * 40))
         dup_score = max(0, 100 - (duplicates / total_records * 100 * 20))
         fresh_score = self._calculate_freshness(last_update) * 20
         complete_score = 20  # Assume complete for now
-        
+
         total_score = gap_score + dup_score + fresh_score + complete_score
-        
+
         return HealthScore(
             symbol=symbol,
             interval=interval,
@@ -567,4 +567,3 @@ SCHEMA_CACHE_TTL=300
 - For deployment patterns: **See master § Data Manager Configuration**
 - For leader election: **See master § Data Manager (leader election patterns)**
 - For pre-merge cleanup: **See master § Pre-Merge Intelligent Cleanup Workflow** - Cursor AI automatically reorganizes files, removes outdated content, and consolidates documentation before merges using semantic understanding
-

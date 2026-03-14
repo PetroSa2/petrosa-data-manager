@@ -113,7 +113,7 @@ MONGODB_URL=mongodb+srv://yurisa2:Fokalove99@petrosa.gynnmi6.mongodb.net/
 ### Successful Writes Proof
 The logs now show duplicate key errors (E11000), which proves successful connection and write attempts:
 ```
-E11000 duplicate key error collection: petrosa_data_manager.depth_UNKNOWN 
+E11000 duplicate key error collection: petrosa_data_manager.depth_UNKNOWN
 index: _id_ dup key: { _id: "UNKNOWN_1761045356716" }
 ```
 
@@ -151,7 +151,7 @@ petrosa-data-manager-5c88b46655-r946r   1/1     Running   2m
 
 The current errors are **not** MongoDB connectivity issues:
 
-1. **Decimal Serialization**: 
+1. **Decimal Serialization**:
    ```
    cannot encode object: Decimal('0'), of type: <class 'decimal.Decimal'>
    ```
@@ -225,4 +225,3 @@ data:
 3. **Implement upsert logic** - Use `update_one(upsert=True)` to handle duplicates
 4. **Add MongoDB monitoring** - Monitor Atlas connection health and query performance
 5. **Document Atlas setup** - Create documentation for Atlas cluster configuration
-

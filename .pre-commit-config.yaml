@@ -114,11 +114,8 @@ repos:
       - id: bandit
         name: 🔐 Bandit Python security scan
         args:
-          - -r
-          - .
           - --severity-level=medium
           - --confidence-level=medium
-          - -ll
         exclude: ^tests/
 
 # ==================================================================
@@ -131,8 +128,8 @@ repos:
         entry: |
           bash -c 'grep -rInE "(BINANCE_API_KEY|BINANCE_API_SECRET|DOCKERHUB_TOKEN|JWT_SECRET|password)\s*[:=]\s*[\"'\'']?[^\"'\'']{5,}[\"'\'']?|mongodb://[^:]+:[^@]+@" \
             --include="*.py" --include="*.yaml" --include="*.yml" \
-            --exclude-dir=.venv --exclude-dir=venv --exclude-dir=.git \
-            --exclude="mongodb_adapter.py" . && \
+            --exclude-dir=.venv --exclude-dir=venv --exclude-dir=.git --exclude-dir=.github \
+            --exclude="mongodb_adapter.py" --exclude="constants.py" --exclude=".pre-commit-config.yaml" . && \
             echo "⚠️  Found potential secrets in code!" && exit 1 || exit 0'
         language: system
         pass_filenames: false

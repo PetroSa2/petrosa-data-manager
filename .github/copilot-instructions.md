@@ -37,11 +37,11 @@ class DataManager:
     def __init__(self):
         self.pg_client = PostgreSQLClient()  # Time-series data
         self.mongo_client = MongoClient()     # Configuration, audit
-    
+
     async def get_klines(self, symbol, interval):
         # PostgreSQL for historical data
         return await self.pg_client.query(...)
-    
+
     async def get_config(self):
         # MongoDB for configuration
         return await self.mongo_client.find_one(...)
@@ -99,12 +99,11 @@ def test_get_klines_pagination():
 
 ## Common Issues
 
-**Slow Queries**: Add database indexes, use caching  
-**Connection Pool Exhaustion**: Monitor pg/mongo connection pools  
+**Slow Queries**: Add database indexes, use caching
+**Connection Pool Exhaustion**: Monitor pg/mongo connection pools
 **Leader Election Split**: Check MongoDB connectivity
 
 ---
 
-**Master Rules**: See `.cursorrules` in `petrosa_k8s` repo  
+**Master Rules**: See `.cursorrules` in `petrosa_k8s` repo
 **Service Rules**: `.cursorrules` in this repo
-

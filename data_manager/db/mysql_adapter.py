@@ -239,7 +239,9 @@ class MySQLAdapter(BaseAdapter):
             self.metadata.create_all(self.engine)
             logger.info("MySQL tables created/verified")
 
-    def _create_klines_table(self, interval: str, collection_name: str | None = None) -> "Table":
+    def _create_klines_table(
+        self, interval: str, collection_name: str | None = None
+    ) -> "Table":
         """Create or reflect a klines table for specific interval."""
         # Map binance interval to table suffix (e.g., 1h -> h1)
         suffix = interval
@@ -249,7 +251,7 @@ class MySQLAdapter(BaseAdapter):
             suffix = f"h{interval[:-1]}"
         elif interval.endswith("d"):
             suffix = f"d{interval[:-1]}"
-            
+
         physical_table_name = f"klines_{suffix}"
         # Use requested collection name as the Table object name if provided
         object_name = collection_name or physical_table_name
@@ -283,13 +285,15 @@ class MySQLAdapter(BaseAdapter):
             Index(f"idx_{physical_table_name}_symbol_timestamp", "symbol", "timestamp"),
             Index(f"idx_{physical_table_name}_timestamp", "timestamp"),
             Index(f"idx_{physical_table_name}_open_time", "open_time"),
-            extend_existing=True
+            extend_existing=True,
         )
 
         self.tables[object_name] = table
         if self.engine is not None:
             table.create(self.engine, checkfirst=True)
-            logger.info(f"Created/Verified table: {physical_table_name} (mapped to {object_name})")
+            logger.info(
+                f"Created/Verified table: {physical_table_name} (mapped to {object_name})"
+            )
         return table
 
     def _get_table(self, collection: str) -> "Table":
@@ -302,7 +306,7 @@ class MySQLAdapter(BaseAdapter):
             suffix = collection.replace("klines_", "")
             interval = suffix
             # Detect if it's already in financial style (e.g. h1) or binance style (e.g. 1h)
-            if any(suffix.startswith(x) for x in ['m', 'h', 'd']):
+            if any(suffix.startswith(x) for x in ["m", "h", "d"]):
                 # Already financial style (m15, h1, etc.)
                 if suffix.startswith("m"):
                     interval = f"{suffix[1:]}m"
@@ -310,7 +314,7 @@ class MySQLAdapter(BaseAdapter):
                     interval = f"{suffix[1:]}h"
                 elif suffix.startswith("d"):
                     interval = f"{suffix[1:]}d"
-            
+
             return self._create_klines_table(interval, collection_name=collection)
 
         # Try to reflect the table dynamically if it exists in the database

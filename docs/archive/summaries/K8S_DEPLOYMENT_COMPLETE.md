@@ -1,7 +1,7 @@
 # Kubernetes Deployment Configuration Complete ✅
 
-**Date**: October 20, 2025  
-**PR**: https://github.com/PetroSa2/petrosa_k8s/pull/14  
+**Date**: October 20, 2025
+**PR**: https://github.com/PetroSa2/petrosa_k8s/pull/14
 **Status**: ✅ **MERGED TO MAIN**
 
 ---
@@ -233,7 +233,6 @@ This will trigger the CD pipeline which will:
 
 ---
 
-**petrosa_k8s PR**: ✅ Merged (#14)  
-**petrosa-data-manager**: 🔄 Ready to deploy  
+**petrosa_k8s PR**: ✅ Merged (#14)
+**petrosa-data-manager**: 🔄 Ready to deploy
 **Status**: ✅ **CONFIGURATION COMPLETE - READY FOR FINAL DEPLOYMENT**
-

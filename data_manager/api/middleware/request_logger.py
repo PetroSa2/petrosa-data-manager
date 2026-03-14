@@ -8,8 +8,8 @@ import uuid
 from collections.abc import Callable
 
 from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
 from opentelemetry import trace
+from starlette.middleware.base import BaseHTTPMiddleware
 
 import constants
 

@@ -205,7 +205,7 @@ Update service dependencies to use the latest version:
 # petrosa-binance-data-extractor/requirements.txt
 petrosa-data-manager-client>=1.0.23
 
-# petrosa-realtime-strategies/requirements.txt  
+# petrosa-realtime-strategies/requirements.txt
 petrosa-data-manager-client>=1.0.23
 ```
 
@@ -302,4 +302,3 @@ pip install --force-reinstall petrosa-data-manager-client
 **Status**: ✅ **FULLY OPERATIONAL**
 
 The PyPI publishing integration is complete and working. The `petrosa-data-manager-client` package is automatically published on every release with synchronized versioning.
-

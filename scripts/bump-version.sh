@@ -63,4 +63,3 @@ echo "$NEW_VERSION"
 
 # Log the bump to stderr so it doesn't interfere with stdout capture
 echo "Bumped $CURRENT_VERSION → $NEW_VERSION ($BUMP_TYPE)" >&2
-

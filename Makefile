@@ -215,4 +215,3 @@ cleanup-docs: ## Archive temporary documentation files
 
 validate-docs: ## Validate documentation naming standards
 	@bash -c 'temp_docs=$$(find docs/ -maxdepth 1 -type f -regex ".*_\(SUMMARY\|FIX\|COMPLETE\|STATUS\)\.md$$" || true) && if [ -n "$$temp_docs" ]; then echo "❌ Found temporary docs in root:" && echo "$$temp_docs" && exit 1; else echo "✅ Documentation standards OK"; fi'
-

@@ -79,7 +79,7 @@ In your Grafana dashboard, you should see:
 1. **Log Volume**: Significantly reduced (90%+ decrease expected)
 2. **Error Rate**: Near zero for data-manager service
 3. **Log Levels**: Mostly INFO and DEBUG, very few WARNINGS, almost no ERRORS
-4. **Common Messages**: 
+4. **Common Messages**:
    - "Skipping message with missing or invalid symbol" (WARNING - expected)
    - Normal NATS message processing (DEBUG)
    - No audit/analytics cycle errors
@@ -130,4 +130,3 @@ kubectl --kubeconfig=k8s/kubeconfig.yaml -n petrosa-apps rollout restart deploym
 2. **Check Grafana** for log volume reduction
 3. **Review any new error patterns** that emerge
 4. **Consider implementing leader election** for future scheduler re-enabling
-
