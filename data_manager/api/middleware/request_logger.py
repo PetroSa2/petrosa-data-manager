@@ -30,9 +30,9 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         span = trace.get_current_span()
         span_context = span.get_span_context()
         if span_context.is_valid:
-            trace_id = format(span_context.trace_id, "032x")
+            request_id = format(span_context.trace_id, "032x")
         else:
-            trace_id = str(uuid.uuid4())
+            request_id = str(uuid.uuid4())
 
         # Start timing
         start_time = time.time()
