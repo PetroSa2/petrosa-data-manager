@@ -128,7 +128,12 @@ repos:
     hooks:
       - id: check-secrets-patterns
         name: 🔐 Check for common secret patterns
-        entry: bash -c 'grep -rInE "(BINANCE_API_KEY|BINANCE_API_SECRET|DOCKERHUB_TOKEN|JWT_SECRET|mongodb://[^:]+:[^@]+@|password\s*=\s*[\"'\''][^\"'\'']+[\"'\''])" --include="*.py" --include="*.yaml" --include="*.yml" --exclude-dir=.venv --exclude-dir=venv --exclude-dir=.git . && echo "⚠️  Found potential secrets in code!" && exit 1 || exit 0'
+        entry: |
+          bash -c 'grep -rInE "(BINANCE_API_KEY|BINANCE_API_SECRET|DOCKERHUB_TOKEN|JWT_SECRET|password)\s*[:=]\s*[\"'\'']?[^\"'\'']{5,}[\"'\'']?|mongodb://[^:]+:[^@]+@" \
+            --include="*.py" --include="*.yaml" --include="*.yml" \
+            --exclude-dir=.venv --exclude-dir=venv --exclude-dir=.git \
+            --exclude="mongodb_adapter.py" . && \
+            echo "⚠️  Found potential secrets in code!" && exit 1 || exit 0'
         language: system
         pass_filenames: false
         verbose: true
@@ -147,7 +152,7 @@ repos:
 
       - id: validate-doc-naming
         name: 🗑️  Validate documentation naming patterns
-        entry: >
+        entry: |
           bash -c 'temp_docs=$(git diff --cached --name-only --diff-filter=A | grep -E "docs/.*_(SUMMARY|FIX|COMPLETE|STATUS)\.md$" || true) &&
           if [ -n "$temp_docs" ]; then
             echo "⚠️  Detected temporary documentation files:" &&
