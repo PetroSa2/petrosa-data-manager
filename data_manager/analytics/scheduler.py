@@ -71,8 +71,8 @@ class AnalyticsScheduler:
 
         metrics_calculated = 0
 
-        # Calculate analytics for each supported symbol
-        for symbol in constants.SUPPORTED_PAIRS:
+        async def calculate_symbol_metrics(symbol):
+            nonlocal metrics_calculated
             # Focus on higher timeframes for analytics (1h, 1d)
             for timeframe in ["1h", "1d"]:
                 try:
@@ -132,6 +132,10 @@ class AnalyticsScheduler:
                     metrics_calculated += 1
             except Exception as e:
                 logger.warning(f"Error classifying regime for {symbol}: {e}")
+
+        # Calculate analytics for each supported symbol in parallel
+        tasks = [calculate_symbol_metrics(symbol) for symbol in constants.SUPPORTED_PAIRS]
+        await asyncio.gather(*tasks)
 
         # Calculate cross-market correlation (all pairs together, 1h timeframe)
         try:
