@@ -154,30 +154,30 @@ class AuditScheduler:
         total_gaps = 0
         total_duplicates = 0
 
-        # Audit each supported symbol and timeframe
-        for symbol in constants.SUPPORTED_PAIRS:
-            for timeframe in constants.SUPPORTED_TIMEFRAMES:
+        semaphore = asyncio.Semaphore(constants.MAX_CONCURRENT_TASKS)
+
+        async def audit_subset(symbol, timeframe):
+            async with semaphore:
                 try:
                     # Detect gaps
                     gaps = await self.gap_detector.detect_gaps(
                         symbol, timeframe, start, end
                     )
-                    total_gaps += len(gaps)
+                    gaps_count = len(gaps)
 
                     if gaps:
                         logger.warning(
-                            f"Found {len(gaps)} gaps for {symbol} {timeframe}"
+                            f"Found {gaps_count} gaps for {symbol} {timeframe}"
                         )
                         # Update metrics
                         audit_gaps_detected.labels(
                             symbol=symbol, timeframe=timeframe
-                        ).inc(len(gaps))
+                        ).inc(gaps_count)
 
                     # Detect duplicates
                     duplicates = await self.duplicate_detector.detect_duplicates(
                         symbol, timeframe, start, end
                     )
-                    total_duplicates += duplicates
 
                     if duplicates > 0:
                         logger.warning(
@@ -206,14 +206,29 @@ class AuditScheduler:
                         f"Health for {symbol} {timeframe}: "
                         f"completeness={health.completeness:.1f}%, "
                         f"quality={health.quality_score:.1f}, "
-                        f"gaps={len(gaps)}, "
+                        f"gaps={gaps_count}, "
                         f"duplicates={duplicates}"
                     )
 
-                    symbols_audited += 1
+                    return 1, gaps_count, duplicates
 
                 except Exception as e:
                     logger.warning(f"Error auditing {symbol} {timeframe}: {e}")
+                    return 0, 0, 0
+
+        # Audit each supported symbol and timeframe in parallel
+        tasks = []
+        for symbol in constants.SUPPORTED_PAIRS:
+            for timeframe in constants.SUPPORTED_TIMEFRAMES:
+                tasks.append(audit_subset(symbol, timeframe))
+
+        results = await asyncio.gather(*tasks)
+
+        # Sum up results
+        for audited, gaps, duplicates in results:
+            symbols_audited += audited
+            total_gaps += gaps
+            total_duplicates += duplicates
 
         audit_duration = (datetime.utcnow() - audit_start).total_seconds()
 

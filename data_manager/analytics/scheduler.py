@@ -69,69 +69,77 @@ class AnalyticsScheduler:
         """Run a single analytics cycle for all symbols and timeframes."""
         logger.info("Starting analytics cycle")
 
-        metrics_calculated = 0
+        semaphore = asyncio.Semaphore(constants.MAX_CONCURRENT_TASKS)
 
-        # Calculate analytics for each supported symbol
-        for symbol in constants.SUPPORTED_PAIRS:
-            # Focus on higher timeframes for analytics (1h, 1d)
-            for timeframe in ["1h", "1d"]:
-                try:
-                    # Calculate volatility
-                    volatility = await self.volatility_calc.calculate_volatility(
-                        symbol, timeframe, window_days=30
-                    )
-                    if volatility:
-                        metrics_calculated += 1
-
-                    # Calculate volume
-                    volume = await self.volume_calc.calculate_volume(
-                        symbol, timeframe, window_hours=24
-                    )
-                    if volume:
-                        metrics_calculated += 1
-
-                    # Calculate trend
-                    trend = await self.trend_calc.calculate_trend(
-                        symbol, timeframe, window_days=30
-                    )
-                    if trend:
-                        metrics_calculated += 1
-
-                    # Calculate deviation
-                    deviation = await self.deviation_calc.calculate_deviation(
-                        symbol, timeframe, window_days=30
-                    )
-                    if deviation:
-                        metrics_calculated += 1
-
-                    # Calculate seasonality (only for 1h timeframe to avoid overload)
-                    if timeframe == "1h":
-                        seasonality = await self.seasonality_calc.calculate_seasonality(
-                            symbol, timeframe, window_days=90
+        async def calculate_symbol_metrics(symbol):
+            async with semaphore:
+                count = 0
+                # Focus on higher timeframes for analytics (1h, 1d)
+                for timeframe in ["1h", "1d"]:
+                    try:
+                        # Calculate volatility
+                        volatility = await self.volatility_calc.calculate_volatility(
+                            symbol, timeframe, window_days=30
                         )
-                        if seasonality:
-                            metrics_calculated += 1
+                        if volatility:
+                            count += 1
 
+                        # Calculate volume
+                        volume = await self.volume_calc.calculate_volume(
+                            symbol, timeframe, window_hours=24
+                        )
+                        if volume:
+                            count += 1
+
+                        # Calculate trend
+                        trend = await self.trend_calc.calculate_trend(
+                            symbol, timeframe, window_days=30
+                        )
+                        if trend:
+                            count += 1
+
+                        # Calculate deviation
+                        deviation = await self.deviation_calc.calculate_deviation(
+                            symbol, timeframe, window_days=30
+                        )
+                        if deviation:
+                            count += 1
+
+                        # Calculate seasonality (only for 1h timeframe to avoid overload)
+                        if timeframe == "1h":
+                            seasonality = await self.seasonality_calc.calculate_seasonality(
+                                symbol, timeframe, window_days=90
+                            )
+                            if seasonality:
+                                count += 1
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Error calculating analytics for {symbol} {timeframe}: {e}"
+                        )
+
+                # Calculate spread (uses latest depth, not timeframe-specific)
+                try:
+                    spread = await self.spread_calc.calculate_spread(symbol)
+                    if spread:
+                        count += 1
                 except Exception as e:
-                    logger.warning(
-                        f"Error calculating analytics for {symbol} {timeframe}: {e}"
-                    )
+                    logger.warning(f"Error calculating spread for {symbol}: {e}")
 
-            # Calculate spread (uses latest depth, not timeframe-specific)
-            try:
-                spread = await self.spread_calc.calculate_spread(symbol)
-                if spread:
-                    metrics_calculated += 1
-            except Exception as e:
-                logger.warning(f"Error calculating spread for {symbol}: {e}")
+                # Classify market regime (uses computed metrics)
+                try:
+                    regime = await self.regime_classifier.classify_regime(symbol, "1h")
+                    if regime:
+                        count += 1
+                except Exception as e:
+                    logger.warning(f"Error classifying regime for {symbol}: {e}")
 
-            # Classify market regime (uses computed metrics)
-            try:
-                regime = await self.regime_classifier.classify_regime(symbol, "1h")
-                if regime:
-                    metrics_calculated += 1
-            except Exception as e:
-                logger.warning(f"Error classifying regime for {symbol}: {e}")
+                return count
+
+        # Calculate analytics for each supported symbol in parallel
+        tasks = [calculate_symbol_metrics(symbol) for symbol in constants.SUPPORTED_PAIRS]
+        results = await asyncio.gather(*tasks)
+        metrics_calculated = sum(results)
 
         # Calculate cross-market correlation (all pairs together, 1h timeframe)
         try:
