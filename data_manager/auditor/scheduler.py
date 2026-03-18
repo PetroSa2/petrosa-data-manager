@@ -111,7 +111,12 @@ class AuditScheduler:
             audit_leader_status.set(1)  # Assume leader if election disabled
 
         self.running = True
-        logger.info("Audit scheduler started")
+        logger.info(f"Audit scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)")
+        
+        # Give the service time to stabilize and pass health checks before starting cycles
+        await asyncio.sleep(constants.INITIAL_STARTUP_DELAY)
+        
+        logger.info("Audit scheduler active")
 
         while self.running:
             try:
