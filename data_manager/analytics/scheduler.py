@@ -47,7 +47,12 @@ class AnalyticsScheduler:
     async def start(self) -> None:
         """Start the analytics scheduler."""
         self.running = True
-        logger.info("Analytics scheduler started")
+        logger.info(f"Analytics scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)")
+        
+        # Give the service time to stabilize and pass health checks before starting cycles
+        await asyncio.sleep(constants.INITIAL_STARTUP_DELAY)
+        
+        logger.info("Analytics scheduler active")
 
         while self.running:
             try:

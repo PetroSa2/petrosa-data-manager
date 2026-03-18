@@ -90,11 +90,25 @@ class DataManagerApp:
         except Exception as e:
             logger.error(f"Failed to start metrics server: {e}")
 
+        # Start FastAPI server in background EARLY to handle health checks
+        if constants.ENABLE_API:
+            self.api_server_task = asyncio.create_task(self._run_api_server())
+            logger.info("API server task created (health checks available)")
+
         # Initialize database connections
         try:
             self.db_manager = DatabaseManager()
             await self.db_manager.initialize()
             logger.info("Database connections initialized successfully")
+
+            # Update API server with initialized db_manager
+            if self.api_server_task:
+                from data_manager import api
+                api.app.db_manager = self.db_manager
+                # Also update repositories in routers
+                from data_manager.api.routes import config
+                config.set_database_manager(self.db_manager)
+
         except Exception as e:
             logger.warning(
                 f"Failed to initialize databases: {e}. "
@@ -144,11 +158,6 @@ class DataManagerApp:
             logger.info("Backfill orchestrator initialized")
         else:
             self.backfill_orchestrator = None
-
-        # Start FastAPI server in background
-        if constants.ENABLE_API:
-            self.api_server_task = asyncio.create_task(self._run_api_server())
-            logger.info("API server task created")
 
         # Start background workers
         asyncio.create_task(self._run_auditor())
