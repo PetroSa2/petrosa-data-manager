@@ -5,6 +5,7 @@ Based on petrosa-binance-data-extractor patterns.
 """
 
 import logging
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -351,6 +352,11 @@ class MySQLAdapter(BaseAdapter):
                 records = []
                 for instance in model_instances:
                     record = instance.model_dump()
+                    
+                    # Ensure 'id' field is present for MySQL primary key
+                    if "id" not in record or not record["id"]:
+                        record["id"] = str(uuid.uuid4())
+                        
                     # Ensure datetime fields are proper datetime objects
                     for key, value in record.items():
                         if isinstance(value, str) and key.endswith(

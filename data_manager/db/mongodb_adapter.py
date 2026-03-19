@@ -94,7 +94,16 @@ class MongoDBAdapter(BaseAdapter):
                 doc = instance.model_dump()
                 # Create _id from symbol and timestamp for deduplication
                 if "symbol" in doc and "timestamp" in doc:
-                    timestamp_ms = int(doc["timestamp"].timestamp() * 1000)
+                    ts = doc["timestamp"]
+                    if isinstance(ts, str):
+                        # Handle potential 'Z' suffix for ISO format
+                        ts_str = ts.replace("Z", "+00:00")
+                        # Some strings might already have +00:00
+                        if ts_str.count("+00:00") > 1:
+                            ts_str = ts_str.replace("+00:00+00:00", "+00:00")
+                        from datetime import datetime
+                        ts = datetime.fromisoformat(ts_str)
+                    timestamp_ms = int(ts.timestamp() * 1000)
                     doc["_id"] = f"{doc['symbol']}_{timestamp_ms}"
 
                 # Convert Decimal to float for MongoDB compatibility
