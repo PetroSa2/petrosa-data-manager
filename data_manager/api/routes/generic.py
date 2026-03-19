@@ -343,10 +343,10 @@ async def insert_records(
             await _validate_data_against_schema(database, schema, data_list)
 
         # Convert to model instances (simplified - in real implementation, use proper models)
-        from pydantic import BaseModel
+        from pydantic import BaseModel, ConfigDict
 
         class GenericModel(BaseModel):
-            pass
+            model_config = ConfigDict(extra="allow")
 
         # Create dynamic model instances
         model_instances = []
