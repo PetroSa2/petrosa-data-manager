@@ -364,7 +364,7 @@ class MySQLAdapter(BaseAdapter):
                         ):
                             try:
                                 record[key] = datetime.fromisoformat(
-                                    value.replace("Z", "+00:00")
+                                    value
                                 )
                             except (ValueError, TypeError):
                                 pass
