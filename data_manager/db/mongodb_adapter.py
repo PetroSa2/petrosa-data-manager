@@ -96,12 +96,7 @@ class MongoDBAdapter(BaseAdapter):
                 if "symbol" in doc and "timestamp" in doc:
                     ts = doc["timestamp"]
                     if isinstance(ts, str):
-                        # Handle potential 'Z' suffix for ISO format
-                        ts_str = ts.replace("Z", "+00:00")
-                        # Some strings might already have +00:00
-                        while ts_str.count("+00:00") > 1:
-                            ts_str = ts_str.replace("+00:00+00:00", "+00:00")
-                        ts = datetime.fromisoformat(ts_str)
+                        ts = datetime.fromisoformat(ts)
                         # Normalize back into document for correct storage type
                         doc["timestamp"] = ts
                     timestamp_ms = int(ts.timestamp() * 1000)

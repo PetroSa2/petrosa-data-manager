@@ -83,7 +83,7 @@ async def get_anomalies(
                     isinstance(a["timestamp"], datetime)
                     and a["timestamp"] >= from_time
                     or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00"))
+                    and datetime.fromisoformat(a["timestamp"])
                     >= from_time
                 )
             ]
@@ -97,7 +97,7 @@ async def get_anomalies(
                     isinstance(a["timestamp"], datetime)
                     and a["timestamp"] <= to_time
                     or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"].replace("Z", "+00:00"))
+                    and datetime.fromisoformat(a["timestamp"])
                     <= to_time
                 )
             ]
@@ -113,7 +113,7 @@ async def get_anomalies(
                         x.get("timestamp", datetime.min)
                         if isinstance(x.get("timestamp"), datetime)
                         else datetime.fromisoformat(
-                            x.get("timestamp", "1970-01-01").replace("Z", "+00:00")
+                            x.get("timestamp", "1970-01-01")
                         )
                     ),
                     reverse=reverse,
