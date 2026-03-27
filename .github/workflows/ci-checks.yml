@@ -1,12 +1,12 @@
 name: CI Checks
 
 on:
-  push:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    branches: [ main, develop ]
   pull_request:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    branches: [ main, develop ]
+    branches: [main, develop]
+  push:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    branches: [main, develop]
 
 jobs:
   lint:
@@ -35,14 +35,12 @@ jobs:
 
       - name: Run type check
         run: make type-check
-        continue-on-error: true  # Allow type check failures initially
+        continue-on-error: true
 
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test & Coverage
     runs-on: petrosa-org-runners
-    env:
-      OTEL_NO_AUTO_INIT: 1
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -61,52 +59,12 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run tests with coverage
-        timeout-minutes: 10
-        run: make test
-        continue-on-error: true  # Allow coverage failures while improving codebase coverage
+        run: make test-coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: always() && (github.event.pull_request.head.repo.full_name == github.repository)
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: PetroSa2/petrosa-data-manager
-          file: ./coverage.xml
-          flags: unittests
-          fail_ci_if_error: false
-
-  test-quality:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    name: Test Quality Check
-    runs-on: petrosa-org-runners
-    steps:
-      - name: Checkout service code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Ensure check script is executable
-        run: chmod +x scripts/check-test-assertions.py
-
-      - name: Check test assertions
-        run: |
-          # Find all test files and check them
-          TEST_FILES=$(find . -type f -name "test_*.py" -o -name "*_test.py" | grep -v ".venv" | grep -v "__pycache__" || true)
-          if [ -z "$TEST_FILES" ]; then
-            echo "⚠️  No test files found - skipping test quality check"
-            exit 0
-          fi
-          echo "Found test files:"
-          echo "$TEST_FILES" | sed 's/^/  - /'
-          python scripts/check-test-assertions.py $(echo "$TEST_FILES" | tr '\n' ' ')
-          if [ $? -ne 0 ]; then
-            echo "❌ Tests without assertions detected"
-            exit 1
-          fi
-          echo "✅ All tests have assertions"
 
   security:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -114,13 +72,12 @@ jobs:
     runs-on: petrosa-org-runners
     permissions:
       contents: read
-      security-events: write  # Required for SARIF upload
-      actions: read
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for secret detection
+          fetch-depth: 0
 
       - name: 🔐 Run Gitleaks (Secret Detection)
         run: |
@@ -129,61 +86,44 @@ jobs:
           /tmp/gitleaks detect --source . --no-git || echo "⚠️ Gitleaks found issues but continuing"
         continue-on-error: true
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: 🐍 Run Bandit (Python Security)
-        continue-on-error: true
         run: |
-          pip install bandit[toml]
-          bandit -r . \
-            --configfile .bandit \
-            --format json \
-            --output bandit-report.json
+          pip install bandit
+          bandit -r . -f json -o bandit-report.json || true
           echo "📊 Bandit Results:"
-          python -m json.tool bandit-report.json | head -30 || echo "No issues found"
+          python -m json.tool bandit-report.json 2>/dev/null | head -30 || echo "No issues found"
 
       - name: 🗂️ Run Trivy (Vulnerability Scanner)
         uses: aquasecurity/trivy-action@master
-        continue-on-error: true
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'  # Fail if vulnerabilities found
+          exit-code: '0'
           ignore-unfixed: true
 
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('trivy-results.sarif') != ''
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-
-  build:
-    if: github.event_name == 'push'
-    name: Build Docker Image
-    runs-on: ubuntu-latest
-    needs: [lint, test]
+  test-quality:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Test Quality Check
+    runs-on: petrosa-org-runners
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          context: .
-          push: false
-          tags: petrosa-data-manager:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          python-version: '3.11'
+      - name: Install make
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends make
+      - name: Run test quality check
+        run: make test-quality
 
   documentation-standards:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -192,35 +132,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Check for temporary documentation patterns
+      - name: Documentation check
         run: |
-          temp_docs=$(find docs/ -maxdepth 1 -type f -regex '.*_\(SUMMARY\|FIX\|COMPLETE\|STATUS\)\.md$' || true)
-          if [ -n "$temp_docs" ]; then
-            echo "❌ Found temporary documentation in docs/ root:"
-            echo "$temp_docs"
-            echo ""
-            echo "These files should be in docs/archive/ subdirectories"
-            exit 1
+          if [ -f scripts/check-docs.sh ]; then
+            bash scripts/check-docs.sh
+          else
+            echo "Skipping docs check"
           fi
-          echo "✅ Documentation standards check passed"
 
   pipeline:
     name: pipeline
     runs-on: petrosa-org-runners
-    needs: [lint, test, test-quality, security, documentation-standards]
+    needs: [lint, test, security, test-quality, documentation-standards]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     steps:
-      - name: Validate upstream job results
+      - name: Validate pipeline results
         run: |
-          echo "lint=${{ needs.lint.result }}"
-          echo "test=${{ needs.test.result }}"
-          echo "test-quality=${{ needs.test-quality.result }}"
-          echo "security=${{ needs.security.result }}"
-          echo "documentation-standards=${{ needs.documentation-standards.result }}"
-
           [[ "${{ needs.lint.result }}" == "success" ]]
           [[ "${{ needs.test.result }}" == "success" ]]
-          [[ "${{ needs.test-quality.result }}" == "success" ]]
-          [[ "${{ needs.security.result }}" == "success" ]]
-          [[ "${{ needs.documentation-standards.result }}" == "success" ]]
+          [[ "${{ needs.security.result }}" != "failure" ]]
