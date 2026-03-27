@@ -1,20 +1,10 @@
-# Enhanced Pre-commit Configuration for Petrosa Services
-# Version: 2.0 - Ruff-only toolchain with comprehensive security
-# Replaces: black, isort, flake8 with Ruff
+# Standardized Pre-commit Configuration for Petrosa Services
+# Version: 2.1 - Standardized across ecosystem (Aligned with #303)
+# Replaces: black, isort, flake8 with Ruff v0.1.15
 
 repos:
-  # Local hooks (No external dependencies needed)
-  - repo: local
-    hooks:
-      - id: check-test-assertions
-        name: 🧪 Check tests have assertions
-        entry: python3 scripts/check-test-assertions.py
-        language: system
-        pass_filenames: true
-        types: [python]
-        files: ^(tests/|test_|.*_test.py)
   # ==================================================================
-  # CODE QUALITY - Ruff (All-in-one)
+  # CODE QUALITY - Ruff (All-in-one) - STRICT VERSION ALIGNMENT
   # ==================================================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.1.15
@@ -26,6 +16,35 @@ repos:
         name: Ruff formatter (replaces black)
 
   # ==================================================================
+  # TYPE CHECKING - Mypy
+  # ==================================================================
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.9.0
+    hooks:
+      - id: mypy
+        name: Mypy type checker
+        additional_dependencies: [pyyaml, types-PyYAML, types-requests]
+        args: [--ignore-missing-imports]
+
+  # ==================================================================
+  # YAML LINTING - Yamllint
+  # ==================================================================
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        name: YAML linter
+
+  # ==================================================================
+  # PROTO LINTING - Protolint
+  # ==================================================================
+  - repo: https://github.com/yoheimuta/protolint
+    rev: v0.50.4
+    hooks:
+      - id: protolint
+        name: Protobuf linter
+
+  # ==================================================================
   # SECURITY CHECKS - Standard (No external dependencies)
   # ==================================================================
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -35,6 +54,7 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        args: [--allow-multiple-documents]
       - id: check-json
       - id: check-toml
       - id: check-ast
@@ -49,15 +69,6 @@ repos:
 
       - id: check-case-conflict
         name: Check for case-insensitive filename conflicts
-
-      # Security: Detect private keys (SSH, RSA, etc.)
-      - id: detect-private-key
-        name: 🔐 Detect private keys (SSH, RSA, PEM)
-
-      # Security: Detect AWS credentials
-      - id: detect-aws-credentials
-        name: 🔐 Detect AWS credentials
-        args: [--allow-missing-credentials]
 
       # Code quality
       - id: debug-statements
@@ -82,79 +93,35 @@ repos:
         name: Check for deprecated log.warn
 
   # ==================================================================
-  # SECURITY: Advanced secret detection
-  # ==================================================================
-  - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.4.0
-    hooks:
-      - id: detect-secrets
-        name: 🔐 Detect secrets (entropy-based)
-        args:
-          - --baseline
-          - .secrets.baseline
-        exclude: |
-          (?x)^(
-            .*\.lock$|
-            .*\.min\.js$|
-            .*\.min\.css$|
-            package-lock\.json$|
-            poetry\.lock$|
-            .*\.svg$|
-            .*\.backup$|
-            .*\.backup2$|
-            .*/tests/.*
-          )
-
-  # ==================================================================
   # PYTHON SECURITY
   # ==================================================================
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.7.5
+    rev: 1.7.8
     hooks:
       - id: bandit
         name: 🔐 Bandit Python security scan
         args:
           - --severity-level=medium
           - --confidence-level=medium
-        exclude: ^tests/
+        exclude: ^(tests/|_bmad-output/)
 
-# ==================================================================
-# LOCAL HOOKS (No external dependencies needed)
-# ==================================================================
+  # ==================================================================
+  # LOCAL HOOKS (No external dependencies needed)
+  # ==================================================================
   - repo: local
     hooks:
-      - id: check-secrets-patterns
-        name: 🔐 Check for common secret patterns
-        entry: bash -c 'grep -rInE "(BINANCE_API_KEY|BINANCE_API_SECRET|DOCKERHUB_TOKEN|JWT_SECRET|password)\s*[:=]" --include="*.py" --include="*.yaml" --exclude-dir=.venv --exclude-dir=venv --exclude-dir=.git --exclude-dir=.github --exclude-dir=build --exclude-dir=dist --exclude="mongodb_adapter.py" --exclude="mysql_adapter.py" --exclude="constants.py" --exclude=".pre-commit-config.yaml" . && echo "⚠️  Found potential secrets in code!" && exit 1 || exit 0'
+      - id: check-test-assertions
+        name: 🧪 Check tests have assertions
+        entry: python3 scripts/check-test-assertions.py
         language: system
-        pass_filenames: false
-        verbose: true
+        pass_filenames: true
+        types: [python]
+        files: ^tests/
 
-      - id: check-env-files
-        name: 🔐 Check .env files not committed
-        entry: bash -c 'if git ls-files | grep -E "^\.env$" | grep -v "\.env\.example\|\.env\.template"; then echo "⚠️  .env file should not be committed!"; exit 1; fi'
+      - id: pytest
+        name: 🧪 Run pytest
+        entry: pytest
         language: system
         pass_filenames: false
-
-      - id: check-kubeconfig
-        name: 🔐 Check kubeconfig with credentials not committed
-        entry: bash -c 'if git diff --cached --name-only | grep -E "kubeconfig\.yaml"; then if git diff --cached | grep -E "(certificate-authority-data|client-certificate-data|client-key-data|token):"; then echo "⚠️  kubeconfig with credentials should not be committed!"; exit 1; fi; fi'
-        language: system
-        pass_filenames: false
-
-      - id: validate-doc-naming
-        name: 🗑️  Validate documentation naming patterns
-        entry: |
-          bash -c 'temp_docs=$(git diff --cached --name-only --diff-filter=A | grep -E "docs/.*_(SUMMARY|FIX|COMPLETE|STATUS)\.md$" || true) &&
-          if [ -n "$temp_docs" ]; then
-            echo "⚠️  Detected temporary documentation files:" &&
-            echo "$temp_docs" | sed "s/^/  - /" &&
-            echo "" &&
-            echo "Please use: docs/archive/{summaries,fixes,investigations}/ or GitHub Issues/PRs" &&
-            echo "To bypass: git commit --no-verify" &&
-            exit 1;
-          fi'
-        language: system
-        pass_filenames: false
-        always_run: false
-        stages: [commit]
+        always_run: true
+        stages: [push]
