@@ -25,7 +25,7 @@ RUFF := $(if $(wildcard ./venv/bin/ruff),./venv/bin/ruff,ruff)
 # PHONY targets
 .PHONY: help setup install install-dev clean
 .PHONY: format lint type-check pre-commit
-.PHONY: test unit integration e2e coverage
+.PHONY: test unit integration e2e coverage test-coverage test-quality
 .PHONY: security build container
 .PHONY: deploy k8s-status k8s-logs k8s-clean
 .PHONY: pipeline
@@ -102,6 +102,12 @@ test: validate-python ## Run all tests with coverage (fail if below 40%)
 	@echo "$(BLUE)🧪 Running all tests with coverage...$(NC)"
 	OTEL_NO_AUTO_INIT=1 ENVIRONMENT=testing pytest tests/ -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml --cov-fail-under=$(COVERAGE_THRESHOLD)
 	@echo "✅ Tests completed!"
+
+test-coverage: test ## Alias for test (standardized)
+
+test-quality: validate-python ## Run test quality check (assertions check)
+	@echo "🔍 Checking test quality..."
+	python3 scripts/check-test-assertions.py $(shell find tests -name "test_*.py")
 
 unit: ## Run unit tests only
 	@echo "🧪 Running unit tests..."
