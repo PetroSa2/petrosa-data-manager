@@ -4,7 +4,7 @@ Binance REST API client for fetching historical data.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import httpx
 
@@ -25,13 +25,13 @@ class RateLimiter:
         """
         self.requests_per_minute = requests_per_minute
         self.tokens = requests_per_minute
-        self.last_update = datetime.now(timezone.utc)
+        self.last_update = datetime.now(UTC)
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
         """Acquire a token, waiting if necessary."""
         async with self.lock:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             elapsed = (now - self.last_update).total_seconds()
 
             # Refill tokens based on elapsed time
@@ -42,7 +42,7 @@ class RateLimiter:
             # Wait if no tokens available
             while self.tokens < 1:
                 await asyncio.sleep(0.1)
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 elapsed = (now - self.last_update).total_seconds()
                 refill = elapsed * (self.requests_per_minute / 60.0)
                 self.tokens = min(self.requests_per_minute, self.tokens + refill)

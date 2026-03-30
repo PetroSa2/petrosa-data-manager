@@ -3,7 +3,7 @@ Correlation and cross-market metrics calculator.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -53,7 +53,7 @@ class CorrelationCalculator:
             logger.info(f"Calculating correlations for {len(symbols)} symbols")
 
             # Fetch candles for all symbols
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
 
             all_candles = {}
@@ -152,7 +152,7 @@ class CorrelationCalculator:
                     window=f"{window_days}d",
                     parameters={"symbols": len(symbols), "benchmark": benchmark},
                     completeness=100.0,
-                    computed_at=datetime.now(timezone.utc),
+                    computed_at=datetime.now(UTC),
                 )
 
                 # Create metrics object
@@ -174,7 +174,7 @@ class CorrelationCalculator:
 
             # Also store the full correlation matrix
             matrix_doc = {
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": datetime.now(UTC),
                 "timeframe": timeframe,
                 "matrix": {
                     symbol: {k: str(v) for k, v in corr.items()}

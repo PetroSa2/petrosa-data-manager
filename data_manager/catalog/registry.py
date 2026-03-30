@@ -3,7 +3,7 @@ Dataset registry for auto-discovery and cataloging.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CatalogRepository
@@ -85,8 +85,8 @@ class DatasetRegistry:
                 "storage_type": "mongodb",
                 "owner": "data-manager",
                 "update_frequency": "real-time",
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
             }
 
             await self.catalog_repo.upsert_dataset(dataset)
@@ -106,8 +106,8 @@ class DatasetRegistry:
             "storage_type": "mongodb",
             "owner": "data-manager",
             "update_frequency": "real-time",
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
 
         await self.catalog_repo.upsert_dataset(dataset)
@@ -125,8 +125,8 @@ class DatasetRegistry:
             "storage_type": "mongodb",
             "owner": "data-manager",
             "update_frequency": "8h",
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
 
         await self.catalog_repo.upsert_dataset(dataset)
@@ -144,8 +144,8 @@ class DatasetRegistry:
             "storage_type": "mongodb",
             "owner": "data-manager",
             "update_frequency": "real-time",
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
 
         await self.catalog_repo.upsert_dataset(dataset)
@@ -163,8 +163,8 @@ class DatasetRegistry:
             "storage_type": "mongodb",
             "owner": "data-manager",
             "update_frequency": "real-time",
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
 
         await self.catalog_repo.upsert_dataset(dataset)

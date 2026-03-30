@@ -3,7 +3,7 @@ Health scoring for datasets.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository, HealthRepository
@@ -57,7 +57,7 @@ class HealthScorer:
             DataHealthMetrics instance
         """
         try:
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
             start = end - timedelta(hours=lookback_hours)
 
             # Get actual record count

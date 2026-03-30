@@ -2,7 +2,7 @@
 Pydantic models for schema registry operations.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from enum import Enum, StrEnum
 from typing import Any
 
@@ -42,10 +42,10 @@ class SchemaDefinition(BaseModel):
         None, description="Schema description", max_length=500
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
+        default_factory=lambda: datetime.now(UTC), description="Creation timestamp"
     )
     updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Last update timestamp"
+        default_factory=lambda: datetime.now(UTC), description="Last update timestamp"
     )
     created_by: str | None = Field(
         None, description="Creator identifier", max_length=100

@@ -3,7 +3,7 @@ Seasonality and cyclical pattern calculator.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -52,7 +52,7 @@ class SeasonalityCalculator:
         """
         try:
             # Fetch candles from MongoDB (need longer history for seasonality)
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -97,7 +97,7 @@ class SeasonalityCalculator:
                 )
 
             # Seasonal deviation (current vs seasonal average)
-            current_hour = datetime.now(timezone.utc).hour
+            current_hour = datetime.now(UTC).hour
             seasonal_avg = float(hourly_pattern.get(str(current_hour), Decimal("0")))
             current_price = df["close"].iloc[-1]
             seasonal_deviation = (
@@ -136,7 +136,7 @@ class SeasonalityCalculator:
                 window=f"{window_days}d",
                 parameters={"fft_size": len(prices)},
                 completeness=100.0,
-                computed_at=datetime.now(timezone.utc),
+                computed_at=datetime.now(UTC),
             )
 
             # Create metrics object

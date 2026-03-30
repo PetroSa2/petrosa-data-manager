@@ -2,7 +2,7 @@
 Tests for volatility calculator.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
@@ -31,7 +31,7 @@ async def test_calculate_volatility_success(volatility_calculator, mock_db_manag
     """Test successful volatility calculation."""
     # Create sample candle data
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(days=30)
+    base_time = datetime.now(UTC) - timedelta(days=30)
     base_price = 50000.0
 
     for i in range(30):
@@ -77,7 +77,7 @@ async def test_calculate_volatility_insufficient_data(volatility_calculator):
 async def test_calculate_volatility_minimum_data(volatility_calculator):
     """Test volatility calculation with minimum required data."""
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(days=1)
+    base_time = datetime.now(UTC) - timedelta(days=1)
 
     # Create exactly 20 candles (minimum required)
     for i in range(20):
@@ -122,7 +122,7 @@ async def test_calculate_volatility_stores_metrics(
 ):
     """Test that volatility metrics are stored in MongoDB."""
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(days=30)
+    base_time = datetime.now(UTC) - timedelta(days=30)
 
     for i in range(30):
         candles.append(

@@ -3,7 +3,7 @@ Deviation and statistical metrics calculator.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -50,7 +50,7 @@ class DeviationCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -117,7 +117,7 @@ class DeviationCalculator:
                     "bollinger_std_multiplier": 2,
                 },
                 completeness=100.0,
-                computed_at=datetime.now(timezone.utc),
+                computed_at=datetime.now(UTC),
             )
 
             # Create metrics object

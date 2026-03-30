@@ -2,7 +2,7 @@
 Tests for volume calculator.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -24,7 +24,7 @@ async def test_calculate_volume_success(volume_calculator, mock_db_manager):
     """Test successful volume calculation."""
     # Create sample candle data
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(hours=24)
+    base_time = datetime.now(UTC) - timedelta(hours=24)
 
     for i in range(24):
         candles.append(
@@ -70,7 +70,7 @@ async def test_calculate_volume_insufficient_data(volume_calculator):
 async def test_calculate_volume_minimum_data(volume_calculator):
     """Test volume calculation with minimum required data."""
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    base_time = datetime.now(UTC) - timedelta(hours=5)
 
     # Create exactly 5 candles (minimum required)
     for i in range(5):
@@ -113,7 +113,7 @@ async def test_calculate_volume_error_handling(volume_calculator):
 async def test_calculate_volume_stores_metrics(volume_calculator, mock_db_manager):
     """Test that volume metrics are stored in MongoDB."""
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(hours=24)
+    base_time = datetime.now(UTC) - timedelta(hours=24)
 
     for i in range(24):
         candles.append(
@@ -152,7 +152,7 @@ def test_volume_calculator_initialization(mock_db_manager):
 async def test_calculate_volume_spike_ratio(volume_calculator):
     """Test volume spike ratio calculation."""
     candles = []
-    base_time = datetime.now(timezone.utc) - timedelta(hours=24)
+    base_time = datetime.now(UTC) - timedelta(hours=24)
 
     # Create candles with a spike at the end
     for i in range(24):

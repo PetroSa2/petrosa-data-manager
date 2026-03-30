@@ -4,7 +4,7 @@ Audit scheduler for periodic data quality checks.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -112,10 +112,10 @@ class AuditScheduler:
 
         self.running = True
         logger.info(f"Audit scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)")
-        
+
         # Give the service time to stabilize and pass health checks before starting cycles
         await asyncio.sleep(constants.INITIAL_STARTUP_DELAY)
-        
+
         logger.info("Audit scheduler active")
 
         while self.running:
@@ -149,10 +149,10 @@ class AuditScheduler:
     async def run_audit_cycle(self) -> None:
         """Run a single audit cycle for all symbols and timeframes."""
         logger.info("Starting audit cycle")
-        audit_start = datetime.now(timezone.utc)
+        audit_start = datetime.now(UTC)
 
         # Define audit window (last 24 hours)
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         start = end - timedelta(hours=24)
 
         symbols_audited = 0
@@ -235,13 +235,13 @@ class AuditScheduler:
             total_gaps += gaps
             total_duplicates += duplicates
 
-        audit_duration = (datetime.now(timezone.utc) - audit_start).total_seconds()
+        audit_duration = (datetime.now(UTC) - audit_start).total_seconds()
 
         # Update cycle duration metric
         audit_cycle_duration.observe(audit_duration)
 
         # Store last audit time
-        self.last_audit_time = datetime.now(timezone.utc)
+        self.last_audit_time = datetime.now(UTC)
 
         logger.info(
             f"Audit cycle complete: "

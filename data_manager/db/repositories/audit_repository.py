@@ -4,7 +4,7 @@ Repository for audit log operations.
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from data_manager.db.repositories.base_repository import BaseRepository
 
@@ -43,7 +43,7 @@ class AuditRepository(BaseRepository):
                 "audit_type": "gap",
                 "severity": severity,
                 "details": f"Gap from {gap_start} to {gap_end}",
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": datetime.now(UTC),
             }
 
             # Create a simple Pydantic-like object
@@ -81,7 +81,7 @@ class AuditRepository(BaseRepository):
                 "audit_type": "health_check",
                 "severity": severity,
                 "details": details,
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": datetime.now(UTC),
             }
 
             class AuditLog:

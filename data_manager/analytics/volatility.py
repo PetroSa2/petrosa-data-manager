@@ -3,7 +3,7 @@ Volatility metrics calculator.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -50,7 +50,7 @@ class VolatilityCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -115,7 +115,7 @@ class VolatilityCalculator:
                 window=f"{window_days}d",
                 parameters={"rolling_window": rolling_window},
                 completeness=len(candles) / (window_days * 24) * 100,  # Approximate
-                computed_at=datetime.now(timezone.utc),
+                computed_at=datetime.now(UTC),
             )
 
             # Create metrics object
