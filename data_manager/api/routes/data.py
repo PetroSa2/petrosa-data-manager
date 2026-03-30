@@ -3,7 +3,7 @@ Data access endpoints for raw market data.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -91,7 +91,7 @@ async def get_candles(
 
         # Set default time range if not provided
         if not end:
-            end = datetime.utcnow()
+            end = datetime.now(UTC)
         if not start:
             start = end - timedelta(hours=24)
 
@@ -147,7 +147,7 @@ async def get_candles(
             },
             "metadata": {
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(UTC).isoformat(),
                 "source": "mongodb",
                 "collection": f"candles_{pair}_{period}",
                 "records_returned": len(values),
@@ -196,7 +196,7 @@ async def get_trades(
 
         # Set default time range
         if not end:
-            end = datetime.utcnow()
+            end = datetime.now(UTC)
         if not start:
             start = end - timedelta(hours=1)
 
@@ -244,7 +244,7 @@ async def get_trades(
             },
             "metadata": {
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(UTC).isoformat(),
                 "source": "mongodb",
                 "collection": f"trades_{pair}",
                 "records_returned": len(values),
@@ -286,7 +286,7 @@ async def get_depth(
                 pair=pair,
                 data={"bids": [], "asks": [], "last_update_id": 0},
                 metadata={
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "source": "mongodb",
                 },
                 parameters={"pair": pair},
@@ -348,7 +348,7 @@ async def get_funding(
         )
 
         if not end:
-            end = datetime.utcnow()
+            end = datetime.now(UTC)
         if not start:
             start = end - timedelta(days=7)
 
@@ -394,7 +394,7 @@ async def get_funding(
             },
             "metadata": {
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(UTC).isoformat(),
                 "source": "mongodb",
                 "collection": f"funding_rates_{pair}",
                 "records_returned": len(values),

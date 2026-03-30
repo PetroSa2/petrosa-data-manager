@@ -3,7 +3,7 @@ Repository for configuration management and audit trails.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 from data_manager.db.repositories.base_repository import BaseRepository
@@ -44,7 +44,7 @@ class ConfigurationRepository(BaseRepository):
             return None
 
         try:
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
             existing = await self.get_app_config()
 
             old_params = existing.get("parameters") if existing else None
@@ -120,7 +120,7 @@ class ConfigurationRepository(BaseRepository):
             return None
 
         try:
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
             existing = await self.get_strategy_config(strategy_id, symbol, side)
 
             old_params = existing.get("parameters") if existing else None

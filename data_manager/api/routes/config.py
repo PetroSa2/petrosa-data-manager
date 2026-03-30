@@ -7,7 +7,7 @@ Includes auditing and rollback capabilities.
 
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 import httpx
@@ -129,8 +129,8 @@ async def get_application_config():
                     "position_sizes": [100, 200, 500, 1000],
                     "version": 0,
                     "source": "default",
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 },
             }
 
@@ -234,8 +234,8 @@ async def get_strategy_config(
                     "version": 0,
                     "source": "none",
                     "is_override": bool(symbol or side),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 },
             }
 

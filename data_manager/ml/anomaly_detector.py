@@ -5,7 +5,7 @@ Optional module - requires scikit-learn.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -76,7 +76,7 @@ class MLAnomalyDetector:
         """
         try:
             # Fetch recent candles
-            end = datetime.utcnow()
+            end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 

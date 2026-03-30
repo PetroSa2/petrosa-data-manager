@@ -3,7 +3,7 @@ Statistical anomaly detection without ML dependencies.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -58,7 +58,7 @@ class StatisticalAnomalyDetector:
         """
         try:
             # Fetch recent candles
-            end = datetime.utcnow()
+            end = datetime.now(UTC)
             start = end - timedelta(days=7)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 

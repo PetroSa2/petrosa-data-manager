@@ -3,7 +3,7 @@ Anomaly detection endpoints.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -153,7 +153,7 @@ async def get_anomalies(
                 "by": sort_by,
                 "order": sort_order,
             },
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
     except Exception as e:
@@ -197,7 +197,7 @@ async def trigger_anomaly_detection(
             "method": method,
             "anomalies_detected": len(anomalies),
             "anomalies": anomalies,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
     except Exception as e:
@@ -250,7 +250,7 @@ async def anomaly_summary() -> dict:
             "total_anomalies": len(anomaly_logs),
             "by_severity": by_severity,
             "by_symbol": by_symbol,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
     except Exception as e:

@@ -9,7 +9,7 @@ mechanism used by the Data Manager auditor and analytics schedulers.
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 
 import motor.motor_asyncio
 
@@ -105,9 +105,9 @@ async def setup_leader_election_collections():
         test_doc = {
             "status": "test",
             "pod_id": "setup_script",
-            "elected_at": datetime.utcnow(),
-            "last_heartbeat": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "elected_at": datetime.now(UTC),
+            "last_heartbeat": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
 
         result = await leader_collection.insert_one(test_doc)

@@ -5,7 +5,7 @@ Handles time series data storage in MongoDB.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel
@@ -376,7 +376,7 @@ class MongoDBAdapter(BaseAdapter):
         try:
             # Add metadata
             config.update(metadata)
-            config["updated_at"] = datetime.utcnow().isoformat()
+            config["updated_at"] = datetime.now(UTC).isoformat()
 
             # Upsert (update if exists, insert if not)
             result = await self.db.app_config.replace_one(
@@ -440,8 +440,8 @@ class MongoDBAdapter(BaseAdapter):
                 "strategy_id": strategy_id,
                 "parameters": parameters,
                 "version": 1,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
                 **metadata,
             }
 
@@ -511,8 +511,8 @@ class MongoDBAdapter(BaseAdapter):
                 "symbol": symbol,
                 "parameters": parameters,
                 "version": 1,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
                 **metadata,
             }
 

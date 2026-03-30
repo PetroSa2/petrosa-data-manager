@@ -3,7 +3,7 @@ Spread and liquidity metrics calculator.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 from decimal import Decimal
 
 from data_manager.db.database_manager import DatabaseManager
@@ -105,7 +105,7 @@ class SpreadCalculator:
                 window="snapshot",
                 parameters={"depth_levels": len(bids)},
                 completeness=100.0,
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(UTC),
             )
 
             # Create metrics object

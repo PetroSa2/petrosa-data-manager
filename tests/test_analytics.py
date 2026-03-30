@@ -5,7 +5,7 @@ Tests correlation analysis, deviation detection, trend analysis,
 and other analytics calculations.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -40,7 +40,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "BTCUSDT",
                 "close": Decimal("50000.00"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i),
+                "timestamp": datetime.now(UTC) - timedelta(hours=i),
                 "volume": Decimal("100.0"),
             }
             for i in range(100, 0, -1)
@@ -53,7 +53,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "ETHUSDT",
                 "close": Decimal("3000.00"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i),
+                "timestamp": datetime.now(UTC) - timedelta(hours=i),
                 "volume": Decimal("500.0"),
             }
             for i in range(100, 0, -1)
@@ -103,7 +103,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "BTCUSDT",
                 "close": Decimal("50000.00"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i),
+                "timestamp": datetime.now(UTC) - timedelta(hours=i),
                 "volume": Decimal("100.0"),
             }
             for i in range(10, 0, -1)
@@ -161,7 +161,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "BTCUSDT",
                 "close": Decimal(f"{50000 + i}.{i % 100:02d}"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i),
+                "timestamp": datetime.now(UTC) - timedelta(hours=i),
                 "volume": Decimal("100.0"),
             }
             for i in range(50, 0, -1)
@@ -188,7 +188,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "BTCUSDT",
                 "close": Decimal("50000.00"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i * 2),  # Gaps
+                "timestamp": datetime.now(UTC) - timedelta(hours=i * 2),  # Gaps
                 "volume": Decimal("100.0"),
             }
             for i in range(30, 0, -1)
@@ -198,7 +198,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "ETHUSDT",
                 "close": Decimal("3000.00"),
-                "timestamp": datetime.utcnow()
+                "timestamp": datetime.now(UTC)
                 - timedelta(hours=i * 3),  # Different gaps
                 "volume": Decimal("500.0"),
             }
@@ -271,7 +271,7 @@ class TestCorrelationCalculator:
             {
                 "symbol": "BTCUSDT",
                 "close": Decimal(f"{50000 + i * 10}"),
-                "timestamp": datetime.utcnow() - timedelta(hours=i),
+                "timestamp": datetime.now(UTC) - timedelta(hours=i),
                 "volume": Decimal("100.0"),
             }
             for i in range(1000, 0, -1)

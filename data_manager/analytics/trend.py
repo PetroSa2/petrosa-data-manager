@@ -3,7 +3,7 @@ Trend and momentum indicators calculator.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import numpy as np
@@ -50,7 +50,7 @@ class TrendCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.utcnow()
+            end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -114,7 +114,7 @@ class TrendCalculator:
                 window=f"{window_days}d",
                 parameters={"sma_window": 20, "ema_span": 20},
                 completeness=len(candles) / (window_days * 24) * 100,
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(UTC),
             )
 
             # Create metrics object

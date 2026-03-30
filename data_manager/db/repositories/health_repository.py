@@ -4,7 +4,7 @@ Repository for health metrics operations.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.health import DataHealthMetrics
@@ -39,7 +39,7 @@ class HealthRepository(BaseRepository):
                 "gaps_count": metrics.gaps_count,
                 "duplicates_count": metrics.duplicates_count,
                 "quality_score": float(metrics.quality_score),
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(UTC),
             }
 
             class HealthMetric:
