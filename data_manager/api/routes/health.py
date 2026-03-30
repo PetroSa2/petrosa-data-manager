@@ -3,7 +3,7 @@ Health check endpoints for Kubernetes probes and monitoring.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -49,7 +49,7 @@ async def liveness() -> HealthStatus:
     """
     return HealthStatus(
         status="ok",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         version="1.0.0",
     )
 
@@ -72,7 +72,7 @@ async def readiness() -> ReadinessStatus:
     return ReadinessStatus(
         ready=True,
         components=components,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -86,7 +86,7 @@ async def database_health():
     if not api_module.db_manager:
         return {
             "error": "Database manager not available",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     health = api_module.db_manager.health_check()
@@ -95,7 +95,7 @@ async def database_health():
     return {
         "databases": health,
         "statistics": stats,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -109,7 +109,7 @@ async def connection_stats():
     if not api_module.db_manager:
         return {
             "error": "Database manager not available",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     stats = api_module.db_manager.get_connection_stats()
@@ -132,7 +132,7 @@ async def connection_stats():
     return {
         "statistics": stats,
         "pool_configuration": connection_info,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -151,7 +151,7 @@ async def health_summary():
             "overall_score": 100.0,
         },
         "metadata": {
-            "last_updated": datetime.utcnow().isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
             "source": "data-manager",
         },
         "parameters": {},
@@ -182,20 +182,20 @@ async def leader_status():
                 "running": status["running"],
                 "heartbeat_interval": status["heartbeat_interval"],
                 "election_timeout": status["election_timeout"],
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         else:
             return {
                 "enabled": False,
                 "message": "Leader election not initialized or disabled",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
     except Exception as e:
         logger.error(f"Error getting leader status: {e}")
         return {
             "enabled": False,
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -220,20 +220,20 @@ async def audit_status():
                 "is_leader": status.get("is_leader", False),
                 "leader_pod_id": status.get("leader_pod_id"),
                 "pod_id": status.get("pod_id"),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         else:
             return {
                 "enabled": False,
                 "message": "Audit scheduler not initialized or disabled",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
     except Exception as e:
         logger.error(f"Error getting audit status: {e}")
         return {
             "enabled": False,
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -260,7 +260,7 @@ async def data_health(
             "quality_score": 99.5,
         },
         metadata={
-            "last_audit": datetime.utcnow().isoformat(),
+            "last_audit": datetime.now(timezone.utc).isoformat(),
             "data_source": "mongodb",
         },
         parameters={

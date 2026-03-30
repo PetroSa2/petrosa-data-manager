@@ -50,7 +50,7 @@ class VolatilityCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -115,7 +115,7 @@ class VolatilityCalculator:
                 window=f"{window_days}d",
                 parameters={"rolling_window": rolling_window},
                 completeness=len(candles) / (window_days * 24) * 100,  # Approximate
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(timezone.utc),
             )
 
             # Create metrics object

@@ -2,7 +2,7 @@
 Tests for data models.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from data_manager.models.events import EventType, MarketDataEvent
@@ -80,7 +80,7 @@ def test_candle_model():
     """Test Candle model validation."""
     candle = Candle(
         symbol="BTCUSDT",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         open=Decimal("50000.00"),
         high=Decimal("51000.00"),
         low=Decimal("49500.00"),
@@ -99,7 +99,7 @@ def test_trade_model():
     trade = Trade(
         symbol="BTCUSDT",
         trade_id=12345,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         price=Decimal("50000.00"),
         quantity=Decimal("0.1"),
         quote_quantity=Decimal("5000.00"),

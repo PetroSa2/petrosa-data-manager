@@ -50,7 +50,7 @@ class DeviationCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -117,7 +117,7 @@ class DeviationCalculator:
                     "bollinger_std_multiplier": 2,
                 },
                 completeness=100.0,
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(timezone.utc),
             )
 
             # Create metrics object

@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import constants
@@ -159,7 +159,7 @@ class LeaderElectionManager:
                 # Check if current leader is stale (no heartbeat for timeout period)
                 if (
                     last_heartbeat
-                    and (datetime.utcnow() - last_heartbeat).total_seconds()
+                    and (datetime.now(timezone.utc) - last_heartbeat).total_seconds()
                     < self.election_timeout
                 ):
                     # Current leader is still active
@@ -182,9 +182,9 @@ class LeaderElectionManager:
                 {
                     "$set": {
                         "pod_id": self.pod_id,
-                        "elected_at": datetime.utcnow(),
-                        "last_heartbeat": datetime.utcnow(),
-                        "updated_at": datetime.utcnow(),
+                        "elected_at": datetime.now(timezone.utc),
+                        "last_heartbeat": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
                     }
                 },
                 upsert=True,
@@ -262,8 +262,8 @@ class LeaderElectionManager:
                 {"status": "leader", "pod_id": self.pod_id},
                 {
                     "$set": {
-                        "last_heartbeat": datetime.utcnow(),
-                        "updated_at": datetime.utcnow(),
+                        "last_heartbeat": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
                     }
                 },
             )

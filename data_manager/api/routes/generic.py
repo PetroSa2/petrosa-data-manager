@@ -4,7 +4,7 @@ Generic CRUD API endpoints for dynamic database/collection operations.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -85,7 +85,7 @@ async def _execute_query_internal(
             "database": database,
             "collection": collection,
             "records_returned": len(paginated_records),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }
 
@@ -353,7 +353,7 @@ async def insert_records(
         for item in data_list:
             # Add timestamp if not present
             if "timestamp" not in item:
-                item["timestamp"] = datetime.utcnow()
+                item["timestamp"] = datetime.now(timezone.utc)
             model_instances.append(GenericModel(**item))
 
         # Execute insert
@@ -371,7 +371,7 @@ async def insert_records(
             "metadata": {
                 "database": database,
                 "collection": collection,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         }
 
@@ -430,7 +430,7 @@ async def update_records(
                 "metadata": {
                     "database": database,
                     "collection": collection,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             }
 
@@ -438,13 +438,13 @@ async def update_records(
         for _updated_count, record in enumerate(matching_records, 1):
             # Merge update data
             record.update(request.data)
-            record["updated_at"] = datetime.utcnow()
+            record["updated_at"] = datetime.now(timezone.utc)
 
         # If upsert and no matches, create new record
         if not matching_records and request.upsert:
             new_record = request.data.copy()
-            new_record["created_at"] = datetime.utcnow()
-            new_record["updated_at"] = datetime.utcnow()
+            new_record["created_at"] = datetime.now(timezone.utc)
+            new_record["updated_at"] = datetime.now(timezone.utc)
             updated_count = 1
 
         # Track metrics
@@ -456,7 +456,7 @@ async def update_records(
             "metadata": {
                 "database": database,
                 "collection": collection,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         }
 
@@ -509,7 +509,7 @@ async def delete_records(
             "metadata": {
                 "database": database,
                 "collection": collection,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         }
 
@@ -561,7 +561,7 @@ async def batch_operations(
                 model_instances = []
                 for item in data:
                     if "timestamp" not in item:
-                        item["timestamp"] = datetime.utcnow()
+                        item["timestamp"] = datetime.now(timezone.utc)
                     model_instances.append(GenericModel(**item))
 
                 if database == "mysql":
@@ -589,7 +589,7 @@ async def batch_operations(
                 matching = _apply_filter(records, filter_dict)
                 for record in matching:
                     record.update(data)
-                    record["updated_at"] = datetime.utcnow()
+                    record["updated_at"] = datetime.now(timezone.utc)
 
                 results.append({"type": "update", "count": len(matching)})
 
@@ -619,7 +619,7 @@ async def batch_operations(
                 "database": database,
                 "collection": collection,
                 "operations_count": len(results),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         }
 

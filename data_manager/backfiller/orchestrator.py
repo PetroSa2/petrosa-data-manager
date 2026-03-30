@@ -5,7 +5,7 @@ Backfill orchestrator for managing data recovery jobs.
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from data_manager.backfiller.binance_client import BinanceClient
@@ -64,7 +64,7 @@ class BackfillOrchestrator:
             job_id=str(uuid.uuid4()),
             request=request,
             status="pending",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         # Store job in MySQL

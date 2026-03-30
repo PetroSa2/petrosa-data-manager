@@ -2,7 +2,7 @@
 Tests for schema registry API endpoints.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -39,8 +39,8 @@ def mock_schema_service():
     mock_schema_def.status = SchemaStatus.ACTIVE
     mock_schema_def.compatibility_mode = "BACKWARD"
     mock_schema_def.description = "Test schema"
-    mock_schema_def.created_at = datetime.utcnow()
-    mock_schema_def.updated_at = datetime.utcnow()
+    mock_schema_def.created_at = datetime.now(timezone.utc)
+    mock_schema_def.updated_at = datetime.now(timezone.utc)
     mock_schema_def.created_by = "test_user"
     mock_schema_def.schema = {
         "type": "object",
@@ -56,7 +56,7 @@ def mock_schema_service():
                 "status": "ACTIVE",
                 "schema": {"type": "object"},
                 "compatibility_mode": "BACKWARD",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
         ]
     )

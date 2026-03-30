@@ -76,7 +76,7 @@ class MLAnomalyDetector:
         """
         try:
             # Fetch recent candles
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 

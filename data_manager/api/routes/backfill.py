@@ -4,7 +4,7 @@ Backfill management endpoints.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Path, Query
 from pydantic import BaseModel
@@ -84,7 +84,7 @@ async def start_backfill(
             progress=0.0,
             records_fetched=0,
             records_inserted=0,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             started_at=None,
             completed_at=None,
         )
@@ -195,13 +195,13 @@ async def get_backfill_job(
             symbol="BTCUSDT",
             data_type="candles",
             timeframe="1h",
-            start_time=datetime.utcnow(),
-            end_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
         ),
         progress=100.0,
         records_fetched=1000,
         records_inserted=1000,
-        created_at=datetime.utcnow(),
-        started_at=datetime.utcnow(),
-        completed_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
     )

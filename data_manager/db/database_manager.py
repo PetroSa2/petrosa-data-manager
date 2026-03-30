@@ -5,7 +5,7 @@ Database manager to coordinate MySQL and MongoDB adapters.
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import constants
@@ -73,7 +73,7 @@ class DatabaseManager:
             self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
             self.mysql_adapter.connect()
             self._stats["mysql"]["connection_count"] += 1
-            self._stats["mysql"]["last_connected"] = datetime.utcnow()
+            self._stats["mysql"]["last_connected"] = datetime.now(timezone.utc)
             logger.info("MySQL connection established")
 
             # Initialize MongoDB adapter (async)
@@ -81,7 +81,7 @@ class DatabaseManager:
             self.mongodb_adapter = get_adapter("mongodb", constants.MONGODB_URL)
             self.mongodb_adapter.connect()
             self._stats["mongodb"]["connection_count"] += 1
-            self._stats["mongodb"]["last_connected"] = datetime.utcnow()
+            self._stats["mongodb"]["last_connected"] = datetime.now(timezone.utc)
             logger.info("MongoDB connection established")
 
             # Initialize repositories
@@ -117,7 +117,7 @@ class DatabaseManager:
         if self.mysql_adapter:
             try:
                 self.mysql_adapter.disconnect()
-                self._stats["mysql"]["last_disconnected"] = datetime.utcnow()
+                self._stats["mysql"]["last_disconnected"] = datetime.now(timezone.utc)
                 logger.info("MySQL disconnected")
             except Exception as e:
                 logger.error(f"Error disconnecting MySQL: {e}")
@@ -125,7 +125,7 @@ class DatabaseManager:
         if self.mongodb_adapter:
             try:
                 self.mongodb_adapter.disconnect()
-                self._stats["mongodb"]["last_disconnected"] = datetime.utcnow()
+                self._stats["mongodb"]["last_disconnected"] = datetime.now(timezone.utc)
                 logger.info("MongoDB disconnected")
             except Exception as e:
                 logger.error(f"Error disconnecting MongoDB: {e}")
@@ -202,7 +202,7 @@ class DatabaseManager:
         while not self._shutdown_event.is_set():
             try:
                 await asyncio.sleep(constants.DB_HEALTH_CHECK_INTERVAL)
-                self._last_health_check = datetime.utcnow()
+                self._last_health_check = datetime.now(timezone.utc)
 
                 # Check MySQL connection
                 if self.mysql_adapter and not self.mysql_adapter.is_connected():
@@ -242,7 +242,7 @@ class DatabaseManager:
             self.mysql_adapter.connect()
 
             self._stats["mysql"]["connection_count"] += 1
-            self._stats["mysql"]["last_connected"] = datetime.utcnow()
+            self._stats["mysql"]["last_connected"] = datetime.now(timezone.utc)
             self._mysql_reconnect_attempts = 0  # Reset on success
 
             logger.info("MySQL reconnection successful")
@@ -274,7 +274,7 @@ class DatabaseManager:
             self.mongodb_adapter.connect()
 
             self._stats["mongodb"]["connection_count"] += 1
-            self._stats["mongodb"]["last_connected"] = datetime.utcnow()
+            self._stats["mongodb"]["last_connected"] = datetime.now(timezone.utc)
             self._mongodb_reconnect_attempts = 0  # Reset on success
 
             logger.info("MongoDB reconnection successful")

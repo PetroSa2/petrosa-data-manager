@@ -4,7 +4,7 @@ Raw query API endpoints for MySQL and MongoDB with safety validation.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -64,7 +64,7 @@ async def execute_mysql_query(request: RawQueryRequest) -> RawQueryResponse:
                 "database": "mysql",
                 "query_type": _get_query_type(request.query),
                 "records_returned": len(results),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -103,7 +103,7 @@ async def execute_mongodb_query(request: RawQueryRequest) -> RawQueryResponse:
                 "database": "mongodb",
                 "query_type": _get_mongodb_query_type(query_obj),
                 "records_returned": len(results),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
 

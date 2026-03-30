@@ -2,7 +2,7 @@
 Tests for the message handler.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
@@ -39,7 +39,7 @@ async def test_handle_unknown_event(message_handler):
     event = MarketDataEvent(
         event_type=EventType.UNKNOWN,
         symbol="BTCUSDT",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         data={"strange_key": "some_value"},
         exchange="binance",
         stream="mystream",
@@ -76,7 +76,7 @@ async def test_handle_unknown_event_no_stream(message_handler):
     event = MarketDataEvent(
         event_type=EventType.UNKNOWN,
         symbol="BTCUSDT",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         data={"another_key": 123},
         exchange="binance",
         stream=None,

@@ -2,7 +2,7 @@
 Pydantic models for configuration and audit trails.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -23,7 +23,7 @@ class ConfigAudit(BaseModel):
     old_parameters: dict[str, Any] | None = Field(None, description="Previous values")
     new_parameters: dict[str, Any] | None = Field(None, description="New values")
     changed_by: str = Field(..., description="Who made the change")
-    changed_at: datetime = Field(default_factory=datetime.utcnow)
+    changed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     reason: str | None = Field(None, description="Reason for change")
     version: int = Field(..., description="Configuration version after change")
 
@@ -36,7 +36,7 @@ class ConfigurationDocument(BaseModel):
     symbol: str | None = None
     parameters: dict[str, Any]
     version: int = 1
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     changed_by: str
     reason: str | None = None

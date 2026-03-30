@@ -3,7 +3,7 @@ Market regime classifier.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from data_manager.db.database_manager import DatabaseManager
@@ -132,7 +132,7 @@ class RegimeClassifier:
                     "volume_low_threshold": 0.7,
                 },
                 completeness=100.0,
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(timezone.utc),
             )
 
             # Create regime object

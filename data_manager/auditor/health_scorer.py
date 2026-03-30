@@ -57,7 +57,7 @@ class HealthScorer:
             DataHealthMetrics instance
         """
         try:
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(hours=lookback_hours)
 
             # Get actual record count

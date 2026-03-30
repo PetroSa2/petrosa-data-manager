@@ -3,7 +3,7 @@ Data catalog endpoints for dataset metadata and schemas.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Path, Query
 from pydantic import BaseModel
@@ -159,7 +159,7 @@ async def list_datasets(
                 "by": sort_by,
                 "order": sort_order,
             },
-            "last_updated": datetime.utcnow().isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
     return {
@@ -182,7 +182,7 @@ async def list_datasets(
             "by": sort_by,
             "order": sort_order,
         },
-        "last_updated": datetime.utcnow().isoformat(),
+        "last_updated": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -204,8 +204,8 @@ async def get_dataset_metadata(
         schema_id="schema_v1",
         storage_type="mongodb",
         metadata={},
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
 
 
@@ -224,7 +224,7 @@ async def get_schema(
         version="1.0.0",
         fields=[],
         primary_keys=[],
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
 
 
@@ -242,6 +242,6 @@ async def get_lineage(
         dataset_id=dataset_id,
         lineage=[],
         metadata={
-            "last_updated": datetime.utcnow().isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         },
     )

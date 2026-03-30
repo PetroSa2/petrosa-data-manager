@@ -3,7 +3,7 @@ Analytics endpoints for computed metrics.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -54,7 +54,7 @@ async def get_volatility(
             {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -83,7 +83,7 @@ async def get_volatility(
             values=values,
             metadata={
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
                 "collection": collection,
                 "records_returned": len(values),
             },
@@ -113,7 +113,7 @@ async def get_strategy_performance(strategy_id: str):
             },
             "metadata": {
                 "strategy_id": strategy_id,
-                "calculated_at": datetime.utcnow().isoformat(),
+                "calculated_at": datetime.now(timezone.utc).isoformat(),
                 "source": "data-manager-analysis-baseline",
             },
         }
@@ -148,7 +148,7 @@ async def get_volume(
             {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -171,7 +171,7 @@ async def get_volume(
             values=values,
             metadata={
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
                 "collection": collection,
                 "records_returned": len(values),
             },
@@ -206,7 +206,7 @@ async def get_spread(
                 "metric": "spread",
                 "data": None,
                 "metadata": {
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "source": "mongodb",
                     "message": "No spread data available",
                 },
@@ -232,7 +232,7 @@ async def get_spread(
             "metadata": {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -271,7 +271,7 @@ async def get_trend(
             {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -295,7 +295,7 @@ async def get_trend(
             values=values,
             metadata={
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
                 "collection": collection,
                 "records_returned": len(values),
             },
@@ -343,7 +343,7 @@ async def get_correlation(
             "correlation_matrix": correlation_matrix,
             "metadata": {
                 "data_completeness": 100.0,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
                 "collection": collection,
             },
         }
@@ -396,7 +396,7 @@ async def get_deviation(
             "metadata": {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -453,7 +453,7 @@ async def get_seasonality(
             "metadata": {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -506,7 +506,7 @@ async def get_regime(
             "metadata": {
                 "timestamp": (
                     r.get("metadata", {})
-                    .get("computed_at", datetime.utcnow())
+                    .get("computed_at", datetime.now(timezone.utc))
                     .isoformat()
                     if isinstance(r.get("metadata", {}).get("computed_at"), datetime)
                     else str(r.get("metadata", {}).get("computed_at", ""))
@@ -657,7 +657,7 @@ async def market_overview(
                 "by": sort_by,
                 "order": sort_order,
             },
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "pairs_requested": len(paginated_pair_list),
             "pairs_available": len([v for v in overview.values() if v is not None]),
         }

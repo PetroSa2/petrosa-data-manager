@@ -50,7 +50,7 @@ class TrendCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -114,7 +114,7 @@ class TrendCalculator:
                 window=f"{window_days}d",
                 parameters={"sma_window": 20, "ema_span": 20},
                 completeness=len(candles) / (window_days * 24) * 100,
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(timezone.utc),
             )
 
             # Create metrics object

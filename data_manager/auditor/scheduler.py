@@ -149,10 +149,10 @@ class AuditScheduler:
     async def run_audit_cycle(self) -> None:
         """Run a single audit cycle for all symbols and timeframes."""
         logger.info("Starting audit cycle")
-        audit_start = datetime.utcnow()
+        audit_start = datetime.now(timezone.utc)
 
         # Define audit window (last 24 hours)
-        end = datetime.utcnow()
+        end = datetime.now(timezone.utc)
         start = end - timedelta(hours=24)
 
         symbols_audited = 0
@@ -235,13 +235,13 @@ class AuditScheduler:
             total_gaps += gaps
             total_duplicates += duplicates
 
-        audit_duration = (datetime.utcnow() - audit_start).total_seconds()
+        audit_duration = (datetime.now(timezone.utc) - audit_start).total_seconds()
 
         # Update cycle duration metric
         audit_cycle_duration.observe(audit_duration)
 
         # Store last audit time
-        self.last_audit_time = datetime.utcnow()
+        self.last_audit_time = datetime.now(timezone.utc)
 
         logger.info(
             f"Audit cycle complete: "

@@ -53,7 +53,7 @@ class CorrelationCalculator:
             logger.info(f"Calculating correlations for {len(symbols)} symbols")
 
             # Fetch candles for all symbols
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(days=window_days)
 
             all_candles = {}
@@ -152,7 +152,7 @@ class CorrelationCalculator:
                     window=f"{window_days}d",
                     parameters={"symbols": len(symbols), "benchmark": benchmark},
                     completeness=100.0,
-                    computed_at=datetime.utcnow(),
+                    computed_at=datetime.now(timezone.utc),
                 )
 
                 # Create metrics object
@@ -174,7 +174,7 @@ class CorrelationCalculator:
 
             # Also store the full correlation matrix
             matrix_doc = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
                 "timeframe": timeframe,
                 "matrix": {
                     symbol: {k: str(v) for k, v in corr.items()}

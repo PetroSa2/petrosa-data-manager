@@ -2,7 +2,7 @@
 NATS event message models.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, StrEnum
 from typing import Any
 
@@ -110,7 +110,7 @@ class MarketDataEvent(BaseModel):
         if isinstance(timestamp_ms, int) and timestamp_ms > 0:
             timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0)
         else:
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(timezone.utc)
 
         return MarketDataEvent(
             event_type=event_type,

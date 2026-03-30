@@ -49,7 +49,7 @@ class VolumeCalculator:
         """
         try:
             # Fetch candles from MongoDB
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
             start = end - timedelta(hours=window_hours)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
@@ -91,7 +91,7 @@ class VolumeCalculator:
                 window=f"{window_hours}h",
                 parameters={"sma_window": sma_window},
                 completeness=100.0,  # Assume complete for now
-                computed_at=datetime.utcnow(),
+                computed_at=datetime.now(timezone.utc),
             )
 
             # Create metrics object
