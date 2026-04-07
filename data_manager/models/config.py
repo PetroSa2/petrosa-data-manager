@@ -2,7 +2,14 @@
 Pydantic models for configuration and audit trails.
 """
 
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field

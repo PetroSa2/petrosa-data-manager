@@ -3,7 +3,14 @@ Dataset registry for auto-discovery and cataloging.
 """
 
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CatalogRepository

@@ -3,7 +3,14 @@ Health check endpoints for Kubernetes probes and monitoring.
 """
 
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel

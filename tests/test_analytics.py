@@ -5,7 +5,14 @@ Tests correlation analysis, deviation detection, trend analysis,
 and other analytics calculations.
 """
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
 

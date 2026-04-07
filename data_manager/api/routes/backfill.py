@@ -4,7 +4,14 @@ Backfill management endpoints.
 
 import logging
 import uuid
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, Body, Path, Query
 from pydantic import BaseModel

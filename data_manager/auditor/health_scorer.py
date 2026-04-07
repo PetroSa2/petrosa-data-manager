@@ -3,7 +3,14 @@ Health scoring for datasets.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository, HealthRepository

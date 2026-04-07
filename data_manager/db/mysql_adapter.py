@@ -363,9 +363,7 @@ class MySQLAdapter(BaseAdapter):
                             ("_at", "timestamp")
                         ):
                             try:
-                                record[key] = datetime.fromisoformat(
-                                    value
-                                )
+                                record[key] = datetime.fromisoformat(value)
                             except (ValueError, TypeError):
                                 pass
                     records.append(record)

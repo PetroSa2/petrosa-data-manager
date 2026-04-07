@@ -2,7 +2,14 @@
 NATS event message models.
 """
 
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 from enum import Enum, StrEnum
 from typing import Any
 

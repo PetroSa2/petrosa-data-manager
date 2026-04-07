@@ -104,9 +104,11 @@ class DataManagerApp:
             # Update API server with initialized db_manager
             if self.api_server_task:
                 from data_manager import api
+
                 api.app.db_manager = self.db_manager
                 # Also update repositories in routers
                 from data_manager.api.routes import config
+
                 config.set_database_manager(self.db_manager)
 
         except Exception as e:

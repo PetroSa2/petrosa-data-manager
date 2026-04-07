@@ -4,7 +4,14 @@ Audit scheduler for periodic data quality checks.
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -111,7 +118,9 @@ class AuditScheduler:
             audit_leader_status.set(1)  # Assume leader if election disabled
 
         self.running = True
-        logger.info(f"Audit scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)")
+        logger.info(
+            f"Audit scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)"
+        )
 
         # Give the service time to stabilize and pass health checks before starting cycles
         await asyncio.sleep(constants.INITIAL_STARTUP_DELAY)
