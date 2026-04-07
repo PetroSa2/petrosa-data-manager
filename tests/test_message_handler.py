@@ -2,7 +2,14 @@
 Tests for the message handler.
 """
 
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 from unittest.mock import ANY, AsyncMock, patch
 
 import pytest

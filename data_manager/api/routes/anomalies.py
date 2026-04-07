@@ -3,7 +3,14 @@ Anomaly detection endpoints.
 """
 
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -83,8 +90,7 @@ async def get_anomalies(
                     isinstance(a["timestamp"], datetime)
                     and a["timestamp"] >= from_time
                     or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"])
-                    >= from_time
+                    and datetime.fromisoformat(a["timestamp"]) >= from_time
                 )
             ]
 
@@ -97,8 +103,7 @@ async def get_anomalies(
                     isinstance(a["timestamp"], datetime)
                     and a["timestamp"] <= to_time
                     or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"])
-                    <= to_time
+                    and datetime.fromisoformat(a["timestamp"]) <= to_time
                 )
             ]
 
@@ -112,9 +117,7 @@ async def get_anomalies(
                     key=lambda x: (
                         x.get("timestamp", datetime.min)
                         if isinstance(x.get("timestamp"), datetime)
-                        else datetime.fromisoformat(
-                            x.get("timestamp", "1970-01-01")
-                        )
+                        else datetime.fromisoformat(x.get("timestamp", "1970-01-01"))
                     ),
                     reverse=reverse,
                 )

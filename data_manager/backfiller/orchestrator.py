@@ -5,7 +5,14 @@ Backfill orchestrator for managing data recovery jobs.
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 from decimal import Decimal
 
 from data_manager.backfiller.binance_client import BinanceClient

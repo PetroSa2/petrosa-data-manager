@@ -51,7 +51,9 @@ class TestAuditScheduler:
     @pytest.mark.asyncio
     async def test_run_audit_cycle_handles_errors(self, scheduler):
         """Test audit cycle handles errors in sub-tasks."""
-        scheduler.gap_detector.detect_gaps = AsyncMock(side_effect=Exception("Audit failed"))
+        scheduler.gap_detector.detect_gaps = AsyncMock(
+            side_effect=Exception("Audit failed")
+        )
 
         with patch("data_manager.auditor.scheduler.constants") as mock_constants:
             mock_constants.SUPPORTED_PAIRS = ["BTCUSDT"]
@@ -85,7 +87,9 @@ class TestAnalyticsScheduler:
         scheduler.seasonality_calc.calculate_seasonality = AsyncMock(return_value={})
         scheduler.spread_calc.calculate_spread = AsyncMock(return_value=0.01)
         scheduler.regime_classifier.classify_regime = AsyncMock(return_value="bullish")
-        scheduler.correlation_calc.calculate_correlation = AsyncMock(return_value={"BTC/ETH": 0.8})
+        scheduler.correlation_calc.calculate_correlation = AsyncMock(
+            return_value={"BTC/ETH": 0.8}
+        )
 
         with patch("data_manager.analytics.scheduler.constants") as mock_constants:
             mock_constants.SUPPORTED_PAIRS = ["BTCUSDT"]

@@ -3,7 +3,14 @@ Data access endpoints for raw market data.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel

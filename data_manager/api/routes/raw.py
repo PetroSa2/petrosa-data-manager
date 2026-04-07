@@ -4,7 +4,14 @@ Raw query API endpoints for MySQL and MongoDB with safety validation.
 
 import json
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+
+    UTC = timezone.utc  # noqa: UP017
 from typing import Any
 
 from fastapi import APIRouter, HTTPException

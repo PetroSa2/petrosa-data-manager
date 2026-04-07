@@ -47,7 +47,9 @@ class AnalyticsScheduler:
     async def start(self) -> None:
         """Start the analytics scheduler."""
         self.running = True
-        logger.info(f"Analytics scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)")
+        logger.info(
+            f"Analytics scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)"
+        )
 
         # Give the service time to stabilize and pass health checks before starting cycles
         await asyncio.sleep(constants.INITIAL_STARTUP_DELAY)
@@ -112,8 +114,10 @@ class AnalyticsScheduler:
 
                         # Calculate seasonality (only for 1h timeframe to avoid overload)
                         if timeframe == "1h":
-                            seasonality = await self.seasonality_calc.calculate_seasonality(
-                                symbol, timeframe, window_days=90
+                            seasonality = (
+                                await self.seasonality_calc.calculate_seasonality(
+                                    symbol, timeframe, window_days=90
+                                )
                             )
                             if seasonality:
                                 count += 1
@@ -142,7 +146,9 @@ class AnalyticsScheduler:
                 return count
 
         # Calculate analytics for each supported symbol in parallel
-        tasks = [calculate_symbol_metrics(symbol) for symbol in constants.SUPPORTED_PAIRS]
+        tasks = [
+            calculate_symbol_metrics(symbol) for symbol in constants.SUPPORTED_PAIRS
+        ]
         results = await asyncio.gather(*tasks)
         metrics_calculated = sum(results)
 

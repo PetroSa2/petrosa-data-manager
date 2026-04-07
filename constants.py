@@ -55,7 +55,9 @@ ENABLE_API = os.getenv("ENABLE_API", "true").lower() == "true"
 AUDIT_INTERVAL = int(os.getenv("AUDIT_INTERVAL", "300"))  # 5 minutes
 ANALYTICS_INTERVAL = int(os.getenv("ANALYTICS_INTERVAL", "900"))  # 15 minutes
 HEALTH_CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "60"))  # 1 minute
-INITIAL_STARTUP_DELAY = int(os.getenv("INITIAL_STARTUP_DELAY", "60"))  # 1 minute delay before background cycles
+INITIAL_STARTUP_DELAY = int(
+    os.getenv("INITIAL_STARTUP_DELAY", "60")
+)  # 1 minute delay before background cycles
 
 # API Configuration
 API_HOST = os.getenv("API_HOST", "0.0.0.0")

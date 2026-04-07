@@ -119,7 +119,9 @@ def find_test_files(paths: list[str] = None) -> list[str]:
             elif os.path.isdir(path):
                 for root, _, files in os.walk(path):
                     for file in files:
-                        if (file.startswith("test_") or file.endswith("_test.py")) and file.endswith(".py"):
+                        if (
+                            file.startswith("test_") or file.endswith("_test.py")
+                        ) and file.endswith(".py"):
                             test_files.append(os.path.join(root, file))
         return test_files
 
