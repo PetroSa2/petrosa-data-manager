@@ -1,7 +1,9 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from fastapi import HTTPException
-from unittest.mock import MagicMock, AsyncMock, patch
-from data_manager.api.routes.analysis import get_regime, get_deviation, get_seasonality
+
+from data_manager.api.routes.analysis import get_deviation, get_regime, get_seasonality
 
 @pytest.mark.asyncio
 async def test_get_regime_404_not_masked():
