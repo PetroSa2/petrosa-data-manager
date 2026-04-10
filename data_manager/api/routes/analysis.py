@@ -412,6 +412,8 @@ async def get_deviation(
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching deviation metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -469,6 +471,8 @@ async def get_seasonality(
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching seasonality metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -522,6 +526,8 @@ async def get_regime(
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching regime: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -669,6 +675,8 @@ async def market_overview(
             "pairs_available": len([v for v in overview.values() if v is not None]),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error generating market overview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
