@@ -32,7 +32,7 @@ concurrency:
 jobs:
   copilot-review:
     name: copilot-review
-    runs-on: ubuntu-latest
+    runs-on: petrosa-org-runners
     permissions:
       contents: read
       pull-requests: read
