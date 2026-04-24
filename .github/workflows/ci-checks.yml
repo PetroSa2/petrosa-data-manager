@@ -12,7 +12,7 @@ jobs:
   lint:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Lint & Format Check
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test & Coverage
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     env:
       OTEL_NO_AUTO_INIT: 1
     steps:
@@ -78,7 +78,7 @@ jobs:
   test-quality:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test Quality Check
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout service code
         uses: actions/checkout@v4
@@ -111,7 +111,7 @@ jobs:
   security:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Security Scan
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write  # Required for SARIF upload
@@ -188,7 +188,7 @@ jobs:
   documentation-standards:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Documentation Standards Check
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -207,7 +207,7 @@ jobs:
 
   pipeline:
     name: pipeline
-    runs-on: petrosa-org-runners
+    runs-on: ubuntu-latest
     needs: [lint, test, test-quality, security, documentation-standards]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     steps:
