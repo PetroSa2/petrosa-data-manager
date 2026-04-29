@@ -104,7 +104,10 @@ jobs:
               );
             };
 
-            async function hasCopilotReviewForHeadSha() {
+            // Accept any submitted non-dismissed Copilot review on the PR, regardless of
+            // which commit was reviewed. Re-review via API is a no-op (#380) — the
+            // thread-resolution check below is the real enforcement mechanism.
+            async function hasCopilotReviewForPR() {
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner,
                 repo,
@@ -116,7 +119,6 @@ jobs:
                 (r) =>
                   r.user &&
                   isCopilotPrReviewer(r.user.login) &&
-                  r.commit_id === headSha &&
                   r.state !== 'DISMISSED' &&
                   r.state !== 'PENDING'
               );
@@ -130,21 +132,21 @@ jobs:
             let waited = 0;
 
             while (waited <= maxWaitSeconds) {
-              if (await hasCopilotReviewForHeadSha()) {
-                core.info(`Found submitted Copilot review for head ${headSha}.`);
+              if (await hasCopilotReviewForPR()) {
+                core.info(`Found submitted Copilot review for PR #${pull_number}.`);
                 break;
               }
 
               if (waited === 0) {
                 core.info(
-                  `Waiting for Copilot PR review on current head ${headSha} (polling up to ${maxWaitSeconds}s).`
+                  `Waiting for Copilot PR review on PR #${pull_number} (any commit accepted, polling up to ${maxWaitSeconds}s).`
                 );
               }
 
               if (waited >= maxWaitSeconds) {
                 core.setFailed(
-                  `No submitted Copilot PR review for current head ${headSha} after waiting ${maxWaitSeconds}s. ` +
-                    `Copilot may be delayed; re-request Copilot review and retry once it submits a review on the latest commit.`
+                  `No submitted Copilot PR review for PR #${pull_number} after waiting ${maxWaitSeconds}s. ` +
+                    `Request a Copilot review via the GitHub UI and retry once it submits one.`
                 );
                 return;
               }
