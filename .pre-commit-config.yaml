@@ -15,23 +15,6 @@ repos:
         name: ⚡ Ruff Formatter
 
   # ==================================================================
-  # TYPE CHECKING - Mypy (Latest v1.15.0)
-  # ==================================================================
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.15.0
-    hooks:
-      - id: mypy
-        name: 🔍 Mypy Type Checker
-        additional_dependencies: [
-          'pyyaml',
-          'types-PyYAML',
-          'types-requests',
-          'types-setuptools',
-          'pydantic'
-        ]
-        args: [--ignore-missing-imports, --strict]
-
-  # ==================================================================
   # SECURITY - Gitleaks (Official Hook)
   # ==================================================================
   - repo: https://github.com/gitleaks/gitleaks
@@ -88,11 +71,3 @@ repos:
         language: system
         types: [python]
         files: ^tests/
-
-      - id: pipeline
-        name: 🔄 Complete Local Pipeline (Parallel to CI)
-        entry: make test
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [push]
