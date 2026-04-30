@@ -1,8 +1,11 @@
 # TEMPLATE — Copy to `.github/workflows/copilot-review-gate.yml` in each Petrosa repo
 # before requiring the `copilot-review / copilot-review` status check on `main`.
 #
-# Enforces merge gating: Copilot must have reviewed the current PR head SHA and
-# all Copilot-started review threads must be resolved.
+# Enforces merge gating: Copilot must have reviewed the PR (any commit) and
+# all non-outdated Copilot-started review threads must be resolved.
+#
+# Design: one Copilot review per PR is the correct standard (issue #380).
+# Re-review via API is a no-op — the thread-resolution check is the real quality gate.
 #
 # Branch protection must require the check name: copilot-review / copilot-review
 # (workflow name / job name). See petrosa_k8s/docs/COPILOT_REVIEW_ENFORCEMENT.md
@@ -85,7 +88,6 @@ jobs:
             }
 
             const pull_number = pr.number;
-            const headSha = pr.head.sha;
 
             // When triggered by a Copilot review submission, the GitHub REST API can
             // take 10–20s to reflect the new review. A short grace period before the
@@ -234,5 +236,5 @@ jobs:
             }
 
             core.info(
-              `Copilot review gate passed for ${repo}#${pull_number} @ ${headSha}`
+              `Copilot review gate passed for ${repo}#${pull_number}.`
             );
