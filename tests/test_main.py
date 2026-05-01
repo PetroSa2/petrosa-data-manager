@@ -54,6 +54,7 @@ async def test_main_otel_enabled_with_endpoint(mock_constants, mock_app_class, c
                 mock_init_telemetry.assert_called_once_with(
                     service_name="petrosa-data-manager",
                     service_type="async",
+                    enable_mysql=True,
                     enable_mongodb=True,
                     enable_http=True,
                 )
@@ -155,6 +156,7 @@ async def test_main_otel_endpoint_missing(mock_app_class, caplog):
                         mock_init_telemetry.assert_called_once_with(
                             service_name="petrosa-data-manager",
                             service_type="async",
+                            enable_mysql=True,
                             enable_mongodb=True,
                             enable_http=True,
                         )
