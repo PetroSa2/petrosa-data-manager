@@ -123,7 +123,8 @@ jobs:
         run: |
           VERSION="${{ needs.build-and-push.outputs.version }}"
           # Update the image tag in manifests robustly (preserves registry/repo, only updates tag)
-          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -E -i "s|(image:[[:space:]]*[^[:space:]]*/petrosa-data-manager):[^[:space:]]*|\1:$VERSION|g"
+          # Handles both qualified (e.g., repo/petrosa-data-manager:tag) and unqualified (petrosa-data-manager:tag) image names
+          find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -E -i "s|(image:[[:space:]]*)([^[:space:]]*/)?(petrosa-data-manager):[^[:space:]]*|\1\2\3:$VERSION|g"
 
           # Update version labels specifically (targets common label patterns)
           find petrosa_k8s/k8s/data-manager -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -E -i "s/(version|app.kubernetes.io\/version):.*/\1: $VERSION/g"
