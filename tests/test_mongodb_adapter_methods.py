@@ -316,6 +316,16 @@ class TestEnsureIndexes:
         assert len(indexes) == 2
 
     @pytest.mark.asyncio
+    async def test_creates_intents_collection_indexes(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+        await adapter.ensure_indexes("intents")
+        indexes = coll.create_indexes.call_args[0][0]
+        # intent_id (unique), strategy_id, decision_id (sparse), timestamp = 4
+        assert len(indexes) == 4
+
+    @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):
         coll = MagicMock()
         coll.create_indexes = AsyncMock(side_effect=PyMongoError("x"))

@@ -25,6 +25,7 @@ from prometheus_client import start_http_server
 
 import constants
 from data_manager.api.app import create_app
+from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
 
@@ -65,6 +66,7 @@ class DataManagerApp:
     def __init__(self):
         self.db_manager: DatabaseManager | None = None
         self.consumer: MarketDataConsumer | None = None
+        self.intent_consumer: IntentConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
@@ -152,6 +154,14 @@ class DataManagerApp:
             else:
                 logger.error("Failed to start market data consumer")
 
+        # Initialize and start intent consumer (cross-service identifier contract, P0.2a)
+        if constants.ENABLE_INTENT_CONSUMER:
+            self.intent_consumer = IntentConsumer(db_manager=self.db_manager)
+            if await self.intent_consumer.start():
+                logger.info("Intent consumer started successfully")
+            else:
+                logger.error("Failed to start intent consumer")
+
         # Initialize backfill orchestrator
         if self.db_manager and constants.ENABLE_BACKFILLER:
             from data_manager.backfiller.orchestrator import BackfillOrchestrator
@@ -194,6 +204,11 @@ class DataManagerApp:
         if self.consumer:
             await self.consumer.stop()
             logger.info("Consumer stopped")
+
+        # Stop intent consumer
+        if self.intent_consumer:
+            await self.intent_consumer.stop()
+            logger.info("Intent consumer stopped")
 
         # Stop API server
         if self.api_server_task:

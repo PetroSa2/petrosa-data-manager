@@ -256,6 +256,15 @@ class MongoDBAdapter(BaseAdapter):
                     ),
                     IndexModel([("created_at", ASCENDING)]),
                 ]
+            elif collection == "intents":
+                # Cross-service identifier contract (P0.2a): `intents` collection
+                # decision_id is sparse — publishers may emit before CIO assigns one.
+                indexes = [
+                    IndexModel([("intent_id", ASCENDING)], unique=True),
+                    IndexModel([("strategy_id", ASCENDING)]),
+                    IndexModel([("decision_id", ASCENDING)], sparse=True),
+                    IndexModel([("timestamp", ASCENDING)]),
+                ]
             else:
                 # Default time-series indexes
                 indexes = [
