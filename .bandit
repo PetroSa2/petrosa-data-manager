@@ -13,7 +13,10 @@ exclude_dirs:
 
 ### Skips
 # B104: hardcoded_bind_all_interfaces
-skips: ['B104']
+# B608: hardcoded_sql_expressions — false positives on f-string error
+#       messages in `raise ... from e` patterns; confidence is "Low" and
+#       real query construction uses parameterized driver calls.
+skips: ['B104', 'B608']
 
 ### Levels
 severity: medium
