@@ -20,6 +20,14 @@ NATS_CONSUMER_SUBJECT = os.getenv(
 # Audit-trail subscribers (cross-service identifier contract, P0.2 epic)
 NATS_INTENT_SUBJECT = os.getenv("NATS_INTENT_SUBJECT", "cio.intent.>")
 NATS_DECISION_SUBJECT = os.getenv("NATS_DECISION_SUBJECT", "signals.trading.>")
+# P0.2c: tradeengine publishes onto <prefix>.<strategy_id>; we subscribe
+# with the `>` wildcard. Prefix comes from petrosa-common-config.
+NATS_TOPIC_EXECUTION_EVENTS = os.getenv(
+    "NATS_TOPIC_EXECUTION_EVENTS", "execution.events"
+)
+NATS_EXECUTION_EVENTS_SUBJECT = os.getenv(
+    "NATS_EXECUTION_EVENTS_SUBJECT", f"{NATS_TOPIC_EXECUTION_EVENTS}.>"
+)
 NATS_CLIENT_NAME = f"{SERVICE_NAME}-consumer"
 NATS_CONNECT_TIMEOUT = int(os.getenv("NATS_CONNECT_TIMEOUT", "10"))
 NATS_MAX_RECONNECT_ATTEMPTS = int(os.getenv("NATS_MAX_RECONNECT_ATTEMPTS", "10"))
@@ -56,6 +64,9 @@ ENABLE_API = os.getenv("ENABLE_API", "true").lower() == "true"
 ENABLE_INTENT_CONSUMER = os.getenv("ENABLE_INTENT_CONSUMER", "true").lower() == "true"
 ENABLE_DECISION_CONSUMER = (
     os.getenv("ENABLE_DECISION_CONSUMER", "true").lower() == "true"
+)
+ENABLE_EXECUTION_EVENTS_CONSUMER = (
+    os.getenv("ENABLE_EXECUTION_EVENTS_CONSUMER", "true").lower() == "true"
 )
 
 # Scheduling Configuration
