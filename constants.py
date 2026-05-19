@@ -19,6 +19,7 @@ NATS_CONSUMER_SUBJECT = os.getenv(
 )
 # Audit-trail subscribers (cross-service identifier contract, P0.2 epic)
 NATS_INTENT_SUBJECT = os.getenv("NATS_INTENT_SUBJECT", "cio.intent.>")
+NATS_DECISION_SUBJECT = os.getenv("NATS_DECISION_SUBJECT", "signals.trading.>")
 NATS_CLIENT_NAME = f"{SERVICE_NAME}-consumer"
 NATS_CONNECT_TIMEOUT = int(os.getenv("NATS_CONNECT_TIMEOUT", "10"))
 NATS_MAX_RECONNECT_ATTEMPTS = int(os.getenv("NATS_MAX_RECONNECT_ATTEMPTS", "10"))
@@ -53,6 +54,9 @@ ENABLE_BACKFILLER = os.getenv("ENABLE_BACKFILLER", "true").lower() == "true"
 ENABLE_ANALYTICS = os.getenv("ENABLE_ANALYTICS", "true").lower() == "true"
 ENABLE_API = os.getenv("ENABLE_API", "true").lower() == "true"
 ENABLE_INTENT_CONSUMER = os.getenv("ENABLE_INTENT_CONSUMER", "true").lower() == "true"
+ENABLE_DECISION_CONSUMER = (
+    os.getenv("ENABLE_DECISION_CONSUMER", "true").lower() == "true"
+)
 
 # Scheduling Configuration
 AUDIT_INTERVAL = int(os.getenv("AUDIT_INTERVAL", "300"))  # 5 minutes

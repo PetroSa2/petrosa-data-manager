@@ -25,6 +25,7 @@ from prometheus_client import start_http_server
 
 import constants
 from data_manager.api.app import create_app
+from data_manager.consumer.decision_consumer import DecisionConsumer
 from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
@@ -67,6 +68,7 @@ class DataManagerApp:
         self.db_manager: DatabaseManager | None = None
         self.consumer: MarketDataConsumer | None = None
         self.intent_consumer: IntentConsumer | None = None
+        self.decision_consumer: DecisionConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
@@ -162,6 +164,14 @@ class DataManagerApp:
             else:
                 logger.error("Failed to start intent consumer")
 
+        # Initialize and start CIO decision consumer (P0.2b)
+        if constants.ENABLE_DECISION_CONSUMER:
+            self.decision_consumer = DecisionConsumer(db_manager=self.db_manager)
+            if await self.decision_consumer.start():
+                logger.info("Decision consumer started successfully")
+            else:
+                logger.error("Failed to start decision consumer")
+
         # Initialize backfill orchestrator
         if self.db_manager and constants.ENABLE_BACKFILLER:
             from data_manager.backfiller.orchestrator import BackfillOrchestrator
@@ -209,6 +219,11 @@ class DataManagerApp:
         if self.intent_consumer:
             await self.intent_consumer.stop()
             logger.info("Intent consumer stopped")
+
+        # Stop decision consumer
+        if self.decision_consumer:
+            await self.decision_consumer.stop()
+            logger.info("Decision consumer stopped")
 
         # Stop API server
         if self.api_server_task:
