@@ -275,6 +275,19 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("timestamp", ASCENDING)]),
                     IndexModel([("action", ASCENDING)]),
                 ]
+            elif collection == "execution_events":
+                # Cross-service identifier contract (P0.2c): `execution_events` collection
+                # The same order_id emits multiple events (placed → filled, etc.)
+                # so neither order_id alone nor decision_id alone is unique;
+                # uniqueness is enforced via the synthesized `_id`
+                # (order_id:event_type) on insert.
+                indexes = [
+                    IndexModel([("decision_id", ASCENDING)]),
+                    IndexModel([("order_id", ASCENDING)]),
+                    IndexModel([("strategy_id", ASCENDING)]),
+                    IndexModel([("timestamp", ASCENDING)]),
+                    IndexModel([("event_type", ASCENDING)]),
+                ]
             else:
                 # Default time-series indexes
                 indexes = [

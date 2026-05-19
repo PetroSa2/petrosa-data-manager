@@ -26,6 +26,7 @@ from prometheus_client import start_http_server
 import constants
 from data_manager.api.app import create_app
 from data_manager.consumer.decision_consumer import DecisionConsumer
+from data_manager.consumer.execution_events_consumer import ExecutionEventsConsumer
 from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.db.database_manager import DatabaseManager
@@ -69,6 +70,7 @@ class DataManagerApp:
         self.consumer: MarketDataConsumer | None = None
         self.intent_consumer: IntentConsumer | None = None
         self.decision_consumer: DecisionConsumer | None = None
+        self.execution_events_consumer: ExecutionEventsConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
@@ -172,6 +174,16 @@ class DataManagerApp:
             else:
                 logger.error("Failed to start decision consumer")
 
+        # Initialize and start execution events consumer (P0.2c)
+        if constants.ENABLE_EXECUTION_EVENTS_CONSUMER:
+            self.execution_events_consumer = ExecutionEventsConsumer(
+                db_manager=self.db_manager
+            )
+            if await self.execution_events_consumer.start():
+                logger.info("Execution events consumer started successfully")
+            else:
+                logger.error("Failed to start execution events consumer")
+
         # Initialize backfill orchestrator
         if self.db_manager and constants.ENABLE_BACKFILLER:
             from data_manager.backfiller.orchestrator import BackfillOrchestrator
@@ -224,6 +236,11 @@ class DataManagerApp:
         if self.decision_consumer:
             await self.decision_consumer.stop()
             logger.info("Decision consumer stopped")
+
+        # Stop execution events consumer
+        if self.execution_events_consumer:
+            await self.execution_events_consumer.stop()
+            logger.info("Execution events consumer stopped")
 
         # Stop API server
         if self.api_server_task:
