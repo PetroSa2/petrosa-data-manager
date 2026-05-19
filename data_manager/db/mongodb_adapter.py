@@ -265,6 +265,16 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("decision_id", ASCENDING)], sparse=True),
                     IndexModel([("timestamp", ASCENDING)]),
                 ]
+            elif collection == "cio_decisions":
+                # Cross-service identifier contract (P0.2b): `cio_decisions` collection
+                # CIO has assigned decision_id by the time it publishes onto
+                # signals.trading.> — so decision_id is the unique key.
+                indexes = [
+                    IndexModel([("decision_id", ASCENDING)], unique=True),
+                    IndexModel([("strategy_id", ASCENDING)]),
+                    IndexModel([("timestamp", ASCENDING)]),
+                    IndexModel([("action", ASCENDING)]),
+                ]
             else:
                 # Default time-series indexes
                 indexes = [
