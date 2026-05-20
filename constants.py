@@ -28,6 +28,13 @@ NATS_TOPIC_EXECUTION_EVENTS = os.getenv(
 NATS_EXECUTION_EVENTS_SUBJECT = os.getenv(
     "NATS_EXECUTION_EVENTS_SUBJECT", f"{NATS_TOPIC_EXECUTION_EVENTS}.>"
 )
+# P0.2d: data-manager itself publishes onto <prefix>.<strategy_id> after the
+# P4.1 P&L computation lands; the subscriber side ships first so the
+# collection + indexes + subscription exist when the publisher comes online.
+NATS_TOPIC_PNL_EVENTS = os.getenv("NATS_TOPIC_PNL_EVENTS", "pnl.events")
+NATS_PNL_EVENTS_SUBJECT = os.getenv(
+    "NATS_PNL_EVENTS_SUBJECT", f"{NATS_TOPIC_PNL_EVENTS}.>"
+)
 NATS_CLIENT_NAME = f"{SERVICE_NAME}-consumer"
 NATS_CONNECT_TIMEOUT = int(os.getenv("NATS_CONNECT_TIMEOUT", "10"))
 NATS_MAX_RECONNECT_ATTEMPTS = int(os.getenv("NATS_MAX_RECONNECT_ATTEMPTS", "10"))
@@ -68,6 +75,7 @@ ENABLE_DECISION_CONSUMER = (
 ENABLE_EXECUTION_EVENTS_CONSUMER = (
     os.getenv("ENABLE_EXECUTION_EVENTS_CONSUMER", "true").lower() == "true"
 )
+ENABLE_PNL_CONSUMER = os.getenv("ENABLE_PNL_CONSUMER", "true").lower() == "true"
 
 # Scheduling Configuration
 AUDIT_INTERVAL = int(os.getenv("AUDIT_INTERVAL", "300"))  # 5 minutes

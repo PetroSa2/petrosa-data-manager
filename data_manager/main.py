@@ -29,6 +29,7 @@ from data_manager.consumer.decision_consumer import DecisionConsumer
 from data_manager.consumer.execution_events_consumer import ExecutionEventsConsumer
 from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
+from data_manager.consumer.pnl_consumer import PnlConsumer
 from data_manager.db.database_manager import DatabaseManager
 
 if TYPE_CHECKING:
@@ -71,6 +72,7 @@ class DataManagerApp:
         self.intent_consumer: IntentConsumer | None = None
         self.decision_consumer: DecisionConsumer | None = None
         self.execution_events_consumer: ExecutionEventsConsumer | None = None
+        self.pnl_consumer: PnlConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
@@ -184,6 +186,17 @@ class DataManagerApp:
             else:
                 logger.error("Failed to start execution events consumer")
 
+        # Initialize and start pnl events consumer (P0.2d). Subscriber-only
+        # today; the publisher side ships with P4.1 P&L computation. The
+        # subscription is harmless until traffic arrives — at which point
+        # the collection + indexes already exist.
+        if constants.ENABLE_PNL_CONSUMER:
+            self.pnl_consumer = PnlConsumer(db_manager=self.db_manager)
+            if await self.pnl_consumer.start():
+                logger.info("Pnl consumer started successfully")
+            else:
+                logger.error("Failed to start pnl consumer")
+
         # Initialize backfill orchestrator
         if self.db_manager and constants.ENABLE_BACKFILLER:
             from data_manager.backfiller.orchestrator import BackfillOrchestrator
@@ -241,6 +254,11 @@ class DataManagerApp:
         if self.execution_events_consumer:
             await self.execution_events_consumer.stop()
             logger.info("Execution events consumer stopped")
+
+        # Stop pnl consumer (P0.2d)
+        if self.pnl_consumer:
+            await self.pnl_consumer.stop()
+            logger.info("Pnl consumer stopped")
 
         # Stop API server
         if self.api_server_task:

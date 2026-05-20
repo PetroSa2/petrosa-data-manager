@@ -288,6 +288,20 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("timestamp", ASCENDING)]),
                     IndexModel([("event_type", ASCENDING)]),
                 ]
+            elif collection == "pnl_events":
+                # Cross-service identifier contract (P0.2d): `pnl_events` collection.
+                # A single decision can produce many P&L events over time
+                # (closed + repeated mark_to_market snapshots), so decision_id
+                # alone is not unique; uniqueness is enforced via the
+                # synthesized `_id` (decision_id:pnl_kind:timestamp_micros)
+                # on insert.
+                indexes = [
+                    IndexModel([("decision_id", ASCENDING)]),
+                    IndexModel([("strategy_id", ASCENDING)]),
+                    IndexModel([("timestamp", ASCENDING)]),
+                    IndexModel([("pnl_kind", ASCENDING)]),
+                    IndexModel([("order_id", ASCENDING)], sparse=True),
+                ]
             else:
                 # Default time-series indexes
                 indexes = [
