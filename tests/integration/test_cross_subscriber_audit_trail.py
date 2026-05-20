@@ -204,6 +204,7 @@ def in_memory_tracer_provider(monkeypatch):
         decision_consumer as dc_mod,
         execution_events_consumer as ec_mod,
         intent_consumer as ic_mod,
+        pnl_consumer as pc_mod,
     )
 
     monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
@@ -220,6 +221,7 @@ def in_memory_tracer_provider(monkeypatch):
         ic_mod: ic_mod.tracer,
         dc_mod: dc_mod.tracer,
         ec_mod: ec_mod.tracer,
+        pc_mod: pc_mod.tracer,
     }
     for mod in saved_tracers:
         mod.tracer = provider.get_tracer(mod.__name__)  # type: ignore[attr-defined]
@@ -515,3 +517,187 @@ async def test_three_leg_logs_carry_decision_id(
         "data_manager.consumer.decision_consumer",
         "data_manager.consumer.execution_events_consumer",
     }, by_logger
+
+
+# ---------------------------------------------------------------------------
+# 4-leg test (P0.2d shipped — subscriber lives in this repo)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def started_consumers_4leg(broker, db_manager):
+    """Like `started_consumers` but also subscribes the PnL consumer.
+
+    Used by the 4-leg test family below. The PnL subscriber lives in
+    data-manager (P0.2d); the publisher side ships with P4.1, so the test
+    simulator stands in for the future publisher.
+    """
+    from data_manager.consumer.decision_consumer import DecisionConsumer
+    from data_manager.consumer.execution_events_consumer import (
+        ExecutionEventsConsumer,
+    )
+    from data_manager.consumer.intent_consumer import IntentConsumer
+    from data_manager.consumer.pnl_consumer import PnlConsumer
+
+    nats = _FakeNATSClient(broker)
+    intent = IntentConsumer(
+        nats_client=nats,  # type: ignore[arg-type]
+        db_manager=db_manager,
+        subject="cio.intent.>",
+    )
+    decision = DecisionConsumer(
+        nats_client=nats,  # type: ignore[arg-type]
+        db_manager=db_manager,
+        subject="signals.trading.>",
+    )
+    execution = ExecutionEventsConsumer(
+        nats_client=nats,  # type: ignore[arg-type]
+        db_manager=db_manager,
+        subject="execution.events.>",
+    )
+    pnl = PnlConsumer(
+        nats_client=nats,  # type: ignore[arg-type]
+        db_manager=db_manager,
+        subject="pnl.events.>",
+    )
+
+    for consumer in (intent, decision, execution, pnl):
+        consumer._owns_nats_client = False
+
+    intent.subscription = await nats.subscribe(
+        subject=intent.subject, callback=intent._process_message
+    )
+    decision.subscription = await nats.subscribe(
+        subject=decision.subject, callback=decision._process_message
+    )
+    execution.subscription = await nats.subscribe(
+        subject=execution.subject, callback=execution._process_message
+    )
+    pnl.subscription = await nats.subscribe(
+        subject=pnl.subject, callback=pnl._process_message
+    )
+
+    yield intent, decision, execution, pnl
+
+    for consumer in (intent, decision, execution, pnl):
+        with contextlib.suppress(Exception):
+            await consumer.subscription.unsubscribe()
+
+
+def _pnl_payload(trace_headers: dict[str, str]) -> dict[str, Any]:
+    return {
+        "decision_id": DECISION_ID,
+        "strategy_id": STRATEGY_ID,
+        "timestamp": _NOW,
+        "pnl_kind": "closed",
+        "realized_pnl_usd": 12.5,
+        "order_id": ORDER_ID,
+        "currency": "USD",
+        "_otel_trace_headers": dict(trace_headers),
+    }
+
+
+async def _publish_four_leg_chain(
+    broker: _FakeNATSBroker, tracer: trace.Tracer
+) -> dict[str, str]:
+    """Publish the four audit-trail events in order under one trace."""
+    import json
+
+    from data_manager.utils.nats_trace_propagator import NATSTracePropagator
+
+    with tracer.start_as_current_span("simulator.audit_trail_chain_4leg") as root:
+        headers: dict[str, str] = {}
+        for span_name, subject, payload_builder in (
+            (
+                "simulator.publish_intent",
+                "cio.intent.trading",
+                _intent_payload,
+            ),
+            (
+                "simulator.publish_decision",
+                f"signals.trading.{SYMBOL}",
+                _decision_payload,
+            ),
+            (
+                "simulator.publish_execution",
+                f"execution.events.{STRATEGY_ID}",
+                _execution_payload,
+            ),
+            (
+                "simulator.publish_pnl",
+                f"pnl.events.{STRATEGY_ID}",
+                _pnl_payload,
+            ),
+        ):
+            with tracer.start_as_current_span(span_name):
+                stub: dict[str, Any] = {}
+                NATSTracePropagator.inject_context(stub)
+                headers = stub.get(NATSTracePropagator.TRACE_HEADERS_FIELD, {})
+                await broker.publish(
+                    subject,
+                    json.dumps(payload_builder(headers)).encode(),
+                )
+        return {"trace_id_hex": format(root.get_span_context().trace_id, "032x")}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_four_leg_round_trip_joins_by_decision_id(
+    in_memory_tracer_provider, broker, db_manager, started_consumers_4leg
+):
+    """All four audit-trail collections receive one doc, joined by decision_id (#140)."""
+    _exporter, provider = in_memory_tracer_provider
+    tracer = provider.get_tracer("test")
+
+    await _publish_four_leg_chain(broker, tracer)
+    await asyncio.sleep(0)
+
+    intents = db_manager.mongodb_adapter.db["intents"].docs
+    decisions = db_manager.mongodb_adapter.db["cio_decisions"].docs
+    executions = db_manager.mongodb_adapter.db["execution_events"].docs
+    pnls = db_manager.mongodb_adapter.db["pnl_events"].docs
+
+    assert len(intents) == 1, intents
+    assert len(decisions) == 1, decisions
+    assert len(executions) == 1, executions
+    assert len(pnls) == 1, pnls
+
+    for collection_docs in (intents, decisions, executions, pnls):
+        assert collection_docs[0]["decision_id"] == DECISION_ID
+        assert collection_docs[0]["strategy_id"] == STRATEGY_ID
+
+    # PnL-specific assertions: kind preserved, realized P&L parsed, _id composite.
+    assert pnls[0]["pnl_kind"] == "closed"
+    assert pnls[0]["realized_pnl_usd"] == 12.5
+    assert pnls[0]["_id"].startswith(f"{DECISION_ID}:closed:")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_four_leg_trace_continuity_single_trace_id(
+    in_memory_tracer_provider, broker, db_manager, started_consumers_4leg
+):
+    """All four persistence spans share the publisher's trace_id (closes umbrella AC)."""
+    exporter, provider = in_memory_tracer_provider
+    tracer = provider.get_tracer("test")
+
+    out = await _publish_four_leg_chain(broker, tracer)
+    await asyncio.sleep(0)
+
+    spans = exporter.get_finished_spans()
+    persistence_span_names = {
+        "persist_intent_event",
+        "persist_decision_event",
+        "persist_execution_event",
+        "persist_pnl_event",
+    }
+    persistence_spans = [s for s in spans if s.name in persistence_span_names]
+    span_names_seen = {s.name for s in persistence_spans}
+    assert span_names_seen == persistence_span_names, span_names_seen
+    assert len(persistence_spans) == 4, [s.name for s in persistence_spans]
+
+    trace_ids = {
+        format(s.get_span_context().trace_id, "032x") for s in persistence_spans
+    }
+    assert len(trace_ids) == 1, trace_ids
+    assert trace_ids == {out["trace_id_hex"]}, (trace_ids, out["trace_id_hex"])
