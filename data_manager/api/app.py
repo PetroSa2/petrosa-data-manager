@@ -22,6 +22,7 @@ from data_manager.api.routes import (
     config,
     data,
     drawdown,
+    fidelity,
     generic,
     health,
     lifecycle,
@@ -140,6 +141,8 @@ def create_app() -> FastAPI:
     app.include_router(lifecycle.router, prefix="/api/v1", tags=["Lifecycle"])
     # Portfolio drawdown vs characterization envelope (#602 P4.2).
     app.include_router(drawdown.router, prefix="/api/v1", tags=["Portfolio"])
+    # Strategy-fidelity evaluator (#594 P2.3).
+    app.include_router(fidelity.router, prefix="/api/v1", tags=["Strategy Fidelity"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
