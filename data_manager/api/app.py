@@ -21,6 +21,7 @@ from data_manager.api.routes import (
     characterizations,
     config,
     data,
+    drawdown,
     generic,
     health,
     lifecycle,
@@ -137,6 +138,8 @@ def create_app() -> FastAPI:
     app.include_router(audit.router, prefix="/api/v1", tags=["Audit Trail"])
     # Lifecycle reconstruction join (#603 P4.3).
     app.include_router(lifecycle.router, prefix="/api/v1", tags=["Lifecycle"])
+    # Portfolio drawdown vs characterization envelope (#602 P4.2).
+    app.include_router(drawdown.router, prefix="/api/v1", tags=["Portfolio"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
