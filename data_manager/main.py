@@ -79,6 +79,7 @@ class DataManagerApp:
         self.ingest_evaluator = None  # P2.2 (#593) — set in start()
         self.execution_evaluator = None  # P2.4 (#595) — set in start()
         self.audit_evaluator = None  # P2.5 (#596) — set in start()
+        self.pnl_publisher = None  # P4.1 follow-up (#652) — set in start()
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -219,8 +220,32 @@ class DataManagerApp:
 
         # Initialize and start execution events consumer (P0.2c)
         if constants.ENABLE_EXECUTION_EVENTS_CONSUMER:
+            # P4.1 follow-up (#652): bind a NATS-backed P&L publisher to the
+            # consumer's `on_persisted` hook so every persisted fill emits a
+            # `pnl.events.<strategy_id>` message. The publisher owns a long-
+            # lived `PnlCalculator` so FIFO lot state survives between fills.
+            on_persisted_hook = None
+            if constants.ENABLE_PNL_PUBLISHER:
+                from data_manager.services.pnl_publisher import PnlEventPublisher
+
+                self.pnl_publisher = PnlEventPublisher(
+                    nats_client=_DeferredNatsClient(
+                        lambda: getattr(self.consumer.nats_client, "nc", None)
+                        if self.consumer is not None
+                        else None
+                    ),
+                )
+                # Cold-start seed: replay the last N days of execution_events
+                # so the FIFO lot state reflects positions opened before this
+                # process started. Absence of mongo (limited mode) is fine —
+                # the calculator just starts empty and the first live fill
+                # opens lots from zero.
+                await self._seed_pnl_calculator(self.pnl_publisher)
+                on_persisted_hook = self.pnl_publisher.on_persisted
+
             self.execution_events_consumer = ExecutionEventsConsumer(
-                db_manager=self.db_manager
+                db_manager=self.db_manager,
+                on_persisted=on_persisted_hook,
             )
             if await self.execution_events_consumer.start():
                 logger.info("Execution events consumer started successfully")
@@ -614,6 +639,56 @@ class DataManagerApp:
             except Exception as exc:
                 logger.warning(f"Audit evaluator tick failed: {exc}")
         logger.info("Audit evaluator loop stopped")
+
+    async def _seed_pnl_calculator(self, publisher) -> None:
+        """Replay historical execution_events to seed the P&L calculator (#652).
+
+        Without seeding, the first fills after a restart would mis-state
+        realized P&L because the FIFO lot state would be empty. We pull
+        ``PNL_PUBLISHER_SEED_DAYS`` of `execution_events` and replay them
+        through `publisher.calculator.apply_fill` without publishing. The
+        replay is best-effort: missing mongo (limited mode) or a query
+        failure both degrade to an empty calculator, which is the same
+        behavior as a true cold start with no prior history.
+        """
+        from datetime import datetime, timedelta
+
+        try:
+            from datetime import UTC
+        except ImportError:  # Python 3.10 compatibility
+            from datetime import timezone
+
+            UTC = timezone.utc  # noqa: UP017
+
+        if not self.db_manager or not getattr(self.db_manager, "mongodb_adapter", None):
+            logger.info(
+                "pnl_publisher_seed_skipped",
+                extra={"reason": "no_mongodb_adapter"},
+            )
+            return
+
+        end = datetime.now(UTC)
+        start = end - timedelta(days=constants.PNL_PUBLISHER_SEED_DAYS)
+        try:
+            rows = await self.db_manager.mongodb_adapter.query_range(
+                "execution_events", start=start, end=end
+            )
+        except Exception as exc:
+            logger.warning(
+                "pnl_publisher_seed_failed",
+                extra={"error": str(exc), "days": constants.PNL_PUBLISHER_SEED_DAYS},
+            )
+            return
+
+        applied = publisher.replay_history(rows)
+        logger.info(
+            "pnl_publisher_seed_complete",
+            extra={
+                "rows_scanned": len(rows),
+                "fills_applied": applied,
+                "days": constants.PNL_PUBLISHER_SEED_DAYS,
+            },
+        )
 
     async def _run_analytics(self) -> None:
         """Run analytics engine in background."""

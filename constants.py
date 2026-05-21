@@ -76,6 +76,16 @@ ENABLE_EXECUTION_EVENTS_CONSUMER = (
     os.getenv("ENABLE_EXECUTION_EVENTS_CONSUMER", "true").lower() == "true"
 )
 ENABLE_PNL_CONSUMER = os.getenv("ENABLE_PNL_CONSUMER", "true").lower() == "true"
+# P4.1 follow-up (#652): publisher side that binds the
+# `ExecutionEventsConsumer.on_persisted` hook to a NATS publisher emitting
+# `pnl.events.<strategy_id>`. Defaults true so a fresh deploy lights up the
+# subject. Set to "false" only when the broker is unavailable (CI w/o NATS)
+# or when temporarily quiescing the publisher during a migration.
+ENABLE_PNL_PUBLISHER = os.getenv("ENABLE_PNL_PUBLISHER", "true").lower() == "true"
+# Lookback window for the cold-start replay that seeds the long-lived
+# PnlCalculator from historical `execution_events`. Operator can shorten
+# this for faster restarts on a backfilled environment.
+PNL_PUBLISHER_SEED_DAYS = int(os.getenv("PNL_PUBLISHER_SEED_DAYS", "30"))
 # P2.4 execution evaluator (#595)
 ENABLE_EXECUTION_EVALUATOR = (
     os.getenv("ENABLE_EXECUTION_EVALUATOR", "true").lower() == "true"
