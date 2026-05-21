@@ -15,6 +15,7 @@ from data_manager.api.middleware import MetricsMiddleware, RequestLoggerMiddlewa
 from data_manager.api.routes import (
     analysis,
     anomalies,
+    audit,
     backfill,
     catalog,
     characterizations,
@@ -131,6 +132,8 @@ def create_app() -> FastAPI:
         tags=["Strategy Timeline"],
     )
     app.include_router(pnl.router, prefix="/api/v1", tags=["P&L"])
+    # Cross-service decision audit-trail (#605 P4.5).
+    app.include_router(audit.router, prefix="/api/v1", tags=["Audit Trail"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
