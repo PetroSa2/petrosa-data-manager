@@ -360,11 +360,24 @@ class DataManagerApp:
         # Import here to avoid circular dependency
         from data_manager.auditor.scheduler import AuditScheduler
 
+        # Per #634: thread the underlying nats-py client into the
+        # scheduler so the P2.1 evaluator framework can publish
+        # `evaluator.data-manager.verdict` after each audit cycle.
+        # `self.consumer.nats_client.nc` is the raw nats.aio.client.Client
+        # the framework's `NatsVerdictPublisher` expects. Fall back to
+        # ``None`` when the consumer hasn't connected (e.g. local dev
+        # without a broker) — the scheduler then runs without publishing,
+        # which is safe and was the legacy behavior.
+        evaluator_nats_client = None
+        if self.consumer is not None and getattr(self.consumer, "nats_client", None):
+            evaluator_nats_client = getattr(self.consumer.nats_client, "nc", None)
+
         try:
             audit_scheduler = AuditScheduler(
                 self.db_manager,
                 leader_election=self.leader_election,
                 backfill_orchestrator=self.backfill_orchestrator,
+                nats_client=evaluator_nats_client,
             )
             await audit_scheduler.start()
         except Exception as e:
