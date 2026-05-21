@@ -76,6 +76,13 @@ ENABLE_EXECUTION_EVENTS_CONSUMER = (
     os.getenv("ENABLE_EXECUTION_EVENTS_CONSUMER", "true").lower() == "true"
 )
 ENABLE_PNL_CONSUMER = os.getenv("ENABLE_PNL_CONSUMER", "true").lower() == "true"
+ENABLE_AUDIT_EVALUATOR = os.getenv("ENABLE_AUDIT_EVALUATOR", "true").lower() == "true"
+# P2.5 audit evaluator tick cadence (seconds). Default 5 min so each tick's
+# consume/persist delta covers a meaningful slice without thrashing.
+AUDIT_EVALUATOR_TICK_INTERVAL = int(os.getenv("AUDIT_EVALUATOR_TICK_INTERVAL", "300"))
+# How long the audit evaluator looks back when checking propagation and
+# join completeness on each tick.
+AUDIT_EVALUATOR_LOOKBACK_S = int(os.getenv("AUDIT_EVALUATOR_LOOKBACK_S", "1800"))
 
 # Scheduling Configuration
 AUDIT_INTERVAL = int(os.getenv("AUDIT_INTERVAL", "300"))  # 5 minutes
