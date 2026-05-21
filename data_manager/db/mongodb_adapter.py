@@ -206,6 +206,72 @@ class MongoDBAdapter(BaseAdapter):
         except PyMongoError as e:
             raise DatabaseError(f"Failed to query latest from {collection}: {e}") from e
 
+    async def find_filtered(
+        self,
+        collection: str,
+        *,
+        filters: dict[str, Any] | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 100,
+        sort_field: str = "timestamp",
+        sort_order: int = -1,
+    ) -> list[dict[str, Any]]:
+        """Query a collection with a composable equality + time-window filter.
+
+        The cross-service audit-trail surface (#605 P4.5) needs to filter
+        ``cio_decisions`` by arbitrary indexed fields (``strategy_id``,
+        ``action``, ``decision_id``) without bolting more named parameters
+        onto :meth:`query_latest`. ``filters`` accepts ``{column: value}``
+        pairs and is composed with the optional ``[start, end)``
+        time-window via Mongo's ``$gte`` / ``$lt`` operators.
+
+        Args:
+            collection: target collection name.
+            filters: equality filters as ``{field: value}``; ``None``
+                values are skipped so callers can pass through optional
+                request params without branching.
+            start: inclusive lower bound on ``sort_field`` (typically
+                ``timestamp``).
+            end: exclusive upper bound on ``sort_field``.
+            limit: hard cap on returned documents (caller enforces sanity).
+            sort_field: field to sort + window on (defaults to ``timestamp``).
+            sort_order: 1 (ASC) or -1 (DESC, default — newest first).
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        try:
+            coll = self.db[collection]
+
+            query: dict[str, Any] = {}
+            if filters:
+                for field, value in filters.items():
+                    if value is None:
+                        continue
+                    query[field] = value
+            if start is not None or end is not None:
+                window: dict[str, Any] = {}
+                if start is not None:
+                    window["$gte"] = start
+                if end is not None:
+                    window["$lt"] = end
+                if window:
+                    query[sort_field] = window
+
+            cursor = coll.find(query).sort(sort_field, sort_order).limit(limit)
+            documents = await cursor.to_list(length=limit)
+
+            for doc in documents:
+                doc.pop("_id", None)
+
+            return documents
+
+        except PyMongoError as e:
+            raise DatabaseError(
+                f"Failed to query {collection} with filters: {e}"
+            ) from e
+
     async def get_record_count(
         self,
         collection: str,
