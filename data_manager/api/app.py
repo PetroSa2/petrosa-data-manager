@@ -24,6 +24,7 @@ from data_manager.api.routes import (
     health,
     raw,
     schemas,
+    strategy_timeline,
 )
 
 try:
@@ -122,6 +123,11 @@ def create_app() -> FastAPI:
         characterizations.router,
         prefix="/api/v1",
         tags=["Characterizations"],
+    )
+    app.include_router(
+        strategy_timeline.router,
+        prefix="/api/v1",
+        tags=["Strategy Timeline"],
     )
 
     # New API routes
