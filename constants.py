@@ -76,6 +76,17 @@ ENABLE_EXECUTION_EVENTS_CONSUMER = (
     os.getenv("ENABLE_EXECUTION_EVENTS_CONSUMER", "true").lower() == "true"
 )
 ENABLE_PNL_CONSUMER = os.getenv("ENABLE_PNL_CONSUMER", "true").lower() == "true"
+# P2.4 execution evaluator (#595)
+ENABLE_EXECUTION_EVALUATOR = (
+    os.getenv("ENABLE_EXECUTION_EVALUATOR", "true").lower() == "true"
+)
+# P2.4 evaluator tick cadence. Default ≈ half the error-rate window so a
+# committed-unhealthy verdict surfaces within roughly one detection-time
+# budget after the underlying anomaly begins.
+EXECUTION_EVALUATOR_TICK_INTERVAL = int(
+    os.getenv("EXECUTION_EVALUATOR_TICK_INTERVAL", "150")
+)
+# P2.5 audit evaluator (#596)
 ENABLE_AUDIT_EVALUATOR = os.getenv("ENABLE_AUDIT_EVALUATOR", "true").lower() == "true"
 # P2.5 audit evaluator tick cadence (seconds). Default 5 min so each tick's
 # consume/persist delta covers a meaningful slice without thrashing.
