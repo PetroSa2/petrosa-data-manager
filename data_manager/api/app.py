@@ -17,6 +17,7 @@ from data_manager.api.routes import (
     anomalies,
     backfill,
     catalog,
+    characterizations,
     config,
     data,
     generic,
@@ -117,6 +118,11 @@ def create_app() -> FastAPI:
     app.include_router(catalog.router, prefix="/catalog", tags=["Catalog"])
     app.include_router(backfill.router, prefix="/backfill", tags=["Backfill"])
     app.include_router(anomalies.router, prefix="/anomalies", tags=["Anomalies"])
+    app.include_router(
+        characterizations.router,
+        prefix="/api/v1",
+        tags=["Characterizations"],
+    )
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
