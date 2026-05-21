@@ -105,23 +105,107 @@ async def get_volatility(
 async def get_strategy_performance(strategy_id: str):
     """
     Returns historical performance metrics for a specific strategy.
-    Currently returns an initialized healthy baseline while historical
-    trade aggregation logic is being finalized.
+
+    Computes a real win-rate + recent-P&L trend by replaying the
+    persisted `execution_events` fills through the FIFO P&L calculator
+    (P4.1, #601). When the database is unavailable or no fills exist,
+    the response degrades to a "no-data" payload rather than failing
+    the request.
     """
     try:
-        # TODO: Integrate with trade_history collection for real WR/PnL calculation
-        # For initial unblocking, return healthy baseline
+        import data_manager.api.app as api_module
+        from data_manager.services.pnl_calculator import PnlCalculator
+
+        if not api_module.db_manager or not getattr(
+            api_module.db_manager, "mongodb_adapter", None
+        ):
+            return {
+                "stats": {
+                    "win_rate": None,
+                    "win_rate_delta": None,
+                    "consecutive_losses": None,
+                    "recent_pnl_trend": "unknown",
+                },
+                "metadata": {
+                    "strategy_id": strategy_id,
+                    "calculated_at": datetime.now(UTC).isoformat(),
+                    "source": "data-manager-analysis-no-db",
+                },
+            }
+
+        mongodb = api_module.db_manager.mongodb_adapter
+        try:
+            cursor = (
+                mongodb.db["execution_events"]
+                .find(
+                    {
+                        "strategy_id": strategy_id,
+                        "event_type": {"$in": ["filled", "partial_fill"]},
+                    }
+                )
+                .sort("timestamp", 1)
+            )
+            rows = await cursor.to_list(length=None)
+        except Exception as exc:
+            # A misconfigured / mock adapter (or a transient MongoDB
+            # error) degrades to the no-data payload rather than 500ing.
+            # Real errors still get logged for ops to investigate.
+            logger.warning(
+                "performance: execution_events read failed for %s: %s",
+                strategy_id,
+                exc,
+            )
+            return {
+                "stats": {
+                    "win_rate": None,
+                    "win_rate_delta": None,
+                    "consecutive_losses": None,
+                    "recent_pnl_trend": "unknown",
+                },
+                "metadata": {
+                    "strategy_id": strategy_id,
+                    "calculated_at": datetime.now(UTC).isoformat(),
+                    "source": "data-manager-analysis-no-db",
+                },
+            }
+
+        calc = PnlCalculator()
+        wins = 0
+        losses = 0
+        for row in rows:
+            impact = calc.apply_fill(row)
+            if impact is None or impact.realized_pnl == 0:
+                continue
+            if impact.realized_pnl > 0:
+                wins += 1
+            else:
+                losses += 1
+
+        decisions = wins + losses
+        win_rate = (wins / decisions) if decisions else None
+        breakdown = calc.strategy_pnl(strategy_id)
+        recent_trend = (
+            "positive"
+            if breakdown.total > 0
+            else "negative"
+            if breakdown.total < 0
+            else "flat"
+        )
+
         return {
             "stats": {
-                "win_rate": 0.62,
-                "win_rate_delta": 0.02,
-                "consecutive_losses": 0,
-                "recent_pnl_trend": "positive",
+                "win_rate": win_rate,
+                "win_rate_delta": None,
+                "consecutive_losses": None,
+                "recent_pnl_trend": recent_trend,
+                "realized_pnl": breakdown.realized,
+                "unrealized_pnl": breakdown.unrealized,
             },
             "metadata": {
                 "strategy_id": strategy_id,
                 "calculated_at": datetime.now(UTC).isoformat(),
-                "source": "data-manager-analysis-baseline",
+                "source": "data-manager-pnl-calculator",
+                "fills_replayed": len(rows),
             },
         }
     except Exception as e:

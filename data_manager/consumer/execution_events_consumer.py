@@ -66,6 +66,7 @@ class ExecutionEventsConsumer:
         nats_client: NATSClient | None = None,
         db_manager: Any | None = None,
         subject: str | None = None,
+        on_persisted: Any | None = None,
     ) -> None:
         self.nats_client = nats_client or NATSClient()
         self.db_manager = db_manager
@@ -77,6 +78,12 @@ class ExecutionEventsConsumer:
         )
         self._processing_tasks: list[asyncio.Task] = []
         self._owns_nats_client = nats_client is None
+        # P4.1 (#601): after a fill is successfully persisted, this
+        # awaitable is invoked with the `ExecutionEvent`. The hook is
+        # responsible for any downstream side-effects (publishing
+        # `pnl.events.<strategy_id>` in the production wiring).
+        # Optional so this consumer remains usable in isolation.
+        self._on_persisted = on_persisted
 
     async def start(self) -> bool:
         try:
@@ -240,6 +247,21 @@ class ExecutionEventsConsumer:
                 execution_messages_persisted.inc()
                 logger.info("execution_event_persisted", extra=log_extra)
                 span.set_status(trace.Status(trace.StatusCode.OK))
+                # P4.1 (#601): hand the just-persisted event to the
+                # optional `on_persisted` hook (the production wiring
+                # publishes pnl.events on fills). Hook errors must NOT
+                # poison the consumer's main path.
+                if self._on_persisted is not None:
+                    try:
+                        await self._on_persisted(event)
+                    except Exception as hook_exc:
+                        logger.warning(
+                            "execution_event_on_persisted_hook_failed",
+                            extra={
+                                **log_extra,
+                                "error": str(hook_exc),
+                            },
+                        )
             else:
                 execution_messages_failed.labels(error_type="persistence").inc()
                 logger.warning("execution_event_persistence_skipped", extra=log_extra)

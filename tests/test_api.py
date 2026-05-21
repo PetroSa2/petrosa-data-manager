@@ -86,7 +86,15 @@ def test_catalog_datasets_endpoint(client):
 
 
 def test_strategy_performance_endpoint(client):
-    """Test strategy performance analytics endpoint."""
+    """Test strategy performance analytics endpoint.
+
+    Per #601 the stub at `/analysis/performance/{strategy_id}` now
+    replays persisted `execution_events` through the FIFO P&L
+    calculator. The shared `mock_db_manager` fixture does not wire a
+    fully-functional Mongo adapter, so the endpoint should degrade to
+    the no-db payload (200 / source=data-manager-analysis-no-db)
+    OR succeed with the calculator source — either is acceptable.
+    """
     strategy_id = "test_momentum_v1"
     response = client.get(f"/analysis/performance/{strategy_id}")
     assert response.status_code == 200
@@ -94,4 +102,7 @@ def test_strategy_performance_endpoint(client):
     assert "stats" in data
     assert "win_rate" in data["stats"]
     assert data["metadata"]["strategy_id"] == strategy_id
-    assert data["metadata"]["source"] == "data-manager-analysis-baseline"
+    assert data["metadata"]["source"] in {
+        "data-manager-pnl-calculator",
+        "data-manager-analysis-no-db",
+    }
