@@ -11,6 +11,7 @@ from opentelemetry import trace
 from prometheus_client import Counter, Histogram
 
 import constants
+from data_manager.auditor.ingest_evaluator import IngestEvaluator
 from data_manager.consumer.message_handler import MessageHandler
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.events import MarketDataEvent
@@ -52,10 +53,16 @@ class MarketDataConsumer:
         nats_client: NATSClient | None = None,
         message_handler: MessageHandler | None = None,
         db_manager: Any | None = None,
+        ingest_evaluator: IngestEvaluator | None = None,
     ) -> None:
         self.nats_client = nats_client or NATSClient()
         self.db_manager = db_manager
         self.message_handler = message_handler or MessageHandler(db_manager=db_manager)
+        # Per #593 (P2.2): consumer feeds the ingest evaluator each time
+        # a message arrives or fails parsing. The evaluator may be None
+        # (e.g. tests, local dev) — record_message/record_parse_failure
+        # are tolerant of missing state.
+        self.ingest_evaluator = ingest_evaluator
         self.running = False
         self.subscription = None
         self._message_queue: asyncio.Queue = asyncio.Queue(
@@ -210,10 +217,17 @@ class MarketDataConsumer:
                         },
                     )
                     messages_received.labels(event_type="invalid").inc()
+                    if self.ingest_evaluator is not None:
+                        self.ingest_evaluator.record_parse_failure(msg.subject)
                     return
 
                 event_type = event.event_type.value
                 messages_received.labels(event_type=event_type).inc()
+
+                if self.ingest_evaluator is not None:
+                    self.ingest_evaluator.record_message(
+                        msg.subject, payload_timestamp=event.timestamp
+                    )
 
                 # Add event details to span
                 span.set_attribute("event.type", event_type)
@@ -248,10 +262,14 @@ class MarketDataConsumer:
             messages_failed.labels(
                 event_type=event_type, error_type="json_decode"
             ).inc()
+            if self.ingest_evaluator is not None:
+                self.ingest_evaluator.record_parse_failure(msg.subject)
 
         except Exception as e:
             logger.error(f"Failed to process message: {e}", exc_info=True)
             messages_failed.labels(event_type=event_type, error_type="processing").inc()
+            if self.ingest_evaluator is not None:
+                self.ingest_evaluator.record_parse_failure(msg.subject)
 
     async def _report_stats(self) -> None:
         """Periodically report processing statistics at INFO level."""
