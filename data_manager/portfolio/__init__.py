@@ -1,8 +1,17 @@
-"""Portfolio-level analytics: drawdown vs characterization envelope (P4.2, #602)."""
+"""Portfolio-level analytics: drawdown surface (#602) + state-at-time-T (#604)."""
 
 from data_manager.portfolio.drawdown_service import (
     DrawdownResult,
     DrawdownService,
 )
+from data_manager.portfolio.state_service import (
+    PortfolioStateAtTime,
+    PortfolioStateService,
+)
 
-__all__ = ["DrawdownResult", "DrawdownService"]
+__all__ = [
+    "DrawdownResult",
+    "DrawdownService",
+    "PortfolioStateAtTime",
+    "PortfolioStateService",
+]
