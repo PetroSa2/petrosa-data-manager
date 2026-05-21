@@ -23,6 +23,7 @@ from data_manager.api.routes import (
     data,
     generic,
     health,
+    lifecycle,
     pnl,
     raw,
     schemas,
@@ -134,6 +135,8 @@ def create_app() -> FastAPI:
     app.include_router(pnl.router, prefix="/api/v1", tags=["P&L"])
     # Cross-service decision audit-trail (#605 P4.5).
     app.include_router(audit.router, prefix="/api/v1", tags=["Audit Trail"])
+    # Lifecycle reconstruction join (#603 P4.3).
+    app.include_router(lifecycle.router, prefix="/api/v1", tags=["Lifecycle"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
