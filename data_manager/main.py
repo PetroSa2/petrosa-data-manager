@@ -78,6 +78,7 @@ class DataManagerApp:
         self.backfill_orchestrator: BackfillOrchestrator | None = None
         self.ingest_evaluator = None  # P2.2 (#593) — set in start()
         self.execution_evaluator = None  # P2.4 (#595) — set in start()
+        self.audit_evaluator = None  # P2.5 (#596) — set in start()
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -258,6 +259,71 @@ class DataManagerApp:
             )
             asyncio.create_task(self._run_execution_evaluator_loop())
             logger.info("Execution evaluator started successfully")
+
+        # Initialize and start audit evaluator (P2.5, #596). Runs over the
+        # `intents`, `cio_decisions`, and `execution_events` collections
+        # plus the Prometheus receipt/persist counters on each consumer.
+        if constants.ENABLE_AUDIT_EVALUATOR and self.db_manager is not None:
+            from petrosa_otel.evaluators import NatsVerdictPublisher
+
+            from data_manager.auditor.audit_evaluator import AuditEvaluator
+            from data_manager.consumer.decision_consumer import (
+                decision_messages_persisted,
+                decision_messages_received,
+            )
+            from data_manager.consumer.execution_events_consumer import (
+                execution_messages_persisted,
+                execution_messages_received,
+            )
+            from data_manager.consumer.intent_consumer import (
+                intent_messages_persisted,
+                intent_messages_received,
+            )
+
+            def _sum_metric(metric) -> int:
+                """Sum every sample of a prometheus Counter, label or no label."""
+                total = 0
+                for family in metric.collect():
+                    for sample in family.samples:
+                        if sample.name.endswith("_total"):
+                            total += int(sample.value)
+                return total
+
+            def _audit_counter_source() -> dict[str, tuple[int, int]]:
+                return {
+                    "intent": (
+                        _sum_metric(intent_messages_received),
+                        _sum_metric(intent_messages_persisted),
+                    ),
+                    "decision": (
+                        _sum_metric(decision_messages_received),
+                        _sum_metric(decision_messages_persisted),
+                    ),
+                    "execution": (
+                        _sum_metric(execution_messages_received),
+                        _sum_metric(execution_messages_persisted),
+                    ),
+                }
+
+            audit_mongodb = self.db_manager.mongodb_adapter
+
+            async def _audit_event_source(collection, start, end):
+                return await audit_mongodb.query_range(collection, start=start, end=end)
+
+            self.audit_evaluator = AuditEvaluator(
+                counter_source=_audit_counter_source,
+                event_source=_audit_event_source,
+                lookback_s=constants.AUDIT_EVALUATOR_LOOKBACK_S,
+                publisher=NatsVerdictPublisher(
+                    nats_client=_DeferredNatsClient(
+                        lambda: getattr(self.consumer.nats_client, "nc", None)
+                        if self.consumer is not None
+                        else None
+                    )
+                ),
+            )
+            asyncio.create_task(self._run_audit_evaluator_loop())
+            logger.info("Audit evaluator started successfully")
 
         # Initialize and start pnl events consumer (P0.2d). Subscriber-only
         # today; the publisher side ships with P4.1 P&L computation. The
@@ -519,6 +585,35 @@ class DataManagerApp:
             except Exception as exc:
                 logger.warning(f"Execution evaluator tick failed: {exc}")
         logger.info("Execution evaluator loop stopped")
+
+    async def _run_audit_evaluator_loop(self) -> None:
+        """Periodic tick loop for the P2.5 audit evaluator (#596).
+
+        Default cadence (5 min) gives the consume-without-persist detector
+        a meaningful slice between snapshots; shorter cadences cause
+        oscillation when persistence batches lag receipts by one tick.
+        """
+        interval = max(
+            5,
+            int(
+                getattr(
+                    constants,
+                    "AUDIT_EVALUATOR_TICK_INTERVAL",
+                    300,
+                )
+            ),
+        )
+        logger.info(f"Audit evaluator loop started (interval={interval}s)")
+        while self.running:
+            try:
+                await asyncio.sleep(interval)
+                if self.audit_evaluator is not None:
+                    await self.audit_evaluator.tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(f"Audit evaluator tick failed: {exc}")
+        logger.info("Audit evaluator loop stopped")
 
     async def _run_analytics(self) -> None:
         """Run analytics engine in background."""
