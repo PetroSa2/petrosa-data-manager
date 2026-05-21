@@ -77,6 +77,7 @@ class DataManagerApp:
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
         self.ingest_evaluator = None  # P2.2 (#593) — set in start()
+        self.execution_evaluator = None  # P2.4 (#595) — set in start()
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -224,6 +225,39 @@ class DataManagerApp:
                 logger.info("Execution events consumer started successfully")
             else:
                 logger.error("Failed to start execution events consumer")
+
+        # Initialize and start execution evaluator (P2.4, #595). Runs over
+        # the `execution_events` collection persisted by the consumer above.
+        # The consumer is the precondition: without P0.2c traffic, the
+        # evaluator's provider returns no rows and it stays in "unknown".
+        if constants.ENABLE_EXECUTION_EVALUATOR and self.db_manager is not None:
+            from petrosa_otel.evaluators import NatsVerdictPublisher
+
+            from data_manager.auditor.execution_evaluator import (
+                ExecutionEvaluator,
+            )
+
+            mongodb_adapter = self.db_manager.mongodb_adapter
+
+            async def _execution_event_provider(start, end):
+                # Pulled via closure so the evaluator never needs to know
+                # about the database manager directly.
+                return await mongodb_adapter.query_range(
+                    "execution_events", start=start, end=end
+                )
+
+            self.execution_evaluator = ExecutionEvaluator(
+                event_provider=_execution_event_provider,
+                publisher=NatsVerdictPublisher(
+                    nats_client=_DeferredNatsClient(
+                        lambda: getattr(self.consumer.nats_client, "nc", None)
+                        if self.consumer is not None
+                        else None
+                    )
+                ),
+            )
+            asyncio.create_task(self._run_execution_evaluator_loop())
+            logger.info("Execution evaluator started successfully")
 
         # Initialize and start pnl events consumer (P0.2d). Subscriber-only
         # today; the publisher side ships with P4.1 P&L computation. The
@@ -456,6 +490,35 @@ class DataManagerApp:
             except Exception as exc:
                 logger.warning(f"Ingest evaluator tick failed: {exc}")
         logger.info("Ingest evaluator loop stopped")
+
+    async def _run_execution_evaluator_loop(self) -> None:
+        """Periodic tick loop for the P2.4 execution evaluator (#595).
+
+        Cadence is half of the error-rate window by default so a
+        committed-unhealthy verdict surfaces within roughly one
+        detection-time budget after the underlying anomaly begins.
+        """
+        interval = max(
+            5,
+            int(
+                getattr(
+                    constants,
+                    "EXECUTION_EVALUATOR_TICK_INTERVAL",
+                    150,
+                )
+            ),
+        )
+        logger.info(f"Execution evaluator loop started (interval={interval}s)")
+        while self.running:
+            try:
+                await asyncio.sleep(interval)
+                if self.execution_evaluator is not None:
+                    await self.execution_evaluator.tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(f"Execution evaluator tick failed: {exc}")
+        logger.info("Execution evaluator loop stopped")
 
     async def _run_analytics(self) -> None:
         """Run analytics engine in background."""
