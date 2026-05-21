@@ -76,6 +76,7 @@ class DataManagerApp:
         self.api_server_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
+        self.ingest_evaluator = None  # P2.2 (#593) — set in start()
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -152,11 +153,49 @@ class DataManagerApp:
                 )
                 self.leader_election = None
 
-        # Initialize and start NATS consumer
+        # Initialize and start NATS consumer.
+        # Per #593 (P2.2): wire the consumer to the ingest evaluator
+        # before starting it so the very first message is recorded. The
+        # publisher uses the raw nats.aio.client.Client we hand it; for
+        # the first start the consumer has not yet connected, so we
+        # construct the publisher with a deferred lookup via a tiny
+        # adapter — the evaluator only tries to publish on tick(), which
+        # runs after the consumer is connected.
         if constants.ENABLE_API or True:  # Always start consumer for now
-            self.consumer = MarketDataConsumer(db_manager=self.db_manager)
+            from petrosa_otel.evaluators import NatsVerdictPublisher
+
+            from data_manager.auditor.ingest_evaluator import IngestEvaluator
+
+            class _DeferredNatsClient:
+                """Forwards publish() to consumer.nats_client.nc after start."""
+
+                def __init__(self, get_nc):
+                    self._get_nc = get_nc
+
+                async def publish(self, subject, payload):
+                    nc = self._get_nc()
+                    if nc is None:
+                        return
+                    await nc.publish(subject, payload)
+
+            self.ingest_evaluator = IngestEvaluator(
+                subjects=[constants.NATS_CONSUMER_SUBJECT],
+                publisher=NatsVerdictPublisher(
+                    nats_client=_DeferredNatsClient(
+                        lambda: getattr(self.consumer.nats_client, "nc", None)
+                        if self.consumer is not None
+                        else None
+                    )
+                ),
+            )
+            self.consumer = MarketDataConsumer(
+                db_manager=self.db_manager,
+                ingest_evaluator=self.ingest_evaluator,
+            )
             if await self.consumer.start():
                 logger.info("Market data consumer started successfully")
+                # Start the periodic ingest-evaluator tick loop.
+                asyncio.create_task(self._run_ingest_evaluator_loop())
             else:
                 logger.error("Failed to start market data consumer")
 
@@ -384,6 +423,39 @@ class DataManagerApp:
             logger.error(f"Error in auditor: {e}", exc_info=True)
 
         logger.info("Auditor stopped")
+
+    async def _run_ingest_evaluator_loop(self) -> None:
+        """Periodic tick loop for the P2.2 ingest evaluator (#593).
+
+        Runs the evaluator at roughly half the silence threshold so
+        the silence detector commits its post-hysteresis verdict
+        within the NFR-R1 detection-time window.
+        """
+        from data_manager.auditor.ingest_evaluator import (
+            DEFAULT_SILENCE_THRESHOLD_S,
+        )
+
+        interval = max(
+            5,
+            int(
+                getattr(
+                    constants,
+                    "INGEST_EVALUATOR_TICK_INTERVAL",
+                    DEFAULT_SILENCE_THRESHOLD_S // 2,
+                )
+            ),
+        )
+        logger.info(f"Ingest evaluator loop started (interval={interval}s)")
+        while self.running:
+            try:
+                await asyncio.sleep(interval)
+                if self.ingest_evaluator is not None:
+                    await self.ingest_evaluator.tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(f"Ingest evaluator tick failed: {exc}")
+        logger.info("Ingest evaluator loop stopped")
 
     async def _run_analytics(self) -> None:
         """Run analytics engine in background."""
