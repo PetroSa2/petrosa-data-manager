@@ -27,6 +27,7 @@ from data_manager.api.routes import (
     health,
     lifecycle,
     pnl,
+    portfolio_state,
     raw,
     schemas,
     strategy_timeline,
@@ -143,6 +144,10 @@ def create_app() -> FastAPI:
     app.include_router(drawdown.router, prefix="/api/v1", tags=["Portfolio"])
     # Strategy-fidelity evaluator (#594 P2.3).
     app.include_router(fidelity.router, prefix="/api/v1", tags=["Strategy Fidelity"])
+    # Portfolio state-at-time-T query (#604 P4.4).
+    app.include_router(
+        portfolio_state.router, prefix="/api/v1", tags=["Portfolio State"]
+    )
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
