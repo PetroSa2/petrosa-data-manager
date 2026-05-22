@@ -300,6 +300,11 @@ export default function TimeSlider() {
   }, [fetchStartedAt]);
 
   const debounceRef = useRef<number | null>(null);
+  // Request id rises monotonically. Each in-flight fetch carries the id it
+  // was issued under; only the latest gets to write state. Without this, a
+  // slow earlier fetch resolving after a faster later one would overwrite
+  // the slider's current target with stale data.
+  const requestIdRef = useRef<number>(0);
   const runFetch = useCallback(
     (iso: string) => {
       if (debounceRef.current !== null) {
@@ -307,17 +312,18 @@ export default function TimeSlider() {
       }
       debounceRef.current = window.setTimeout(() => {
         debounceRef.current = null;
+        const myId = ++requestIdRef.current;
         const started = Date.now();
         setFetchStartedAt(started);
         setLoading(true);
         fetchPortfolioStateAt(iso)
           .then((d) => {
-            if (!aliveRef.current) return;
+            if (!aliveRef.current || myId !== requestIdRef.current) return;
             setData(d);
             setError(null);
           })
           .catch((e: unknown) => {
-            if (!aliveRef.current) return;
+            if (!aliveRef.current || myId !== requestIdRef.current) return;
             setError(
               e instanceof ApiError
                 ? e
@@ -325,7 +331,7 @@ export default function TimeSlider() {
             );
           })
           .finally(() => {
-            if (!aliveRef.current) return;
+            if (!aliveRef.current || myId !== requestIdRef.current) return;
             setLoading(false);
             setFetchStartedAt(null);
           });
