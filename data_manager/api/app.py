@@ -20,6 +20,7 @@ from data_manager.api.routes import (
     catalog,
     characterizations,
     config,
+    dashboard,
     data,
     drawdown,
     fidelity,
@@ -148,6 +149,11 @@ def create_app() -> FastAPI:
     app.include_router(
         portfolio_state.router, prefix="/api/v1", tags=["Portfolio State"]
     )
+
+    # Operator dashboard backend API surface (#644 P5.1a). Thin façade over
+    # the existing service-layer code that powers /api/v1. Mounted at
+    # /api/dashboard so the SPA contract is decoupled from /api/v1.
+    app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
