@@ -195,3 +195,71 @@ export interface StrategyListPayload {
 export function fetchStrategyList(): Promise<StrategyListPayload> {
   return getJson<StrategyListPayload>(`/api/v1/config/strategies`);
 }
+
+// Time-slider reconstruction (FR34, P5.1d). The shape mirrors
+// PortfolioStateAtTime.to_dict() in data_manager/portfolio/state_service.py;
+// the recent_* arrays are deliberately loose because each row carries
+// per-collection fields. Sub-second drift between Mongo timestamps and the
+// `at` query parameter is expected — the slider quantises to seconds.
+export interface PortfolioEventRow {
+  // Every recent_* row has either `timestamp` (decisions/executions) or
+  // `event_ts`/equivalent (pnl_events); the slider only depends on
+  // `decision_id` for the deep-link and on `timestamp`-ish for sort order.
+  // Keep the type open so the renderer can pull whatever the collection
+  // happens to expose without forcing a backend change.
+  [key: string]: unknown;
+  decision_id?: string;
+  timestamp?: string;
+}
+
+export interface PortfolioStateAtTimePayload {
+  at: string;
+  strategy_id: string | null;
+  cumulative_realized_pnl_usd: number;
+  latest_unrealized_pnl_usd: number;
+  current_equity_usd: number;
+  peak_equity_usd: number;
+  current_drawdown_pct: number;
+  open_positions: PortfolioEventRow[];
+  recent_decisions: PortfolioEventRow[];
+  recent_executions: PortfolioEventRow[];
+  recent_pnl_events: PortfolioEventRow[];
+  events_evaluated: number;
+}
+
+export function fetchPortfolioStateAt(
+  at: string,
+  strategy_id?: string | null,
+): Promise<PortfolioStateAtTimePayload> {
+  const q = new URLSearchParams({ at });
+  if (strategy_id) q.set("strategy_id", strategy_id);
+  return getJson<PortfolioStateAtTimePayload>(
+    `/api/dashboard/portfolio/state?${q.toString()}`,
+  );
+}
+
+// Per-decision lifecycle reconstruction (FR34 detail panel; P4.3 #603).
+export interface LifecycleReconstructionPayload {
+  decision_id: string;
+  decision: Record<string, unknown>;
+  intents: Record<string, unknown>[];
+  executions: Record<string, unknown>[];
+  pnl_events: Record<string, unknown>[];
+  summary: {
+    action: string | null;
+    strategy_id: string | null;
+    decision_timestamp: string | null;
+    executions_count: number;
+    pnl_events_count: number;
+    has_filled: boolean;
+    realized_pnl_usd: number | null;
+  };
+}
+
+export function fetchLifecycleByDecisionId(
+  decision_id: string,
+): Promise<LifecycleReconstructionPayload> {
+  return getJson<LifecycleReconstructionPayload>(
+    `/api/dashboard/lifecycle/${encodeURIComponent(decision_id)}`,
+  );
+}
