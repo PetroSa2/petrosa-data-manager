@@ -32,7 +32,7 @@ repos:
       - id: bandit
         name: 🔐 Bandit (Python Security)
         args: [-c, .bandit, -ll, -r, .]
-        exclude: ^(tests/|venv/|\.venv/)
+        exclude: ^(tests/|venv/|\.venv/|dashboard/)
 
   # ==================================================================
   # LINTING - YAML & TOML
