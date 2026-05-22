@@ -8,6 +8,24 @@ env:
   NAMESPACE: petrosa-apps
 
 jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: petrosa-org-runners
+    outputs:
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Path filter
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            dashboard:
+              - 'dashboard/**'
+
   create-release:
     name: Create Release
     runs-on: petrosa-org-runners
@@ -90,6 +108,58 @@ jobs:
           COMMIT_SHA=${{ github.sha }}
           BUILD_DATE=${{ steps.meta.outputs.date }}
 
+  build-and-push-dashboard:
+    name: Build & Push Dashboard
+    needs: [create-release, detect-changes]
+    if: needs.detect-changes.outputs.dashboard == 'true'
+    runs-on: petrosa-org-runners
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ needs.create-release.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Determine Version
+      id: version
+      run: |
+        VERSION="${{ needs.create-release.outputs.version }}"
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "Using version: ${VERSION}"
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    - name: Extract Docker Metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-dashboard
+        tags: |
+          type=raw,value=${{ steps.version.outputs.version }}
+    - name: Build and Push Dashboard Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./dashboard
+        platforms: linux/amd64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha,scope=dashboard
+        cache-to: type=gha,mode=max,scope=dashboard
+        build-args: |
+          VERSION=${{ steps.version.outputs.version }}
+          COMMIT_SHA=${{ github.sha }}
+          BUILD_DATE=${{ steps.meta.outputs.date }}
+
   gitops-update:
     name: GitOps Update
     needs: [build-and-push, create-release]
@@ -148,6 +218,54 @@ jobs:
             echo "No changes to commit (version might already be up to date)"
           else
             git commit -m "gitops: data-manager image ${{ needs.build-and-push.outputs.version }}"
+            git push origin main
+          fi
+
+  gitops-update-dashboard:
+    name: GitOps Update Dashboard
+    needs: [build-and-push-dashboard, create-release, detect-changes]
+    runs-on: petrosa-org-runners
+    if: needs.detect-changes.outputs.dashboard == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Generate GitOps Bot Token
+        uses: tibdex/github-app-token@v2
+        id: generate-token
+        with:
+          app_id: ${{ secrets.GITOPS_APP_ID }}
+          private_key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          installation_retrieval_mode: id
+          installation_retrieval_payload: ${{ secrets.GITOPS_APP_INSTALLATION_ID }}
+
+      - name: Checkout petrosa_k8s
+        uses: actions/checkout@v4
+        with:
+          repository: PetroSa2/petrosa_k8s
+          ref: main
+          token: ${{ steps.generate-token.outputs.token }}
+          path: petrosa_k8s
+
+      - name: Rebase on main
+        run: ./scripts/gitops-rebase-main.sh
+        working-directory: petrosa_k8s
+
+      - name: Update dashboard image tag in GitOps manifests
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          # Only rewrites image: ...petrosa-dashboard:<tag> entries under k8s/dashboard/.
+          # Mirrors the data-manager rewrite shape (preserves registry/repo prefix, replaces only the tag).
+          find petrosa_k8s/k8s/dashboard -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | xargs -0 -r sed -E -i "s|(image:[[:space:]]*)([^[:space:]]*/)?(petrosa-dashboard):[^[:space:]]*|\1\2\3:$VERSION|g"
+          echo "Updated petrosa-dashboard image tag to $VERSION in petrosa_k8s/k8s/dashboard/"
+
+      - name: Commit and push to petrosa_k8s
+        working-directory: petrosa_k8s
+        run: |
+          git config user.name "gitops-bot"
+          git config user.email "gitops-bot@users.noreply.github.com"
+          git add k8s/dashboard/
+          if git diff --staged --quiet; then
+            echo "No changes to commit (version might already be up to date)"
+          else
+            git commit -m "gitops: petrosa-dashboard image ${{ needs.create-release.outputs.version }}"
             git push origin main
           fi
 
