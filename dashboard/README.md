@@ -6,8 +6,23 @@ surface (added in [#644](https://github.com/PetroSa2/petrosa_k8s/issues/644)).
 
 This package satisfies the scaffolding portion of
 [#645](https://github.com/PetroSa2/petrosa_k8s/issues/645) — routing,
-single-operator auth header readout, dark-mode Tailwind, build, image. Feature
-views (home, time slider, strategy lifecycle) land in #646–#648.
+single-operator auth header readout, dark-mode Tailwind, build, image —
+and the home view landed in
+[#646](https://github.com/PetroSa2/petrosa_k8s/issues/646) (P5.1c). The
+remaining feature views land in #647 (time slider) and #648 (strategy
+lifecycle).
+
+The home view consumes four routes across two services:
+
+- `GET /api/dashboard/portfolio/pnl?window=24h` — data-manager (#644)
+- `GET /api/dashboard/portfolio/drawdown?strategy_id=...&window=24h` — data-manager (#644)
+- `GET /api/dashboard/evaluator/verdicts` — petrosa-cio (#654)
+- `GET /api/dashboard/decisions/recent?window=24h` — petrosa-cio (#654)
+
+Both backends mount under `/api/dashboard/`; the cluster ingress (#655)
+routes by path in production. In pure local dev the vite proxy only
+points at data-manager on `:8000`, so the cio panes render their
+"waiting on cio…" state unless you add a second proxy entry.
 
 ## Local development
 
