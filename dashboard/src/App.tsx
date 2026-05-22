@@ -27,8 +27,8 @@ export default function App() {
               <NavLink to="/time/now" className={navLinkClass}>
                 time
               </NavLink>
-              <NavLink to="/strategy/_" className={navLinkClass}>
-                strategy
+              <NavLink to="/strategies" className={navLinkClass}>
+                strategies
               </NavLink>
             </nav>
           </div>

@@ -136,3 +136,62 @@ export function fetchRecentDecisions(
     `/api/dashboard/decisions/recent?window=${window}`,
   );
 }
+
+// Per-strategy lifecycle timeline (FR36, P5.1e). The data-manager route
+// returns chronologically-merged events from six audit-trail collections;
+// payload shape is intentionally loose because each event type carries its
+// own per-source fields.
+export type TimelineEventType =
+  | "config"
+  | "characterization"
+  | "lifecycle"
+  | "intent"
+  | "decision"
+  | "execution";
+
+export interface TimelineEvent {
+  ts: string;
+  type: TimelineEventType;
+  source: string;
+  event_id: string;
+  payload: Record<string, unknown>;
+}
+
+export interface StrategyLifecyclePayload {
+  strategy_id: string;
+  events: TimelineEvent[];
+  window: string | null;
+  next_cursor: string | null;
+}
+
+export function fetchStrategyLifecycle(
+  strategy_id: string,
+  options: { window?: string | null; types?: TimelineEventType[] } = {},
+): Promise<StrategyLifecyclePayload> {
+  const q = new URLSearchParams();
+  // Omit window to get full history; pass an explicit value when the caller
+  // wants a rolling window.
+  if (options.window !== undefined && options.window !== null) {
+    q.set("window", options.window);
+  }
+  if (options.types && options.types.length > 0) {
+    q.set("types", options.types.join(","));
+  }
+  q.set("limit", "200");
+  const qs = q.toString();
+  return getJson<StrategyLifecyclePayload>(
+    `/api/dashboard/strategy/${encodeURIComponent(strategy_id)}/lifecycle${qs ? `?${qs}` : ""}`,
+  );
+}
+
+// Strategy index. The data-manager `/api/v1/config/strategies` route returns
+// every strategy known to the configuration store. P5.1a never shipped a
+// dedicated dashboard-side list endpoint; the SPA derives current_state per
+// strategy by fanning out lifecycle queries on top of this list (#648 P5.1e).
+export interface StrategyListPayload {
+  strategy_ids: string[];
+}
+
+export function fetchStrategyList(): Promise<StrategyListPayload> {
+  return getJson<StrategyListPayload>(`/api/v1/config/strategies`);
+}
