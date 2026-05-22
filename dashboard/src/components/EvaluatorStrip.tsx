@@ -35,7 +35,7 @@ export default function EvaluatorStrip({ subsystems, error, loading }: Props) {
       waitingCopy="waiting on cio…"
       footer={
         subsystems
-          ? `${list.length}/8 subsystems · achievable once #610 P7.1 ships`
+          ? `${list.length}/8 subsystems reporting`
           : undefined
       }
     >

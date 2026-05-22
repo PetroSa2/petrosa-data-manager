@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, DrawdownPayload, fetchDrawdown } from "../lib/api";
 import { formatPercent, formatRelativeTime } from "../lib/format";
 import PaneShell from "./PaneShell";
@@ -21,12 +21,18 @@ interface Row {
 // p100] band when the producer attached it.
 export default function DrawdownPane({ strategyIds }: Props) {
   const [rows, setRows] = useState<Record<string, Row>>({});
+  // Ref mirrors the freshest rows so the polling loop's stale-on-error path
+  // can read the LAST successful payload instead of the closure-captured one
+  // (which would only ever hold the value from when the effect re-armed).
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
 
   useEffect(() => {
     let cancelled = false;
 
     async function pull() {
       const next: Record<string, Row> = {};
+      const prev = rowsRef.current;
       await Promise.all(
         strategyIds.map(async (sid) => {
           try {
@@ -37,7 +43,7 @@ export default function DrawdownPane({ strategyIds }: Props) {
               e instanceof ApiError
                 ? e
                 : new ApiError(0, null, (e as Error).message);
-            next[sid] = { payload: rows[sid]?.payload ?? null, error: err };
+            next[sid] = { payload: prev[sid]?.payload ?? null, error: err };
           }
         }),
       );
@@ -56,7 +62,6 @@ export default function DrawdownPane({ strategyIds }: Props) {
       cancelled = true;
     };
     // strategyIds is a fresh array each render; serialise to avoid loops.
-    // rows is intentionally not in deps — including it would re-arm every pull.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyIds.join("|")]);
 
