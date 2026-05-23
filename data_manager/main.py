@@ -373,6 +373,7 @@ class DataManagerApp:
         # Start background workers
         asyncio.create_task(self._run_auditor())
         asyncio.create_task(self._run_analytics())
+        asyncio.create_task(self._run_drawdown_scheduler())
 
         self.running = True
         logger.info("All components started successfully")
@@ -720,6 +721,59 @@ class DataManagerApp:
             logger.error(f"Error in analytics: {e}", exc_info=True)
 
         logger.info("Analytics stopped")
+
+    async def _run_drawdown_scheduler(self) -> None:
+        """Periodic drawdown-vs-envelope check (P4.2, #602; FR30).
+
+        Iterates known strategies on each tick, computes current
+        drawdown against the latest characterization envelope, and
+        emits a breach event on ``portfolio.drawdown.breach.{sid}``
+        so CIO can intervene. Healthy ticks do not publish — only
+        envelope breaches do.
+
+        Surfaced as the FR30 production-wiring gap by the 2026-05-22
+        reality-check audit (see prd-reality-check-2026-05-22.md).
+        """
+        if not self.db_manager or not getattr(self.db_manager, "mongodb_adapter", None):
+            logger.warning("DrawdownScheduler not started: no mongodb_adapter")
+            return
+
+        if not self.db_manager.is_healthy():
+            logger.warning("DrawdownScheduler not started: databases not healthy")
+            return
+
+        # Import here to avoid circular dependency at module load.
+        from data_manager.db.repositories.characterization_repository import (
+            CharacterizationRepository,
+        )
+        from data_manager.portfolio.drawdown_scheduler import (
+            DrawdownScheduler,
+        )
+
+        # Same lazy-extraction pattern used by the audit scheduler:
+        # the breach publisher tolerates a None client (logs + drops
+        # without raising), so local-dev without a broker is safe.
+        drawdown_nats_client = None
+        if self.consumer is not None and getattr(self.consumer, "nats_client", None):
+            drawdown_nats_client = getattr(self.consumer.nats_client, "nc", None)
+
+        try:
+            char_repo = CharacterizationRepository(
+                mysql_adapter=None,
+                mongodb_adapter=self.db_manager.mongodb_adapter,
+            )
+            scheduler = DrawdownScheduler(
+                mongodb_adapter=self.db_manager.mongodb_adapter,
+                characterization_repository=char_repo,
+                nats_client=drawdown_nats_client,
+            )
+            await scheduler.start()
+            logger.info(
+                "drawdown_scheduler_started",
+                extra={"interval_seconds": 300},
+            )
+        except Exception as e:
+            logger.error(f"Error in DrawdownScheduler: {e}", exc_info=True)
 
     def shutdown(self, signum, frame):
         """Handle shutdown signal."""
