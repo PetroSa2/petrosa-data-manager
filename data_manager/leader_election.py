@@ -162,6 +162,8 @@ class LeaderElectionManager:
             if current_leader:
                 current_leader_pod = current_leader["pod_id"]
                 last_heartbeat = current_leader["last_heartbeat"]
+                if last_heartbeat is not None and last_heartbeat.tzinfo is None:
+                    last_heartbeat = last_heartbeat.replace(tzinfo=UTC)
 
                 # Check if current leader is stale (no heartbeat for timeout period)
                 if (
