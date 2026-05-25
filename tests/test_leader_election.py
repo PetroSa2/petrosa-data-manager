@@ -322,3 +322,41 @@ class TestGetStatus:
         assert isinstance(status, dict)
         assert status["pod_id"] == "test-pod"
         assert status["is_leader"] is True
+
+
+class TestHeartbeatTimezoneHandling:
+    """Regression tests for #169: MongoDB naive datetimes must not cause TypeError."""
+
+    @pytest.mark.asyncio
+    async def test_naive_heartbeat_treated_as_utc(self):
+        client, db, coll = make_mongo_client()
+        naive_hb = datetime.now() - timedelta(seconds=5)
+        coll.find_one = AsyncMock(
+            return_value={
+                "pod_id": "other-pod",
+                "last_heartbeat": naive_hb,
+                "status": "leader",
+            }
+        )
+        mgr = LeaderElectionManager()
+        mgr.mongodb_db = db
+        mgr.election_timeout = 30
+        result = await mgr._try_become_leader()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_aware_heartbeat_unchanged(self):
+        client, db, coll = make_mongo_client()
+        aware_hb = datetime.now(UTC) - timedelta(seconds=5)
+        coll.find_one = AsyncMock(
+            return_value={
+                "pod_id": "other-pod",
+                "last_heartbeat": aware_hb,
+                "status": "leader",
+            }
+        )
+        mgr = LeaderElectionManager()
+        mgr.mongodb_db = db
+        mgr.election_timeout = 30
+        result = await mgr._try_become_leader()
+        assert result is False
