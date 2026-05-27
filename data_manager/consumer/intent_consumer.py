@@ -6,14 +6,18 @@ import logging
 from typing import Any
 
 from opentelemetry import trace
-from prometheus_client import Counter, Histogram
 
 try:
     from petrosa_otel import (
         extract_decision_context_from_nats,
+        get_meter,
         set_decision_context,
     )
 except ImportError:
+    from opentelemetry import metrics as _otel_metrics
+
+    def get_meter(name: str) -> Any:
+        return _otel_metrics.get_meter(name)
 
     def extract_decision_context_from_nats(message_dict: Any) -> dict[str, Any]:
         return {}
@@ -32,23 +36,25 @@ tracer = trace.get_tracer(__name__)
 
 INTENTS_COLLECTION = "intents"
 
-intent_messages_received = Counter(
+_meter = get_meter(__name__)
+_METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "intent"}
+
+intent_messages_received = _meter.create_counter(
     "data_manager_intent_messages_received_total",
-    "Total intent messages received from NATS",
-    ["subject"],
+    description="Total intent messages received from NATS",
 )
-intent_messages_persisted = Counter(
+intent_messages_persisted = _meter.create_counter(
     "data_manager_intent_messages_persisted_total",
-    "Total intent messages successfully persisted",
+    description="Total intent messages successfully persisted",
 )
-intent_messages_failed = Counter(
+intent_messages_failed = _meter.create_counter(
     "data_manager_intent_messages_failed_total",
-    "Total intent messages that failed processing",
-    ["error_type"],
+    description="Total intent messages that failed processing",
 )
-intent_processing_time = Histogram(
+intent_processing_time = _meter.create_histogram(
     "data_manager_intent_processing_seconds",
-    "Intent message processing time in seconds",
+    description="Intent message processing time in seconds",
+    unit="s",
 )
 
 
@@ -148,7 +154,7 @@ class IntentConsumer:
             await self._message_queue.put(msg)
         except asyncio.QueueFull:
             logger.warning("Intent queue full; dropping message")
-            intent_messages_failed.labels(error_type="queue_full").inc()
+            intent_messages_failed.add(1, {**_METRIC_ATTRS, "error_type": "queue_full"})
 
     async def _worker(self, worker_id: int) -> None:
         logger.info(f"Intent worker {worker_id} started")
@@ -164,7 +170,9 @@ class IntentConsumer:
                     logger.error(
                         f"Error in intent worker {worker_id}: {e}", exc_info=True
                     )
-                    intent_messages_failed.labels(error_type="processing").inc()
+                    intent_messages_failed.add(
+                        1, {**_METRIC_ATTRS, "error_type": "processing"}
+                    )
         except asyncio.CancelledError:
             pass
         logger.info(f"Intent worker {worker_id} stopped")
@@ -177,10 +185,12 @@ class IntentConsumer:
             data = json.loads(msg.data.decode())
         except (json.JSONDecodeError, AttributeError) as e:
             logger.error(f"Failed to decode intent message: {e}")
-            intent_messages_failed.labels(error_type="json_decode").inc()
+            intent_messages_failed.add(
+                1, {**_METRIC_ATTRS, "error_type": "json_decode"}
+            )
             return
 
-        intent_messages_received.labels(subject=subject).inc()
+        intent_messages_received.add(1, {**_METRIC_ATTRS, "subject": subject})
 
         with NATSTracePropagator.create_span_from_message(
             tracer,
@@ -197,7 +207,9 @@ class IntentConsumer:
                     "invalid_intent_message_received",
                     extra={"subject": subject, "raw_data": data},
                 )
-                intent_messages_failed.labels(error_type="invalid_payload").inc()
+                intent_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "invalid_payload"}
+                )
                 return
 
             decision_attrs: dict[str, Any] = {
@@ -224,15 +236,19 @@ class IntentConsumer:
 
             persisted = await self._persist(event)
             if persisted:
-                intent_messages_persisted.inc()
+                intent_messages_persisted.add(1, _METRIC_ATTRS)
                 logger.debug("intent_persisted", extra=log_extra)
                 span.set_status(trace.Status(trace.StatusCode.OK))
             else:
-                intent_messages_failed.labels(error_type="persistence").inc()
+                intent_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "persistence"}
+                )
                 logger.warning("intent_persistence_skipped", extra=log_extra)
                 span.set_attribute("persistence.skipped", True)
 
-            intent_processing_time.observe(asyncio.get_event_loop().time() - start_time)
+            intent_processing_time.record(
+                asyncio.get_event_loop().time() - start_time, _METRIC_ATTRS
+            )
 
     async def _persist(self, event: IntentEvent) -> bool:
         adapter = (

@@ -6,14 +6,18 @@ import logging
 from typing import Any
 
 from opentelemetry import trace
-from prometheus_client import Counter, Histogram
 
 try:
     from petrosa_otel import (
         extract_decision_context_from_nats,
+        get_meter,
         set_decision_context,
     )
 except ImportError:
+    from opentelemetry import metrics as _otel_metrics
+
+    def get_meter(name: str) -> Any:
+        return _otel_metrics.get_meter(name)
 
     def extract_decision_context_from_nats(message_dict: Any) -> dict[str, Any]:
         return {}
@@ -32,23 +36,25 @@ tracer = trace.get_tracer(__name__)
 
 CIO_DECISIONS_COLLECTION = "cio_decisions"
 
-decision_messages_received = Counter(
+_meter = get_meter(__name__)
+_METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "decision"}
+
+decision_messages_received = _meter.create_counter(
     "data_manager_decision_messages_received_total",
-    "Total CIO decision messages received from NATS",
-    ["subject"],
+    description="Total CIO decision messages received from NATS",
 )
-decision_messages_persisted = Counter(
+decision_messages_persisted = _meter.create_counter(
     "data_manager_decision_messages_persisted_total",
-    "Total CIO decision messages successfully persisted",
+    description="Total CIO decision messages successfully persisted",
 )
-decision_messages_failed = Counter(
+decision_messages_failed = _meter.create_counter(
     "data_manager_decision_messages_failed_total",
-    "Total CIO decision messages that failed processing",
-    ["error_type"],
+    description="Total CIO decision messages that failed processing",
 )
-decision_processing_time = Histogram(
+decision_processing_time = _meter.create_histogram(
     "data_manager_decision_processing_seconds",
-    "CIO decision message processing time in seconds",
+    description="CIO decision message processing time in seconds",
+    unit="s",
 )
 
 
@@ -153,7 +159,9 @@ class DecisionConsumer:
             await self._message_queue.put(msg)
         except asyncio.QueueFull:
             logger.warning("Decision queue full; dropping message")
-            decision_messages_failed.labels(error_type="queue_full").inc()
+            decision_messages_failed.add(
+                1, {**_METRIC_ATTRS, "error_type": "queue_full"}
+            )
 
     async def _worker(self, worker_id: int) -> None:
         logger.info(f"Decision worker {worker_id} started")
@@ -169,7 +177,9 @@ class DecisionConsumer:
                     logger.error(
                         f"Error in decision worker {worker_id}: {e}", exc_info=True
                     )
-                    decision_messages_failed.labels(error_type="processing").inc()
+                    decision_messages_failed.add(
+                        1, {**_METRIC_ATTRS, "error_type": "processing"}
+                    )
         except asyncio.CancelledError:
             pass
         logger.info(f"Decision worker {worker_id} stopped")
@@ -182,10 +192,12 @@ class DecisionConsumer:
             data = json.loads(msg.data.decode())
         except (json.JSONDecodeError, AttributeError) as e:
             logger.error(f"Failed to decode decision message: {e}")
-            decision_messages_failed.labels(error_type="json_decode").inc()
+            decision_messages_failed.add(
+                1, {**_METRIC_ATTRS, "error_type": "json_decode"}
+            )
             return
 
-        decision_messages_received.labels(subject=subject).inc()
+        decision_messages_received.add(1, {**_METRIC_ATTRS, "subject": subject})
 
         with NATSTracePropagator.create_span_from_message(
             tracer,
@@ -202,7 +214,9 @@ class DecisionConsumer:
                     "invalid_decision_message_received",
                     extra={"subject": subject, "raw_data": data},
                 )
-                decision_messages_failed.labels(error_type="invalid_payload").inc()
+                decision_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "invalid_payload"}
+                )
                 return
 
             decision_attrs: dict[str, Any] = {
@@ -227,16 +241,18 @@ class DecisionConsumer:
 
             persisted = await self._persist(event)
             if persisted:
-                decision_messages_persisted.inc()
+                decision_messages_persisted.add(1, _METRIC_ATTRS)
                 logger.debug("decision_persisted", extra=log_extra)
                 span.set_status(trace.Status(trace.StatusCode.OK))
             else:
-                decision_messages_failed.labels(error_type="persistence").inc()
+                decision_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "persistence"}
+                )
                 logger.warning("decision_persistence_skipped", extra=log_extra)
                 span.set_attribute("persistence.skipped", True)
 
-            decision_processing_time.observe(
-                asyncio.get_event_loop().time() - start_time
+            decision_processing_time.record(
+                asyncio.get_event_loop().time() - start_time, _METRIC_ATTRS
             )
 
     async def _persist(self, event: DecisionEvent) -> bool:

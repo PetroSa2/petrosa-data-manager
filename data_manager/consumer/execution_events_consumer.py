@@ -6,14 +6,18 @@ import logging
 from typing import Any
 
 from opentelemetry import trace
-from prometheus_client import Counter, Histogram
 
 try:
     from petrosa_otel import (
         extract_decision_context_from_nats,
+        get_meter,
         set_decision_context,
     )
 except ImportError:
+    from opentelemetry import metrics as _otel_metrics
+
+    def get_meter(name: str) -> Any:
+        return _otel_metrics.get_meter(name)
 
     def extract_decision_context_from_nats(message_dict: Any) -> dict[str, Any]:
         return {}
@@ -32,23 +36,25 @@ tracer = trace.get_tracer(__name__)
 
 EXECUTION_EVENTS_COLLECTION = "execution_events"
 
-execution_messages_received = Counter(
+_meter = get_meter(__name__)
+_METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "execution"}
+
+execution_messages_received = _meter.create_counter(
     "data_manager_execution_messages_received_total",
-    "Total execution-event messages received from NATS",
-    ["subject"],
+    description="Total execution-event messages received from NATS",
 )
-execution_messages_persisted = Counter(
+execution_messages_persisted = _meter.create_counter(
     "data_manager_execution_messages_persisted_total",
-    "Total execution-event messages successfully persisted",
+    description="Total execution-event messages successfully persisted",
 )
-execution_messages_failed = Counter(
+execution_messages_failed = _meter.create_counter(
     "data_manager_execution_messages_failed_total",
-    "Total execution-event messages that failed processing",
-    ["error_type"],
+    description="Total execution-event messages that failed processing",
 )
-execution_processing_time = Histogram(
+execution_processing_time = _meter.create_histogram(
     "data_manager_execution_processing_seconds",
-    "Execution-event message processing time in seconds",
+    description="Execution-event message processing time in seconds",
+    unit="s",
 )
 
 
@@ -164,7 +170,9 @@ class ExecutionEventsConsumer:
             await self._message_queue.put(msg)
         except asyncio.QueueFull:
             logger.warning("Execution events queue full; dropping message")
-            execution_messages_failed.labels(error_type="queue_full").inc()
+            execution_messages_failed.add(
+                1, {**_METRIC_ATTRS, "error_type": "queue_full"}
+            )
 
     async def _worker(self, worker_id: int) -> None:
         logger.info(f"Execution events worker {worker_id} started")
@@ -181,7 +189,9 @@ class ExecutionEventsConsumer:
                         f"Error in execution events worker {worker_id}: {e}",
                         exc_info=True,
                     )
-                    execution_messages_failed.labels(error_type="processing").inc()
+                    execution_messages_failed.add(
+                        1, {**_METRIC_ATTRS, "error_type": "processing"}
+                    )
         except asyncio.CancelledError:
             pass
         logger.info(f"Execution events worker {worker_id} stopped")
@@ -194,10 +204,12 @@ class ExecutionEventsConsumer:
             data = json.loads(msg.data.decode())
         except (json.JSONDecodeError, AttributeError) as e:
             logger.error(f"Failed to decode execution event message: {e}")
-            execution_messages_failed.labels(error_type="json_decode").inc()
+            execution_messages_failed.add(
+                1, {**_METRIC_ATTRS, "error_type": "json_decode"}
+            )
             return
 
-        execution_messages_received.labels(subject=subject).inc()
+        execution_messages_received.add(1, {**_METRIC_ATTRS, "subject": subject})
 
         with NATSTracePropagator.create_span_from_message(
             tracer,
@@ -214,7 +226,9 @@ class ExecutionEventsConsumer:
                     "invalid_execution_event_received",
                     extra={"subject": subject, "raw_data": data},
                 )
-                execution_messages_failed.labels(error_type="invalid_payload").inc()
+                execution_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "invalid_payload"}
+                )
                 return
 
             # Span attribute names match the cross-service identifier contract;
@@ -244,7 +258,7 @@ class ExecutionEventsConsumer:
 
             persisted = await self._persist(event)
             if persisted:
-                execution_messages_persisted.inc()
+                execution_messages_persisted.add(1, _METRIC_ATTRS)
                 logger.info("execution_event_persisted", extra=log_extra)
                 span.set_status(trace.Status(trace.StatusCode.OK))
                 # P4.1 (#601): hand the just-persisted event to the
@@ -263,12 +277,14 @@ class ExecutionEventsConsumer:
                             },
                         )
             else:
-                execution_messages_failed.labels(error_type="persistence").inc()
+                execution_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "persistence"}
+                )
                 logger.warning("execution_event_persistence_skipped", extra=log_extra)
                 span.set_attribute("persistence.skipped", True)
 
-            execution_processing_time.observe(
-                asyncio.get_event_loop().time() - start_time
+            execution_processing_time.record(
+                asyncio.get_event_loop().time() - start_time, _METRIC_ATTRS
             )
 
     async def _persist(self, event: ExecutionEvent) -> bool:

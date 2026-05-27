@@ -18,14 +18,18 @@ import logging
 from typing import Any
 
 from opentelemetry import trace
-from prometheus_client import Counter, Histogram
 
 try:
     from petrosa_otel import (
         extract_decision_context_from_nats,
+        get_meter,
         set_decision_context,
     )
 except ImportError:
+    from opentelemetry import metrics as _otel_metrics
+
+    def get_meter(name: str) -> Any:
+        return _otel_metrics.get_meter(name)
 
     def extract_decision_context_from_nats(message_dict: Any) -> dict[str, Any]:
         return {}
@@ -44,23 +48,25 @@ tracer = trace.get_tracer(__name__)
 
 PNL_EVENTS_COLLECTION = "pnl_events"
 
-pnl_messages_received = Counter(
+_meter = get_meter(__name__)
+_METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "pnl"}
+
+pnl_messages_received = _meter.create_counter(
     "data_manager_pnl_messages_received_total",
-    "Total pnl-event messages received from NATS",
-    ["subject"],
+    description="Total pnl-event messages received from NATS",
 )
-pnl_messages_persisted = Counter(
+pnl_messages_persisted = _meter.create_counter(
     "data_manager_pnl_messages_persisted_total",
-    "Total pnl-event messages successfully persisted",
+    description="Total pnl-event messages successfully persisted",
 )
-pnl_messages_failed = Counter(
+pnl_messages_failed = _meter.create_counter(
     "data_manager_pnl_messages_failed_total",
-    "Total pnl-event messages that failed processing",
-    ["error_type"],
+    description="Total pnl-event messages that failed processing",
 )
-pnl_processing_time = Histogram(
+pnl_processing_time = _meter.create_histogram(
     "data_manager_pnl_processing_seconds",
-    "Pnl-event message processing time in seconds",
+    description="Pnl-event message processing time in seconds",
+    unit="s",
 )
 
 
@@ -160,7 +166,7 @@ class PnlConsumer:
             await self._message_queue.put(msg)
         except asyncio.QueueFull:
             logger.warning("Pnl queue full; dropping message")
-            pnl_messages_failed.labels(error_type="queue_full").inc()
+            pnl_messages_failed.add(1, {**_METRIC_ATTRS, "error_type": "queue_full"})
 
     async def _worker(self, worker_id: int) -> None:
         logger.info(f"Pnl worker {worker_id} started")
@@ -174,7 +180,9 @@ class PnlConsumer:
                     await self._process_message(msg)
                 except Exception as e:
                     logger.error(f"Error in pnl worker {worker_id}: {e}", exc_info=True)
-                    pnl_messages_failed.labels(error_type="processing").inc()
+                    pnl_messages_failed.add(
+                        1, {**_METRIC_ATTRS, "error_type": "processing"}
+                    )
         except asyncio.CancelledError:
             pass
         logger.info(f"Pnl worker {worker_id} stopped")
@@ -187,10 +195,10 @@ class PnlConsumer:
             data = json.loads(msg.data.decode())
         except (json.JSONDecodeError, AttributeError) as e:
             logger.error(f"Failed to decode pnl message: {e}")
-            pnl_messages_failed.labels(error_type="json_decode").inc()
+            pnl_messages_failed.add(1, {**_METRIC_ATTRS, "error_type": "json_decode"})
             return
 
-        pnl_messages_received.labels(subject=subject).inc()
+        pnl_messages_received.add(1, {**_METRIC_ATTRS, "subject": subject})
 
         with NATSTracePropagator.create_span_from_message(
             tracer,
@@ -207,7 +215,9 @@ class PnlConsumer:
                     "invalid_pnl_event_received",
                     extra={"subject": subject, "raw_data": data},
                 )
-                pnl_messages_failed.labels(error_type="invalid_payload").inc()
+                pnl_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "invalid_payload"}
+                )
                 return
 
             # Span attribute names match the cross-service identifier contract.
@@ -234,15 +244,19 @@ class PnlConsumer:
 
             persisted = await self._persist(event)
             if persisted:
-                pnl_messages_persisted.inc()
+                pnl_messages_persisted.add(1, _METRIC_ATTRS)
                 logger.info("pnl_event_persisted", extra=log_extra)
                 span.set_status(trace.Status(trace.StatusCode.OK))
             else:
-                pnl_messages_failed.labels(error_type="persistence").inc()
+                pnl_messages_failed.add(
+                    1, {**_METRIC_ATTRS, "error_type": "persistence"}
+                )
                 logger.warning("pnl_event_persistence_skipped", extra=log_extra)
                 span.set_attribute("persistence.skipped", True)
 
-            pnl_processing_time.observe(asyncio.get_event_loop().time() - start_time)
+            pnl_processing_time.record(
+                asyncio.get_event_loop().time() - start_time, _METRIC_ATTRS
+            )
 
     async def _persist(self, event: PnlEvent) -> bool:
         adapter = (
