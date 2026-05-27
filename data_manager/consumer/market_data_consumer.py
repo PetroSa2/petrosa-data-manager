@@ -5,6 +5,7 @@ Market data consumer for processing NATS messages.
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from opentelemetry import trace
@@ -79,7 +80,10 @@ class MarketDataConsumer:
         self._processing_tasks: list = []
         self._stats_task: asyncio.Task | None = None
         self._messages_processed = 0
-        self._last_stats_time = asyncio.get_event_loop().time()
+        # Use a loop-independent monotonic clock so __init__ does not require a
+        # running event loop (asyncio.get_event_loop() raises in sync contexts
+        # such as test fixtures under Python 3.11+).
+        self._last_stats_time = time.monotonic()
 
     async def start(self) -> bool:
         """Start the consumer."""
@@ -299,7 +303,7 @@ class MarketDataConsumer:
                 await asyncio.sleep(stats_interval)
 
                 # Calculate messages per second
-                current_time = asyncio.get_event_loop().time()
+                current_time = time.monotonic()
                 time_elapsed = current_time - self._last_stats_time
                 messages_per_sec = (
                     self._messages_processed / time_elapsed if time_elapsed > 0 else 0
