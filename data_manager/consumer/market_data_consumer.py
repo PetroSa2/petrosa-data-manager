@@ -5,10 +5,19 @@ Market data consumer for processing NATS messages.
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from opentelemetry import trace
-from prometheus_client import Counter, Histogram
+
+try:
+    from petrosa_otel import get_meter
+except ImportError:
+    from opentelemetry import metrics as _otel_metrics
+
+    def get_meter(name: str) -> Any:
+        return _otel_metrics.get_meter(name)
+
 
 import constants
 from data_manager.auditor.ingest_evaluator import IngestEvaluator
@@ -22,26 +31,26 @@ logger = logging.getLogger(__name__)
 # Get OpenTelemetry tracer
 tracer = trace.get_tracer(__name__)
 
-# Prometheus metrics
-messages_received = Counter(
+# OTel SDK metrics (exported via the OTLP push pipeline)
+_meter = get_meter(__name__)
+_METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "market_data"}
+
+messages_received = _meter.create_counter(
     "data_manager_messages_received_total",
-    "Total messages received from NATS",
-    ["event_type"],
+    description="Total messages received from NATS",
 )
-messages_processed = Counter(
+messages_processed = _meter.create_counter(
     "data_manager_messages_processed_total",
-    "Total messages processed successfully",
-    ["event_type"],
+    description="Total messages processed successfully",
 )
-messages_failed = Counter(
+messages_failed = _meter.create_counter(
     "data_manager_messages_failed_total",
-    "Total messages that failed processing",
-    ["event_type", "error_type"],
+    description="Total messages that failed processing",
 )
-message_processing_time = Histogram(
+message_processing_time = _meter.create_histogram(
     "data_manager_message_processing_seconds",
-    "Message processing time in seconds",
-    ["event_type"],
+    description="Message processing time in seconds",
+    unit="s",
 )
 
 
@@ -71,7 +80,10 @@ class MarketDataConsumer:
         self._processing_tasks: list = []
         self._stats_task: asyncio.Task | None = None
         self._messages_processed = 0
-        self._last_stats_time = asyncio.get_event_loop().time()
+        # Use a loop-independent monotonic clock so __init__ does not require a
+        # running event loop (asyncio.get_event_loop() raises in sync contexts
+        # such as test fixtures under Python 3.11+).
+        self._last_stats_time = time.monotonic()
 
     async def start(self) -> bool:
         """Start the consumer."""
@@ -158,7 +170,10 @@ class MarketDataConsumer:
             await self._message_queue.put(msg)
         except asyncio.QueueFull:
             logger.warning("Message queue full, dropping message")
-            messages_failed.labels(event_type="unknown", error_type="queue_full").inc()
+            messages_failed.add(
+                1,
+                {**_METRIC_ATTRS, "event_type": "unknown", "error_type": "queue_full"},
+            )
 
     async def _process_messages_worker(self, worker_id: int) -> None:
         """Worker task for processing messages from queue."""
@@ -189,7 +204,7 @@ class MarketDataConsumer:
         try:
             # Decode message
             data = json.loads(msg.data.decode())
-            messages_received.labels(event_type="raw").inc()
+            messages_received.add(1, {**_METRIC_ATTRS, "event_type": "raw"})
 
             # Create span from message using NATSTracePropagator utility
             with NATSTracePropagator.create_span_from_message(
@@ -216,13 +231,13 @@ class MarketDataConsumer:
                             "raw_data": data,
                         },
                     )
-                    messages_received.labels(event_type="invalid").inc()
+                    messages_received.add(1, {**_METRIC_ATTRS, "event_type": "invalid"})
                     if self.ingest_evaluator is not None:
                         self.ingest_evaluator.record_parse_failure(msg.subject)
                     return
 
                 event_type = event.event_type.value
-                messages_received.labels(event_type=event_type).inc()
+                messages_received.add(1, {**_METRIC_ATTRS, "event_type": event_type})
 
                 if self.ingest_evaluator is not None:
                     self.ingest_evaluator.record_message(
@@ -248,10 +263,10 @@ class MarketDataConsumer:
 
                 # Track metrics
                 processing_time = asyncio.get_event_loop().time() - start_time
-                message_processing_time.labels(event_type=event_type).observe(
-                    processing_time
+                message_processing_time.record(
+                    processing_time, {**_METRIC_ATTRS, "event_type": event_type}
                 )
-                messages_processed.labels(event_type=event_type).inc()
+                messages_processed.add(1, {**_METRIC_ATTRS, "event_type": event_type})
                 self._messages_processed += 1
 
                 span.set_attribute("message.processing_time_seconds", processing_time)
@@ -259,15 +274,23 @@ class MarketDataConsumer:
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON message: {e}")
-            messages_failed.labels(
-                event_type=event_type, error_type="json_decode"
-            ).inc()
+            messages_failed.add(
+                1,
+                {
+                    **_METRIC_ATTRS,
+                    "event_type": event_type,
+                    "error_type": "json_decode",
+                },
+            )
             if self.ingest_evaluator is not None:
                 self.ingest_evaluator.record_parse_failure(msg.subject)
 
         except Exception as e:
             logger.error(f"Failed to process message: {e}", exc_info=True)
-            messages_failed.labels(event_type=event_type, error_type="processing").inc()
+            messages_failed.add(
+                1,
+                {**_METRIC_ATTRS, "event_type": event_type, "error_type": "processing"},
+            )
             if self.ingest_evaluator is not None:
                 self.ingest_evaluator.record_parse_failure(msg.subject)
 
@@ -280,7 +303,7 @@ class MarketDataConsumer:
                 await asyncio.sleep(stats_interval)
 
                 # Calculate messages per second
-                current_time = asyncio.get_event_loop().time()
+                current_time = time.monotonic()
                 time_elapsed = current_time - self._last_stats_time
                 messages_per_sec = (
                     self._messages_processed / time_elapsed if time_elapsed > 0 else 0
