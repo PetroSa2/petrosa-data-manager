@@ -55,6 +55,134 @@ def test_app_config_request_ceiling_zero_allowed():
 
 
 # ---------------------------------------------------------------------------
+# AC3 — /api/v1/config/application HTTP routes carry the ceiling field
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def config_api_client(mock_db_manager):
+    """Build an API TestClient with the mock db_manager injected."""
+    from fastapi.testclient import TestClient
+
+    import data_manager.api.app as api_module
+
+    app = api_module.create_app()
+    api_module.db_manager = mock_db_manager
+    # The config router reads db_manager from its own module too.
+    import data_manager.api.routes.config as config_module
+
+    config_module.db_manager = mock_db_manager
+    yield TestClient(app)
+    api_module.db_manager = None
+    config_module.db_manager = None
+
+
+def test_get_application_config_returns_default_ceiling_when_empty(config_api_client):
+    """When no config in MongoDB, /application returns the 5.0 default ceiling
+    (covers the default-branch diff line in config.py).
+    """
+    # mock_db_manager.configuration.get_app_config returns None by default;
+    # set it explicitly to be safe.
+    from unittest.mock import AsyncMock
+
+    import data_manager.api.routes.config as config_module
+
+    config_module.db_manager.configuration.get_app_config = AsyncMock(return_value=None)
+
+    resp = config_api_client.get("/api/v1/config/application")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["data"]["llm_spend_ceiling_usd_per_day"] == 5.0
+    assert body["data"]["source"] == "default"
+
+
+def test_get_application_config_returns_ceiling_from_mongodb(config_api_client):
+    """When MongoDB returns a config with a ceiling, it round-trips through the
+    response (covers the mongodb-path diff lines).
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    import data_manager.api.routes.config as config_module
+
+    now = datetime.now(UTC)
+    config_module.db_manager.configuration.get_app_config = AsyncMock(
+        return_value={
+            "parameters": {
+                "enabled_strategies": ["s1"],
+                "symbols": ["BTCUSDT"],
+                "candle_periods": ["1h"],
+                "min_confidence": 0.6,
+                "max_confidence": 0.95,
+                "max_positions": 10,
+                "position_sizes": [100, 200, 500, 1000],
+                "llm_spend_ceiling_usd_per_day": 12.5,
+            },
+            "version": 7,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+    resp = config_api_client.get("/api/v1/config/application")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["llm_spend_ceiling_usd_per_day"] == 12.5
+    assert body["data"]["source"] == "mongodb"
+    assert body["data"]["version"] == 7
+
+
+def test_update_application_config_persists_ceiling_field(config_api_client):
+    """POST /application includes the ceiling in the upsert payload
+    (covers the upsert-payload diff line in config.py).
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    import data_manager.api.routes.config as config_module
+
+    captured: dict = {}
+
+    async def _fake_upsert(*, parameters, changed_by, reason):
+        captured["parameters"] = parameters
+        captured["changed_by"] = changed_by
+        captured["reason"] = reason
+        return {
+            "parameters": parameters,
+            "version": 1,
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+
+    config_module.db_manager.configuration.upsert_app_config = _fake_upsert
+    # validate_only=False path requires validate_application_config to pass —
+    # the model validation enforces non-negative ceiling, so we send a real
+    # value the validator will accept.
+    config_module.db_manager.configuration.get_app_config = AsyncMock(return_value=None)
+
+    resp = config_api_client.post(
+        "/api/v1/config/application",
+        json={
+            "enabled_strategies": ["s1"],
+            "symbols": ["BTCUSDT"],
+            "candle_periods": ["1h"],
+            "min_confidence": 0.6,
+            "max_confidence": 0.95,
+            "max_positions": 10,
+            "position_sizes": [100, 200, 500, 1000],
+            "llm_spend_ceiling_usd_per_day": 7.25,
+            "changed_by": "tester",
+            "reason": "raise ceiling for FR63 test",
+            "validate_only": False,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["parameters"]["llm_spend_ceiling_usd_per_day"] == 7.25
+    assert captured["changed_by"] == "tester"
+
+
+# ---------------------------------------------------------------------------
 # AC6 — ceiling breach → alert + fallback (integration with CIO orchestrator)
 # ---------------------------------------------------------------------------
 
