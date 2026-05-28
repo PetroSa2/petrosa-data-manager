@@ -32,6 +32,33 @@ from pydantic import BaseModel, Field
 REQUIRED_METRIC_KEYS = ("sharpe", "win_rate", "mean_return")
 
 
+class StrategyRevisionRef(BaseModel):
+    """FR53 / P3.4 — typed reference to a strategy revision.
+
+    Mirrors the producer's nested shape (petrosa-bot-ta-analysis
+    `backtest/strategy_revision.py`, PR #250). The flat
+    ``strategy_revision_id`` carries the short, sortable display form
+    (``srev_{module_hash[:12]}_{parameter_hash[:12]}``) and is the field
+    consumers filter / refuse on; the nested object preserves the full
+    SHA-256 hashes so any byte-level audit can recompute hashes without
+    a producer round-trip.
+    """
+
+    revision_id: str = Field(
+        ...,
+        description=(
+            "Short revision identifier — "
+            "`srev_{module_hash[:12]}_{parameter_hash[:12]}`."
+        ),
+    )
+    module_hash: str = Field(
+        ..., description="Full 64-hex SHA-256 of the strategy module source"
+    )
+    parameter_hash: str = Field(
+        ..., description="Full 64-hex SHA-256 of the canonicalized parameter set"
+    )
+
+
 class Characterization(BaseModel):
     """A single backtest characterization persisted in `characterizations`."""
 
@@ -63,6 +90,25 @@ class Characterization(BaseModel):
         description=(
             "Hex SHA-256 of the deterministic inputs (strategy_id, version, "
             "window bounds, seed, params). Reproducibility key."
+        ),
+    )
+    # FR53 / P3.4 (#179): content-addressable strategy revision binding.
+    # `strategy_revision_id` is the flat lookup / filter key; `strategy_revision`
+    # carries the nested full-hash provenance. Both default `None` so existing
+    # documents (persisted before the producer side shipped) round-trip cleanly.
+    strategy_revision_id: str | None = Field(
+        default=None,
+        description=(
+            "Content-addressable strategy-revision identifier "
+            "`srev_{module_hash[:12]}_{parameter_hash[:12]}`. "
+            "None on artifacts persisted before P3.4 producer shipped."
+        ),
+    )
+    strategy_revision: StrategyRevisionRef | None = Field(
+        default=None,
+        description=(
+            "Full provenance (module_hash + parameter_hash) for the revision; "
+            "callers needing strict byte-level reproducibility audit hash from here."
         ),
     )
     created_at: datetime = Field(
@@ -143,12 +189,16 @@ def verify_characterization(
     )
 
     def _blob(c: Characterization) -> bytes:
+        # `strategy_revision_id` participates in the byte-equality check so a
+        # re-characterization against the same metrics but a different strategy
+        # revision (FR53 / P3.4) is correctly detected as drift, not a match.
         return json.dumps(
             {
                 "metrics": c.metrics,
                 "drawdown_envelope": c.drawdown_envelope,
                 "param_sensitivities": c.param_sensitivities,
                 "inputs_hash": c.inputs_hash,
+                "strategy_revision_id": c.strategy_revision_id,
             },
             sort_keys=True,
             separators=(",", ":"),

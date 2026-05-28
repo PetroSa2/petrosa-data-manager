@@ -94,6 +94,31 @@ class CharacterizationRepository(BaseRepository):
         docs = await cursor.to_list(length=1)
         return _document_to_artifact(docs[0]) if docs else None
 
+    async def get_by_strategy_revision(
+        self, strategy_id: str, strategy_revision_id: str
+    ) -> Characterization | None:
+        """Return the most recent characterization for a (strategy, revision) pair.
+
+        FR53 / P3.4 (#179): consumers (CIO refusal path / FR20 evaluator
+        binding) use this to confirm a characterization exists for the exact
+        revision the live intent carries — None ⇒ stale, refuse.
+        """
+        if not self.mongodb or not getattr(self.mongodb, "db", None):
+            return None
+        cursor = (
+            self.mongodb.db[CHARACTERIZATIONS_COLLECTION]
+            .find(
+                {
+                    "strategy_id": strategy_id,
+                    "strategy_revision_id": strategy_revision_id,
+                }
+            )
+            .sort("created_at", -1)
+            .limit(1)
+        )
+        docs = await cursor.to_list(length=1)
+        return _document_to_artifact(docs[0]) if docs else None
+
 
 def _document_to_artifact(doc: dict[str, Any] | None) -> Characterization | None:
     """Convert a stored Mongo document back to a `Characterization`.
