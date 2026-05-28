@@ -90,3 +90,9 @@ minversion = "8.0"
 addopts = "-v --cov=data_manager --cov-report=term --cov-report=html --cov-report=xml"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# #178 — pin the per-test loop scope so pytest-asyncio creates a fresh event
+# loop for every test and never shares one across tests. Explicit > implicit:
+# this guarantees no test can leak loop state into a later sync fixture that
+# touches `asyncio.get_event_loop()` (the deprecated pattern that triggered
+# the original failure on Python 3.11.15 CI).
+asyncio_default_fixture_loop_scope = "function"

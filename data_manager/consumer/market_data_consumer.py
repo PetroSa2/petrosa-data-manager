@@ -199,7 +199,10 @@ class MarketDataConsumer:
     async def _process_message(self, msg: Any) -> None:
         """Process a single message with trace context propagation."""
         event_type = "unknown"
-        start_time = asyncio.get_event_loop().time()
+        # Use time.monotonic() instead of asyncio.get_event_loop().time() — the
+        # latter is deprecated in modern asyncio and silently fragile under
+        # pytest-asyncio 1.x when called from sync helpers; see #178.
+        start_time = time.monotonic()
 
         try:
             # Decode message
@@ -262,7 +265,7 @@ class MarketDataConsumer:
                 await self.message_handler.handle_event(event)
 
                 # Track metrics
-                processing_time = asyncio.get_event_loop().time() - start_time
+                processing_time = time.monotonic() - start_time
                 message_processing_time.record(
                     processing_time, {**_METRIC_ATTRS, "event_type": event_type}
                 )

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from opentelemetry import trace
@@ -185,7 +186,10 @@ class DecisionConsumer:
         logger.info(f"Decision worker {worker_id} stopped")
 
     async def _process_message(self, msg: Any) -> None:
-        start_time = asyncio.get_event_loop().time()
+        # Use time.monotonic() instead of time.monotonic() — the
+        # latter is deprecated in modern asyncio and silently fragile under
+        # pytest-asyncio 1.x when called from sync helpers; see #178.
+        start_time = time.monotonic()
         subject = getattr(msg, "subject", self.subject)
 
         try:
@@ -252,7 +256,7 @@ class DecisionConsumer:
                 span.set_attribute("persistence.skipped", True)
 
             decision_processing_time.record(
-                asyncio.get_event_loop().time() - start_time, _METRIC_ATTRS
+                time.monotonic() - start_time, _METRIC_ATTRS
             )
 
     async def _persist(self, event: DecisionEvent) -> bool:
