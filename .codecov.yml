@@ -1,0 +1,27 @@
+# codecov configuration for petrosa-data-manager
+#
+# Python coverage (the only language tracked) excludes the operator
+# `dashboard/` frontend (TypeScript/React) because no JS coverage report is
+# uploaded by CI — without this exclusion every TS line in a PR diff shows up
+# as "0% hit" and pulls patch coverage well below the project baseline.
+
+codecov:
+  require_ci_to_pass: true
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+
+ignore:
+  - "dashboard/**"
+  - "tests/**"
+  - "**/test_*.py"
+  - "**/__pycache__"
+  - "*.egg-info"
