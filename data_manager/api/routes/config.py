@@ -57,6 +57,17 @@ class AppConfigRequest(BaseModel):
     position_sizes: list[int] = Field(
         [100, 200, 500, 1000], description="Available position sizes"
     )
+    # FR63 / AC3 (petrosa-data-manager#170): per-day LLM cost ceiling for CIO.
+    # When projected daily spend reaches this threshold the CIO automatically
+    # transitions to deterministic-fallback mode (FR13) until period reset.
+    llm_spend_ceiling_usd_per_day: float = Field(
+        5.0,
+        ge=0.0,
+        description=(
+            "Per-day LLM cost ceiling in USD (FR63). CIO switches to "
+            "deterministic-fallback when projected daily spend >= this value."
+        ),
+    )
     changed_by: str = Field(..., description="Who is making the change")
     reason: str | None = Field(None, description="Reason for the change")
     validate_only: bool = Field(
@@ -74,6 +85,7 @@ class AppConfigResponse(BaseModel):
     max_confidence: float
     max_positions: int
     position_sizes: list[int]
+    llm_spend_ceiling_usd_per_day: float = 5.0
     version: int
     source: str
     created_at: str
@@ -134,6 +146,7 @@ async def get_application_config():
                     "max_confidence": 0.95,
                     "max_positions": 10,
                     "position_sizes": [100, 200, 500, 1000],
+                    "llm_spend_ceiling_usd_per_day": 5.0,
                     "version": 0,
                     "source": "default",
                     "created_at": datetime.now(UTC).isoformat(),
@@ -150,6 +163,9 @@ async def get_application_config():
             "max_confidence": params.get("max_confidence", 0.95),
             "max_positions": params.get("max_positions", 10),
             "position_sizes": params.get("position_sizes", [100, 200, 500, 1000]),
+            "llm_spend_ceiling_usd_per_day": params.get(
+                "llm_spend_ceiling_usd_per_day", 5.0
+            ),
             "version": config.get("version", 0),
             "source": "mongodb",
             "created_at": config.get("created_at").isoformat()
@@ -191,6 +207,7 @@ async def update_application_config(request: AppConfigRequest):
             "max_confidence": request.max_confidence,
             "max_positions": request.max_positions,
             "position_sizes": request.position_sizes,
+            "llm_spend_ceiling_usd_per_day": request.llm_spend_ceiling_usd_per_day,
         }
 
         config = await db_manager.configuration.upsert_app_config(

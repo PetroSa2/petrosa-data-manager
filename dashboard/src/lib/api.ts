@@ -238,6 +238,30 @@ export function fetchPortfolioStateAt(
   );
 }
 
+// FR63: LLM spend pane (P5.2, petrosa-data-manager#170). Route lives in CIO
+// at GET /api/dashboard/llm-spend; cluster ingress routes by path.
+export interface LlmSpendBucket {
+  decision_type: string;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  call_count: number;
+}
+
+export interface LlmSpendPayload {
+  period_date: string;
+  ceiling_usd_per_day: number;
+  total_cost_usd: number;
+  projected_daily_usd: number;
+  ceiling_breached: boolean;
+  distance_to_ceiling_usd: number;
+  buckets: LlmSpendBucket[];
+}
+
+export function fetchLlmSpend(): Promise<LlmSpendPayload> {
+  return getJson<LlmSpendPayload>(`/api/dashboard/llm-spend`);
+}
+
 // Per-decision lifecycle reconstruction (FR34 detail panel; P4.3 #603).
 export interface LifecycleReconstructionPayload {
   decision_id: string;

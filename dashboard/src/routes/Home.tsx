@@ -5,6 +5,7 @@ import PnlPane from "../components/PnlPane";
 import DrawdownPane from "../components/DrawdownPane";
 import EvaluatorStrip from "../components/EvaluatorStrip";
 import CioFeed from "../components/CioFeed";
+import LlmSpendPane from "../components/LlmSpendPane";
 
 // FR23 + FR31 + FR32 + FR33 — operator dashboard home view (P5.1c).
 // Composes four panes: P&L, drawdown, evaluator strip, CIO decision feed.
@@ -38,6 +39,9 @@ export default function Home() {
         <PnlPane />
         <DrawdownPane strategyIds={strategyIds} />
       </div>
+
+      {/* FR63 P5.2 — LLM spend visibility and ceiling alert */}
+      <LlmSpendPane />
 
       <EvaluatorStrip
         subsystems={verdicts.data?.subsystems ?? null}
