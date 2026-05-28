@@ -31,6 +31,7 @@ from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.consumer.pnl_consumer import PnlConsumer
 from data_manager.db.database_manager import DatabaseManager
+from data_manager.services.alert_dispatcher import AlertDispatcher
 
 if TYPE_CHECKING:
     from data_manager.backfiller.orchestrator import BackfillOrchestrator
@@ -80,6 +81,7 @@ class DataManagerApp:
         self.execution_evaluator = None  # P2.4 (#595) — set in start()
         self.audit_evaluator = None  # P2.5 (#596) — set in start()
         self.pnl_publisher = None  # P4.1 follow-up (#652) — set in start()
+        self.alert_dispatcher: AlertDispatcher | None = None  # #183 alert spine
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -217,6 +219,21 @@ class DataManagerApp:
                 logger.info("Decision consumer started successfully")
             else:
                 logger.error("Failed to start decision consumer")
+
+        # Initialize and start alert dispatcher (#183, FR66). Subscribes to
+        # `alerts.>`, persists every event into the `alerts` Mongo collection,
+        # attempts delivery to the operator webhook (or marks delivered_mock
+        # when no webhook is configured), and enforces per-category rate
+        # limiting + summary rollup.
+        if constants.ENABLE_ALERT_DISPATCHER:
+            self.alert_dispatcher = AlertDispatcher(
+                db_manager=self.db_manager,
+                subject=constants.NATS_ALERTS_SUBJECT,
+            )
+            if await self.alert_dispatcher.start():
+                logger.info("Alert dispatcher started successfully")
+            else:
+                logger.error("Failed to start alert dispatcher")
 
         # Initialize and start execution events consumer (P0.2c)
         if constants.ENABLE_EXECUTION_EVENTS_CONSUMER:
@@ -414,6 +431,11 @@ class DataManagerApp:
         if self.decision_consumer:
             await self.decision_consumer.stop()
             logger.info("Decision consumer stopped")
+
+        # Stop alert dispatcher (#183)
+        if self.alert_dispatcher:
+            await self.alert_dispatcher.stop()
+            logger.info("Alert dispatcher stopped")
 
         # Stop execution events consumer
         if self.execution_events_consumer:

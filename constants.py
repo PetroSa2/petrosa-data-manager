@@ -76,6 +76,14 @@ ENABLE_EXECUTION_EVENTS_CONSUMER = (
     os.getenv("ENABLE_EXECUTION_EVENTS_CONSUMER", "true").lower() == "true"
 )
 ENABLE_PNL_CONSUMER = os.getenv("ENABLE_PNL_CONSUMER", "true").lower() == "true"
+# Alert spine subscriber (FR66 / #183). Subscribes to `alerts.>`, persists
+# every event into the `alerts` Mongo collection, attempts delivery to the
+# operator webhook (or marks delivered_mock when no webhook URL is set),
+# and enforces per-category rate limiting + summary rollup. Defaults true
+# so a fresh deploy is ready to receive alerts the moment producers light
+# up (e.g. petrosa-tradeengine reconciliation mismatch on AC2.e).
+ENABLE_ALERT_DISPATCHER = os.getenv("ENABLE_ALERT_DISPATCHER", "true").lower() == "true"
+NATS_ALERTS_SUBJECT = os.getenv("NATS_ALERTS_SUBJECT", "alerts.>")
 # P4.1 follow-up (#652): publisher side that binds the
 # `ExecutionEventsConsumer.on_persisted` hook to a NATS publisher emitting
 # `pnl.events.<strategy_id>`. Defaults true so a fresh deploy lights up the
