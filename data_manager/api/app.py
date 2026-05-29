@@ -26,6 +26,7 @@ from data_manager.api.routes import (
     fidelity,
     generic,
     health,
+    leverage_bounds,
     lifecycle,
     pnl,
     portfolio_state,
@@ -154,6 +155,9 @@ def create_app() -> FastAPI:
     # the existing service-layer code that powers /api/v1. Mounted at
     # /api/dashboard so the SPA contract is decoupled from /api/v1.
     app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
+    # leverage_bounds routes already include the /api/dashboard prefix in-path
+    # so they're registered without a router-level prefix.
+    app.include_router(leverage_bounds.router, tags=["Dashboard"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
