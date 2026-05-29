@@ -22,6 +22,7 @@ from data_manager.api.routes import (
     config,
     dashboard,
     data,
+    dr_status,
     drawdown,
     fidelity,
     generic,
@@ -158,6 +159,9 @@ def create_app() -> FastAPI:
     # leverage_bounds routes already include the /api/dashboard prefix in-path
     # so they're registered without a router-level prefix.
     app.include_router(leverage_bounds.router, tags=["Dashboard"])
+    # dr_status route also carries the /api/dashboard prefix in-path
+    # (#743 / P9-AC5.c).
+    app.include_router(dr_status.router, tags=["Dashboard"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
