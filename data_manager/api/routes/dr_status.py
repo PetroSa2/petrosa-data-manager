@@ -116,8 +116,8 @@ async def dr_status() -> dict[str, Any]:
     else:
         now = datetime.now(UTC)
         days_since = int((now - exercised_at).total_seconds() // 86400)
-        iso_exercised_at = exercised_at.astimezone(UTC).isoformat().replace(
-            "+00:00", "Z"
+        iso_exercised_at = (
+            exercised_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
         )
 
     return {
