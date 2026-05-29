@@ -59,7 +59,9 @@ jobs:
   build-and-push:
     name: Build & Push
     needs: create-release
-    runs-on: petrosa-org-runners
+    # Docker build requires /var/run/docker.sock which petrosa-org-runners lack.
+    # Convention across the Petrosa fleet: ubuntu-latest for image builds.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -112,7 +114,8 @@ jobs:
     name: Build & Push Dashboard
     needs: [create-release, detect-changes]
     if: needs.detect-changes.outputs.dashboard == 'true'
-    runs-on: petrosa-org-runners
+    # Docker build — same reason as build-and-push above.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write

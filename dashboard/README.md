@@ -114,3 +114,5 @@ The Helm chart, ingress, and `apply-k8s-changes.yml` wiring live in the
 sibling ticket
 [#655](https://github.com/PetroSa2/petrosa_k8s/issues/655) under
 `petrosa_k8s/k8s/dashboard/`. This package only produces the image.
+
+<!-- Build pipeline restored 2026-05-29 via petrosa_k8s#713 — see deploy.yml runner fix. -->
