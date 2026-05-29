@@ -24,6 +24,7 @@ from data_manager.api.routes import (
     data,
     dr_status,
     drawdown,
+    envelopes,
     fidelity,
     generic,
     health,
@@ -162,6 +163,9 @@ def create_app() -> FastAPI:
     # dr_status route also carries the /api/dashboard prefix in-path
     # (#743 / P9-AC5.c).
     app.include_router(dr_status.router, tags=["Dashboard"])
+    # Operator envelope-approval workflow (#187, P4.6-AC1 / FR62) — routes
+    # embed the /api/envelopes prefix in-path.
+    app.include_router(envelopes.router, tags=["Envelopes"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
