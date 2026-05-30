@@ -34,6 +34,7 @@ from data_manager.api.routes import (
     portfolio_state,
     raw,
     schemas,
+    strategies,
     strategy_timeline,
 )
 
@@ -166,6 +167,10 @@ def create_app() -> FastAPI:
     # Operator envelope-approval workflow (#187, P4.6-AC1 / FR62) — routes
     # embed the /api/envelopes prefix in-path.
     app.include_router(envelopes.router, tags=["Envelopes"])
+
+    # Strategy registry (#195, FR54) — POST/GET /api/strategies. Routes embed
+    # the prefix in-path.
+    app.include_router(strategies.router, tags=["Strategies"])
 
     # New API routes
     app.include_router(generic.router, tags=["Generic CRUD"])
