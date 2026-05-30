@@ -204,6 +204,29 @@ class DataManagerApp:
             else:
                 logger.error("Failed to start market data consumer")
 
+            # Wire NATS publishers for operator endpoint cache-bust events (#197).
+            # Both routes share ONE publisher instance (AC3): one connection, two
+            # subjects (``envelopes.changed`` from envelopes.py + #193, and
+            # ``cio.config.leverage_bounds.updated`` from leverage_bounds.py + #182).
+            # The _DeferredNatsClient lambda defers nats_client lookup until publish
+            # time, so wiring here — after consumer.start() succeeded — guarantees the
+            # first accept/reject request resolves to a live NATS connection (AC4).
+            from data_manager.api.routes.envelopes import (
+                set_envelopes_changed_publisher,
+            )
+            from data_manager.api.routes.leverage_bounds import (
+                set_leverage_bounds_publisher,
+            )
+
+            self._envelope_leverage_publisher = _DeferredNatsClient(
+                lambda: getattr(self.consumer.nats_client, "nc", None)
+                if self.consumer is not None
+                else None
+            )
+            set_envelopes_changed_publisher(self._envelope_leverage_publisher)
+            set_leverage_bounds_publisher(self._envelope_leverage_publisher)
+            logger.info("Envelope/leverage NATS publishers wired at boot (#197)")
+
         # Initialize and start intent consumer (cross-service identifier contract, P0.2a)
         if constants.ENABLE_INTENT_CONSUMER:
             self.intent_consumer = IntentConsumer(db_manager=self.db_manager)
@@ -416,6 +439,24 @@ class DataManagerApp:
         if self.leader_election:
             await self.leader_election.stop()
             logger.info("Leader election stopped")
+
+        # Unwire operator-route NATS publishers (#197 AC5). Done BEFORE
+        # consumer.stop() closes the underlying nats_client.nc so a late
+        # in-flight accept/reject request gets `publisher is None` (graceful
+        # no-op) instead of a publish() against a half-closed connection.
+        try:
+            from data_manager.api.routes.envelopes import (
+                set_envelopes_changed_publisher,
+            )
+            from data_manager.api.routes.leverage_bounds import (
+                set_leverage_bounds_publisher,
+            )
+
+            set_envelopes_changed_publisher(None)
+            set_leverage_bounds_publisher(None)
+            logger.info("Envelope/leverage NATS publishers unwired (#197)")
+        except Exception as e:
+            logger.warning(f"Failed to unwire route publishers: {e}")
 
         # Stop consumer
         if self.consumer:
