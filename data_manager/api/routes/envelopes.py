@@ -276,6 +276,43 @@ async def list_pending_envelope_changes(limit: int = 200) -> dict[str, Any]:
     }
 
 
+@router.get("/api/envelopes/active/{key}")
+async def get_active_envelope(
+    key: str = Path(..., min_length=1, description="strategy_or_portfolio_key"),
+) -> dict[str, Any]:
+    """Return the active (highest-version) envelope for ``key`` (#200).
+
+    Wraps :meth:`EnvelopeRepository.get_full_active_envelope` so out-of-process
+    consumers (cio envelope-fetch helper from #154, tradeengine FR30 wiring
+    from #421) can read the active envelope without sharing the Mongo
+    connection.
+
+    The repository returns the highest ``version`` regardless of ``source``
+    (AC3 of #154 — operator-approved precedence by version, not by source):
+    if an operator-approved ``v=4`` row exists and a characterization ``v=5``
+    arrives afterward, the read returns ``v=5``. That precedence-by-version
+    is intentional and is asserted by the cross-repo helper tests.
+
+    Responses:
+      * ``200`` — full ``Envelope`` document as JSON (envelope_id, version,
+        strategy_or_portfolio_key, value, source, originating_characterization_revision,
+        operator_id, created_at, signed_action_id).
+      * ``404`` — no envelope exists for the given key.
+      * ``503`` — MongoDB is unavailable (data-manager in limited mode).
+    """
+    repo = _envelope_repo()
+    envelope = await repo.get_full_active_envelope(key)
+    if envelope is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "title": "Envelope not found",
+                "detail": f"No envelope exists for strategy_or_portfolio_key={key!r}",
+            },
+        )
+    return envelope.model_dump(mode="json")
+
+
 @router.post("/api/envelopes/{change_id}/accept")
 async def accept_envelope_change(
     req: AcceptEnvelopeChangeRequest,

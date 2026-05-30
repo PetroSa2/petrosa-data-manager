@@ -618,3 +618,85 @@ def test_publisher_unwired_returns_nats_published_false(wired_app: TestClient) -
     assert r.json()["nats_published"] is False
     # Storage + audit still happen.
     assert len(wired_app.mongo.db[ENVELOPES_COLLECTION].docs) == 1
+
+
+# ─── #200 — GET /api/envelopes/active/{key} (read route for cio#154 unblock) ─
+
+
+def test_get_active_envelope_returns_seeded_envelope(wired_app: TestClient) -> None:
+    """AC1 + AC2 of #200: 200 with full Envelope shape when one exists."""
+    key = "strategy:btc_momentum_v3"
+    _seed_existing_envelope(
+        wired_app.mongo, key=key, version=5, value={"max_drawdown_pct": 6.5}
+    )
+
+    r = wired_app.get(f"/api/envelopes/active/{key}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # All Envelope fields present and JSON-serialized.
+    assert body["strategy_or_portfolio_key"] == key
+    assert body["version"] == 5
+    assert body["value"] == {"max_drawdown_pct": 6.5}
+    assert body["source"] == "characterization"
+    assert body["envelope_id"] == f"{key}:v5"
+    assert body["signed_action_id"] == "sa-prior"
+    assert "created_at" in body  # ISO-8601 string
+
+
+def test_get_active_envelope_returns_404_when_missing(wired_app: TestClient) -> None:
+    """AC1 of #200: 404 when no envelope exists for the key."""
+    r = wired_app.get("/api/envelopes/active/strategy:never_seeded")
+    assert r.status_code == 404
+    detail = r.json()["detail"]
+    assert "strategy:never_seeded" in detail["detail"]
+
+
+def test_get_active_envelope_returns_highest_version_regardless_of_source(
+    wired_app: TestClient,
+) -> None:
+    """AC3 of #200 (and the cio#154 precedence-by-version quirk):
+    operator_approved v=4 followed by characterization v=5 must return v=5.
+    The repository sorts by version desc; source is informational, not
+    used as a filter."""
+    key = "strategy:precedence_check"
+    # operator_approved v=4 (older)
+    wired_app.mongo.db[ENVELOPES_COLLECTION].docs.append(
+        {
+            "_id": f"{key}:v4",
+            "envelope_id": f"{key}:v4",
+            "version": 4,
+            "strategy_or_portfolio_key": key,
+            "value": {"max_drawdown_pct": 7.0},
+            "source": "operator_approved",
+            "originating_characterization_revision": None,
+            "operator_id": "alice",
+            "created_at": "2026-05-29T00:00:00+00:00",
+            "signed_action_id": "sa-op-v4",
+        }
+    )
+    # characterization v=5 (newer — wins)
+    _seed_existing_envelope(
+        wired_app.mongo, key=key, version=5, value={"max_drawdown_pct": 6.0}
+    )
+
+    r = wired_app.get(f"/api/envelopes/active/{key}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["version"] == 5
+    assert body["source"] == "characterization"
+    assert body["value"] == {"max_drawdown_pct": 6.0}
+
+
+def test_get_active_envelope_503_when_db_unavailable() -> None:
+    """AC1 of #200: 503 when MongoDB is unavailable (limited mode)."""
+    original = api_module.db_manager
+    api_module.db_manager = None
+    try:
+        app = create_app()
+        client = TestClient(app)
+        r = client.get("/api/envelopes/active/strategy:anything")
+        assert r.status_code == 503
+        detail = r.json()["detail"]
+        assert detail["title"] == "MongoDB unavailable"
+    finally:
+        api_module.db_manager = original
