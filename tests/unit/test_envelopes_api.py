@@ -21,6 +21,7 @@ Covers every AC of #187:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -28,7 +29,11 @@ from fastapi.testclient import TestClient
 
 import data_manager.api.app as api_module
 from data_manager.api.app import create_app
-from data_manager.api.routes.envelopes import ENVELOPE_AUTHORSHIP_AUDIT_COLLECTION
+from data_manager.api.routes.envelopes import (
+    ENVELOPE_AUTHORSHIP_AUDIT_COLLECTION,
+    ENVELOPES_CHANGED_NATS_SUBJECT,
+    set_envelopes_changed_publisher,
+)
 from data_manager.db.repositories.envelope_repository import ENVELOPES_COLLECTION
 from data_manager.db.repositories.pending_envelope_change_repository import (
     PENDING_ENVELOPE_CHANGES_COLLECTION,
@@ -158,19 +163,40 @@ class _FakeDbManager:
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
 
+class _RecordingPublisher:
+    """Captures (subject, payload-dict) tuples for assertion in tests."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+
+    async def publish(self, subject: str, payload: bytes) -> None:
+        self.published.append((subject, json.loads(payload.decode())))
+
+
+class _BrokenPublisher:
+    """Always raises — used to prove publish failures never break the operator request."""
+
+    async def publish(self, subject: str, payload: bytes) -> None:
+        raise RuntimeError("nats down")
+
+
 @pytest.fixture
 def wired_app():
-    """Wire the in-memory Mongo into the app module for the duration of a test."""
+    """Wire the in-memory Mongo + recording NATS publisher into the app module."""
     original = api_module.db_manager
     api_module.db_manager = _FakeDbManager()
+    publisher = _RecordingPublisher()
+    set_envelopes_changed_publisher(publisher)
     try:
         app = create_app()
         client = TestClient(app)
-        # Stash the mongo handle for in-test seeding/inspection.
+        # Stash handles for in-test seeding/inspection.
         client.mongo = api_module.db_manager.mongodb_adapter  # type: ignore[attr-defined]
+        client.publisher = publisher  # type: ignore[attr-defined]
         yield client
     finally:
         api_module.db_manager = original
+        set_envelopes_changed_publisher(None)
 
 
 def _seed_pending(
@@ -469,3 +495,126 @@ def test_reject_404_when_change_missing(wired_app: TestClient) -> None:
         },
     )
     assert r.status_code == 404
+
+
+# ─── AC3 / #193 — envelopes.changed NATS publisher ───────────────────────────
+
+
+def test_accept_publishes_envelopes_changed(wired_app: TestClient) -> None:
+    """AC3: successful accept emits envelopes.changed with the AC payload shape."""
+    _seed_pending(
+        wired_app.mongo,
+        change_id="chg-pub-1",
+        key="strategy:btc_pub",
+        proposed={"max_drawdown_pct": 7.5},
+        char_revision="char-rev-pub-1",
+    )
+
+    r = wired_app.post(
+        "/api/envelopes/chg-pub-1/accept",
+        json={"operator_id": "alice", "signed_action_id": "sa-pub-1"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["nats_published"] is True
+
+    assert len(wired_app.publisher.published) == 1
+    subject, payload = wired_app.publisher.published[0]
+    assert subject == ENVELOPES_CHANGED_NATS_SUBJECT
+    assert subject == "envelopes.changed"
+    assert payload["strategy_or_portfolio_key"] == "strategy:btc_pub"
+    assert isinstance(payload["new_version"], int)
+    assert payload["source"] == "operator_approved"
+    assert payload["signed_action_id"] == "sa-pub-1"
+    assert payload["originating_characterization_revision"] == "char-rev-pub-1"
+    assert payload["accepted_at"] is not None
+
+
+def test_accept_with_modification_publishes_envelopes_changed(
+    wired_app: TestClient,
+) -> None:
+    _seed_pending(
+        wired_app.mongo,
+        change_id="chg-pub-2",
+        key="strategy:eth_pub",
+        proposed={"max_drawdown_pct": 6.0, "vol_target": 0.1},
+        char_revision="char-rev-pub-2",
+    )
+
+    r = wired_app.post(
+        "/api/envelopes/chg-pub-2/accept-with-modification",
+        json={
+            "operator_id": "bob",
+            "signed_action_id": "sa-pub-2",
+            "modification_overrides": {"vol_target": 0.15},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["nats_published"] is True
+
+    assert len(wired_app.publisher.published) == 1
+    subject, payload = wired_app.publisher.published[0]
+    assert subject == "envelopes.changed"
+    assert payload["strategy_or_portfolio_key"] == "strategy:eth_pub"
+    assert payload["source"] == "operator_approved"
+    assert payload["signed_action_id"] == "sa-pub-2"
+
+
+def test_reject_publishes_envelopes_changed_with_status_rejected(
+    wired_app: TestClient,
+) -> None:
+    _seed_pending(wired_app.mongo, change_id="chg-pub-3", key="strategy:doge_pub")
+
+    r = wired_app.post(
+        "/api/envelopes/chg-pub-3/reject",
+        json={
+            "operator_id": "carol",
+            "signed_action_id": "sa-pub-3",
+            "rejection_reason": "characterization sample too small",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["nats_published"] is True
+
+    assert len(wired_app.publisher.published) == 1
+    subject, payload = wired_app.publisher.published[0]
+    assert subject == "envelopes.changed"
+    assert payload["strategy_or_portfolio_key"] == "strategy:doge_pub"
+    assert payload["status"] == "rejected"
+    assert payload["change_id"] == "chg-pub-3"
+    assert payload["operator_id"] == "carol"
+    assert payload["signed_action_id"] == "sa-pub-3"
+    # Accept-only fields must be absent on reject payload (top-level filter)
+    assert "new_version" not in payload
+    assert "source" not in payload
+
+
+def test_broken_publisher_does_not_fail_accept(wired_app: TestClient) -> None:
+    """AC: publish failures are logged but never break the operator request."""
+    set_envelopes_changed_publisher(_BrokenPublisher())
+    _seed_pending(wired_app.mongo, change_id="chg-broken", key="strategy:broken")
+
+    r = wired_app.post(
+        "/api/envelopes/chg-broken/accept",
+        json={"operator_id": "alice", "signed_action_id": "sa-broken"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["nats_published"] is False
+    # Envelope + audit still landed even though publish raised.
+    assert len(wired_app.mongo.db[ENVELOPES_COLLECTION].docs) == 1
+    assert len(wired_app.mongo.db[ENVELOPE_AUTHORSHIP_AUDIT_COLLECTION].docs) == 1
+
+
+def test_publisher_unwired_returns_nats_published_false(wired_app: TestClient) -> None:
+    """No publisher wired → route still succeeds, returns nats_published=False."""
+    set_envelopes_changed_publisher(None)
+    _seed_pending(wired_app.mongo, change_id="chg-no-pub", key="strategy:noop")
+
+    r = wired_app.post(
+        "/api/envelopes/chg-no-pub/accept",
+        json={"operator_id": "alice", "signed_action_id": "sa-no-pub"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["nats_published"] is False
+    # Storage + audit still happen.
+    assert len(wired_app.mongo.db[ENVELOPES_COLLECTION].docs) == 1

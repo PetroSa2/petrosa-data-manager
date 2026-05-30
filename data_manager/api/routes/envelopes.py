@@ -27,9 +27,10 @@ Pydantic models with field descriptions (AC1.f).
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 try:
     from datetime import UTC
@@ -62,6 +63,70 @@ router = APIRouter()
 
 ENVELOPE_AUTHORSHIP_AUDIT_COLLECTION = "envelope_authorship_audit"
 """Mongo collection that captures every approve/reject action (AC1.g)."""
+
+ENVELOPES_CHANGED_NATS_SUBJECT = "envelopes.changed"
+"""Top-level NATS subject for envelope cache-bust events (P4.6-AC3, #193).
+
+Top-level (not ``.<key>``-suffixed): a single subscriber sees every event
+and filters client-side by ``strategy_or_portfolio_key``.
+"""
+
+
+# ── NATS publisher plumbing (parallel to leverage_bounds.set_*_publisher) ──
+
+
+class _NATSPublisher(Protocol):
+    async def publish(self, subject: str, payload: bytes) -> None: ...
+
+
+_publisher: _NATSPublisher | None = None
+
+
+def set_envelopes_changed_publisher(publisher: _NATSPublisher | None) -> None:
+    """Wire the NATS publisher used by accept/reject routes (call once at boot).
+
+    Tests inject a recording stub; passing ``None`` unwires the publisher
+    (the routes then complete normally but skip the NATS emit).
+    """
+    global _publisher
+    _publisher = publisher
+
+
+def _get_publisher() -> _NATSPublisher | None:
+    return _publisher
+
+
+async def _publish_envelopes_changed(payload: dict[str, Any]) -> bool:
+    """Best-effort NATS publish of an ``envelopes.changed`` event (AC3).
+
+    Returns ``True`` iff a publisher was wired AND the publish call did
+    not raise. All failures are logged but never propagated — the operator
+    request must succeed even when NATS is down.
+    """
+    publisher = _get_publisher()
+    if publisher is None:
+        logger.info(
+            "envelopes_changed.publish_skipped key=%s (no publisher wired)",
+            payload.get("strategy_or_portfolio_key"),
+        )
+        return False
+    try:
+        await publisher.publish(
+            ENVELOPES_CHANGED_NATS_SUBJECT, json.dumps(payload).encode()
+        )
+    except Exception as exc:  # noqa: BLE001 — never block the operator request
+        logger.warning(
+            "envelopes_changed.publish_failed key=%s error=%s",
+            payload.get("strategy_or_portfolio_key"),
+            exc,
+        )
+        return False
+    logger.info(
+        "envelopes_changed.published subject=%s key=%s",
+        ENVELOPES_CHANGED_NATS_SUBJECT,
+        payload.get("strategy_or_portfolio_key"),
+    )
+    return True
 
 
 # ── infrastructure helpers (parallel to leverage_bounds.py) ─────────────────
@@ -275,9 +340,21 @@ async def accept_envelope_change(
         rejection_reason=None,
     )
 
+    nats_published = await _publish_envelopes_changed(
+        {
+            "strategy_or_portfolio_key": change.strategy_or_portfolio_key,
+            "new_version": inserted.version,
+            "source": inserted.source,
+            "signed_action_id": req.signed_action_id,
+            "originating_characterization_revision": change.originating_characterization_revision,
+            "accepted_at": datetime.now(UTC).isoformat(),
+        }
+    )
+
     return {
         "change": resolved.model_dump(mode="json"),
         "envelope": inserted.model_dump(mode="json"),
+        "nats_published": nats_published,
     }
 
 
@@ -343,9 +420,21 @@ async def accept_envelope_change_with_modification(
         rejection_reason=None,
     )
 
+    nats_published = await _publish_envelopes_changed(
+        {
+            "strategy_or_portfolio_key": change.strategy_or_portfolio_key,
+            "new_version": inserted.version,
+            "source": inserted.source,
+            "signed_action_id": req.signed_action_id,
+            "originating_characterization_revision": change.originating_characterization_revision,
+            "accepted_at": datetime.now(UTC).isoformat(),
+        }
+    )
+
     return {
         "change": resolved.model_dump(mode="json"),
         "envelope": inserted.model_dump(mode="json"),
+        "nats_published": nats_published,
     }
 
 
@@ -399,4 +488,17 @@ async def reject_envelope_change(
         rejection_reason=req.rejection_reason,
     )
 
-    return {"change": resolved.model_dump(mode="json")}
+    nats_published = await _publish_envelopes_changed(
+        {
+            "strategy_or_portfolio_key": change.strategy_or_portfolio_key,
+            "status": "rejected",
+            "change_id": change_id,
+            "operator_id": req.operator_id,
+            "signed_action_id": req.signed_action_id,
+        }
+    )
+
+    return {
+        "change": resolved.model_dump(mode="json"),
+        "nats_published": nats_published,
+    }
