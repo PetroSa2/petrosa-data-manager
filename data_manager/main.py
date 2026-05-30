@@ -7,7 +7,7 @@ import logging
 import os
 import signal
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # 1. Setup OpenTelemetry FIRST (before any other imports that might use it)
 try:
@@ -84,6 +84,50 @@ class DataManagerApp:
         self.alert_dispatcher: AlertDispatcher | None = None  # #183 alert spine
         self.running = False
         self._shutdown_event = asyncio.Event()
+
+    def _wire_route_publishers(self, deferred_publisher: Any) -> None:
+        """Wire NATS publishers used by operator routes (#197).
+
+        Both ``envelopes.changed`` (from envelopes.py route) and
+        ``cio.config.leverage_bounds.updated`` (from leverage_bounds.py
+        route) receive the SAME publisher instance (AC3 — one connection,
+        two subjects). Extracted as a method so the wiring is testable in
+        isolation without booting the full DataManagerApp (codecov gap fix
+        for #197).
+        """
+        from data_manager.api.routes.envelopes import (
+            set_envelopes_changed_publisher,
+        )
+        from data_manager.api.routes.leverage_bounds import (
+            set_leverage_bounds_publisher,
+        )
+
+        self._envelope_leverage_publisher = deferred_publisher
+        set_envelopes_changed_publisher(deferred_publisher)
+        set_leverage_bounds_publisher(deferred_publisher)
+        logger.info("Envelope/leverage NATS publishers wired at boot (#197)")
+
+    def _unwire_route_publishers(self) -> None:
+        """Unwire operator-route NATS publishers (#197 AC5).
+
+        Passes ``None`` to both setters so the route modules' module-level
+        ``_publisher`` globals reset — a subsequent restart starts from a
+        clean slate, no stale closed-conn reference. Extracted from stop()
+        for testability (codecov gap fix for #197).
+        """
+        try:
+            from data_manager.api.routes.envelopes import (
+                set_envelopes_changed_publisher,
+            )
+            from data_manager.api.routes.leverage_bounds import (
+                set_leverage_bounds_publisher,
+            )
+
+            set_envelopes_changed_publisher(None)
+            set_leverage_bounds_publisher(None)
+            logger.info("Envelope/leverage NATS publishers unwired (#197)")
+        except Exception as e:
+            logger.warning(f"Failed to unwire route publishers: {e}")
 
     async def start(self) -> None:
         """Start all application components."""
@@ -211,21 +255,13 @@ class DataManagerApp:
             # The _DeferredNatsClient lambda defers nats_client lookup until publish
             # time, so wiring here — after consumer.start() succeeded — guarantees the
             # first accept/reject request resolves to a live NATS connection (AC4).
-            from data_manager.api.routes.envelopes import (
-                set_envelopes_changed_publisher,
+            self._wire_route_publishers(
+                _DeferredNatsClient(
+                    lambda: getattr(self.consumer.nats_client, "nc", None)
+                    if self.consumer is not None
+                    else None
+                )
             )
-            from data_manager.api.routes.leverage_bounds import (
-                set_leverage_bounds_publisher,
-            )
-
-            self._envelope_leverage_publisher = _DeferredNatsClient(
-                lambda: getattr(self.consumer.nats_client, "nc", None)
-                if self.consumer is not None
-                else None
-            )
-            set_envelopes_changed_publisher(self._envelope_leverage_publisher)
-            set_leverage_bounds_publisher(self._envelope_leverage_publisher)
-            logger.info("Envelope/leverage NATS publishers wired at boot (#197)")
 
         # Initialize and start intent consumer (cross-service identifier contract, P0.2a)
         if constants.ENABLE_INTENT_CONSUMER:
@@ -444,19 +480,7 @@ class DataManagerApp:
         # consumer.stop() closes the underlying nats_client.nc so a late
         # in-flight accept/reject request gets `publisher is None` (graceful
         # no-op) instead of a publish() against a half-closed connection.
-        try:
-            from data_manager.api.routes.envelopes import (
-                set_envelopes_changed_publisher,
-            )
-            from data_manager.api.routes.leverage_bounds import (
-                set_leverage_bounds_publisher,
-            )
-
-            set_envelopes_changed_publisher(None)
-            set_leverage_bounds_publisher(None)
-            logger.info("Envelope/leverage NATS publishers unwired (#197)")
-        except Exception as e:
-            logger.warning(f"Failed to unwire route publishers: {e}")
+        self._unwire_route_publishers()
 
         # Stop consumer
         if self.consumer:

@@ -12,6 +12,11 @@ emit-on-accept contract is exercised there with a recording publisher
 that mirrors what `main.py` injects at boot. This test file proves the
 boot-side of that contract: the wiring is real and the same publisher
 flows to both subject owners.
+
+Dynamic tests (`*_method_executes_*`) hit the extracted
+`_wire_route_publishers` / `_unwire_route_publishers` methods on
+`DataManagerApp` directly to close the codecov coverage gap that
+inspect-based structural tests alone could not.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import inspect
 import pytest
 
 from data_manager.api.routes import envelopes, leverage_bounds
+from data_manager.main import DataManagerApp
 
 
 class _RecordingPublisher:
@@ -97,39 +103,63 @@ def test_wired_publisher_receives_publish_calls_via_route_helper() -> None:
     assert subject == envelopes.ENVELOPES_CHANGED_NATS_SUBJECT
 
 
-def test_main_module_imports_both_setters_at_wiring_site() -> None:
-    """AC4 (structure): `DataManagerApp.start()` source contains the
-    boot-time wiring block — both setter imports + setter calls + a
-    shared `_DeferredNatsClient` instance — so the wiring cannot be
-    silently removed without this test failing.
-
-    This guards against a regression where #197's wiring is reverted but
-    the env/leverage routes still appear to work (because tests inject
-    publishers directly), masking the loss of the production cache-bust.
+def test_wire_route_publishers_method_executes_dynamic() -> None:
+    """AC1 + AC2 + AC3 (dynamic): `DataManagerApp._wire_route_publishers`
+    actually runs and wires both route module globals to the SAME publisher
+    instance passed in. Provides line coverage for the boot wiring code
+    that the inspect-based structural tests alone could not.
     """
-    from data_manager import main as main_module
+    _reset_module_publishers()
+    app = DataManagerApp()
+    rec = _RecordingPublisher()
 
-    src = inspect.getsource(main_module.DataManagerApp.start)
-    assert "set_envelopes_changed_publisher" in src
-    assert "set_leverage_bounds_publisher" in src
+    app._wire_route_publishers(rec)
+
+    assert envelopes._publisher is rec
+    assert leverage_bounds._publisher is rec
+    assert app._envelope_leverage_publisher is rec
+
+
+def test_unwire_route_publishers_method_executes_dynamic() -> None:
+    """AC5 (dynamic): `DataManagerApp._unwire_route_publishers` actually
+    runs and resets both route module globals to None even when the app
+    was previously wired with a publisher. Provides line coverage for the
+    teardown code, including the try/except wrapper."""
+    _reset_module_publishers()
+    rec = _RecordingPublisher()
+    envelopes.set_envelopes_changed_publisher(rec)
+    leverage_bounds.set_leverage_bounds_publisher(rec)
+
+    app = DataManagerApp()
+    app._unwire_route_publishers()
+
+    assert envelopes._publisher is None
+    assert leverage_bounds._publisher is None
+
+
+def test_main_module_start_delegates_to_wire_route_publishers() -> None:
+    """AC4 (structure): `DataManagerApp.start()` source contains a call to
+    the extracted wiring method, and the inline ``_DeferredNatsClient``
+    construction that supplies its argument. Guards against a regression
+    where #197's wiring is reverted but routes still appear to work
+    (because tests inject publishers directly), masking the loss of the
+    production cache-bust.
+    """
+    src = inspect.getsource(DataManagerApp.start)
+    assert "_wire_route_publishers" in src
     assert "_DeferredNatsClient" in src
 
 
-def test_main_module_stop_unwires_both_setters() -> None:
-    """AC5 (structure): `DataManagerApp.stop()` source contains the
-    teardown block that passes `None` to both setters before the consumer
-    is stopped (so the unwiring beats the nats_client close-down)."""
-    from data_manager import main as main_module
-
-    src = inspect.getsource(main_module.DataManagerApp.stop)
-    assert "set_envelopes_changed_publisher(None)" in src
-    assert "set_leverage_bounds_publisher(None)" in src
-    # Teardown comes BEFORE the consumer.stop() call so the deferred
-    # nats_client lookup is no-oped before its underlying client closes.
-    unwire_idx = src.index("set_envelopes_changed_publisher(None)")
+def test_main_module_stop_delegates_to_unwire_route_publishers() -> None:
+    """AC5 (structure ordering): `DataManagerApp.stop()` calls the unwire
+    method BEFORE `consumer.stop()` so the deferred nats_client lookup is
+    no-oped before its underlying client closes."""
+    src = inspect.getsource(DataManagerApp.stop)
+    assert "_unwire_route_publishers" in src
+    unwire_idx = src.index("self._unwire_route_publishers()")
     consumer_stop_idx = src.index("await self.consumer.stop()")
     assert unwire_idx < consumer_stop_idx, (
-        "stop() must unwire route publishers BEFORE consumer.stop() — "
+        "stop() must call _unwire_route_publishers() BEFORE consumer.stop() — "
         "see #197 AC5 rationale"
     )
 
