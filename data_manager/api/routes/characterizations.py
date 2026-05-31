@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -10,6 +11,7 @@ import data_manager.api.app as api_module
 from data_manager.db.repositories.characterization_repository import (
     CharacterizationRepository,
 )
+from data_manager.models.characterization import Characterization
 
 logger = logging.getLogger(__name__)
 
@@ -93,4 +95,44 @@ async def get_characterization(
             detail += f", strategy_revision_id={strategy_revision_id}"
         raise HTTPException(status_code=404, detail=detail)
 
+    return artifact.model_dump(mode="json")
+
+
+@router.post("/characterizations", status_code=201)
+async def create_characterization(artifact: Characterization) -> dict[str, Any]:
+    """Persist a characterization artifact (#202, FR54-B precursor).
+
+    The repository upsert is keyed by ``(strategy_id, strategy_version)`` — a
+    re-POST with identical key replaces in-place (idempotent at the data
+    layer). 503 if Mongo is unavailable. 422 (via Pydantic) on schema
+    validation; 422 (explicit) on missing required metrics.
+    """
+    repo = _repo()
+    if repo is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "title": "data-manager in limited mode",
+                "detail": "MongoDB adapter not available — characterization write refused.",
+            },
+        )
+    try:
+        artifact.validate_required_metrics()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "title": "characterization missing required metrics",
+                "detail": str(exc),
+            },
+        ) from exc
+    ok = await repo.upsert(artifact)
+    if not ok:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "title": "characterization persist failed",
+                "detail": "repository upsert returned False (MongoDB unavailable mid-write).",
+            },
+        )
     return artifact.model_dump(mode="json")
