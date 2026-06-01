@@ -17,6 +17,7 @@ from data_manager.api.routes import (
     anomalies,
     audit,
     backfill,
+    breaches,
     catalog,
     characterizations,
     config,
@@ -167,6 +168,11 @@ def create_app() -> FastAPI:
     # Operator envelope-approval workflow (#187, P4.6-AC1 / FR62) — routes
     # embed the /api/envelopes prefix in-path.
     app.include_router(envelopes.router, tags=["Envelopes"])
+
+    # P4.6-AC6.c / #194 — drawdown breach read API.
+    app.include_router(
+        breaches.router, prefix="/api/breaches", tags=["Drawdown Breaches"]
+    )
 
     # Strategy registry (#195, FR54) — POST/GET /api/strategies. Routes embed
     # the prefix in-path.
