@@ -287,3 +287,146 @@ export function fetchLifecycleByDecisionId(
     `/api/dashboard/lifecycle/${encodeURIComponent(decision_id)}`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// P4.6-AC4.b/c/d — envelope-authorship pane (#204).
+// Backend API ships in #206 (closes #203) at /api/dashboard/envelope-authorship.
+// ---------------------------------------------------------------------------
+
+export interface EnvelopeView {
+  envelope_id: string;
+  strategy_or_portfolio_key: string;
+  version: number;
+  source: "operator_approved" | "characterization";
+  value: Record<string, unknown>;
+  operator_id: string | null;
+  originating_characterization_revision: string | null;
+  signed_action_id: string | null;
+  created_at: string;
+}
+
+export interface EnvelopeChangeResolutionView {
+  operator_id: string;
+  decided_at: string;
+  signed_action_id: string;
+  rejection_reason: string | null;
+  overrides: Record<string, unknown> | null;
+}
+
+export interface PendingEnvelopeChangeView {
+  change_id: string;
+  strategy_or_portfolio_key: string;
+  proposed_envelope_value: Record<string, unknown>;
+  current_envelope_version: number | null;
+  current_envelope_value: Record<string, unknown> | null;
+  originating_characterization_revision: string;
+  created_at: string;
+  status: "pending" | "accepted" | "rejected";
+  resolution: EnvelopeChangeResolutionView | null;
+}
+
+export interface EnvelopeAuthorshipPayload {
+  current: EnvelopeView[];
+  pending: PendingEnvelopeChangeView[];
+  history: PendingEnvelopeChangeView[];
+  next_cursor: string | null;
+  filters: { key: string | null; limit: number };
+}
+
+export function fetchEnvelopeAuthorship(
+  key?: string,
+  limit?: number,
+  cursor?: string,
+): Promise<EnvelopeAuthorshipPayload> {
+  const q = new URLSearchParams();
+  if (key) q.set("key", key);
+  if (limit !== undefined) q.set("limit", String(limit));
+  if (cursor) q.set("cursor", cursor);
+  const qs = q.toString();
+  return getJson<EnvelopeAuthorshipPayload>(
+    `/api/dashboard/envelope-authorship${qs ? `?${qs}` : ""}`,
+  );
+}
+
+// Minimal POST helper for the envelope-resolution endpoints — mirrors
+// `getJson` semantics (ProblemJson on error, ApiError thrown).
+async function postJson<T, B>(path: string, body: B): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new ApiError(0, null, `network error: ${(e as Error).message}`);
+  }
+  if (!res.ok) {
+    let problem: ProblemJson | null = null;
+    try {
+      const responseBody = (await res.json()) as
+        | { detail?: ProblemJson }
+        | ProblemJson;
+      problem =
+        (responseBody as { detail?: ProblemJson }).detail ??
+        (responseBody as ProblemJson);
+    } catch {
+      // No problem-JSON body — fall through with status only.
+    }
+    throw new ApiError(
+      res.status,
+      problem,
+      problem?.detail ?? problem?.title ?? `HTTP ${res.status}`,
+    );
+  }
+  return (await res.json()) as T;
+}
+
+export interface AcceptEnvelopeBody {
+  operator_id: string;
+  signed_action_id: string;
+  rationale?: string | null;
+}
+
+export interface AcceptWithModificationBody extends AcceptEnvelopeBody {
+  overrides: Record<string, unknown>;
+}
+
+export interface RejectEnvelopeBody {
+  operator_id: string;
+  signed_action_id: string;
+  rejection_reason: string;
+}
+
+export function postEnvelopeAccept(
+  change_id: string,
+  body: AcceptEnvelopeBody,
+): Promise<EnvelopeView> {
+  return postJson<EnvelopeView, AcceptEnvelopeBody>(
+    `/api/envelopes/${encodeURIComponent(change_id)}/accept`,
+    body,
+  );
+}
+
+export function postEnvelopeAcceptWithModification(
+  change_id: string,
+  body: AcceptWithModificationBody,
+): Promise<EnvelopeView> {
+  return postJson<EnvelopeView, AcceptWithModificationBody>(
+    `/api/envelopes/${encodeURIComponent(change_id)}/accept-with-modification`,
+    body,
+  );
+}
+
+export function postEnvelopeReject(
+  change_id: string,
+  body: RejectEnvelopeBody,
+): Promise<{ status: "rejected" }> {
+  return postJson<{ status: "rejected" }, RejectEnvelopeBody>(
+    `/api/envelopes/${encodeURIComponent(change_id)}/reject`,
+    body,
+  );
+}
