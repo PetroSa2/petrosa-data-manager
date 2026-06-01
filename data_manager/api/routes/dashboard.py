@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 try:
     from datetime import UTC
@@ -517,3 +518,114 @@ async def dashboard_strategy_lifecycle(
     payload.setdefault("strategy_id", strategy_id)
     payload["window"] = window
     return payload
+
+
+# ----------------------------------------------------------------------
+# Route: /envelope-authorship — P4.6-AC4.a / FR62 (#203).
+# Backend API for the operator dashboard envelope-authorship pane.
+# Returns the current active envelope per strategy_or_portfolio_key,
+# pending changes awaiting operator action, and the decided-history
+# tail (paginated via ?limit= + ?cursor=).
+# ----------------------------------------------------------------------
+
+
+@router.get("/envelope-authorship")
+async def get_envelope_authorship(
+    key: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Return ``{current, pending, history}`` for the dashboard pane.
+
+    Query params (all optional):
+      * ``key`` — narrow all three buckets to one strategy_or_portfolio_key.
+      * ``limit`` — history page size (default 50, max 200, min 1).
+      * ``cursor`` — ISO-8601 ``resolution.decided_at`` of the last row
+        from the previous history page; returns rows strictly older.
+
+    Response shape::
+
+        {
+            "current": [Envelope, ...],
+            "pending": [PendingEnvelopeChange, ...],
+            "history": [PendingEnvelopeChange, ...],
+            "next_cursor": str | null,
+            "filters": {"key": str | null, "limit": int},
+        }
+    """
+    # Local imports avoid an import cycle at app boot (envelope routes
+    # import dashboard for nothing but the repos here are the same).
+    from data_manager.db.repositories.envelope_repository import EnvelopeRepository
+    from data_manager.db.repositories.pending_envelope_change_repository import (
+        PendingEnvelopeChangeRepository,
+    )
+
+    mongo = _require_mongo()
+    env_repo = EnvelopeRepository(mongodb_adapter=mongo)
+    pending_repo = PendingEnvelopeChangeRepository(mongodb_adapter=mongo)
+
+    clamped_limit = max(1, min(int(limit), 200))
+
+    try:
+        current = await env_repo.list_active_envelopes(key=key, limit=200)
+    except Exception as exc:
+        logger.error(
+            "dashboard_envelope_authorship_current_failed",
+            extra={"key": key, "error": str(exc)},
+            exc_info=True,
+        )
+        _raise_problem(
+            status=500,
+            title="envelope_authorship_current_failed",
+            detail="Failed to load active envelopes.",
+        )
+
+    try:
+        pending_rows = await pending_repo.list_pending(limit=200)
+        if key:
+            pending_rows = [
+                p for p in pending_rows if p.strategy_or_portfolio_key == key
+            ]
+    except Exception as exc:
+        logger.error(
+            "dashboard_envelope_authorship_pending_failed",
+            extra={"key": key, "error": str(exc)},
+            exc_info=True,
+        )
+        _raise_problem(
+            status=500,
+            title="envelope_authorship_pending_failed",
+            detail="Failed to load pending envelope changes.",
+        )
+
+    try:
+        history_rows, next_cursor = await pending_repo.list_decided(
+            key=key, limit=clamped_limit, cursor=cursor
+        )
+    except ValueError as exc:
+        # Bad cursor format → 400 (operator's fault, not ours).
+        _raise_problem(
+            status=400,
+            title="invalid_cursor",
+            detail=str(exc),
+        )
+    except Exception as exc:
+        logger.error(
+            "dashboard_envelope_authorship_history_failed",
+            extra={"key": key, "cursor": cursor, "error": str(exc)},
+            exc_info=True,
+        )
+        _raise_problem(
+            status=500,
+            title="envelope_authorship_history_failed",
+            detail="Failed to load decided envelope changes.",
+        )
+
+    # Pydantic models serialise via model_dump for stable JSON shape.
+    return {
+        "current": [e.model_dump(mode="json") for e in current],
+        "pending": [p.model_dump(mode="json") for p in pending_rows],
+        "history": [p.model_dump(mode="json") for p in history_rows],
+        "next_cursor": next_cursor,
+        "filters": {"key": key, "limit": clamped_limit},
+    }

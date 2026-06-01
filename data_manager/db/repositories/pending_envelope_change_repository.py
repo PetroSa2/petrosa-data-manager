@@ -15,6 +15,7 @@ first one.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from data_manager.db.repositories.base_repository import BaseRepository
@@ -95,6 +96,55 @@ class PendingEnvelopeChangeRepository(BaseRepository):
             name="strategy_or_portfolio_key_1_status_1",
             background=True,
         )
+
+    async def list_decided(
+        self,
+        *,
+        key: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[PendingEnvelopeChange], str | None]:
+        """List decided (accepted/rejected) envelope-change rows for the
+        dashboard history pane (P4.6-AC4.a / #203).
+
+        Sorted descending by ``resolution.decided_at``. The cursor is the
+        ISO-8601 ``decided_at`` value of the last row in the previous page —
+        callers paginate by passing it back as ``cursor`` to get rows older
+        than that timestamp.
+
+        ``limit`` is clamped to ``[1, 200]`` — the AC defines that range.
+        """
+        clamped = max(1, min(int(limit), 200))
+        col = self._collection()
+        query: dict[str, Any] = {"status": {"$in": ["accepted", "rejected"]}}
+        if key:
+            query["strategy_or_portfolio_key"] = key
+        if cursor:
+            # decided_at lives inside resolution sub-document; the cursor
+            # is interpreted as exclusive (returns rows strictly older).
+            try:
+                cursor_dt = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(
+                    f"cursor must be an ISO-8601 datetime; got {cursor!r}"
+                ) from exc
+            query["resolution.decided_at"] = {"$lt": cursor_dt}
+        # +1 to detect whether there's another page without a second query
+        mongo_cursor = (
+            col.find(query).sort("resolution.decided_at", -1).limit(clamped + 1)
+        )
+        rows: list[PendingEnvelopeChange] = []
+        async for doc in mongo_cursor:
+            change = self._doc_to_model(doc)
+            if change is not None:
+                rows.append(change)
+        next_cursor: str | None = None
+        if len(rows) > clamped:
+            rows = rows[:clamped]
+            tail = rows[-1]
+            if tail.resolution is not None:
+                next_cursor = tail.resolution.decided_at.isoformat()
+        return rows, next_cursor
 
     async def list_pending(self, limit: int = 200) -> list[PendingEnvelopeChange]:
         """Return all pending changes (AC1.a) in newest-first order.
