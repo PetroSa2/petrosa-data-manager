@@ -125,6 +125,48 @@ class EnvelopeRepository(BaseRepository):
         doc = await col.find_one({"strategy_or_portfolio_key": key, "version": version})
         return self._doc_to_envelope(doc)
 
+    async def list_active_envelopes(
+        self, *, key: str | None = None, limit: int = 200
+    ) -> list[Envelope]:
+        """Return the highest-version envelope per ``strategy_or_portfolio_key``.
+
+        Powers the dashboard ``current[]`` pane (P4.6-AC4.a / #203). When
+        ``key`` is supplied, the result is at most one element. When omitted,
+        returns one row per distinct key in the store, capped at ``limit``.
+
+        Implementation note: a simple ``$group``+``$first`` aggregation over
+        a sort by ``version DESC`` per key. Mongo doesn't directly support
+        "max-version per group" without a sort upstream — that's what the
+        pipeline does.
+        """
+        col = self._collection()
+        match: dict[str, Any] = {}
+        if key:
+            match["strategy_or_portfolio_key"] = key
+        pipeline: list[dict[str, Any]] = []
+        if match:
+            pipeline.append({"$match": match})
+        pipeline.extend(
+            [
+                {"$sort": {"strategy_or_portfolio_key": 1, "version": -1}},
+                {
+                    "$group": {
+                        "_id": "$strategy_or_portfolio_key",
+                        "doc": {"$first": "$ROOT"},
+                    }
+                },
+                {"$replaceRoot": {"newRoot": "$doc"}},
+                {"$sort": {"strategy_or_portfolio_key": 1}},
+                {"$limit": max(1, min(int(limit), 200))},
+            ]
+        )
+        out: list[Envelope] = []
+        async for doc in col.aggregate(pipeline):
+            env = self._doc_to_envelope(doc)
+            if env is not None:
+                out.append(env)
+        return out
+
     async def list_versions(self, key: str, limit: int = 50) -> list[int]:
         """Version numbers for ``key`` in descending order (operator history pane).
 
