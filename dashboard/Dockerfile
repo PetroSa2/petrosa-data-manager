@@ -10,7 +10,6 @@ COPY tsconfig.json tsconfig.node.json vite.config.ts ./
 COPY tailwind.config.js postcss.config.js .eslintrc.cjs ./
 COPY index.html ./
 COPY src ./src
-COPY public ./public
 
 RUN npm run build
 
