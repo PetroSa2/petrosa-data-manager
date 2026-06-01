@@ -7,6 +7,7 @@ import Home from "./routes/Home";
 import TimeSlider from "./routes/TimeSlider";
 import Strategy from "./routes/Strategy";
 import Strategies from "./routes/Strategies";
+import EnvelopeAuthorship from "./routes/EnvelopeAuthorship";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="time/:t" element={<TimeSlider />} />
           <Route path="strategies" element={<Strategies />} />
           <Route path="strategy/:id" element={<Strategy />} />
+          <Route path="envelopes" element={<EnvelopeAuthorship />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

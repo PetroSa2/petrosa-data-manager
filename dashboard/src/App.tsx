@@ -1,4 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { fetchEnvelopeAuthorship } from "./lib/api";
+import { useEndpoint } from "./lib/useEndpoint";
 import { useOperator } from "./lib/operator";
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -8,6 +10,30 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
       ? "bg-slate-800 text-slate-100"
       : "text-slate-400 hover:text-slate-100 hover:bg-slate-900",
   ].join(" ");
+
+// AC4.c — pending-count badge in the nav. Polls
+// /api/dashboard/envelope-authorship at the same cadence as the pane
+// itself (30s) so the badge tracks reality without doubling the load.
+function EnvelopesNavLink() {
+  const { data } = useEndpoint(
+    () => fetchEnvelopeAuthorship(undefined, 1),
+    30_000,
+  );
+  const count = data?.pending.length ?? 0;
+  return (
+    <NavLink to="/envelopes" className={navLinkClass}>
+      envelopes
+      {count > 0 && (
+        <span
+          className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500/80 px-1 text-[10px] font-semibold text-slate-950"
+          aria-label={`${count} pending envelope changes`}
+        >
+          {count}
+        </span>
+      )}
+    </NavLink>
+  );
+}
 
 export default function App() {
   const operator = useOperator();
@@ -30,6 +56,7 @@ export default function App() {
               <NavLink to="/strategies" className={navLinkClass}>
                 strategies
               </NavLink>
+              <EnvelopesNavLink />
             </nav>
           </div>
           <div className="text-xs text-slate-500">
