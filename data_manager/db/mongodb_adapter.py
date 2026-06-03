@@ -418,6 +418,140 @@ class MongoDBAdapter(BaseAdapter):
         except PyMongoError as e:
             raise DatabaseError(f"Failed to list collections: {e}") from e
 
+    # -------------------------------------------------------------------------
+    # Read-only introspection helpers (petrosa_k8s#794 storage-inventory audit)
+    #
+    # These methods issue ONLY MongoDB read commands (listDatabases, dbStats,
+    # collStats, list_collections with filter, find_one). They never write,
+    # update, drop, or otherwise mutate the cluster — and they accept an
+    # explicit `db_name` so the storage-inventory audit can iterate every
+    # database returned by `listDatabases`, not just the connected default.
+    # -------------------------------------------------------------------------
+
+    async def list_databases(self) -> list[dict[str, Any]]:
+        """Return every database the client can see via ``listDatabases``.
+
+        Includes ``local``/``admin``/``config`` system DBs because the audit
+        cares about oplog and system-DB storage too. Each entry has at least
+        ``name``, ``sizeOnDisk``, ``empty``.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        try:
+            result = await self.client.list_databases()
+            return list(result)
+        except PyMongoError as e:
+            raise DatabaseError(f"Failed to list databases: {e}") from e
+
+    async def db_stats(self, db_name: str) -> dict[str, Any]:
+        """Return ``dbStats`` for ``db_name``.
+
+        The verdict figure for Atlas-quota attribution is ``storageSize``
+        (compressed on-disk), NOT ``dataSize`` (logical). Both are returned
+        so callers can report each explicitly.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        try:
+            stats = await self.client[db_name].command("dbStats")
+            return dict(stats)
+        except PyMongoError as e:
+            raise DatabaseError(f"Failed to fetch dbStats for {db_name}: {e}") from e
+
+    async def coll_stats(self, db_name: str, collection: str) -> dict[str, Any]:
+        """Return ``collStats`` for one collection.
+
+        Falls back to a ``$collStats`` aggregation if the legacy ``collStats``
+        command is restricted by Atlas role — the aggregation surface has
+        broader cluster-monitor reach.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        target_db = self.client[db_name]
+        try:
+            stats = await target_db.command("collStats", collection)
+            return dict(stats)
+        except PyMongoError as exc:
+            try:
+                cursor = target_db[collection].aggregate(
+                    [{"$collStats": {"storageStats": {}}}]
+                )
+                docs = await cursor.to_list(length=1)
+                if docs:
+                    storage = dict(docs[0].get("storageStats", {}))
+                    storage["_via_aggregation"] = True
+                    return storage
+            except PyMongoError:
+                pass
+            raise DatabaseError(
+                f"Failed to fetch collStats for {db_name}.{collection}: {exc}"
+            ) from exc
+
+    async def is_timeseries(self, db_name: str, collection: str) -> bool:
+        """Return True when ``collection`` is a MongoDB time-series collection.
+
+        Time-series collections store their actual bytes in a hidden backing
+        ``system.buckets.<name>``; the audit must size BOTH the logical name
+        and the backing bucket or it under/over-counts ``klines_*``.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        try:
+            target_db = self.client[db_name]
+            spec = await target_db.list_collections(
+                filter={"name": collection}
+            ).to_list(length=1)
+        except PyMongoError as exc:
+            raise DatabaseError(
+                f"Failed to read collection spec for {db_name}.{collection}: {exc}"
+            ) from exc
+
+        if not spec:
+            return False
+        info = spec[0]
+        if info.get("type") == "timeseries":
+            return True
+        options = info.get("options") or {}
+        return "timeseries" in options
+
+    async def oplog_size(self) -> dict[str, Any]:
+        """Return ``collStats`` for ``local.oplog.rs`` (capped; invisible to the app)."""
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+        return await self.coll_stats("local", "oplog.rs")
+
+    async def newest_doc_age(self, db_name: str, collection: str) -> datetime | None:
+        """Best-effort newest-document timestamp across common time fields.
+
+        Tries ``timestamp``, ``time``, ``open_time``, ``created_at``, ``_id``
+        in order; returns the first hit or ``None`` if the collection is
+        empty / has no recognized time field.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        candidate_fields = ("timestamp", "time", "open_time", "created_at", "_id")
+        coll = self.client[db_name][collection]
+        for field in candidate_fields:
+            try:
+                doc = await coll.find_one(sort=[(field, -1)])
+            except PyMongoError:
+                continue
+            if not doc:
+                return None
+            value = doc.get(field)
+            if isinstance(value, datetime):
+                return value
+            if field == "_id" and value is not None:
+                generation = getattr(value, "generation_time", None)
+                if isinstance(generation, datetime):
+                    return generation
+        return None
+
     @staticmethod
     def _prepare_for_bson(doc: dict) -> dict:
         """
