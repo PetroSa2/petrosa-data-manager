@@ -562,3 +562,505 @@ def test_render_markdown_includes_attribution_and_duplication_sections():
     assert "`1m`" in text
     assert "## MongoDB databases" in text
     assert "## MySQL schemas" in text
+
+
+def test_render_markdown_handles_empty_report_with_errors():
+    """Markdown renders cleanly when both backends errored before producing data."""
+    report = si.StorageInventoryReport(
+        generated_at="2026-06-03T00:00:00Z",
+        mongo_ok=False,
+        mysql_ok=False,
+        mongo_error="not authorized on admin",
+        mysql_error="connection refused",
+    )
+    text = si.render_markdown(report)
+    assert "Mongo backend: FAILED" in text
+    assert "MySQL backend: FAILED" in text
+    assert "not authorized" in text
+    assert "connection refused" in text
+
+
+def test_render_markdown_includes_oplog_when_present():
+    report = si.StorageInventoryReport(
+        generated_at="t",
+        mongo_ok=True,
+        mysql_ok=True,
+        mongo_error=None,
+        mysql_error=None,
+        mongo_oplog={"storageSize": 5000, "size": 4000},
+    )
+    text = si.render_markdown(report)
+    assert "Oplog" in text
+    assert "5,000" in text
+
+
+def test_render_markdown_marks_error_rows_for_failed_databases():
+    db = si.MongoDatabaseStat(
+        name="petrosa",
+        is_system=False,
+        storage_size=0,
+        data_size=0,
+        index_size=0,
+        collections=0,
+        objects=0,
+        error="dbStats failed",
+    )
+    report = si.StorageInventoryReport(
+        generated_at="t",
+        mongo_ok=True,
+        mysql_ok=True,
+        mongo_error=None,
+        mysql_error=None,
+        mongo_databases=[db],
+    )
+    text = si.render_markdown(report)
+    assert "_error_" in text
+    assert "dbStats failed" in text
+
+
+def test_render_markdown_marks_error_rows_for_failed_schemas():
+    schema = si.MysqlSchemaStat(name="petrosa", error="permission denied")
+    report = si.StorageInventoryReport(
+        generated_at="t",
+        mongo_ok=True,
+        mysql_ok=True,
+        mongo_error=None,
+        mysql_error=None,
+        mysql_schemas=[schema],
+    )
+    text = si.render_markdown(report)
+    assert "_error_" in text
+    assert "permission denied" in text
+
+
+def test_report_to_dict_round_trips_via_json():
+    """The structured report must serialise cleanly via json.dumps(default=str)."""
+    import json as _json
+
+    report = _build_report_for_classification()
+    si._classify_all(report)
+    si._attribute_400mb(report)
+
+    serialised = _json.dumps(si.report_to_dict(report), default=str)
+    parsed = _json.loads(serialised)
+    assert parsed["mongo_ok"] is True
+    assert parsed["attribution"]["mongo_klines_buckets_bytes"] == 2_000_000
+    assert "1m" in parsed["duplicated_candle_timeframes"]
+
+
+def test_isoformat_or_none_handles_datetime_and_none():
+    assert si._isoformat_or_none(None) is None
+    dt = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
+    assert si._isoformat_or_none(dt) == dt.isoformat()
+    assert si._isoformat_or_none("not-a-datetime") is None
+
+
+def test_is_privilege_error_detects_common_phrasings():
+    assert si._is_privilege_error("not authorized on admin") is True
+    assert si._is_privilege_error("permission denied for user 'audit'") is True
+    assert si._is_privilege_error("Access denied; you need SELECT privilege") is True
+    assert si._is_privilege_error("Unauthorized — listDatabases refused") is True
+    assert si._is_privilege_error("connection refused") is False
+    assert si._is_privilege_error(None) is False
+    assert si._is_privilege_error("") is False
+
+
+# ---------------------------------------------------------------------------
+# _audit_mongo_collection — error paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audit_mongo_collection_records_error_when_coll_stats_fails():
+    adapter = AsyncMock()
+    adapter.is_timeseries.return_value = False
+    adapter.coll_stats.side_effect = RuntimeError("namespace not found")
+    adapter.newest_doc_age.return_value = None
+
+    stat = await si._audit_mongo_collection(adapter, "petrosa", "missing_collection")
+
+    assert stat.classification == "error"
+    assert stat.error == "namespace not found"
+    assert stat.storage_size == 0
+
+
+@pytest.mark.asyncio
+async def test_audit_mongo_collection_tolerates_missing_backing_bucket():
+    """Time-series collection without a discoverable system.buckets.* still produces a stat."""
+    adapter = AsyncMock()
+    adapter.is_timeseries.return_value = True
+    adapter.coll_stats.side_effect = [
+        _coll_stats(1_000),
+        RuntimeError("system.buckets.klines_1h not found"),
+    ]
+    adapter.newest_doc_age.return_value = None
+
+    stat = await si._audit_mongo_collection(adapter, "petrosa", "klines_1h")
+
+    assert stat.is_timeseries is True
+    assert stat.storage_size == 1_000
+    assert stat.backing_bucket_storage_size is None
+
+
+@pytest.mark.asyncio
+async def test_audit_mongo_collection_handles_newest_doc_age_failure():
+    adapter = AsyncMock()
+    adapter.is_timeseries.return_value = False
+    adapter.coll_stats.return_value = _coll_stats(200)
+    adapter.newest_doc_age.side_effect = RuntimeError("read denied")
+
+    stat = await si._audit_mongo_collection(adapter, "petrosa", "signals")
+    assert stat.newest_doc_age is None
+    assert stat.storage_size == 200
+
+
+@pytest.mark.asyncio
+async def test_audit_mongo_handles_per_db_stats_failure_gracefully():
+    """A single DB failing dbStats is recorded as an error on that DB; siblings still walk."""
+    adapter = AsyncMock()
+    adapter.list_databases.return_value = [
+        {"name": "petrosa", "sizeOnDisk": 1000, "empty": False},
+        {"name": "denied_db", "sizeOnDisk": 50, "empty": False},
+    ]
+
+    def _db_stats_side_effect(name):
+        if name == "denied_db":
+            raise RuntimeError("not authorized")
+        return _db_stats(1024)
+
+    adapter.db_stats.side_effect = _db_stats_side_effect
+
+    petrosa_db = MagicMock()
+    petrosa_db.list_collection_names = AsyncMock(return_value=["signals"])
+    client = MagicMock()
+    client.__getitem__.return_value = petrosa_db
+    adapter.client = client
+
+    adapter.is_timeseries.return_value = False
+    adapter.coll_stats.return_value = _coll_stats(100)
+    adapter.newest_doc_age.return_value = None
+    adapter.oplog_size.return_value = None
+
+    dbs, _, err = await si.audit_mongo(adapter)
+    assert err is None
+    by_name = {d.name: d for d in dbs}
+    assert by_name["denied_db"].error == "not authorized"
+    assert by_name["petrosa"].error is None
+    # The denied DB carries no per-collection rows because dbStats failed
+    assert by_name["denied_db"].collection_stats == []
+
+
+@pytest.mark.asyncio
+async def test_audit_mongo_handles_list_collections_failure_per_db():
+    """If list_collection_names fails for a DB, that DB carries the error and walk continues."""
+    adapter = AsyncMock()
+    adapter.list_databases.return_value = [
+        {"name": "petrosa", "sizeOnDisk": 1, "empty": False},
+    ]
+    adapter.db_stats.return_value = _db_stats(1024)
+    petrosa_db = MagicMock()
+    petrosa_db.list_collection_names = AsyncMock(
+        side_effect=RuntimeError("network blip")
+    )
+    client = MagicMock()
+    client.__getitem__.return_value = petrosa_db
+    adapter.client = client
+    adapter.oplog_size.return_value = None
+
+    dbs, _, err = await si.audit_mongo(adapter)
+    assert err is None
+    assert dbs[0].error == "network blip"
+
+
+@pytest.mark.asyncio
+async def test_audit_mongo_continues_when_oplog_unreachable():
+    """oplog_size is best-effort; failure must not propagate to the caller."""
+    adapter = AsyncMock()
+    adapter.list_databases.return_value = []
+    adapter.oplog_size.side_effect = RuntimeError("oplog read denied")
+
+    dbs, oplog, err = await si.audit_mongo(adapter)
+    assert err is None
+    assert oplog is None
+    assert dbs == []
+
+
+# ---------------------------------------------------------------------------
+# MySQL audit — schema-level errors
+# ---------------------------------------------------------------------------
+
+
+def test_audit_mysql_records_per_schema_table_inventory_failure():
+    fake_engine = MagicMock()
+    with (
+        patch.object(si, "create_read_only_engine", return_value=fake_engine),
+        patch.object(si, "list_schemas", return_value=["good", "bad"]),
+        patch.object(
+            si,
+            "table_inventory",
+            side_effect=[
+                [
+                    {
+                        "TABLE_NAME": "positions",
+                        "TABLE_TYPE": "BASE TABLE",
+                        "TABLE_ROWS": 10,
+                        "DATA_LENGTH": 1000,
+                        "INDEX_LENGTH": 200,
+                        "CREATE_TIME": None,
+                        "UPDATE_TIME": None,
+                    },
+                ],
+                RuntimeError("denied"),
+            ],
+        ),
+    ):
+        schemas, err = si.audit_mysql("mysql+pymysql://x")
+
+    assert err is None
+    by_name = {s.name: s for s in schemas}
+    assert by_name["good"].error is None
+    assert by_name["bad"].error == "denied"
+    assert by_name["bad"].tables == []
+    fake_engine.dispose.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Adapter-level read-only helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mongodb_adapter_list_databases_returns_listdatabases_payload():
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+    adapter.client = MagicMock()
+    adapter.client.list_databases = AsyncMock(
+        return_value=[
+            {"name": "petrosa", "sizeOnDisk": 1024, "empty": False},
+            {"name": "admin", "sizeOnDisk": 32, "empty": False},
+        ]
+    )
+
+    result = await adapter.list_databases()
+    assert {db["name"] for db in result} == {"petrosa", "admin"}
+
+
+@pytest.mark.asyncio
+async def test_mongodb_adapter_db_stats_runs_dbstats_command():
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+    fake_db = MagicMock()
+    fake_db.command = AsyncMock(return_value={"storageSize": 1024, "dataSize": 4096})
+    adapter.client = MagicMock()
+    adapter.client.__getitem__.return_value = fake_db
+
+    stats = await adapter.db_stats("petrosa")
+    assert stats["storageSize"] == 1024
+    fake_db.command.assert_awaited_once_with("dbStats")
+
+
+@pytest.mark.asyncio
+async def test_mongodb_adapter_coll_stats_falls_back_to_aggregation_when_command_denied():
+    from pymongo.errors import PyMongoError
+
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+
+    fake_coll = MagicMock()
+    fake_cursor = MagicMock()
+    fake_cursor.to_list = AsyncMock(
+        return_value=[{"storageStats": {"storageSize": 9999}}]
+    )
+    fake_coll.aggregate.return_value = fake_cursor
+
+    fake_db = MagicMock()
+    fake_db.command = AsyncMock(side_effect=PyMongoError("denied"))
+    fake_db.__getitem__.return_value = fake_coll
+    adapter.client = MagicMock()
+    adapter.client.__getitem__.return_value = fake_db
+
+    stats = await adapter.coll_stats("petrosa", "signals")
+    assert stats["storageSize"] == 9999
+    assert stats["_via_aggregation"] is True
+
+
+@pytest.mark.asyncio
+async def test_mongodb_adapter_is_timeseries_reads_collection_spec():
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+
+    fake_db = MagicMock()
+
+    class _FakeCursor:
+        def __init__(self, docs):
+            self._docs = docs
+
+        async def to_list(self, length):
+            return self._docs
+
+    fake_db.list_collections.return_value = _FakeCursor(
+        [
+            {
+                "name": "klines_1h",
+                "type": "timeseries",
+                "options": {"timeseries": {"timeField": "ts"}},
+            }
+        ]
+    )
+    adapter.client = MagicMock()
+    adapter.client.__getitem__.return_value = fake_db
+
+    assert await adapter.is_timeseries("petrosa", "klines_1h") is True
+
+    fake_db.list_collections.return_value = _FakeCursor([])
+    assert await adapter.is_timeseries("petrosa", "missing") is False
+
+
+@pytest.mark.asyncio
+async def test_mongodb_adapter_newest_doc_age_returns_datetime_from_first_hit():
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+
+    fake_coll = MagicMock()
+    target_dt = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
+    fake_coll.find_one = AsyncMock(return_value={"timestamp": target_dt})
+
+    fake_db = MagicMock()
+    fake_db.__getitem__.return_value = fake_coll
+    adapter.client = MagicMock()
+    adapter.client.__getitem__.return_value = fake_db
+
+    result = await adapter.newest_doc_age("petrosa", "signals")
+    assert result == target_dt
+
+
+@pytest.mark.asyncio
+async def test_mongodb_adapter_newest_doc_age_returns_none_on_empty_collection():
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+
+    fake_coll = MagicMock()
+    fake_coll.find_one = AsyncMock(return_value=None)
+    fake_db = MagicMock()
+    fake_db.__getitem__.return_value = fake_coll
+    adapter.client = MagicMock()
+    adapter.client.__getitem__.return_value = fake_db
+
+    result = await adapter.newest_doc_age("petrosa", "empty_col")
+    assert result is None
+
+
+def test_mysql_create_read_only_engine_does_not_call_create_tables():
+    """AC10: the read-only engine helper must not invoke MetaData.create_all."""
+    from data_manager.db import mysql_adapter as ma
+
+    fake_engine = MagicMock()
+    with patch.object(ma, "create_engine", return_value=fake_engine) as mock_ce:
+        engine = ma.create_read_only_engine("mysql+pymysql://user:pass@host:3306/db")
+
+    assert engine is fake_engine
+    mock_ce.assert_called_once()
+    # The kwargs explicitly disable connection-time pool warming and avoid DDL
+    _, kwargs = mock_ce.call_args
+    assert kwargs["pool_pre_ping"] is True
+    assert kwargs["pool_size"] == 2
+    # Sanity: there is NO call to metadata.create_all anywhere on the engine
+    assert not fake_engine.metadata.create_all.called
+
+
+def test_mysql_list_schemas_excludes_system_schemas():
+    from data_manager.db.mysql_adapter import list_schemas
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.__exit__.return_value = None
+    fake_conn.execute.return_value.fetchall.return_value = [
+        ("petrosa",),
+        ("information_schema",),
+        ("mysql",),
+        ("performance_schema",),
+        ("sys",),
+        ("staging",),
+    ]
+    fake_engine = MagicMock()
+    fake_engine.connect.return_value = fake_conn
+
+    result = list_schemas(fake_engine)
+    assert sorted(result) == ["petrosa", "staging"]
+
+
+def test_mysql_table_inventory_returns_table_rows_with_table_type():
+    from data_manager.db.mysql_adapter import table_inventory
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.__exit__.return_value = None
+    fake_rows = [
+        {
+            "TABLE_NAME": "klines_m1",
+            "TABLE_TYPE": "BASE TABLE",
+            "TABLE_ROWS": 1000,
+            "DATA_LENGTH": 1024,
+            "INDEX_LENGTH": 256,
+            "CREATE_TIME": None,
+            "UPDATE_TIME": None,
+        }
+    ]
+    fake_conn.execute.return_value.mappings.return_value.fetchall.return_value = (
+        fake_rows
+    )
+    fake_engine = MagicMock()
+    fake_engine.connect.return_value = fake_conn
+
+    result = table_inventory(fake_engine, "petrosa")
+    assert len(result) == 1
+    assert result[0]["TABLE_NAME"] == "klines_m1"
+    assert result[0]["TABLE_TYPE"] == "BASE TABLE"
+
+
+# ---------------------------------------------------------------------------
+# CLI entrypoint exit-code paths
+# ---------------------------------------------------------------------------
+
+
+def test_amain_returns_ok_when_both_env_vars_missing_and_only_one_backend_requested(
+    monkeypatch,
+):
+    """--mongo-only with no MONGODB_URL set produces a clear error + exit 10."""
+    monkeypatch.delenv("MONGODB_URL", raising=False)
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+    rc = si.main(["--mongo-only", "--json"])
+    assert rc == si.EXIT_MONGO_FAILED
+
+
+def test_amain_rejects_mutually_exclusive_flags(monkeypatch):
+    monkeypatch.delenv("MONGODB_URL", raising=False)
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+    rc = si.main(["--mongo-only", "--mysql-only"])
+    assert rc == 2
+
+
+def test_amain_returns_mysql_failed_when_mysql_uri_missing(monkeypatch):
+    monkeypatch.delenv("MONGODB_URL", raising=False)
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+    rc = si.main(["--mysql-only"])
+    assert rc == si.EXIT_MYSQL_FAILED
+
+
+def test_amain_returns_both_failed_when_no_env_set(monkeypatch):
+    monkeypatch.delenv("MONGODB_URL", raising=False)
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+    rc = si.main([])
+    assert rc == si.EXIT_BOTH_FAILED
