@@ -551,3 +551,82 @@ class MySQLAdapter(BaseAdapter):
         if not self._connected:
             raise DatabaseError("Database is not connected")
         return self.engine
+
+
+# ---------------------------------------------------------------------------
+# Read-only introspection helpers (petrosa_k8s#794 storage-inventory audit)
+#
+# These module-level helpers DELIBERATELY bypass ``MySQLAdapter.connect()``
+# because that method runs ``_create_tables()`` → ``metadata.create_all`` —
+# DDL that would mutate the live schema before the audit issues its first
+# read. The storage-inventory module imports these directly and never calls
+# ``MySQLAdapter.connect()``; together with a ``SELECT``-only DB credential,
+# this is the two-layer read-only guarantee from petrosa_k8s#794 AC2/AC10.
+#
+# Excluded from `information_schema` enumeration: ``mysql``, ``information_schema``,
+# ``performance_schema``, ``sys`` — server-internal schemas the audit must not
+# touch.
+# ---------------------------------------------------------------------------
+
+_SYSTEM_SCHEMAS = frozenset(
+    {"mysql", "information_schema", "performance_schema", "sys"}
+)
+
+
+def create_read_only_engine(connection_string: str) -> "Engine":
+    """Build a bare SQLAlchemy engine that issues NO DDL on creation.
+
+    Unlike :meth:`MySQLAdapter.connect`, this helper does NOT call
+    ``_create_tables`` / ``metadata.create_all``. It only constructs the
+    engine. The caller is responsible for using a ``SELECT``-only DB
+    credential — that is the real safety guarantee; this function is the
+    code-level half (no DDL emitted by the data-manager codebase).
+    """
+    if not SQLALCHEMY_AVAILABLE:
+        raise ImportError(
+            "SQLAlchemy and MySQL driver required. "
+            "Install: pip install sqlalchemy pymysql"
+        )
+    return create_engine(
+        connection_string,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=2,
+        pool_timeout=30,
+        connect_args={"charset": "utf8mb4", "autocommit": True},
+    )
+
+
+def list_schemas(engine: "Engine") -> list[str]:
+    """Return non-system schema names via ``information_schema.SCHEMATA``."""
+    stmt = sa.text(
+        "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME"
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).fetchall()
+    return [r[0] for r in rows if r[0] not in _SYSTEM_SCHEMAS]
+
+
+def table_inventory(engine: "Engine", schema: str) -> list[dict[str, Any]]:
+    """Return per-table size info for ``schema`` via ``information_schema.TABLES``.
+
+    Each row carries ``TABLE_TYPE`` so callers can distinguish ``BASE TABLE``
+    from ``VIEW`` and avoid double-counting view bytes in storage totals
+    (petrosa_k8s#794 AC6). ``TABLE_ROWS`` is an InnoDB estimate — callers
+    should label it approximate; ``DATA_LENGTH``/``INDEX_LENGTH`` are the
+    storage verdict.
+    """
+    stmt = sa.text(
+        """
+        SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS,
+               COALESCE(DATA_LENGTH, 0) AS DATA_LENGTH,
+               COALESCE(INDEX_LENGTH, 0) AS INDEX_LENGTH,
+               CREATE_TIME, UPDATE_TIME
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = :schema
+        ORDER BY TABLE_NAME
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(stmt, {"schema": schema}).mappings().fetchall()
+    return [dict(r) for r in rows]
