@@ -104,12 +104,16 @@ Local/laptop execution is **expected to fail** on IP allow-listing — Atlas
 and the MySQL backend are not reachable from arbitrary workstations. The
 canonical path is a one-shot `kind: Job` in the `petrosa-apps` namespace:
 
-1. `kubectl apply -f petrosa_k8s/k8s/data-extractor/storage-inventory-job.yaml`
-   (added separately under [`petrosa_k8s#794`](https://github.com/PetroSa2/petrosa_k8s/issues/794)'s
-   sibling PR — the manifest is not in this PR because the
-   `k8s/data-extractor/` directory is GitOps-auto-applied and the Job
-   placement needs explicit operator review per
-   [`project_petrosa_k8s_gitops_auto_apply.md`](../../../petrosa_k8s/docs/)).
+1. `kubectl apply -f petrosa_k8s/docs/manual-jobs/storage-inventory-job.yaml`
+   — the manifest lives in `docs/manual-jobs/` (NOT under `k8s/**`) so it
+   is invisible to `apply-k8s-changes.yml`'s `k8s/**/*.{yaml,yml}` trigger
+   glob. Placement was deferred from [`petrosa_k8s#794`](https://github.com/PetroSa2/petrosa_k8s/issues/794)
+   Task 6 and shipped under [`petrosa_k8s#799`](https://github.com/PetroSa2/petrosa_k8s/issues/799)
+   precisely because `k8s/data-extractor/` (where the sibling
+   `klines-retention-cronjob.yaml` lives) is GitOps-auto-applied — and
+   `apply-k8s-changes.sh` deletes any matching Job before re-applying on
+   every push to `main`, which would defeat the "one-shot, low-load,
+   operator-triggered" contract.
 2. Wait for completion: `kubectl wait --for=condition=complete job/storage-inventory -n petrosa-apps --timeout=20m`.
 3. Capture logs **before `ttlSecondsAfterFinished` reaps the pod**:
    `kubectl logs job/storage-inventory -n petrosa-apps > storage-inventory-$(date -u +%FT%H-%M-%SZ).log`.
