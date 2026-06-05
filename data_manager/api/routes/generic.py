@@ -19,10 +19,24 @@ from pydantic import BaseModel, Field
 
 import constants
 import data_manager.api.app as api_module
+from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _serialize_write_result(result: Any) -> dict[str, Any]:
+    """Render a MySQL :class:`WriteResult` (or MongoDB int) as explicit counts.
+
+    Resolves petrosa-data-manager#213 AC2.3 — callers must always see
+    ``inserted`` + ``duplicates`` + ``failed`` instead of an ambiguous bare
+    integer that could mean "duplicate" OR "silently failed".
+    """
+    inserted = int(getattr(result, "inserted", result) or 0)
+    duplicates = int(getattr(result, "duplicates", 0) or 0)
+    failed = int(getattr(result, "failed", 0) or 0)
+    return {"inserted": inserted, "duplicates": duplicates, "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -365,23 +379,47 @@ async def insert_records(
 
         # Execute insert
         if database == "mysql":
-            inserted_count = adapter.write(model_instances, collection)
+            from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
+
+            try:
+                write_result = adapter.write(model_instances, collection)
+            except CircuitBreakerOpenError as exc:
+                # Per #213 AC2.4: surface the OPEN-circuit case as 503 so callers
+                # (urllib3 Retry, k8s ingress) treat it as transient and back off.
+                api_module.db_manager.increment_error_count(database)
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            inserted_count = write_result.inserted
+            duplicates = write_result.duplicates
+            failed = write_result.failed
         else:  # MongoDB
             inserted_count = await adapter.write(model_instances, collection)
+            duplicates = 0
+            failed = 0
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
 
-        return {
+        # Per #213 AC2.3 / AC2.4: always surface explicit counts so callers can
+        # distinguish "all duplicates" from "wrote nothing because it failed".
+        response: dict[str, Any] = {
             "message": f"Successfully inserted {inserted_count} records",
             "inserted_count": inserted_count,
+            "duplicates": duplicates,
+            "failed": failed,
             "metadata": {
                 "database": database,
                 "collection": collection,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         }
+        if duplicates and not inserted_count:
+            response["message"] = (
+                f"No records inserted — {duplicates} duplicate(s) ignored"
+            )
+        return response
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             f"Error inserting into {database}.{collection}: {e}", exc_info=True

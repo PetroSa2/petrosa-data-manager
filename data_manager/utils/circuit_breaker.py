@@ -12,6 +12,21 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
+class CircuitBreakerOpenError(Exception):
+    """Raised when a call is attempted while the breaker is OPEN.
+
+    Distinct from arbitrary downstream exceptions so the HTTP layer can map it
+    to a 503 (service-temporarily-unavailable) instead of a 500. See #213 F9.
+    """
+
+    def __init__(self, name: str, recovery_timeout: int):
+        self.name = name
+        self.recovery_timeout = recovery_timeout
+        super().__init__(
+            f"Circuit breaker {name} is OPEN. Will retry after {recovery_timeout}s"
+        )
+
+
 class CircuitBreakerState(Enum):
     """Circuit breaker states."""
 
@@ -75,10 +90,7 @@ class DatabaseCircuitBreaker:
                 )
                 self.state = CircuitBreakerState.HALF_OPEN
             else:
-                raise Exception(
-                    f"Circuit breaker {self.name} is OPEN. "
-                    f"Will retry after {self.recovery_timeout}s"
-                )
+                raise CircuitBreakerOpenError(self.name, self.recovery_timeout)
 
         try:
             result = func(*args, **kwargs)
