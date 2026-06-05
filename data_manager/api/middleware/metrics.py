@@ -51,6 +51,15 @@ DATABASE_OPERATIONS = Counter(
     ["database", "operation", "status"],
 )
 
+# Per petrosa-data-manager#213 AC2.5 — explicit MySQL write-failure counter
+# so the OPEN-circuit / IntegrityError / unexpected-DB-error paths are
+# observable in Prometheus, distinct from generic request errors.
+MYSQL_WRITE_FAILURES = Counter(
+    "data_manager_mysql_write_failures_total",
+    "MySQL write failures that did not produce inserted rows",
+    ["database", "collection", "reason"],
+)
+
 DATABASE_OPERATION_DURATION = Histogram(
     "data_manager_database_operation_duration_seconds",
     "Database operation duration in seconds",

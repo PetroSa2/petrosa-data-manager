@@ -36,8 +36,41 @@ except ImportError:
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
 from data_manager.utils.circuit_breaker import DatabaseCircuitBreaker
+from data_manager.utils.retry import retry_transient
 
 logger = logging.getLogger(__name__)
+
+
+class WriteResult(int):
+    """Outcome of a MySQL write — explicit ``inserted`` / ``duplicates`` / ``failed`` counts.
+
+    Subclasses ``int`` so existing callers / tests that compare the return value
+    against an integer (e.g. ``assert adapter.write(...) == 0``) keep working;
+    the integer value is the number of rows actually inserted. New callers can
+    read ``.inserted``, ``.duplicates``, and ``.failed`` directly — required by
+    petrosa-data-manager#213 AC2.3 so the boundary stops returning an ambiguous
+    plain ``0`` on the all-duplicates case.
+    """
+
+    inserted: int
+    duplicates: int
+    failed: int
+
+    def __new__(
+        cls, inserted: int = 0, duplicates: int = 0, failed: int = 0
+    ) -> "WriteResult":
+        obj = super().__new__(cls, inserted)
+        obj.inserted = inserted
+        obj.duplicates = duplicates
+        obj.failed = failed
+        return obj
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "inserted": self.inserted,
+            "duplicates": self.duplicates,
+            "failed": self.failed,
+        }
 
 
 class MySQLAdapter(BaseAdapter):
@@ -336,82 +369,137 @@ class MySQLAdapter(BaseAdapter):
                 f"Unknown collection or failed to reflect: {collection}"
             )
 
-    def write(self, model_instances: list[BaseModel], collection: str) -> int:
-        """Write model instances to MySQL table with circuit breaker protection."""
+    def write(self, model_instances: list[BaseModel], collection: str) -> WriteResult:
+        """Write model instances to MySQL with retry + circuit breaker.
+
+        Returns a :class:`WriteResult` carrying explicit ``inserted`` /
+        ``duplicates`` / ``failed`` counts so callers can distinguish
+        "all-duplicates" from "wrote nothing because it failed" (resolves
+        petrosa-data-manager#213 AC2.3). ``WriteResult`` is an ``int``
+        subclass valued at ``inserted``, preserving backward compatibility
+        for callers that compare the result against a plain integer.
+
+        Retry semantics (per #213 F1):
+            * Transient errors (lost connection, deadlock, lock-wait timeout)
+              are retried with backoff INSIDE the circuit breaker call. Each
+              *exhausted* retry cycle counts as one breaker failure — the
+              breaker still opens after ``failure_threshold`` exhausted
+              cycles, not 5×3 raw underlying errors.
+            * ``IntegrityError`` is NOT retried (#213 AC2.2). Note: with
+              ``INSERT IGNORE`` MySQL downgrades duplicate-key collisions to
+              warnings and reduces ``rowcount`` instead of raising — so this
+              path almost never fires for duplicates (#213 F2). It still
+              catches genuine integrity faults (FK violation, NOT NULL).
+        """
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
         if not model_instances:
-            return 0
+            return WriteResult(0, 0, 0)
 
-        def _write_operation():
-            try:
-                table = self._get_table(collection)
-
-                # Convert models to dictionaries
-                records = []
-                for instance in model_instances:
-                    record = instance.model_dump()
-
-                    # Ensure 'id' field is present for MySQL primary key (if table has one)
-                    if "id" in table.c and ("id" not in record or not record["id"]):
-                        record["id"] = str(uuid.uuid4())
-
-                    # Ensure datetime fields are proper datetime objects
-                    for key, value in record.items():
-                        if isinstance(value, str) and key.endswith(
-                            ("_at", "timestamp")
-                        ):
-                            try:
-                                record[key] = datetime.fromisoformat(value)
-                            except (ValueError, TypeError):
-                                pass
-                    records.append(record)
-
-                # Insert records
-                engine = self._ensure_connected()
-                with engine.connect() as conn:
-                    trans = conn.begin()
+        # Prepare records once outside the retry loop so a retry never
+        # mutates a payload that the previous attempt already normalized.
+        table = self._get_table(collection)
+        records: list[dict[str, Any]] = []
+        for instance in model_instances:
+            record = instance.model_dump()
+            if "id" in table.c and ("id" not in record or not record["id"]):
+                record["id"] = str(uuid.uuid4())
+            for key, value in record.items():
+                if isinstance(value, str) and key.endswith(("_at", "timestamp")):
                     try:
-                        # Use INSERT IGNORE to handle duplicates
-                        stmt = table.insert().prefix_with("IGNORE")
-                        result = conn.execute(stmt, records)
-                        trans.commit()
-                        return result.rowcount
-                    except Exception:
-                        trans.rollback()
-                        raise
+                        record[key] = datetime.fromisoformat(value)
+                    except (ValueError, TypeError):
+                        pass
+            records.append(record)
+        total = len(records)
 
+        def _write_attempt() -> int:
+            """Single write attempt — returns rowcount or raises."""
+            engine = self._ensure_connected()
+            with engine.connect() as conn:
+                trans = conn.begin()
+                try:
+                    stmt = table.insert().prefix_with("IGNORE")
+                    result = conn.execute(stmt, records)
+                    trans.commit()
+                    return int(result.rowcount or 0)
+                except Exception:
+                    trans.rollback()
+                    raise
+
+        def _write_with_retry() -> int:
+            try:
+                return retry_transient(_write_attempt)
             except IntegrityError:
-                logger.warning("Duplicate records found when writing to %s", collection)
-                return 0
-            except Exception as e:
-                logger.warning(f"MySQL write error: {e}")
-                raise DatabaseError(f"Error in MySQL write: {e}") from e
+                # Non-transient: FK violation / NOT NULL / similar.
+                # Note: duplicate-key with INSERT IGNORE does NOT land here.
+                logger.warning(
+                    "Integrity error writing to %s — not a duplicate (INSERT IGNORE absorbs those)",
+                    collection,
+                )
+                raise
+            except DatabaseError:
+                raise
+            except Exception as exc:
+                raise DatabaseError(f"Error in MySQL write: {exc}") from exc
 
-        # Use circuit breaker for write operation
-        return self.circuit_breaker.call(_write_operation)
+        try:
+            rowcount = self.circuit_breaker.call(_write_with_retry)
+        except IntegrityError:
+            self._record_write_failure(collection, "integrity_error")
+            return WriteResult(inserted=0, duplicates=0, failed=total)
+        except DatabaseError:
+            self._record_write_failure(collection, "database_error")
+            raise
+        except Exception:
+            # CircuitBreakerOpenError + truly unexpected — let the HTTP
+            # boundary classify; still count the failure for observability.
+            self._record_write_failure(collection, "circuit_or_unknown")
+            raise
+
+        duplicates = max(0, total - rowcount)
+        return WriteResult(inserted=rowcount, duplicates=duplicates, failed=0)
+
+    def _record_write_failure(self, collection: str, reason: str) -> None:
+        """Increment the write-failure counter — fire-and-forget; never raise."""
+        try:
+            from data_manager.api.middleware import metrics as _metrics
+
+            counter = getattr(_metrics, "MYSQL_WRITE_FAILURES", None)
+            if counter is not None:
+                counter.labels(
+                    database="mysql", collection=collection, reason=reason
+                ).inc()
+        except Exception:  # pragma: no cover - metrics must never break writes
+            logger.debug("Failed to record write-failure metric", exc_info=True)
 
     def write_batch(
         self, model_instances: list[BaseModel], collection: str, batch_size: int = 1000
-    ) -> int:
-        """Write model instances in batches."""
-        total_written = 0
+    ) -> WriteResult:
+        """Write model instances in batches, aggregating per-batch counts."""
+        inserted = 0
+        duplicates = 0
+        failed = 0
 
         for i in range(0, len(model_instances), batch_size):
             batch = model_instances[i : i + batch_size]
-            written = self.write(batch, collection)
-            total_written += written
+            result = self.write(batch, collection)
+            inserted += result.inserted
+            duplicates += result.duplicates
+            failed += result.failed
 
             if i + batch_size < len(model_instances):
                 logger.debug(
-                    "Written batch %d: %d records to %s",
+                    "Written batch %d: %d inserted / %d duplicates / %d failed to %s",
                     i // batch_size + 1,
-                    written,
+                    result.inserted,
+                    result.duplicates,
+                    result.failed,
                     collection,
                 )
 
-        return total_written
+        return WriteResult(inserted=inserted, duplicates=duplicates, failed=failed)
 
     def query_range(
         self,
