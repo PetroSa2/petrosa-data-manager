@@ -439,8 +439,8 @@ class MongoDBAdapter(BaseAdapter):
             raise DatabaseError("Not connected to database")
 
         try:
-            result = await self.client.list_databases()
-            return list(result)
+            cursor = self.client.list_databases()
+            return await cursor.to_list(length=None)
         except PyMongoError as e:
             raise DatabaseError(f"Failed to list databases: {e}") from e
 

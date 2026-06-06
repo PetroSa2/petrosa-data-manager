@@ -835,16 +835,22 @@ async def test_mongodb_adapter_list_databases_returns_listdatabases_payload():
 
     adapter = MongoDBAdapter.__new__(MongoDBAdapter)
     adapter._connected = True
-    adapter.client = MagicMock()
-    adapter.client.list_databases = AsyncMock(
+
+    # list_databases() returns a cursor (not a coroutine); to_list() materialises it
+    mock_cursor = MagicMock()
+    mock_cursor.to_list = AsyncMock(
         return_value=[
             {"name": "petrosa", "sizeOnDisk": 1024, "empty": False},
             {"name": "admin", "sizeOnDisk": 32, "empty": False},
         ]
     )
+    adapter.client = MagicMock()
+    adapter.client.list_databases = MagicMock(return_value=mock_cursor)
 
     result = await adapter.list_databases()
     assert {db["name"] for db in result} == {"petrosa", "admin"}
+    adapter.client.list_databases.assert_called_once_with()
+    mock_cursor.to_list.assert_awaited_once_with(length=None)
 
 
 @pytest.mark.asyncio
@@ -1064,3 +1070,61 @@ def test_amain_returns_both_failed_when_no_env_set(monkeypatch):
     monkeypatch.delenv("MYSQL_URI", raising=False)
     rc = si.main([])
     assert rc == si.EXIT_BOTH_FAILED
+
+
+def test_partial_failure_mongo_raises_report_still_produced_nonzero_exit(monkeypatch):
+    """AC2: Mongo raises during list_databases → report still emitted + EXIT_MONGO_FAILED.
+
+    Covers the partial-failure path where the adapter connects but listDatabases
+    blows up mid-audit; the StorageInventoryReport is still produced (mongo_ok=False,
+    mysql_ok=False since MYSQL_URI is unset) and the exit code is EXIT_MONGO_FAILED —
+    not an unhandled exception.
+    """
+    from unittest.mock import patch as _patch
+
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/petrosa")
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+
+    with (
+        _patch.object(MongoDBAdapter, "connect"),
+        _patch.object(MongoDBAdapter, "disconnect"),
+        _patch.object(
+            MongoDBAdapter,
+            "list_databases",
+            new=AsyncMock(side_effect=Exception("connection refused")),
+        ),
+    ):
+        rc = si.main(["--mongo-only"])
+
+    assert rc == si.EXIT_MONGO_FAILED
+
+
+def test_amain_partial_failure_mongo_raises_report_still_produced(monkeypatch):
+    """AC2: adapter connects but list_databases raises → report produced + EXIT_MONGO_FAILED.
+
+    Covers the real cluster failure path: MONGODB_URL is set, the MongoDBAdapter
+    instantiates and connects, but listDatabases then throws (e.g. network error
+    or auth denied). The report must still be emitted (with mongo_ok=False) and
+    the exit code must be EXIT_MONGO_FAILED — not a crash, not EXIT_OK.
+    """
+    from unittest.mock import patch as _patch
+
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/petrosa")
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+
+    with (
+        _patch.object(MongoDBAdapter, "connect"),
+        _patch.object(MongoDBAdapter, "disconnect"),
+        _patch.object(
+            MongoDBAdapter,
+            "list_databases",
+            new=AsyncMock(side_effect=Exception("connection refused")),
+        ),
+    ):
+        rc = si.main(["--mongo-only"])
+
+    assert rc == si.EXIT_MONGO_FAILED
