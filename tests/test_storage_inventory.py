@@ -836,7 +836,7 @@ async def test_mongodb_adapter_list_databases_returns_listdatabases_payload():
     adapter = MongoDBAdapter.__new__(MongoDBAdapter)
     adapter._connected = True
 
-    # list_databases() returns a cursor (not a coroutine); to_list() materialises it
+    # list_databases() is a coroutine in Motor 2.x — must be awaited to get the cursor
     mock_cursor = MagicMock()
     mock_cursor.to_list = AsyncMock(
         return_value=[
@@ -845,7 +845,7 @@ async def test_mongodb_adapter_list_databases_returns_listdatabases_payload():
         ]
     )
     adapter.client = MagicMock()
-    adapter.client.list_databases = MagicMock(return_value=mock_cursor)
+    adapter.client.list_databases = AsyncMock(return_value=mock_cursor)
 
     result = await adapter.list_databases()
     assert {db["name"] for db in result} == {"petrosa", "admin"}
