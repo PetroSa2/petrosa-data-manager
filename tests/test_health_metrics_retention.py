@@ -103,3 +103,82 @@ def test_prune_health_metrics_uses_wall_clock_when_now_not_provided():
     expected_min = hmr.compute_cutoff(before, 90)
     expected_max = hmr.compute_cutoff(after, 90)
     assert expected_min <= result.cutoff <= expected_max
+
+
+def test_configure_logging_sets_root_level():
+    import logging as _logging
+
+    hmr._configure_logging()
+    assert _logging.getLogger().level != 0  # root logger has been configured
+
+
+def test_build_argparser_dry_run_flag():
+    parser = hmr._build_argparser()
+    args = parser.parse_args(["--dry-run"])
+    assert args.dry_run is True
+
+
+def test_build_argparser_retention_days_override():
+    parser = hmr._build_argparser()
+    args = parser.parse_args(["--retention-days", "30"])
+    assert args.retention_days == 30
+
+
+def test_build_argparser_defaults():
+    parser = hmr._build_argparser()
+    args = parser.parse_args([])
+    assert args.dry_run is False
+    assert args.retention_days is None
+
+
+def test_main_runs_end_to_end(monkeypatch):
+    adapter = MagicMock()
+    adapter.delete_range.return_value = 100
+
+    monkeypatch.setenv("MYSQL_URL", "mysql+pymysql://user:pass@host/db")
+    monkeypatch.setenv("HEALTH_METRICS_RETENTION_DAYS", "90")
+
+    with __import__("unittest.mock", fromlist=["patch"]).patch(
+        "data_manager.maintenance.health_metrics_retention.MySQLAdapter",
+        return_value=adapter,
+    ):
+        exit_code = hmr.main([])
+
+    assert exit_code == 0
+    adapter.connect.assert_called_once()
+    adapter.delete_range.assert_called_once()
+    adapter.disconnect.assert_called_once()
+
+
+def test_main_dry_run_does_not_delete(monkeypatch):
+    adapter = MagicMock()
+    adapter.get_record_count.return_value = 500
+
+    monkeypatch.setenv("MYSQL_URL", "mysql+pymysql://user:pass@host/db")
+
+    with __import__("unittest.mock", fromlist=["patch"]).patch(
+        "data_manager.maintenance.health_metrics_retention.MySQLAdapter",
+        return_value=adapter,
+    ):
+        exit_code = hmr.main(["--dry-run"])
+
+    assert exit_code == 0
+    adapter.get_record_count.assert_called_once()
+    adapter.delete_range.assert_not_called()
+
+
+def test_main_retention_days_cli_override(monkeypatch):
+    adapter = MagicMock()
+    adapter.delete_range.return_value = 0
+
+    monkeypatch.setenv("MYSQL_URL", "mysql+pymysql://user:pass@host/db")
+
+    with __import__("unittest.mock", fromlist=["patch"]).patch(
+        "data_manager.maintenance.health_metrics_retention.MySQLAdapter",
+        return_value=adapter,
+    ) as MockAdapter:
+        hmr.main(["--retention-days", "30"])
+        # verify adapter was constructed with the MYSQL_URL
+        MockAdapter.assert_called_once_with(
+            connection_string="mysql+pymysql://user:pass@host/db"
+        )
