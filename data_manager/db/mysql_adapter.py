@@ -16,6 +16,7 @@ try:
     from sqlalchemy import (
         Column,
         DateTime,
+        Enum,
         Index,
         Integer,
         MetaData,
@@ -223,7 +224,11 @@ class MySQLAdapter(BaseAdapter):
             Column("timeframe", String(10)),
             Column("start_time", DateTime, nullable=False),
             Column("end_time", DateTime, nullable=False),
-            Column("status", String(20), nullable=False),
+            Column(
+                "status",
+                Enum("pending", "running", "completed", "failed"),
+                nullable=False,
+            ),
             Column("progress", Numeric(5, 2), default=0),
             Column("records_fetched", Integer, default=0),
             Column("records_inserted", Integer, default=0),
