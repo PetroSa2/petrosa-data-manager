@@ -4,6 +4,8 @@ Repository for backfill job operations.
 
 import logging
 
+from sqlalchemy.sql import select
+
 from data_manager.db.repositories.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
@@ -45,13 +47,12 @@ class BackfillRepository(BaseRepository):
             Job dictionary or None
         """
         try:
-            # For now, use query_latest as a workaround
-            # TODO: Implement proper query by ID
-            jobs = self.mysql.query_latest("backfill_jobs", limit=1000)
-            for job in jobs:
-                if job.get("job_id") == job_id:
-                    return job
-            return None
+            table = self.mysql._get_table("backfill_jobs")
+            engine = self.mysql._ensure_connected()
+            stmt = select(table).where(table.c.job_id == job_id).limit(1)
+            with engine.connect() as conn:
+                row = conn.execute(stmt).fetchone()
+                return dict(row._mapping) if row else None
         except Exception as e:
             logger.error(f"Failed to get backfill job: {e}")
             return None

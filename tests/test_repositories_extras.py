@@ -9,6 +9,17 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    Text,
+    create_engine,
+)
 
 from data_manager.db.repositories.audit_repository import AuditRepository
 from data_manager.db.repositories.backfill_repository import BackfillRepository
@@ -121,26 +132,86 @@ class TestBackfillRepository:
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
         assert await repo.create_job({"job_id": "j-1"}) is False
 
-    def test_get_job_finds_matching_job_id(self):
+    def _make_sqlite_mysql(self, rows: list[dict]):
+        metadata = MetaData()
+        table = Table(
+            "backfill_jobs",
+            metadata,
+            Column("job_id", String(64), primary_key=True),
+            Column("symbol", String(20)),
+            Column("data_type", String(50)),
+            Column("timeframe", String(10)),
+            Column("start_time", DateTime),
+            Column("end_time", DateTime),
+            Column("status", String(20)),
+            Column("progress", Numeric(5, 2), default=0),
+            Column("records_fetched", Integer, default=0),
+            Column("records_inserted", Integer, default=0),
+            Column("error_message", Text),
+            Column("created_at", DateTime),
+            Column("started_at", DateTime),
+            Column("completed_at", DateTime),
+        )
+        engine = create_engine("sqlite:///:memory:")
+        metadata.create_all(engine)
+        if rows:
+            with engine.connect() as conn:
+                conn.execute(table.insert(), rows)
+                conn.commit()
         mysql = Mock()
-        mysql.query_latest = Mock(
-            return_value=[
-                {"job_id": "j-1", "status": "queued"},
-                {"job_id": "j-2", "status": "running"},
+        mysql._get_table.return_value = table
+        mysql._ensure_connected.return_value = engine
+        return mysql
+
+    def test_get_job_finds_matching_job_id(self):
+        mysql = self._make_sqlite_mysql(
+            [
+                {
+                    "job_id": "j-1",
+                    "status": "queued",
+                    "symbol": "BTCUSDT",
+                    "data_type": "klines",
+                    "start_time": datetime(2024, 1, 1),
+                    "end_time": datetime(2024, 1, 2),
+                    "created_at": datetime(2024, 1, 1),
+                },
+                {
+                    "job_id": "j-2",
+                    "status": "running",
+                    "symbol": "BTCUSDT",
+                    "data_type": "klines",
+                    "start_time": datetime(2024, 1, 1),
+                    "end_time": datetime(2024, 1, 2),
+                    "created_at": datetime(2024, 1, 1),
+                },
             ]
         )
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_job("j-2") == {"job_id": "j-2", "status": "running"}
+        result = repo.get_job("j-2")
+        assert result is not None
+        assert result["job_id"] == "j-2"
+        assert result["status"] == "running"
 
     def test_get_job_returns_none_when_not_found(self):
-        mysql = Mock()
-        mysql.query_latest = Mock(return_value=[{"job_id": "j-1"}])
+        mysql = self._make_sqlite_mysql(
+            [
+                {
+                    "job_id": "j-1",
+                    "status": "queued",
+                    "symbol": "BTCUSDT",
+                    "data_type": "klines",
+                    "start_time": datetime(2024, 1, 1),
+                    "end_time": datetime(2024, 1, 2),
+                    "created_at": datetime(2024, 1, 1),
+                },
+            ]
+        )
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
         assert repo.get_job("missing") is None
 
     def test_get_job_returns_none_on_exception(self):
         mysql = Mock()
-        mysql.query_latest = Mock(side_effect=RuntimeError("x"))
+        mysql._get_table.side_effect = RuntimeError("x")
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
         assert repo.get_job("anything") is None
 
