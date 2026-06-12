@@ -318,7 +318,6 @@ class MySQLAdapter(BaseAdapter):
             Column("source", String(50), nullable=False),
             Index(f"idx_{physical_table_name}_symbol_timestamp", "symbol", "timestamp"),
             Index(f"idx_{physical_table_name}_timestamp", "timestamp"),
-            Index(f"idx_{physical_table_name}_open_time", "open_time"),
             extend_existing=True,
         )
 
