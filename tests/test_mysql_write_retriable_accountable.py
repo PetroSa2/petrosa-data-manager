@@ -331,3 +331,122 @@ def test_adapter_increments_failure_counter_on_circuit_open():
             counter.labels.return_value.inc.assert_called_once()
     finally:
         adapter.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# AC8 — klines write path uses ON DUPLICATE KEY UPDATE, not INSERT IGNORE
+# ---------------------------------------------------------------------------
+
+
+class _KlinesRec(BaseModel):
+    """Minimal Pydantic model matching the klines_* table schema."""
+
+    symbol: str
+    timestamp: str
+    open_time: str
+    close_time: str
+    interval: str
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: float
+    quote_asset_volume: float
+    number_of_trades: int
+    taker_buy_base_asset_volume: float
+    taker_buy_quote_asset_volume: float
+    price_change: float | None = None
+    price_change_percent: float | None = None
+    extracted_at: str
+    extractor_version: str
+    source: str
+
+
+def _klines_rec(symbol: str = "BTCUSDT") -> _KlinesRec:
+    return _KlinesRec(
+        symbol=symbol,
+        timestamp="2024-01-01T00:00:00",
+        open_time="2024-01-01T00:00:00",
+        close_time="2024-01-01T00:04:59",
+        interval="5m",
+        open_price=50000.0,
+        high_price=50100.0,
+        low_price=49900.0,
+        close_price=50050.0,
+        volume=100.0,
+        quote_asset_volume=5000000.0,
+        number_of_trades=500,
+        taker_buy_base_asset_volume=60.0,
+        taker_buy_quote_asset_volume=3000000.0,
+        extracted_at="2024-01-01T00:05:00",
+        extractor_version="1.0.0",
+        source="binance",
+    )
+
+
+def test_klines_write_uses_on_duplicate_key_not_insert_ignore():
+    """AC8: klines write path emits ON DUPLICATE KEY UPDATE, not INSERT IGNORE."""
+    from sqlalchemy.dialects import mysql as mysql_dialect
+
+    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter.engine_options = {}
+    adapter.connect()
+    try:
+        records = [_klines_rec()]
+        captured_stmts: list = []
+
+        fake_result = MagicMock()
+        fake_result.rowcount = 1
+        fake_conn = MagicMock()
+
+        def _capture(stmt, *args, **kwargs):
+            captured_stmts.append(stmt)
+            return fake_result
+
+        fake_conn.execute.side_effect = _capture
+        fake_conn.begin.return_value = MagicMock()
+        fake_engine = MagicMock()
+        fake_engine.connect.return_value.__enter__.return_value = fake_conn
+
+        with patch.object(adapter, "_ensure_connected", return_value=fake_engine):
+            adapter.write(records, "klines_m5")
+
+        assert len(captured_stmts) == 1
+        sql = str(captured_stmts[0].compile(dialect=mysql_dialect.dialect()))
+        assert "ON DUPLICATE KEY UPDATE" in sql
+        assert "INSERT IGNORE" not in sql
+        assert "extracted_at" in sql
+    finally:
+        adapter.disconnect()
+
+
+def test_klines_write_duplicate_does_not_raise_and_counts_correctly():
+    """AC8: duplicate klines rows do not raise; WriteResult reflects ON DUPLICATE KEY arithmetic.
+
+    MySQL returns rowcount=1 for a new insert and rowcount=2 for an updated
+    duplicate.  For a batch of 2 rows where 1 is new and 1 is a duplicate:
+      rowcount = 1*1 + 1*2 = 3; duplicates = rowcount - total = 3 - 2 = 1.
+    """
+    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter.engine_options = {}
+    adapter.connect()
+    try:
+        records = [_klines_rec("BTCUSDT"), _klines_rec("ETHUSDT")]
+
+        fake_result = MagicMock()
+        fake_result.rowcount = 3  # 1 insert (1) + 1 duplicate update (2)
+        fake_conn = MagicMock()
+        fake_conn.execute.return_value = fake_result
+        fake_conn.begin.return_value = MagicMock()
+        fake_engine = MagicMock()
+        fake_engine.connect.return_value.__enter__.return_value = fake_conn
+
+        with patch.object(adapter, "_ensure_connected", return_value=fake_engine):
+            result = adapter.write(records, "klines_m5")
+
+        assert isinstance(result, WriteResult)
+        assert result.inserted == 1
+        assert result.duplicates == 1
+        assert result.failed == 0
+    finally:
+        adapter.disconnect()
