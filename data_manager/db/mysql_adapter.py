@@ -195,6 +195,7 @@ class MySQLAdapter(BaseAdapter):
             Column("timestamp", DateTime, nullable=False),
             Index("idx_audit_logs_dataset_timestamp", "dataset_id", "timestamp"),
             Index("idx_audit_logs_symbol", "symbol"),
+            Index("idx_audit_logs_symbol_timestamp", "symbol", "timestamp"),
         )
 
         # Health metrics table
@@ -212,6 +213,7 @@ class MySQLAdapter(BaseAdapter):
             Column("timestamp", DateTime, nullable=False),
             Index("idx_health_metrics_dataset_timestamp", "dataset_id", "timestamp"),
             Index("idx_health_metrics_symbol", "symbol"),
+            Index("idx_health_metrics_symbol_timestamp", "symbol", "timestamp"),
         )
 
         # Backfill jobs table
