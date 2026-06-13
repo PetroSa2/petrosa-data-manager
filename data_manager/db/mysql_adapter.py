@@ -418,13 +418,26 @@ class MySQLAdapter(BaseAdapter):
             records.append(record)
         total = len(records)
 
+        # klines tables carry `extracted_at`; use ON DUPLICATE KEY UPDATE to
+        # avoid MySQL 5.x gap-lock contention that INSERT IGNORE causes on
+        # unique-index conflicts (petrosa-data-manager#231).
+        uses_on_dup_key = "extracted_at" in table.c
+
         def _write_attempt() -> int:
             """Single write attempt — returns rowcount or raises."""
+            from sqlalchemy.dialects.mysql import insert as mysql_insert
+
             engine = self._ensure_connected()
             with engine.connect() as conn:
                 trans = conn.begin()
                 try:
-                    stmt = table.insert().prefix_with("IGNORE")
+                    if uses_on_dup_key:
+                        ins = mysql_insert(table)
+                        stmt = ins.on_duplicate_key_update(
+                            extracted_at=ins.inserted.extracted_at
+                        )
+                    else:
+                        stmt = table.insert().prefix_with("IGNORE")
                     result = conn.execute(stmt, records)
                     trans.commit()
                     return int(result.rowcount or 0)
@@ -437,9 +450,10 @@ class MySQLAdapter(BaseAdapter):
                 return retry_transient(_write_attempt)
             except IntegrityError:
                 # Non-transient: FK violation / NOT NULL / similar.
-                # Note: duplicate-key with INSERT IGNORE does NOT land here.
+                # ON DUPLICATE KEY UPDATE and INSERT IGNORE both absorb
+                # duplicate-key collisions without raising here.
                 logger.warning(
-                    "Integrity error writing to %s — not a duplicate (INSERT IGNORE absorbs those)",
+                    "Integrity error writing to %s — not a duplicate (absorbed by upsert/ignore)",
                     collection,
                 )
                 raise
@@ -462,8 +476,15 @@ class MySQLAdapter(BaseAdapter):
             self._record_write_failure(collection, "circuit_or_unknown")
             raise
 
-        duplicates = max(0, total - rowcount)
-        return WriteResult(inserted=rowcount, duplicates=duplicates, failed=0)
+        if uses_on_dup_key:
+            # ON DUPLICATE KEY UPDATE: MySQL reports 1 per insert, 2 per update.
+            # duplicates = rowcount - total; inserts = total - duplicates.
+            duplicates = max(0, rowcount - total)
+        else:
+            # INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
+            duplicates = max(0, total - rowcount)
+        inserts = total - duplicates
+        return WriteResult(inserted=inserts, duplicates=duplicates, failed=0)
 
     def _record_write_failure(self, collection: str, reason: str) -> None:
         """Increment the write-failure counter — fire-and-forget; never raise."""
