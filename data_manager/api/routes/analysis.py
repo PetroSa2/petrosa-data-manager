@@ -570,7 +570,21 @@ async def get_regime(
     """
     Get market regime classification for a trading pair.
 
-    Returns current market regime and confidence level.
+    Query params:
+      - pair: trading pair symbol (e.g. "BTCUSDT")
+      - period: data period hint (e.g. "1h", "1d") — stored in the analytics collection name
+
+    Response shape (200 OK):
+      {pair, metric="regime", data: {regime, volatility_level, volume_level,
+       trend_direction, confidence} | null, metadata: {timestamp, collection}}
+
+    When no regime has been computed yet for the pair, `data` is null and the
+    status is still 200. Callers must treat null `data` as "regime unknown" —
+    NOT as a wiring error. A 404 from this endpoint always means the route
+    itself is missing, never that data is absent.
+
+    503 → MongoDB adapter unavailable.
+    500 → Unexpected server error.
     """
     if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -582,9 +596,15 @@ async def get_regime(
         )
 
         if not results:
-            raise HTTPException(
-                status_code=404, detail=f"No regime data available for {pair}"
-            )
+            return {
+                "pair": pair,
+                "metric": "regime",
+                "data": None,
+                "metadata": {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "collection": collection,
+                },
+            }
 
         r = results[0]
 
