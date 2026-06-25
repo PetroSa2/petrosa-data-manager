@@ -26,6 +26,7 @@ try:
 except ImportError:
     MOTOR_AVAILABLE = False
 
+import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
 
 logger = logging.getLogger(__name__)
@@ -330,6 +331,19 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("strategy_id", ASCENDING)]),
                     IndexModel([("decision_id", ASCENDING)], sparse=True),
                     IndexModel([("timestamp", ASCENDING)]),
+                    # TTL self-heal (data-manager#244). A dedicated index name on the
+                    # subscriber-set `received_at` datetime — NOT `timestamp` (which
+                    # the line above manages as a plain index, so reusing it caused
+                    # the IndexOptionsConflict that silently dropped the TTL in
+                    # k8s#820/#884 and triggered three Atlas M0 quota P0s). Recreating
+                    # it here on every startup means the collection self-heals even if
+                    # an operator drops the index. `received_at` is always a real BSON
+                    # Date (default_factory=datetime.now(UTC)), so TTL purging works.
+                    IndexModel(
+                        [("received_at", ASCENDING)],
+                        expireAfterSeconds=constants.INTENTS_TTL_SECONDS,
+                        name="received_at_ttl_1d",
+                    ),
                 ]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection

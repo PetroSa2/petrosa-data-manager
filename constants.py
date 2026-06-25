@@ -63,6 +63,16 @@ MONGODB_URL = os.getenv(
     else f"mongodb://{MONGODB_HOST}:{MONGODB_PORT}/{MONGODB_DB}",
 )
 
+# Intents TTL retention (data-manager#244). The `intents` audit-trail collection
+# grows ~280k docs/day; without a working TTL it exhausts the Atlas M0 512 MB quota
+# and halts all cluster writes (three P0s: 2026-06-10/06-16/06-19). A TTL index on
+# the subscriber-set `received_at` datetime (NOT the publisher-supplied `timestamp`,
+# and NOT the non-existent `createdAt` that k8s#820 mistakenly targeted) caps it.
+# Default 1 day → ~280 MB steady state (~45% headroom). Read by BOTH the app-startup
+# self-heal (MongoDBAdapter.ensure_indexes) and the standalone maintenance job
+# (data_manager.maintenance.intents_ttl_index) so they never disagree.
+INTENTS_TTL_SECONDS = int(os.getenv("MONGODB_INTENTS_TTL_SECONDS", "86400"))
+
 # Feature Flags
 ENABLE_AUDITOR = os.getenv("ENABLE_AUDITOR", "true").lower() == "true"
 ENABLE_BACKFILLER = os.getenv("ENABLE_BACKFILLER", "true").lower() == "true"
