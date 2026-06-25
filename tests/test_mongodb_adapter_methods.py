@@ -322,8 +322,17 @@ class TestEnsureIndexes:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         await adapter.ensure_indexes("intents")
         indexes = coll.create_indexes.call_args[0][0]
-        # intent_id (unique), strategy_id, decision_id (sparse), timestamp = 4
-        assert len(indexes) == 4
+        # intent_id (unique), strategy_id, decision_id (sparse), timestamp,
+        # received_at TTL (data-manager#244) = 5
+        assert len(indexes) == 5
+        # The received_at TTL index self-heals the Atlas-quota fix (dm#244):
+        # a dedicated name on the subscriber-set received_at datetime.
+        import constants
+
+        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
+        assert len(ttl) == 1
+        assert ttl[0].document["name"] == "received_at_ttl_1d"
+        assert ttl[0].document["expireAfterSeconds"] == constants.INTENTS_TTL_SECONDS
 
     @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):
