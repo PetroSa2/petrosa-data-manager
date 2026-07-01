@@ -103,6 +103,23 @@ SIBLING_RETENTION_DECISION = (
     "covered by the Atlas data-size leading-indicator alert (data-manager#244 AC6)"
 )
 
+# Per-collection overrides to the default decision above. A sibling graduates
+# here once volume evidence warrants active retention. `trades` graduated on
+# 2026-07-01 (4th Atlas M0 P0, 870k docs / ~349 MB) — it is now actively pruned
+# by data_manager.maintenance.trades_retention via lexicographic ISO-8601 string
+# comparison (its timestamps are strings, so a native TTL index is impossible).
+SIBLING_DECISION_OVERRIDES: dict[str, str] = {
+    "trades": (
+        "actively pruned by data_manager.maintenance.trades_retention "
+        "(data-manager#246) — string timestamps preclude a native TTL index"
+    ),
+}
+
+
+def _sibling_decision(collection: str) -> str:
+    """Return the retention decision for a sibling collection."""
+    return SIBLING_DECISION_OVERRIDES.get(collection, SIBLING_RETENTION_DECISION)
+
 
 @dataclass
 class TtlIndexConfig:
@@ -291,20 +308,21 @@ async def audit_sibling_collections(
     results: list[SiblingAuditResult] = []
 
     for name in SIBLING_COLLECTIONS:
+        decision = _sibling_decision(name)
         if name not in present_collections:
             logger.info(
                 "intents_ttl_index[audit]: db=%s collection=%s present=False "
                 "decision=%s",
                 db_name,
                 name,
-                SIBLING_RETENTION_DECISION,
+                decision,
             )
             results.append(
                 SiblingAuditResult(
                     collection=name,
                     present=False,
                     ttl_indexes={},
-                    decision=SIBLING_RETENTION_DECISION,
+                    decision=decision,
                 )
             )
             continue
@@ -321,14 +339,14 @@ async def audit_sibling_collections(
             db_name,
             name,
             ttl_indexes or "{}",
-            SIBLING_RETENTION_DECISION,
+            decision,
         )
         results.append(
             SiblingAuditResult(
                 collection=name,
                 present=True,
                 ttl_indexes=ttl_indexes,
-                decision=SIBLING_RETENTION_DECISION,
+                decision=decision,
             )
         )
 

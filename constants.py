@@ -73,6 +73,16 @@ MONGODB_URL = os.getenv(
 # (data_manager.maintenance.intents_ttl_index) so they never disagree.
 INTENTS_TTL_SECONDS = int(os.getenv("MONGODB_INTENTS_TTL_SECONDS", "86400"))
 
+# Trades retention (data-manager#246). The `trades` collection (raw public-trade
+# ticks written directly by the binance-futures extractor) grows unbounded at
+# ~22 MB/day and drove the 4th Atlas M0 quota P0 (2026-07-01: 870k docs / ~349 MB,
+# writes blocked). Its `timestamp`/`trade_time`/`extracted_at` fields are stored as
+# ISO-8601 STRINGS, not BSON Dates, so a native TTL index is impossible (same root
+# pattern as #244). Instead a scheduled job deletes docs older than this window via
+# lexicographic string comparison on the ISO-8601 `timestamp` field. Default 7 days;
+# revisit toward 3 days if raw ticks still trend toward the quota.
+TRADES_RETENTION_DAYS = int(os.getenv("TRADES_RETENTION_DAYS", "7"))
+
 # Feature Flags
 ENABLE_AUDITOR = os.getenv("ENABLE_AUDITOR", "true").lower() == "true"
 ENABLE_BACKFILLER = os.getenv("ENABLE_BACKFILLER", "true").lower() == "true"
