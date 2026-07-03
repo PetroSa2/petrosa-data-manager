@@ -148,6 +148,16 @@ ENABLE_MONGO_DATA_SIZE_GAUGE = (
 MONGO_DATA_SIZE_REFRESH_INTERVAL = int(
     os.getenv("MONGO_DATA_SIZE_REFRESH_INTERVAL", "60")
 )
+# Optional comma-separated EXTRA database names to sample beyond the connected
+# DB (petrosa_data_manager, which dominates ~99% of logical size). The gauge
+# always samples the connected DB; these are added by explicit name via
+# dbStats. Left empty by default — deliberately NOT using listDatabases, which
+# the app's Mongo credential cannot run (see mongo_data_size_gauge docstring).
+MONGO_DATA_SIZE_DATABASES = tuple(
+    name.strip()
+    for name in os.getenv("MONGO_DATA_SIZE_DATABASES", "").split(",")
+    if name.strip()
+)
 
 # Scheduling Configuration
 AUDIT_INTERVAL = int(os.getenv("AUDIT_INTERVAL", "300"))  # 5 minutes

@@ -25,9 +25,20 @@ new remote-write, Alloy config, secret, or push CronJob. The downstream alert
 
 The denominator is the 512 MiB constant (M0 exposes no ``_limit`` series).
 
+Why the connected DB, not ``listDatabases``
+-------------------------------------------
+The refresh runs ``dbStats`` on the adapter's **already-connected** database
+(``petrosa_data_manager``, ~99% of the cluster's logical size), not an
+enumeration via ``listDatabases``. ``listDatabases`` is a cluster-level admin
+command the application's Mongo credential is not granted — the read-only
+storage-inventory audit needs a *dedicated* clusterMonitor credential for
+exactly that. Running ``dbStats`` on the connected DB is an ordinary read the
+app can always do, and it is what every P0 diagnosis actually used. Extra
+databases can be sampled by explicit name when needed.
+
 Failure isolation (AC3)
 -----------------------
-:func:`refresh_mongo_data_size` never raises. A ``listDatabases`` failure or a
+:func:`refresh_mongo_data_size` never raises. A missing connected database or a
 per-database ``dbStats`` failure logs a warning, increments
 ``data_manager_mongo_data_size_scrape_errors_total``, and leaves the last-known
 gauge value in place (Prometheus gauges retain their prior sample until the
@@ -44,12 +55,6 @@ from typing import Any
 from prometheus_client import Counter, Gauge
 
 logger = logging.getLogger(__name__)
-
-# Atlas/Mongo system databases — excluded from the app-data total. Their bytes
-# do not count toward what the application is responsible for keeping under the
-# M0 quota, and (e.g. ``local``'s oplog) they are not app-controllable anyway.
-# Mirrors ``storage_inventory.SYSTEM_DBS`` intentionally.
-SYSTEM_DBS = frozenset({"admin", "local", "config"})
 
 # Module-level so the gauge is registered exactly once on the default registry
 # (the one ``start_http_server(METRICS_PORT)`` exposes on :9090). A per-``database``
@@ -73,47 +78,75 @@ mongo_data_size_scrape_errors = Counter(
 )
 
 
+def _resolve_targets(adapter: Any, extra_databases: tuple[str, ...]):
+    """Yield ``(db_name, motor_database_handle)`` pairs to sample.
+
+    Primary target is the adapter's **already-connected** database
+    (``adapter.db`` / ``adapter.db_name``) — ``petrosa_data_manager``, which is
+    ~99% of the cluster's logical size. Additional databases can be named
+    explicitly via ``extra_databases`` and are resolved through
+    ``adapter.client[name]``.
+
+    Deliberately does NOT call ``listDatabases``: that is a cluster-level admin
+    command the application's Mongo credential is not granted (the read-only
+    storage-inventory audit needs a *dedicated* clusterMonitor credential for
+    exactly that reason — see ``storage_inventory``), and enumerating every DB
+    is unnecessary when the app owns the one that dominates the quota. Running
+    ``dbStats`` on the connected DB is an ordinary read the app can always do.
+    """
+    seen: set[str] = set()
+    primary_name = getattr(adapter, "db_name", None)
+    primary_db = getattr(adapter, "db", None)
+    if primary_name and primary_db is not None:
+        seen.add(primary_name)
+        yield primary_name, primary_db
+
+    client = getattr(adapter, "client", None)
+    for name in extra_databases:
+        name = (name or "").strip()
+        if not name or name in seen or client is None:
+            continue
+        seen.add(name)
+        yield name, client[name]
+
+
 async def refresh_mongo_data_size(
     adapter: Any,
     *,
-    system_dbs: frozenset[str] = SYSTEM_DBS,
+    extra_databases: tuple[str, ...] = (),
 ) -> dict[str, int]:
     """Refresh the ``data_manager_mongo_data_size_bytes`` gauge from ``dbStats``.
 
-    Enumerates every non-system database and sets the gauge, labelled by
-    ``database``, to that database's ``dbStats().dataSize``. Returns a
-    ``{database: data_size_bytes}`` map of the databases successfully sampled
-    (useful for tests and structured logging).
+    Runs ``dbStats`` on the adapter's connected database (and any explicitly
+    named ``extra_databases``) and sets the gauge, labelled by ``database``, to
+    each database's ``dataSize``. Returns a ``{database: data_size_bytes}`` map
+    of the databases successfully sampled (useful for tests and logging).
 
-    Never raises (AC3): a ``listDatabases`` error or any per-database
+    Never raises (AC3): a missing connected database or any per-database
     ``dbStats`` error logs a warning, increments
     :data:`mongo_data_size_scrape_errors`, and leaves the last-known gauge
-    value(s) untouched.
+    value(s) untouched. Fully async (Motor), so it never blocks the event loop.
 
     Args:
         adapter: a connected :class:`~data_manager.db.mongodb_adapter.MongoDBAdapter`
-            (or any object exposing async ``list_databases()`` and
-            ``db_stats(name)``).
-        system_dbs: database names to skip (defaults to admin/local/config).
+            exposing ``db`` (connected Motor database), ``db_name``, and
+            ``client``.
+        extra_databases: optional extra database names to also sample by name
+            (best-effort; skipped individually on error).
     """
-    try:
-        databases = await adapter.list_databases()
-    except Exception as exc:  # noqa: BLE001 — must never propagate (AC3)
+    targets = list(_resolve_targets(adapter, extra_databases))
+    if not targets:
         mongo_data_size_scrape_errors.inc()
         logger.warning(
-            "mongo_data_size: listDatabases failed; leaving last-known gauge "
-            "value(s) in place: %s",
-            exc,
+            "mongo_data_size: adapter exposes no connected database "
+            "(db/db_name unset); leaving last-known gauge value(s) in place",
         )
         return {}
 
     sampled: dict[str, int] = {}
-    for db_info in databases:
-        name = (db_info or {}).get("name")
-        if not name or name in system_dbs:
-            continue
+    for name, db_handle in targets:
         try:
-            stats = await adapter.db_stats(name)
+            stats = await db_handle.command("dbStats")
         except Exception as exc:  # noqa: BLE001 — isolate per-DB failures (AC3)
             mongo_data_size_scrape_errors.inc()
             logger.warning(
