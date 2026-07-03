@@ -133,6 +133,22 @@ AUDIT_EVALUATOR_TICK_INTERVAL = int(os.getenv("AUDIT_EVALUATOR_TICK_INTERVAL", "
 # join completeness on each tick.
 AUDIT_EVALUATOR_LOOKBACK_S = int(os.getenv("AUDIT_EVALUATOR_LOOKBACK_S", "1800"))
 
+# MongoDB logical-data-size gauge (data-manager#248) — producer half of the
+# Atlas M0 data-size leading-indicator alert (petrosa_k8s#905, dm#244 AC6).
+# Atlas M0's 512 MiB quota gates on LOGICAL uncompressed `dbStats().dataSize`
+# (NOT the compressed storageSize), which is exactly how all four 2026 P0
+# quota breaches were diagnosed. data-manager is already scraped into Grafana
+# Cloud on :9090, so registering this gauge on the existing registry makes it
+# flow with no new remote-write/Alloy/secret/CronJob. Defaults true.
+ENABLE_MONGO_DATA_SIZE_GAUGE = (
+    os.getenv("ENABLE_MONGO_DATA_SIZE_GAUGE", "true").lower() == "true"
+)
+# Refresh cadence (seconds) for the mongo data-size gauge. 60s is cheap: one
+# dbStats command per application DB per minute, well below scrape frequency.
+MONGO_DATA_SIZE_REFRESH_INTERVAL = int(
+    os.getenv("MONGO_DATA_SIZE_REFRESH_INTERVAL", "60")
+)
+
 # Scheduling Configuration
 AUDIT_INTERVAL = int(os.getenv("AUDIT_INTERVAL", "300"))  # 5 minutes
 ANALYTICS_INTERVAL = int(os.getenv("ANALYTICS_INTERVAL", "900"))  # 15 minutes
