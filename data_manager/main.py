@@ -454,6 +454,12 @@ class DataManagerApp:
         self.running = True
         logger.info("All components started successfully")
 
+        # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
+        # AFTER self.running=True so the `while self.running` loop runs its
+        # first iteration immediately (the series appears within one refresh
+        # interval of boot) rather than exiting on a stale False.
+        asyncio.create_task(self._run_mongo_data_size_loop())
+
         # Wait for shutdown signal
         await self._shutdown_event.wait()
 
@@ -861,6 +867,49 @@ class DataManagerApp:
             )
         except Exception as e:
             logger.error(f"Error in DrawdownScheduler: {e}", exc_info=True)
+
+    async def _run_mongo_data_size_loop(self) -> None:
+        """Periodic MongoDB logical-data-size gauge refresh (dm#248).
+
+        Producer half of the Atlas M0 data-size leading-indicator alert
+        (petrosa_k8s#905 / dm#244 AC6). Refreshes
+        ``data_manager_mongo_data_size_bytes`` from ``dbStats().dataSize``
+        every ``MONGO_DATA_SIZE_REFRESH_INTERVAL`` seconds so the series
+        flows through the already-scraped :9090 endpoint into Grafana Cloud.
+
+        The refresh is failure-isolated inside
+        :func:`refresh_mongo_data_size` (a Mongo error leaves the last-known
+        value and bumps ``..._scrape_errors_total``); the extra try/except
+        here is defense-in-depth so a genuinely unexpected error can never
+        kill the loop.
+        """
+        if not constants.ENABLE_MONGO_DATA_SIZE_GAUGE:
+            logger.info("Mongo data-size gauge disabled")
+            return
+        if not self.db_manager or not getattr(self.db_manager, "mongodb_adapter", None):
+            logger.warning("Mongo data-size gauge loop not started: no mongodb_adapter")
+            return
+
+        from data_manager.maintenance.mongo_data_size_gauge import (
+            refresh_mongo_data_size,
+        )
+
+        interval = max(
+            10,
+            int(getattr(constants, "MONGO_DATA_SIZE_REFRESH_INTERVAL", 60)),
+        )
+        adapter = self.db_manager.mongodb_adapter
+        logger.info(f"Mongo data-size gauge loop started (interval={interval}s)")
+        while self.running:
+            try:
+                await refresh_mongo_data_size(adapter)
+            except Exception as exc:
+                logger.warning(f"Mongo data-size refresh failed: {exc}")
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+        logger.info("Mongo data-size gauge loop stopped")
 
     def shutdown(self, signum, frame):
         """Handle shutdown signal."""
