@@ -899,10 +899,11 @@ class DataManagerApp:
             int(getattr(constants, "MONGO_DATA_SIZE_REFRESH_INTERVAL", 60)),
         )
         adapter = self.db_manager.mongodb_adapter
+        extra_dbs = tuple(getattr(constants, "MONGO_DATA_SIZE_DATABASES", ()))
         logger.info(f"Mongo data-size gauge loop started (interval={interval}s)")
         while self.running:
             try:
-                await refresh_mongo_data_size(adapter)
+                await refresh_mongo_data_size(adapter, extra_databases=extra_dbs)
             except Exception as exc:
                 logger.warning(f"Mongo data-size refresh failed: {exc}")
             try:

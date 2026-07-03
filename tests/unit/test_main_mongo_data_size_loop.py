@@ -63,7 +63,7 @@ async def test_loop_runs_one_iteration_then_exits(monkeypatch):
 
     # refresh stops the loop after the first pass so `while self.running`
     # exits deterministically.
-    async def _refresh(adapter):
+    async def _refresh(adapter, **kwargs):
         app.running = False
         return {"petrosa_data_manager": 1}
 
@@ -87,7 +87,7 @@ async def test_loop_isolates_unexpected_refresh_error(monkeypatch):
 
     # refresh raises (defense-in-depth branch); loop must not propagate and
     # must still terminate — we flip running off before raising.
-    async def _boom(adapter):
+    async def _boom(adapter, **kwargs):
         app.running = False
         raise RuntimeError("unexpected")
 
