@@ -873,9 +873,10 @@ class DataManagerApp:
 
         Producer half of the Atlas M0 data-size leading-indicator alert
         (petrosa_k8s#905 / dm#244 AC6). Refreshes
-        ``data_manager_mongo_data_size_bytes`` from ``dbStats().dataSize``
-        every ``MONGO_DATA_SIZE_REFRESH_INTERVAL`` seconds so the series
-        flows through the already-scraped :9090 endpoint into Grafana Cloud.
+        the ``data_manager_mongo_data_size_bytes`` cache from ``dbStats().dataSize``
+        every ``MONGO_DATA_SIZE_REFRESH_INTERVAL`` seconds; the OTLP
+        ObservableGauge then exports it into Grafana Cloud (dm#252 — the
+        prometheus_client :9090 registry is NOT scraped there).
 
         The refresh is failure-isolated inside
         :func:`refresh_mongo_data_size` (a Mongo error leaves the last-known
