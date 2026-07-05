@@ -1,7 +1,7 @@
-"""MongoDB logical-data-size Prometheus gauge (data-manager#248).
+"""MongoDB logical-data-size gauge, exported via OTLP (data-manager#248, #252).
 
 Producer half of the MongoDB Atlas M0 data-size leading-indicator alert
-(``petrosa_k8s#905``, itself ``dm#244`` AC6).
+(``petrosa_k8s#905`` / ``petrosa_k8s#920``, itself ``dm#244`` AC6).
 
 Why this exists
 ---------------
@@ -14,16 +14,36 @@ Grafana Cloud and there never will be on M0 — the official Grafana Cloud Atlas
 integration requires M10+. So the only reliable source of the number the quota
 actually gates on is ``db.command("dbStats")["dataSize"]`` from the app itself.
 
-data-manager is already scraped into Grafana Cloud (its Prometheus registry is
-exposed on :9090 — see ``main.py``'s ``start_http_server``). Registering this
-gauge on that **same default registry** makes it flow to Grafana Cloud with no
-new remote-write, Alloy config, secret, or push CronJob. The downstream alert
-(#905) then finalizes as, e.g.::
+Why OTLP, not the prometheus_client :9090 registry (dm#252)
+-----------------------------------------------------------
+dm#248 originally registered this gauge on the ``prometheus_client`` default
+registry exposed on :9090, assuming that endpoint was scraped into Grafana
+Cloud. It is **not**: data-manager reaches Grafana Cloud exclusively through the
+**OTLP pipeline** (``petrosa-otel`` → otelcol → ``grafanacloud-prom``). Nothing
+scrapes :9090, so the gauge was live on the pod but ``0 series`` in Grafana
+Cloud (live-verified 2026-07-04), leaving petrosa_k8s#920/#905 permanently
+``NoData``. This module therefore emits the metric through the **OTEL meter**
+(``get_meter`` → OTLP), exactly like the ``data_manager_decision_*`` counters,
+so it lands in ``grafanacloud-prom`` under the same name and the existing alert
+exprs work unchanged::
 
-    sum(data_manager_mongo_data_size_bytes) / (512 * 1024 * 1024) > 0.70  # WARN
-    sum(data_manager_mongo_data_size_bytes) / (512 * 1024 * 1024) > 0.85  # P1
+    sum(data_manager_mongo_data_size_bytes) / (512 * 1024 * 1024) > 0.80  # WARN
+    sum(data_manager_mongo_data_size_bytes) / (512 * 1024 * 1024) > 0.95  # P1
 
 The denominator is the 512 MiB constant (M0 exposes no ``_limit`` series).
+
+Async scrape vs. sync export (the ObservableGauge idiom)
+--------------------------------------------------------
+An OTEL ``ObservableGauge`` reports via a **synchronous** callback the SDK
+invokes at export time — it cannot ``await`` Motor. So the async refresh loop
+(:func:`refresh_mongo_data_size`, driven from ``main.py`` every
+``MONGO_DATA_SIZE_REFRESH_INTERVAL`` s) writes the latest ``dbStats().dataSize``
+per database into a small module-level cache, and the observable callback reads
+that cache and yields one :class:`Observation` per database at export. The
+cache is guarded by a :class:`threading.Lock` because the callback runs on the
+SDK's exporter thread while the loop writes from the asyncio event-loop thread.
+The scrape-error total is exported the same way (an ``ObservableCounter`` over a
+running integer), so it too reaches Grafana Cloud (AC3).
 
 Why the connected DB, not ``listDatabases``
 -------------------------------------------
@@ -39,43 +59,95 @@ databases can be sampled by explicit name when needed.
 Failure isolation (AC3)
 -----------------------
 :func:`refresh_mongo_data_size` never raises. A missing connected database or a
-per-database ``dbStats`` failure logs a warning, increments
-``data_manager_mongo_data_size_scrape_errors_total``, and leaves the last-known
-gauge value in place (Prometheus gauges retain their prior sample until the
-next successful set). The refresh is fully async (Motor) so it never blocks the
-event loop. Callers should still wrap the ``await`` defensively, but the
-function itself is the primary guard.
+per-database ``dbStats`` failure logs a warning, increments the exported
+``data_manager_mongo_data_size_scrape_errors_total`` counter, and leaves the
+last-known cached value in place (so the exported gauge holds its prior sample
+until the next successful scrape). The refresh is fully async (Motor) so it
+never blocks the event loop.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Iterable
 from typing import Any
 
-from prometheus_client import Counter, Gauge
+from opentelemetry.metrics import CallbackOptions, Observation
+
+try:
+    from petrosa_otel import get_meter
+except ImportError:  # pragma: no cover - petrosa_otel always present in prod
+    from opentelemetry import metrics as _otel_metrics
+
+    def get_meter(name: str) -> Any:
+        return _otel_metrics.get_meter(name)
+
 
 logger = logging.getLogger(__name__)
 
-# Module-level so the gauge is registered exactly once on the default registry
-# (the one ``start_http_server(METRICS_PORT)`` exposes on :9090). A per-``database``
-# label lets the alert ``sum()`` across DBs while still showing which DB
-# dominates (``petrosa_data_manager`` is ~99% of the total).
-mongo_data_size_bytes = Gauge(
+_meter = get_meter(__name__)
+
+# Latest per-database ``dbStats().dataSize`` written by the async refresh loop
+# and read by the ObservableGauge callback at OTLP export time. Guarded by a
+# lock because the two run on different threads (asyncio event loop vs. the
+# SDK's metric-exporter thread). ``_scrape_errors`` is a monotonic running
+# total exported via an ObservableCounter (AC3).
+_state_lock = threading.Lock()
+_last_data_size: dict[str, int] = {}
+_scrape_errors: int = 0
+
+
+def _observe_data_size(_options: CallbackOptions) -> Iterable[Observation]:
+    """ObservableGauge callback: yield the last-known size per database.
+
+    Runs synchronously on the SDK exporter thread; reads only the cache the
+    async refresh loop maintains. Yields nothing until the first successful
+    scrape (so the series simply doesn't appear rather than reporting 0).
+    """
+    with _state_lock:
+        snapshot = dict(_last_data_size)
+    for database, data_size in snapshot.items():
+        yield Observation(data_size, {"database": database})
+
+
+def _observe_scrape_errors(_options: CallbackOptions) -> Iterable[Observation]:
+    """ObservableCounter callback: yield the cumulative scrape-error count."""
+    with _state_lock:
+        yield Observation(_scrape_errors)
+
+
+# Keep module-level references so the instruments (and their callbacks) are not
+# garbage-collected. ``data_manager_mongo_data_size_bytes`` is emitted with no
+# ``unit`` on purpose: the OTLP→Prometheus exporter appends a unit suffix (e.g.
+# ``By`` → ``_bytes``) and the name already ends in ``_bytes`` — mirroring how
+# ``data_manager_decision_messages_received_total`` keeps its exact name.
+mongo_data_size_bytes = _meter.create_observable_gauge(
     "data_manager_mongo_data_size_bytes",
-    "Logical (uncompressed) MongoDB data size in bytes per application database, "
-    "from dbStats().dataSize. This is the figure Atlas M0 gates its 512 MiB quota "
-    "on (NOT the compressed storageSize). Producer for petrosa_k8s#905.",
-    ["database"],
+    callbacks=[_observe_data_size],
+    description=(
+        "Logical (uncompressed) MongoDB data size in bytes per application "
+        "database, from dbStats().dataSize. This is the figure Atlas M0 gates "
+        "its 512 MiB quota on (NOT the compressed storageSize). Producer for "
+        "petrosa_k8s#905 / #920; exported via OTLP (dm#252)."
+    ),
 )
 
-# Companion error counter (AC3): a scrape failure increments this instead of
-# crashing the service or zeroing the gauge, so the alert can be made robust to
-# transient scrape gaps and operators can see scrape health.
-mongo_data_size_scrape_errors = Counter(
+mongo_data_size_scrape_errors = _meter.create_observable_counter(
     "data_manager_mongo_data_size_scrape_errors_total",
-    "Total failed dbStats scrapes while refreshing data_manager_mongo_data_size_bytes "
-    "(listDatabases or per-database dbStats). The gauge retains its last-known value.",
+    callbacks=[_observe_scrape_errors],
+    description=(
+        "Cumulative failed dbStats scrapes while refreshing "
+        "data_manager_mongo_data_size_bytes. The gauge retains its last-known "
+        "value across failures."
+    ),
 )
+
+
+def _record_scrape_error() -> None:
+    global _scrape_errors
+    with _state_lock:
+        _scrape_errors += 1
 
 
 def _resolve_targets(adapter: Any, extra_databases: tuple[str, ...]):
@@ -115,17 +187,19 @@ async def refresh_mongo_data_size(
     *,
     extra_databases: tuple[str, ...] = (),
 ) -> dict[str, int]:
-    """Refresh the ``data_manager_mongo_data_size_bytes`` gauge from ``dbStats``.
+    """Refresh the cached ``data_manager_mongo_data_size_bytes`` values.
 
     Runs ``dbStats`` on the adapter's connected database (and any explicitly
-    named ``extra_databases``) and sets the gauge, labelled by ``database``, to
-    each database's ``dataSize``. Returns a ``{database: data_size_bytes}`` map
-    of the databases successfully sampled (useful for tests and logging).
+    named ``extra_databases``) and stores each database's ``dataSize`` in the
+    module cache the OTLP ObservableGauge exports. Returns a
+    ``{database: data_size_bytes}`` map of the databases successfully sampled
+    (useful for tests and logging).
 
     Never raises (AC3): a missing connected database or any per-database
-    ``dbStats`` error logs a warning, increments
-    :data:`mongo_data_size_scrape_errors`, and leaves the last-known gauge
-    value(s) untouched. Fully async (Motor), so it never blocks the event loop.
+    ``dbStats`` error logs a warning, increments the exported
+    ``data_manager_mongo_data_size_scrape_errors_total`` counter, and leaves the
+    last-known cached value(s) untouched. Fully async (Motor), so it never
+    blocks the event loop.
 
     Args:
         adapter: a connected :class:`~data_manager.db.mongodb_adapter.MongoDBAdapter`
@@ -136,7 +210,7 @@ async def refresh_mongo_data_size(
     """
     targets = list(_resolve_targets(adapter, extra_databases))
     if not targets:
-        mongo_data_size_scrape_errors.inc()
+        _record_scrape_error()
         logger.warning(
             "mongo_data_size: adapter exposes no connected database "
             "(db/db_name unset); leaving last-known gauge value(s) in place",
@@ -148,7 +222,7 @@ async def refresh_mongo_data_size(
         try:
             stats = await db_handle.command("dbStats")
         except Exception as exc:  # noqa: BLE001 — isolate per-DB failures (AC3)
-            mongo_data_size_scrape_errors.inc()
+            _record_scrape_error()
             logger.warning(
                 "mongo_data_size: dbStats failed for %s; keeping last-known "
                 "value for that database: %s",
@@ -157,10 +231,11 @@ async def refresh_mongo_data_size(
             )
             continue
         data_size = int((stats or {}).get("dataSize", 0) or 0)
-        mongo_data_size_bytes.labels(database=name).set(data_size)
         sampled[name] = data_size
 
     if sampled:
+        with _state_lock:
+            _last_data_size.update(sampled)
         total = sum(sampled.values())
         logger.info(
             "mongo_data_size: refreshed %d database(s); total dataSize=%d bytes "

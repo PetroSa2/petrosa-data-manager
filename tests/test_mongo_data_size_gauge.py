@@ -1,14 +1,19 @@
-"""Tests for the MongoDB logical-data-size gauge refresh (data-manager#248).
+"""Tests for the MongoDB logical-data-size gauge refresh (data-manager#248, #252).
 
 Verifies the *producer* half of the Atlas M0 data-size leading-indicator alert
-(petrosa_k8s#905 / dm#244 AC6):
+(petrosa_k8s#905 / #920 / dm#244 AC6):
 
-- AC1/AC2 — the ``data_manager_mongo_data_size_bytes`` gauge is set from a
+- AC1/AC2 — the ``data_manager_mongo_data_size_bytes`` value is cached from a
   mocked ``dbStats().dataSize`` payload on the adapter's connected database
-  (and any explicitly named extra DBs).
-- AC3/AC4 — a ``dbStats`` exception (or an adapter with no connected database)
+  (and any explicitly named extra DBs) and exported per ``database`` via the
+  OTLP ObservableGauge callback.
+- AC3 — a ``dbStats`` exception (or an adapter with no connected database)
   does NOT propagate, bumps ``data_manager_mongo_data_size_scrape_errors_total``,
-  and leaves the last-known gauge value in place.
+  and leaves the last-known cached value in place.
+
+Per dm#252 the metric is exported through the OTEL meter (OTLP), not the
+prometheus_client :9090 registry, so these tests assert on the module cache the
+ObservableGauge reads plus the callbacks themselves — not ``prometheus_client.REGISTRY``.
 
 The refresh runs ``dbStats`` on the connected DB via ``adapter.db.command`` —
 deliberately NOT ``listDatabases`` (a cluster admin command the app credential
@@ -21,6 +26,15 @@ from __future__ import annotations
 import pytest
 
 from data_manager.maintenance import mongo_data_size_gauge as mdsg
+
+
+@pytest.fixture(autouse=True)
+def _reset_gauge_state():
+    """Isolate the module-level OTLP cache/counter between tests."""
+    with mdsg._state_lock:
+        mdsg._last_data_size.clear()
+        mdsg._scrape_errors = 0
+    yield
 
 
 class _FakeDatabase:
@@ -53,16 +67,17 @@ class _FakeAdapter:
 
 
 def _gauge_value(database: str):
-    """Read the current gauge value for a ``database`` label, or None if unset."""
-    from prometheus_client import REGISTRY
+    """Read the cached gauge value for a ``database`` label, or None if unset.
 
-    return REGISTRY.get_sample_value(
-        "data_manager_mongo_data_size_bytes", {"database": database}
-    )
+    Mirrors what the OTLP ObservableGauge callback exports.
+    """
+    with mdsg._state_lock:
+        return mdsg._last_data_size.get(database)
 
 
 def _scrape_errors() -> float:
-    return mdsg.mongo_data_size_scrape_errors._value.get()
+    with mdsg._state_lock:
+        return mdsg._scrape_errors
 
 
 @pytest.mark.asyncio
@@ -167,3 +182,36 @@ async def test_extra_db_duplicate_of_connected_is_skipped():
     )
 
     assert refreshed == {"petrosa_data_manager": 100}
+
+
+@pytest.mark.asyncio
+async def test_observable_gauge_callback_yields_one_observation_per_db():
+    """The OTLP ObservableGauge callback exports the cached value per database."""
+    adapter = _FakeAdapter(
+        "petrosa_data_manager",
+        _FakeDatabase({"dataSize": 400}),
+        client={"petrosa": _FakeDatabase({"dataSize": 25})},
+    )
+    await mdsg.refresh_mongo_data_size(adapter, extra_databases=("petrosa",))
+
+    observed = {
+        obs.attributes["database"]: obs.value for obs in mdsg._observe_data_size(None)
+    }
+
+    assert observed == {"petrosa_data_manager": 400, "petrosa": 25}
+
+
+def test_observable_gauge_callback_yields_nothing_before_first_scrape():
+    """No cached sample → the series simply doesn't appear (not a 0)."""
+    assert list(mdsg._observe_data_size(None)) == []
+
+
+@pytest.mark.asyncio
+async def test_observable_error_counter_callback_reports_cumulative_total():
+    """The OTLP ObservableCounter callback exports the running error total (AC3)."""
+    assert [o.value for o in mdsg._observe_scrape_errors(None)] == [0]
+
+    # No connected DB → one scrape error.
+    await mdsg.refresh_mongo_data_size(_FakeAdapter("", None))
+
+    assert [o.value for o in mdsg._observe_scrape_errors(None)] == [1]
