@@ -59,7 +59,13 @@ def _exec_payload(**overrides):
         "side": "buy",
         "qty": 0.001,
         "fill_qty": 0.001,
+        "fill_quantity": 0.001,
         "price": 65010.0,
+        "fill_price": 65010.0,
+        "fill_time": "2026-05-18T12:00:01+00:00",
+        "fee": 0.0065,
+        "fee_asset": "USDT",
+        "pnl": None,
         "exchange_order_id": "binance-9988",
     }
     base.update(overrides)
@@ -80,7 +86,13 @@ def test_execution_event_parses_valid_payload():
     assert event.side == "buy"
     assert event.qty == 0.001
     assert event.fill_qty == 0.001
+    assert event.fill_quantity == 0.001
     assert event.price == 65010.0
+    assert event.fill_price == 65010.0
+    assert event.fill_time == datetime(2026, 5, 18, 12, 0, 1, tzinfo=UTC)
+    assert event.fee == 0.0065
+    assert event.fee_asset == "USDT"
+    assert event.pnl is None
     assert event.reason == "fully filled at market"
     assert event.subject == "execution.events.strat_momentum_v1"
     assert event.payload == {"exchange_order_id": "binance-9988"}
@@ -284,3 +296,21 @@ async def test_process_message_sets_otel_span_attributes(execution_events_consum
     assert captured.get("decision.decision_id") == "dec_20260518T120000000_xyz789"
     assert captured.get("execution.event_type") == "filled"
     assert captured.get("execution.order_id") == "ord_abc123"
+
+
+def test_execution_event_parses_fill_audit_aliases():
+    """#529: fill_price/fill_quantity/fee aliases map onto first-class fields."""
+    data = _exec_payload()
+    data.pop("price")
+    data.pop("fill_qty")
+    data["fill_price"] = 64000.0
+    data["fill_quantity"] = 0.002
+    data["fees"] = 0.01  # publisher may send fees instead of fee
+    data.pop("fee", None)
+    event = ExecutionEvent.from_nats_message(data)
+    assert event is not None
+    assert event.fill_price == 64000.0
+    assert event.price == 64000.0
+    assert event.fill_qty == 0.002
+    assert event.fill_quantity == 0.002
+    assert event.fee == 0.01

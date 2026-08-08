@@ -145,6 +145,19 @@ make k8s-clean
 * `GET /data/depth?pair={pair}` - Order book depth
 * `GET /data/funding?pair={pair}` - Funding rate data
 
+### System Trade Audit Trail
+
+Reads the system's own fills from `execution_events` (tradeengine → NATS → data-manager).
+Distinct from `/data/trades`, which serves raw market-data trades.
+
+* `GET /api/v1/trades?strategy_id=&symbol=&start_date=&end_date=&limit=&offset=` - Fill history with
+  `fill_price`, `fill_quantity`, `fill_time`, `fee`, `fee_asset`, `pnl`, `symbol`, `side`.
+  Pagination is applied server-side (`skip`/`limit`) and `total` comes from `count_documents`.
+* `GET /api/v1/trades/summary?strategy_id=&symbol=&start_date=&end_date=` - Aggregated stats:
+  `fills`, `closed_rounds`, `wins`, `losses`, `win_rate`, `total_pnl`, `unrealized_pnl`, `fee_total`.
+  PnL is replayed FIFO via `PnlCalculator`, so the scan is capped at 50,000 fills; when the cap is
+  hit the response sets `truncated: true` — narrow the date window in that case.
+
 ### Generic CRUD API
 
 * `GET /api/v1/{database}/{collection}` - Query records with filtering, sorting, pagination

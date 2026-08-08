@@ -37,6 +37,7 @@ from data_manager.api.routes import (
     schemas,
     strategies,
     strategy_timeline,
+    system_trades,
 )
 
 try:
@@ -142,6 +143,8 @@ def create_app() -> FastAPI:
         tags=["Strategy Timeline"],
     )
     app.include_router(pnl.router, prefix="/api/v1", tags=["P&L"])
+    # System trade audit trail from execution_events (#529).
+    app.include_router(system_trades.router, prefix="/api/v1", tags=["System Trades"])
     # Cross-service decision audit-trail (#605 P4.5).
     app.include_router(audit.router, prefix="/api/v1", tags=["Audit Trail"])
     # Lifecycle reconstruction join (#603 P4.3).
