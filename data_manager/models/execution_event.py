@@ -43,7 +43,24 @@ class ExecutionEvent(BaseModel):
     fill_qty: float | None = Field(
         default=None, description="Filled quantity (present on filled / partial_fill)"
     )
+    fill_quantity: float | None = Field(
+        default=None,
+        description="Alias for fill_qty (trade-audit contract #529)",
+    )
     price: float | None = Field(default=None, description="Reference / fill price")
+    fill_price: float | None = Field(
+        default=None, description="Actual execution price (#529)"
+    )
+    fill_time: datetime | None = Field(
+        default=None, description="Fill timestamp from publisher (#529)"
+    )
+    fee: float | None = Field(default=None, description="Trading fee (#529)")
+    fee_asset: str | None = Field(
+        default=None, description="Fee currency e.g. BNB/USDT (#529)"
+    )
+    pnl: float | None = Field(
+        default=None, description="Realized PnL when provided by publisher (#529)"
+    )
     subject: str | None = Field(default=None, description="Originating NATS subject")
     payload: dict[str, Any] = Field(
         default_factory=dict, description="Full message body (post-trace-strip)"
@@ -93,6 +110,28 @@ class ExecutionEvent(BaseModel):
             except (ValueError, TypeError):
                 return None
 
+        def _maybe_dt(v: Any) -> datetime | None:
+            if v is None:
+                return None
+            try:
+                if isinstance(v, datetime):
+                    return v if v.tzinfo else v.replace(tzinfo=UTC)
+                if isinstance(v, int | float):
+                    epoch = float(v)
+                    if epoch > 1e12:
+                        epoch /= 1000.0
+                    return datetime.fromtimestamp(epoch, tz=UTC)
+                parsed = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+            except (ValueError, TypeError):
+                return None
+
+        fill_qty = _maybe_float(
+            msg_data.get("fill_qty") or msg_data.get("fill_quantity")
+        )
+        fill_price = _maybe_float(msg_data.get("fill_price") or msg_data.get("price"))
+        price = _maybe_float(msg_data.get("price") or msg_data.get("fill_price"))
+
         canonical = {
             "decision_id",
             "strategy_id",
@@ -105,7 +144,13 @@ class ExecutionEvent(BaseModel):
             "side",
             "qty",
             "fill_qty",
+            "fill_quantity",
             "price",
+            "fill_price",
+            "fill_time",
+            "fee",
+            "fee_asset",
+            "pnl",
             "_trace_context",
             "_decision_context",
             "_otel_trace_headers",
@@ -122,8 +167,20 @@ class ExecutionEvent(BaseModel):
             symbol=(str(msg_data["symbol"]) if msg_data.get("symbol") else None),
             side=(str(msg_data["side"]) if msg_data.get("side") else None),
             qty=_maybe_float(msg_data.get("qty")),
-            fill_qty=_maybe_float(msg_data.get("fill_qty")),
-            price=_maybe_float(msg_data.get("price")),
+            fill_qty=fill_qty,
+            fill_quantity=fill_qty,
+            price=price,
+            fill_price=fill_price,
+            fill_time=_maybe_dt(msg_data.get("fill_time")),
+            fee=_maybe_float(
+                msg_data.get("fee")
+                if msg_data.get("fee") is not None
+                else msg_data.get("fees")
+            ),
+            fee_asset=(
+                str(msg_data["fee_asset"]) if msg_data.get("fee_asset") else None
+            ),
+            pnl=_maybe_float(msg_data.get("pnl")),
             subject=subject,
             payload=payload,
         )
