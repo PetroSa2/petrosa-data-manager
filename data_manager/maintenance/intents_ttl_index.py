@@ -104,16 +104,11 @@ SIBLING_RETENTION_DECISION = (
 )
 
 # Per-collection overrides to the default decision above. A sibling graduates
-# here once volume evidence warrants active retention. `trades` graduated on
-# 2026-07-01 (4th Atlas M0 P0, 870k docs / ~349 MB) — it is now actively pruned
-# by data_manager.maintenance.trades_retention via lexicographic ISO-8601 string
-# comparison (its timestamps are strings, so a native TTL index is impossible).
-SIBLING_DECISION_OVERRIDES: dict[str, str] = {
-    "trades": (
-        "actively pruned by data_manager.maintenance.trades_retention "
-        "(data-manager#246) — string timestamps preclude a native TTL index"
-    ),
-}
+# here once volume evidence warrants active retention. The `trades` override was
+# removed with the trades retention job (data-manager#254): the `trades`
+# collection is being retired entirely (binance-data-extractor#276), so it now
+# falls back to the default sibling decision until the collection is dropped.
+SIBLING_DECISION_OVERRIDES: dict[str, str] = {}
 
 
 def _sibling_decision(collection: str) -> str:

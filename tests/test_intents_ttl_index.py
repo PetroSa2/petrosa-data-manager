@@ -239,11 +239,7 @@ async def test_audit_reports_present_and_absent_siblings():
     assert by_name["alerts"].ttl_indexes == {}
     # cio_decisions / execution_events / trades are absent in this fixture.
     assert by_name["trades"].present is False
-    # `trades` graduated to active retention (data-manager#246); the rest keep
-    # the default "retain pending evidence" decision.
-    assert by_name["trades"].decision == itx.SIBLING_DECISION_OVERRIDES["trades"]
-    assert all(
-        r.decision == itx.SIBLING_RETENTION_DECISION
-        for r in results
-        if r.collection != "trades"
-    )
+    # The `trades` retention override was removed with the retention job
+    # (data-manager#254); every sibling now keeps the default decision.
+    assert itx.SIBLING_DECISION_OVERRIDES == {}
+    assert all(r.decision == itx.SIBLING_RETENTION_DECISION for r in results)
