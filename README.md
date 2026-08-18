@@ -489,6 +489,21 @@ curl "http://localhost:8000/metrics"
 # - data_manager_active_connections (connection pool status)
 ```
 
+#### Trade-audit business metrics (#256)
+
+Emitted per persisted fill by the execution-events consumer (labels: `symbol`, `side`).
+Only fill events (`filled` / `partial_fill`) contribute; duplicate-key replays are not double-counted.
+
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `data_manager_execution_fills_total` | counter | Persisted fill events |
+| `data_manager_execution_fill_pnl_total` | counter | Cumulative realized PnL (quote ccy) |
+| `data_manager_execution_fill_fee_total` | counter | Cumulative trading fees |
+| `data_manager_execution_fill_wins_total` | counter | Fills with positive realized PnL |
+| `data_manager_execution_fill_losses_total` | counter | Fills with negative realized PnL |
+
+Grafana dashboard: `petrosa_k8s/k8s/monitoring/dashboards/data-manager-trade-audit-dashboard.json`.
+
 ---
 
 ## 🔧 Configuration

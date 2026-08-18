@@ -314,3 +314,104 @@ def test_execution_event_parses_fill_audit_aliases():
     assert event.fill_qty == 0.002
     assert event.fill_quantity == 0.002
     assert event.fee == 0.01
+
+
+# --- #256: trade-audit business metrics ---------------------------------
+
+
+def _patch_business_metrics(monkeypatch):
+    """Replace the module-level metric instruments with MagicMocks."""
+    import data_manager.consumer.execution_events_consumer as mod
+
+    names = (
+        "execution_fills_total",
+        "execution_fill_pnl_total",
+        "execution_fill_fee_total",
+        "execution_fill_wins_total",
+        "execution_fill_losses_total",
+    )
+    mocks = {}
+    for name in names:
+        m = MagicMock()
+        monkeypatch.setattr(mod, name, m)
+        mocks[name] = m
+    return mocks
+
+
+@pytest.mark.asyncio
+async def test_fill_emits_business_metrics_on_insert(
+    execution_events_consumer, mock_db_manager, monkeypatch
+):
+    mocks = _patch_business_metrics(monkeypatch)
+    msg = _build_msg(_exec_payload(event_type="filled", pnl=12.5, fee=0.0065))
+    await execution_events_consumer._process_message(msg)
+
+    mocks["execution_fills_total"].add.assert_called_once()
+    fills_args = mocks["execution_fills_total"].add.call_args
+    assert fills_args.args[0] == 1
+    attrs = fills_args.args[1]
+    assert attrs["symbol"] == "BTCUSDT"
+    assert attrs["side"] == "buy"
+
+    mocks["execution_fill_pnl_total"].add.assert_called_once_with(12.5, attrs)
+    mocks["execution_fill_fee_total"].add.assert_called_once_with(0.0065, attrs)
+    mocks["execution_fill_wins_total"].add.assert_called_once_with(1, attrs)
+    mocks["execution_fill_losses_total"].add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_loss_fill_increments_losses_counter(
+    execution_events_consumer, monkeypatch
+):
+    mocks = _patch_business_metrics(monkeypatch)
+    msg = _build_msg(_exec_payload(event_type="filled", pnl=-4.0))
+    await execution_events_consumer._process_message(msg)
+
+    mocks["execution_fill_losses_total"].add.assert_called_once()
+    mocks["execution_fill_wins_total"].add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_fill_event_emits_no_business_metrics(
+    execution_events_consumer, monkeypatch
+):
+    mocks = _patch_business_metrics(monkeypatch)
+    msg = _build_msg(_exec_payload(event_type="placed", pnl=None, fee=None))
+    await execution_events_consumer._process_message(msg)
+
+    mocks["execution_fills_total"].add.assert_not_called()
+    mocks["execution_fill_pnl_total"].add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_replay_does_not_double_count_metrics(
+    execution_events_consumer, mock_db_manager, monkeypatch
+):
+    mocks = _patch_business_metrics(monkeypatch)
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    try:
+        from pymongo.errors import DuplicateKeyError
+    except ImportError:
+        DuplicateKeyError = Exception  # type: ignore[assignment, misc]
+    collection.insert_one.side_effect = DuplicateKeyError("dup")
+
+    msg = _build_msg(_exec_payload(event_type="filled", pnl=9.0))
+    await execution_events_consumer._process_message(msg)
+
+    # Persist returned True (idempotent) but it was not a fresh insert.
+    mocks["execution_fills_total"].add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_without_pnl_emits_count_but_no_win_loss(
+    execution_events_consumer, monkeypatch
+):
+    mocks = _patch_business_metrics(monkeypatch)
+    msg = _build_msg(_exec_payload(event_type="filled", pnl=None, fee=0.02))
+    await execution_events_consumer._process_message(msg)
+
+    mocks["execution_fills_total"].add.assert_called_once()
+    mocks["execution_fill_fee_total"].add.assert_called_once()
+    mocks["execution_fill_pnl_total"].add.assert_not_called()
+    mocks["execution_fill_wins_total"].add.assert_not_called()
+    mocks["execution_fill_losses_total"].add.assert_not_called()
