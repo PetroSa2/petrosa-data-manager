@@ -58,6 +58,65 @@ execution_processing_time = _meter.create_histogram(
     unit="s",
 )
 
+# Business metrics for the trade-audit Grafana dashboard (#256). These are
+# emitted per persisted fill so the dashboard can chart fill throughput,
+# realized PnL, fees, and win/loss rate straight from Prometheus instead of
+# querying MongoDB through the /api/v1/trades API on every panel refresh.
+_FILL_EVENT_TYPES = ("filled", "partial_fill")
+
+execution_fills_total = _meter.create_counter(
+    "data_manager_execution_fills_total",
+    description="Total execution fill events persisted (filled / partial_fill)",
+)
+execution_fill_pnl_total = _meter.create_counter(
+    "data_manager_execution_fill_pnl_total",
+    description="Cumulative realized PnL across persisted fills (quote currency)",
+)
+execution_fill_fee_total = _meter.create_counter(
+    "data_manager_execution_fill_fee_total",
+    description="Cumulative trading fees across persisted fills",
+)
+execution_fill_wins_total = _meter.create_counter(
+    "data_manager_execution_fill_wins_total",
+    description="Persisted fills with positive realized PnL (win)",
+)
+execution_fill_losses_total = _meter.create_counter(
+    "data_manager_execution_fill_losses_total",
+    description="Persisted fills with negative realized PnL (loss)",
+)
+
+
+def _emit_fill_business_metrics(event: "ExecutionEvent") -> None:
+    """Emit per-fill business metrics for the #256 trade-audit dashboard.
+
+    Only fill events carry PnL/fee economics; non-fill events (placed,
+    rejected) are ignored. Metric attributes are kept low-cardinality
+    (symbol + side) so Prometheus series count stays bounded.
+    """
+    if event.event_type not in _FILL_EVENT_TYPES:
+        return
+
+    attrs = {**_METRIC_ATTRS}
+    if event.symbol:
+        attrs["symbol"] = event.symbol
+    if event.side:
+        attrs["side"] = event.side
+
+    execution_fills_total.add(1, attrs)
+
+    fee = event.fee
+    if fee is not None:
+        execution_fill_fee_total.add(abs(float(fee)), attrs)
+
+    pnl = event.pnl
+    if pnl is not None:
+        pnl_value = float(pnl)
+        execution_fill_pnl_total.add(pnl_value, attrs)
+        if pnl_value > 0:
+            execution_fill_wins_total.add(1, attrs)
+        elif pnl_value < 0:
+            execution_fill_losses_total.add(1, attrs)
+
 
 class ExecutionEventsConsumer:
     """Subscribes to `execution.events.>` and persists each event to MongoDB.
@@ -91,6 +150,10 @@ class ExecutionEventsConsumer:
         # `pnl.events.<strategy_id>` in the production wiring).
         # Optional so this consumer remains usable in isolation.
         self._on_persisted = on_persisted
+        # Set by `_persist`: True only when a fresh document was inserted
+        # (False on DuplicateKeyError replay). Gates the #256 business
+        # metrics so redelivery does not double-count PnL/fees.
+        self._last_persist_was_insert = False
 
     async def start(self) -> bool:
         try:
@@ -263,6 +326,8 @@ class ExecutionEventsConsumer:
             persisted = await self._persist(event)
             if persisted:
                 execution_messages_persisted.add(1, _METRIC_ATTRS)
+                if self._last_persist_was_insert:
+                    _emit_fill_business_metrics(event)
                 logger.info("execution_event_persisted", extra=log_extra)
                 span.set_status(trace.Status(trace.StatusCode.OK))
                 # P4.1 (#601): hand the just-persisted event to the
@@ -292,6 +357,7 @@ class ExecutionEventsConsumer:
             )
 
     async def _persist(self, event: ExecutionEvent) -> bool:
+        self._last_persist_was_insert = False
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
             if self.db_manager
@@ -311,8 +377,13 @@ class ExecutionEventsConsumer:
                 DuplicateKeyError = Exception  # type: ignore[assignment, misc]
             try:
                 await adapter.db[EXECUTION_EVENTS_COLLECTION].insert_one(doc)
+                self._last_persist_was_insert = True
                 return True
             except DuplicateKeyError:
+                # Idempotent replay: the event is already stored, so report
+                # success but flag it as a non-insert so business metrics
+                # (#256) are not double-counted on redelivery.
+                self._last_persist_was_insert = False
                 logger.debug(
                     "execution_event_already_persisted",
                     extra={
