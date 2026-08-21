@@ -182,6 +182,93 @@ class TestDisconnectedGuards:
         assert result is None
 
 
+class TestTimeColumnFallback:
+    """#548-adjacent (petrosa-tradeengine) discovery: query_range/query_latest/
+    get_record_count hardcoded ``table.c.timestamp`` for every collection, but
+    the real ``positions`` table (petrosa_k8s/k8s/tradeengine/mysql-schema-job.yaml)
+    has no ``timestamp`` column — only ``entry_time`` — so every call against
+    it raised ``KeyError: 'timestamp'`` (100% reproducible, ~7.8/min in prod).
+    """
+
+    @pytest.fixture
+    def positions_like_adapter(self, sqlite_adapter):
+        """Register a table shaped like the real ``positions`` table: has
+        ``entry_time`` but no ``timestamp`` column."""
+        table = sa.Table(
+            "positions",
+            sqlite_adapter.metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("symbol", sa.String(20), nullable=False),
+            sa.Column("entry_time", sa.DateTime, nullable=False),
+            sa.Column("created_at", sa.DateTime, nullable=False),
+        )
+        table.create(sqlite_adapter.engine, checkfirst=True)
+        sqlite_adapter.tables["positions"] = table
+        with sqlite_adapter.engine.connect() as conn:
+            conn.execute(
+                table.insert(),
+                [
+                    {
+                        "symbol": "BTCUSDT",
+                        "entry_time": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+                        "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+                    }
+                ],
+            )
+            conn.commit()
+        return sqlite_adapter
+
+    def test_query_range_falls_back_to_entry_time(self, positions_like_adapter):
+        rows = positions_like_adapter.query_range(
+            "positions",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "BTCUSDT"
+
+    def test_query_range_excludes_out_of_range_entry_time(self, positions_like_adapter):
+        rows = positions_like_adapter.query_range(
+            "positions",
+            datetime(2026, 2, 1, tzinfo=UTC),
+            datetime(2026, 2, 2, tzinfo=UTC),
+        )
+        assert rows == []
+
+    def test_query_latest_falls_back_to_entry_time(self, positions_like_adapter):
+        rows = positions_like_adapter.query_latest("positions", limit=1)
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "BTCUSDT"
+
+    def test_get_record_count_falls_back_to_entry_time(self, positions_like_adapter):
+        count = positions_like_adapter.get_record_count(
+            "positions",
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        assert count == 1
+
+    def test_time_column_prefers_timestamp_when_present(self, sqlite_adapter):
+        table = sqlite_adapter._get_table("audit_logs")
+        assert sqlite_adapter._time_column(table) is table.c.timestamp
+
+    def test_time_column_raises_for_table_with_no_known_time_column(
+        self, sqlite_adapter
+    ):
+        table = sa.Table(
+            "mystery_table",
+            sqlite_adapter.metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("symbol", sa.String(20)),
+        )
+        table.create(sqlite_adapter.engine, checkfirst=True)
+        with pytest.raises(
+            DatabaseError, match="no recognized time column"
+        ) as exc_info:
+            sqlite_adapter._time_column(table)
+        assert "mystery_table" in str(exc_info.value)
+
+
 class TestEnsureConnected:
     def test_raises_when_no_engine(self):
         a = MySQLAdapter("mysql://x")

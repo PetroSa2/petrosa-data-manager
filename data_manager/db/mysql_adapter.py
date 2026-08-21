@@ -336,6 +336,29 @@ class MySQLAdapter(BaseAdapter):
             )
         return table
 
+    def _time_column(self, table: "Table") -> Any:
+        """Return the column used for time-range filtering/ordering.
+
+        Most reflected tables (klines, market data) use a literal
+        ``timestamp`` column. Others — e.g. ``positions``, whose schema
+        (petrosa_k8s/k8s/tradeengine/mysql-schema-job.yaml) declares
+        ``entry_time DATETIME NOT NULL`` with no ``timestamp`` column at
+        all — do not. ``query_range``/``query_latest``/``get_record_count``
+        previously hardcoded ``table.c.timestamp`` unconditionally, so any
+        call against the ``positions`` collection raised
+        ``KeyError: 'timestamp'`` on every single invocation (100%
+        reproducible, ~7.8/min in production traffic). Fall back through
+        known time-column aliases instead of a hardcoded per-collection
+        allowlist so any current or future reflected table keeps working.
+        """
+        for candidate in ("timestamp", "entry_time", "created_at"):
+            if candidate in table.c:
+                return table.c[candidate]
+        raise DatabaseError(
+            f"Table {table.name!r} has no recognized time column "
+            f"(tried: timestamp, entry_time, created_at)"
+        )
+
     def _get_table(self, collection: str) -> "Table":
         """Get table object for collection. Dynamically create or reflect."""
         if collection in self.tables:
@@ -541,16 +564,15 @@ class MySQLAdapter(BaseAdapter):
 
         try:
             table = self._get_table(collection)
+            time_col = self._time_column(table)
 
             # Build query
-            query = select(table).where(
-                and_(table.c.timestamp >= start, table.c.timestamp < end)
-            )
+            query = select(table).where(and_(time_col >= start, time_col < end))
 
             if symbol:
                 query = query.where(table.c.symbol == symbol)
 
-            query = query.order_by(table.c.timestamp)
+            query = query.order_by(time_col)
 
             engine = self._ensure_connected()
             with engine.connect() as conn:
@@ -569,12 +591,13 @@ class MySQLAdapter(BaseAdapter):
 
         try:
             table = self._get_table(collection)
+            time_col = self._time_column(table)
 
             query = select(table)
             if symbol:
                 query = query.where(table.c.symbol == symbol)
 
-            query = query.order_by(table.c.timestamp.desc()).limit(limit)
+            query = query.order_by(time_col.desc()).limit(limit)
 
             engine = self._ensure_connected()
             with engine.connect() as conn:
@@ -597,14 +620,15 @@ class MySQLAdapter(BaseAdapter):
 
         try:
             table = self._get_table(collection)
+            time_col = self._time_column(table) if (start or end) else None
 
             query = select(func.count()).select_from(table)
 
             conditions = []
             if start:
-                conditions.append(table.c.timestamp >= start)
+                conditions.append(time_col >= start)
             if end:
-                conditions.append(table.c.timestamp < end)
+                conditions.append(time_col < end)
             if symbol:
                 conditions.append(table.c.symbol == symbol)
 
