@@ -275,6 +275,25 @@ class MySQLAdapter(BaseAdapter):
             Index("idx_schemas_name_version", "name", "version", unique=True),
         )
 
+        # Daily P&L table (petrosa-data-manager#264) — persists tradeengine's
+        # per-day realized P&L snapshot (PUT /api/v1/mysql/daily_pnl, filtered
+        # by "date"). Unlike positions/trades — which tradeengine provisions
+        # externally via petrosa_k8s/k8s/tradeengine/mysql-schema-job.yaml and
+        # data-manager only reflects — this table is self-managed here so it
+        # self-heals via metadata.create_all() on every connect(): no manual
+        # kubectl Job step is required for it to exist or survive environment
+        # rebuilds (issue #264 AC4).
+        self.tables["daily_pnl"] = Table(
+            "daily_pnl",
+            self.metadata,
+            Column("id", String(64), primary_key=True),
+            Column("date", String(10), nullable=False),
+            Column("daily_pnl", Numeric(20, 8), nullable=False),
+            Column("created_at", DateTime, nullable=False),
+            Column("updated_at", DateTime, nullable=False),
+            Index("idx_daily_pnl_date", "date", unique=True),
+        )
+
         # Create all tables
         if self.engine is not None:
             self.metadata.create_all(self.engine)
