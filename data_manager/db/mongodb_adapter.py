@@ -207,8 +207,10 @@ class MongoDBAdapter(BaseAdapter):
 
         Raises:
             DatabaseError: If not connected, if ``filter_dict`` is empty
-                (refuses to run an unconditional update-all), or if the update
-                fails.
+                (refuses to run an unconditional update-all), if
+                ``filter_dict`` contains a MongoDB query operator (any key
+                starting with ``$`` or any value that is itself a dict —
+                e.g. ``{"$gte": 5}``), or if the update fails.
         """
         if not self._connected:
             raise DatabaseError("Not connected to database")
@@ -218,6 +220,22 @@ class MongoDBAdapter(BaseAdapter):
                 "update() refused: empty filter would update every document "
                 f"in {collection}"
             )
+
+        # `filter_dict` originates from the PUT request body's `filter` field
+        # (generic.py::UpdateRequest), the same object used to compute
+        # `matching_records` via the equality-only, in-memory `_apply_filter`.
+        # Passed unguarded, MongoDB would interpret operator keys/values
+        # ("$where", "$expr", {"$gte": ...}, ...) as query operators instead
+        # of literal equality — silently updating far more documents than the
+        # equality match implied elsewhere in the route. Enforce the same
+        # equality-only semantics here so `matching_records` and the actual
+        # persisted update never diverge (petrosa-data-manager#262 review).
+        for key, value in filter_dict.items():
+            if key.startswith("$") or isinstance(value, dict):
+                raise DatabaseError(
+                    "update() refused: filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}: {value!r}"
+                )
 
         if not data:
             return 0
