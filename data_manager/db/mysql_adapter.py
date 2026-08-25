@@ -551,6 +551,100 @@ class MySQLAdapter(BaseAdapter):
 
         return WriteResult(inserted=inserted, duplicates=duplicates, failed=failed)
 
+    def update(
+        self, collection: str, filter_dict: dict[str, Any], data: dict[str, Any]
+    ) -> int:
+        """Update existing rows in MySQL matching ``filter_dict`` with ``data``.
+
+        Unlike :meth:`write` (INSERT / ON DUPLICATE KEY UPDATE / INSERT IGNORE,
+        keyed by the table's unique index), this issues a genuine
+        ``UPDATE ... WHERE`` built from equality conditions on ``filter_dict``.
+        Required so ``PUT /api/v1/mysql/{collection}`` (``generic.py::update_records``)
+        actually persists changes to existing rows instead of only mutating an
+        in-memory copy that is discarded (petrosa-data-manager#262).
+
+        Args:
+            collection: Table name.
+            filter_dict: Equality conditions identifying rows to update. Keys
+                that don't match a column on the table are ignored.
+            data: Column values to set. Keys that don't match a column on the
+                table are ignored.
+
+        Returns:
+            Number of rows updated (SQL rowcount).
+
+        Raises:
+            DatabaseError: If not connected, if ``filter_dict`` yields no usable
+                equality conditions against the table's columns (refuses to run
+                an unconditional UPDATE that would touch every row), or if the
+                update ultimately fails after retries.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        table = self._get_table(collection)
+
+        conditions = [
+            table.c[key] == value
+            for key, value in filter_dict.items()
+            if key in table.c
+        ]
+        if not conditions:
+            raise DatabaseError(
+                f"update() refused: filter {filter_dict!r} matches no columns "
+                f"on {collection} — would UPDATE every row"
+            )
+
+        values: dict[str, Any] = {}
+        for key, value in data.items():
+            if key not in table.c:
+                continue
+            if isinstance(value, str) and key.endswith(("_at", "timestamp")):
+                try:
+                    value = datetime.fromisoformat(value)
+                except (ValueError, TypeError):
+                    pass
+            values[key] = value
+
+        if not values:
+            return 0
+
+        def _update_attempt() -> int:
+            engine = self._ensure_connected()
+            with engine.connect() as conn:
+                trans = conn.begin()
+                try:
+                    stmt = table.update().where(and_(*conditions)).values(**values)
+                    result = conn.execute(stmt)
+                    trans.commit()
+                    return int(result.rowcount or 0)
+                except Exception:
+                    trans.rollback()
+                    raise
+
+        def _update_with_retry() -> int:
+            try:
+                return retry_transient(_update_attempt)
+            except IntegrityError:
+                logger.warning("Integrity error updating %s — not retried", collection)
+                raise
+            except DatabaseError:
+                raise
+            except Exception as exc:
+                raise DatabaseError(f"Error in MySQL update: {exc}") from exc
+
+        try:
+            return self.circuit_breaker.call(_update_with_retry)
+        except IntegrityError:
+            self._record_write_failure(collection, "integrity_error")
+            raise
+        except DatabaseError:
+            self._record_write_failure(collection, "database_error")
+            raise
+        except Exception:
+            self._record_write_failure(collection, "circuit_or_unknown")
+            raise
+
     def query_range(
         self,
         collection: str,

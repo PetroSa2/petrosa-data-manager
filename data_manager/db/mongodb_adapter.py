@@ -187,6 +187,49 @@ class MongoDBAdapter(BaseAdapter):
             "Use write() method directly for MongoDB. Batching should be done at caller level."
         )
 
+    async def update(
+        self, collection: str, filter_dict: dict[str, Any], data: dict[str, Any]
+    ) -> int:
+        """Update existing documents matching ``filter_dict`` with ``data``.
+
+        Companion to :class:`MySQLAdapter`'s ``update()`` — required so
+        ``PUT /api/v1/{database}/{collection}`` (``generic.py::update_records``)
+        actually persists changes to existing MongoDB documents instead of only
+        mutating an in-memory copy that is discarded (petrosa-data-manager#262).
+
+        Args:
+            collection: Collection name.
+            filter_dict: Equality conditions identifying documents to update.
+            data: Field values to set via ``$set``.
+
+        Returns:
+            Number of documents modified.
+
+        Raises:
+            DatabaseError: If not connected, if ``filter_dict`` is empty
+                (refuses to run an unconditional update-all), or if the update
+                fails.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        if not filter_dict:
+            raise DatabaseError(
+                "update() refused: empty filter would update every document "
+                f"in {collection}"
+            )
+
+        if not data:
+            return 0
+
+        try:
+            coll = self.db[collection]
+            update_data = self._prepare_for_bson(dict(data))
+            result = await coll.update_many(filter_dict, {"$set": update_data})
+            return int(result.modified_count)
+        except PyMongoError as e:
+            raise DatabaseError(f"Failed to update {collection}: {e}") from e
+
     async def query_range(
         self,
         collection: str,
