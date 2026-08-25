@@ -158,6 +158,18 @@ class TestMongoDBAdapterUpdate:
         assert result == 0
 
     @pytest.mark.asyncio
+    async def test_update_rejects_dollar_key_filter_operator(self, adapter):
+        with pytest.raises(DatabaseError, match="flat equality match") as exc_info:
+            await adapter.update("daily_pnl", {"$where": "1==1"}, {"pnl": 1.0})
+        assert "flat equality match" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_nested_operator_expression_filter(self, adapter):
+        with pytest.raises(DatabaseError, match="flat equality match") as exc_info:
+            await adapter.update("daily_pnl", {"pnl": {"$gte": 0}}, {"pnl": 1.0})
+        assert "flat equality match" in str(exc_info.value)
+
+    @pytest.mark.asyncio
     async def test_update_raises_when_disconnected(self, adapter):
         adapter._connected = False
         with pytest.raises(DatabaseError, match="Not connected") as exc_info:
