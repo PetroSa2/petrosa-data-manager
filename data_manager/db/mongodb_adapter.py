@@ -5,6 +5,7 @@ Handles time series data storage in MongoDB.
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 
 try:
@@ -30,6 +31,27 @@ import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
 
 logger = logging.getLogger(__name__)
+
+# Matches a numeric UTC offset immediately followed by a literal "Z", e.g.
+# "2026-08-24T00:00:00+00:00Z" — the malformed double-suffix case from #263.
+_DOUBLE_TZ_SUFFIX_RE = re.compile(r"([+-]\d{2}:\d{2})Z$")
+
+
+def _normalize_iso_timestamp(ts: str) -> str:
+    """
+    Normalize a timestamp string into a form ``datetime.fromisoformat`` accepts.
+
+    Handles three malformed producer shapes seen in practice (#263):
+      (a) trailing literal "Z" with no numeric offset -> rewritten to "+00:00"
+      (b) a numeric UTC offset with no "Z" -> passed through unchanged
+      (c) a numeric UTC offset immediately followed by a literal "Z"
+          (double suffix, e.g. "+00:00Z") -> the redundant "Z" is stripped
+    """
+    s = ts.strip()
+    s = _DOUBLE_TZ_SUFFIX_RE.sub(r"\1", s)
+    if s.endswith("Z"):
+        s = f"{s[:-1]}+00:00"
+    return s
 
 
 class MongoDBAdapter(BaseAdapter):
@@ -104,7 +126,21 @@ class MongoDBAdapter(BaseAdapter):
                 if "symbol" in doc and "timestamp" in doc:
                     ts = doc["timestamp"]
                     if isinstance(ts, str):
-                        ts = datetime.fromisoformat(ts)
+                        try:
+                            ts = datetime.fromisoformat(ts)
+                        except ValueError:
+                            # Handle malformed producer timestamps (#263): bare
+                            # "Z" suffix, or a numeric UTC offset with a
+                            # redundant trailing "Z" (e.g. "+00:00Z").
+                            normalized = _normalize_iso_timestamp(ts)
+                            ts = datetime.fromisoformat(normalized)
+                            logger.warning(
+                                "Normalized malformed timestamp %r -> %r for "
+                                "collection %s",
+                                doc["timestamp"],
+                                normalized,
+                                collection,
+                            )
                         # Normalize back into document for correct storage type
                         doc["timestamp"] = ts
                     timestamp_ms = int(ts.timestamp() * 1000)

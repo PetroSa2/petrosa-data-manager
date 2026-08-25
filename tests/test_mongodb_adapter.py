@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from data_manager.db.mongodb_adapter import MongoDBAdapter
+from data_manager.db.mongodb_adapter import MongoDBAdapter, _normalize_iso_timestamp
 
 
 def test_prepare_for_bson_basic():
@@ -81,3 +81,40 @@ def test_prepare_for_bson_key_collision(caplog):
 
     # Check that a warning was logged
     assert any("Key collision detected" in record.message for record in caplog.records)
+
+
+class TestNormalizeIsoTimestamp:
+    """Regression coverage for #263 (double timezone suffix)."""
+
+    def test_double_suffix_offset_and_z_strips_redundant_z(self):
+        assert (
+            _normalize_iso_timestamp("2026-08-24T00:00:00+00:00Z")
+            == "2026-08-24T00:00:00+00:00"
+        )
+
+    def test_double_suffix_with_nonzero_offset(self):
+        assert (
+            _normalize_iso_timestamp("2026-08-24T00:00:00+05:30Z")
+            == "2026-08-24T00:00:00+05:30"
+        )
+
+    def test_bare_z_suffix_rewritten_to_offset(self):
+        assert (
+            _normalize_iso_timestamp("2026-08-24T00:00:00Z")
+            == "2026-08-24T00:00:00+00:00"
+        )
+
+    def test_offset_only_passes_through_unchanged(self):
+        assert (
+            _normalize_iso_timestamp("2026-08-24T00:00:00+00:00")
+            == "2026-08-24T00:00:00+00:00"
+        )
+
+    def test_no_timezone_info_passes_through_unchanged(self):
+        assert _normalize_iso_timestamp("2026-08-24T00:00:00") == "2026-08-24T00:00:00"
+
+    def test_result_is_parseable_by_fromisoformat(self):
+        from datetime import datetime
+
+        normalized = _normalize_iso_timestamp("2026-08-24T00:00:00+00:00Z")
+        assert datetime.fromisoformat(normalized) is not None
