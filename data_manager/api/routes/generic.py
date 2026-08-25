@@ -452,8 +452,9 @@ async def update_records(
             # For updates, validate the updated data
             await _validate_data_against_schema(database, schema, [request.data])
 
-        # For now, implement a simple update by querying and re-inserting
-        # In a real implementation, you'd use proper update operations
+        # Determine which records match the filter (drives the early-return /
+        # upsert-create branching below); the actual persistence happens via
+        # adapter.update() further down, not by re-writing these in-memory rows.
 
         # Query existing records
         if database == "mysql":
@@ -479,18 +480,52 @@ async def update_records(
                 },
             }
 
-        # Update records
-        for _updated_count, record in enumerate(matching_records, 1):
-            # Merge update data
-            record.update(request.data)
-            record["updated_at"] = datetime.now(UTC)
+        # Update records: persist via a real UPDATE (mysql) / update_many
+        # (MongoDB) so changes actually land in the database instead of only
+        # mutating the in-memory dicts pulled from query_range() — those were
+        # previously discarded, and `updated_count` was only ever assigned on
+        # the empty-match/upsert branch below, causing an UnboundLocalError
+        # (500) on every update of an existing record (petrosa-data-manager#262).
+        if matching_records:
+            update_data = dict(request.data)
+            update_data["updated_at"] = datetime.now(UTC)
+
+            if database == "mysql":
+                from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
+
+                try:
+                    updated_count = adapter.update(
+                        collection, request.filter, update_data
+                    )
+                except CircuitBreakerOpenError as exc:
+                    api_module.db_manager.increment_error_count(database)
+                    raise HTTPException(status_code=503, detail=str(exc)) from exc
+            else:  # MongoDB
+                updated_count = await adapter.update(
+                    collection, request.filter, update_data
+                )
 
         # If upsert and no matches, create new record
-        if not matching_records and request.upsert:
+        elif request.upsert:
             new_record = request.data.copy()
             new_record["created_at"] = datetime.now(UTC)
             new_record["updated_at"] = datetime.now(UTC)
-            updated_count = 1
+
+            from pydantic import BaseModel, ConfigDict
+
+            class GenericModel(BaseModel):
+                model_config = ConfigDict(extra="allow")
+
+            model_instance = GenericModel(**new_record)
+
+            if database == "mysql":
+                write_result = adapter.write([model_instance], collection)
+                updated_count = write_result.inserted
+            else:  # MongoDB
+                updated_count = await adapter.write([model_instance], collection)
+
+        else:
+            updated_count = 0
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
@@ -505,6 +540,8 @@ async def update_records(
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating {database}.{collection}: {e}", exc_info=True)
         api_module.db_manager.increment_error_count(database)
