@@ -102,6 +102,7 @@ class TestCreateTablesViaConnect:
             "backfill_jobs",
             "lineage_records",
             "schemas",
+            "daily_pnl",
         ):
             assert table_name in a.tables
 
@@ -110,6 +111,14 @@ class TestGetTable:
     def test_returns_pre_registered_table(self, sqlite_adapter):
         table = sqlite_adapter._get_table("datasets")
         assert table.name == "datasets"
+
+    def test_returns_daily_pnl_table_without_reflecting(self, sqlite_adapter):
+        # petrosa-data-manager#264: daily_pnl is self-managed (registered in
+        # _create_tables()), so _get_table() must return it directly instead
+        # of falling into the reflect-or-fail branch that used to raise
+        # NoSuchTableError / "Unknown collection or failed to reflect".
+        table = sqlite_adapter._get_table("daily_pnl")
+        assert table.name == "daily_pnl"
 
     def test_creates_klines_table_from_binance_interval(self, sqlite_adapter):
         # klines_15m → physical klines_m15
