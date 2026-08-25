@@ -182,6 +182,57 @@ class TestWrite:
         # Timestamp should have been parsed to datetime
         assert isinstance(doc["timestamp"], datetime)
 
+    @pytest.mark.asyncio
+    async def test_double_tz_suffix_timestamp_is_normalized(self, adapter):
+        """Regression for #263: '+00:00Z' double suffix must not raise."""
+        model = MagicMock()
+        model.model_dump.return_value = {
+            "symbol": "BTCUSDT",
+            "timestamp": "2026-08-24T00:00:00+00:00Z",
+        }
+        coll = MagicMock()
+        coll.insert_many = AsyncMock(return_value=MagicMock(inserted_ids=["x"]))
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+        n = await adapter.write([model], "klines_15m")
+        assert n == 1
+        doc = coll.insert_many.call_args[0][0][0]
+        assert isinstance(doc["timestamp"], datetime)
+        assert doc["timestamp"] == datetime(2026, 8, 24, 0, 0, 0, tzinfo=UTC)
+
+    @pytest.mark.asyncio
+    async def test_bare_z_suffix_timestamp_is_normalized(self, adapter):
+        """Regression for #263: bare 'Z' with no numeric offset must not raise."""
+        model = MagicMock()
+        model.model_dump.return_value = {
+            "symbol": "BTCUSDT",
+            "timestamp": "2026-08-24T00:00:00Z",
+        }
+        coll = MagicMock()
+        coll.insert_many = AsyncMock(return_value=MagicMock(inserted_ids=["x"]))
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+        n = await adapter.write([model], "klines_15m")
+        assert n == 1
+        doc = coll.insert_many.call_args[0][0][0]
+        assert isinstance(doc["timestamp"], datetime)
+        assert doc["timestamp"] == datetime(2026, 8, 24, 0, 0, 0, tzinfo=UTC)
+
+    @pytest.mark.asyncio
+    async def test_offset_only_timestamp_is_parsed_directly(self, adapter):
+        """A well-formed numeric-offset-only timestamp needs no normalization."""
+        model = MagicMock()
+        model.model_dump.return_value = {
+            "symbol": "BTCUSDT",
+            "timestamp": "2026-08-24T00:00:00+05:00",
+        }
+        coll = MagicMock()
+        coll.insert_many = AsyncMock(return_value=MagicMock(inserted_ids=["x"]))
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+        n = await adapter.write([model], "klines_15m")
+        assert n == 1
+        doc = coll.insert_many.call_args[0][0][0]
+        assert isinstance(doc["timestamp"], datetime)
+        assert doc["timestamp"].utcoffset().total_seconds() == 5 * 3600
+
 
 class TestWriteBatch:
     def test_raises_not_implemented(self):
