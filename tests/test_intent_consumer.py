@@ -106,6 +106,50 @@ def test_intent_event_strips_trace_and_decision_context():
     assert "_decision_context" not in event.payload
 
 
+def test_intent_event_falls_back_to_id_when_intent_id_missing():
+    """#269: real CIO payload has no `intent_id`, only `id` / `signal_id`."""
+    data = {
+        "id": "37c3632a-0000-0000-0000-000000000000",
+        "signal_id": "37c3632a-0000-0000-0000-000000000000",
+        "strategy_id": "Iceberg Order Detector",
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "timestamp": "2026-09-01T15:00:13.326759+00:00",
+    }
+    event = IntentEvent.from_nats_message(data)
+    assert event is not None
+    assert event.intent_id == "37c3632a-0000-0000-0000-000000000000"
+
+
+def test_intent_event_falls_back_to_signal_id_when_id_and_intent_id_missing():
+    data = _intent_payload(intent_id=None, signal_id="sig_only_here")
+    del data["intent_id"]
+    event = IntentEvent.from_nats_message(data)
+    assert event is not None
+    assert event.intent_id == "sig_only_here"
+
+
+def test_intent_event_prefers_intent_id_over_id_and_signal_id():
+    data = _intent_payload(id="fallback_id", signal_id="fallback_signal")
+    event = IntentEvent.from_nats_message(data)
+    assert event is not None
+    assert event.intent_id == "int_20260518T120000000_abc123"
+
+
+def test_intent_event_still_rejects_when_no_id_fields_present():
+    data = _intent_payload()
+    del data["intent_id"]
+    assert IntentEvent.from_nats_message(data) is None
+
+
+def test_intent_event_excludes_id_and_signal_id_from_payload():
+    data = _intent_payload(id="raw_id", signal_id="raw_signal")
+    event = IntentEvent.from_nats_message(data)
+    assert event is not None
+    assert "id" not in event.payload
+    assert "signal_id" not in event.payload
+
+
 def _build_msg(payload, subject="cio.intent.trading"):
     msg = MagicMock()
     msg.data.decode.return_value = json.dumps(payload)

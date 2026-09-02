@@ -48,8 +48,17 @@ class IntentEvent(BaseModel):
 
         Required fields: `intent_id`, `strategy_id`, `timestamp`. All others
         are best-effort and may be missing in older payload shapes.
+
+        Publisher drift fallback (petrosa-data-manager#269): strategy
+        services / CIO are contractually expected to emit `intent_id`
+        (per petrosa_k8s/docs/cross-service-identifier-contract.md), but
+        the payload observed in production carries `id` and `signal_id`
+        instead. Fall back to those fields so intents are not silently
+        dropped while the publisher-side contract adoption catches up.
         """
-        intent_id = msg_data.get("intent_id")
+        intent_id = (
+            msg_data.get("intent_id") or msg_data.get("id") or msg_data.get("signal_id")
+        )
         strategy_id = msg_data.get("strategy_id")
         raw_ts = msg_data.get("timestamp")
 
@@ -81,6 +90,8 @@ class IntentEvent(BaseModel):
             if k
             not in {
                 "intent_id",
+                "id",
+                "signal_id",
                 "strategy_id",
                 "timestamp",
                 "decision_id",
