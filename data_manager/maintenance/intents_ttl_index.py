@@ -46,6 +46,9 @@ Environment contract::
     MONGODB_DATABASE             explicit DB name; falls back to MONGODB_DB,
                                  then to "petrosa_data_manager" (AC4)
     MONGODB_INTENTS_TTL_SECONDS  TTL window in seconds (default 86400 = 1 day)
+    MONGODB_SIGNALS_TTL_SECONDS  signals collection TTL window in seconds
+                                 (default 604800 = 7 days; companion to
+                                 petrosa-bot-ta-analysis#267 AC6)
 
 Exit codes::
 
@@ -83,6 +86,30 @@ TTL_INDEX_NAME = "received_at_ttl_1d"
 LEGACY_BROKEN_FIELD = "createdAt"
 DEFAULT_DATABASE = "petrosa_data_manager"
 DEFAULT_TTL_SECONDS = 86400  # 1 day
+
+# --------------------------------------------------------------------------- #
+# signals TTL — companion to petrosa-bot-ta-analysis#267 AC6
+# --------------------------------------------------------------------------- #
+# The `signals` collection (trading signals persisted via the generic
+# `/api/v1/mongodb/signals` insert endpoint) has NO confirmed reader today
+# (see #267's required follow-up ticket: "who reads signals, and when?").
+# Shipping any new high-frequency Mongo write onto the shared Atlas M0
+# (512 MB) cluster — which has already suffered four P0 quota outages — is
+# only acceptable with a mandatory, bounded retention mechanism in the same
+# change. Unlike `intents.received_at`, callers already send their own
+# `timestamp` as an ISO *string* (JSON-compat requirement in
+# ta_bot/models/signal.py `to_dict()`), so a TTL on `timestamp` would never
+# actually expire anything — the generic insert route
+# (data_manager/api/routes/generic.py `insert_records`) therefore stamps a
+# dedicated, unconditional, real BSON Date field `_ttl_inserted_at` on every
+# `signals` document specifically for this TTL index to key on.
+SIGNALS_COLLECTION = "signals"
+SIGNALS_TTL_FIELD = "_ttl_inserted_at"
+SIGNALS_TTL_INDEX_NAME = "_ttl_inserted_at_ttl"
+DEFAULT_SIGNALS_TTL_SECONDS = 604800  # 7 days — generous default pending the
+# consumer/retention-window contract from #267's required follow-up ticket;
+# comfortably bounded rather than unbounded, and operator-overridable via
+# MONGODB_SIGNALS_TTL_SECONDS.
 
 # AC5 — sibling collections that could share the same unbounded-growth defect.
 # Documented decision: these are audit/financial-event trails. They are NOT
@@ -122,6 +149,7 @@ class TtlIndexConfig:
 
     database: str = DEFAULT_DATABASE
     ttl_seconds: int = DEFAULT_TTL_SECONDS
+    signals_ttl_seconds: int = DEFAULT_SIGNALS_TTL_SECONDS
     dry_run: bool = False
 
 
@@ -167,9 +195,16 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> TtlIndexConfi
     ttl_seconds = _parse_int_env(
         env, "MONGODB_INTENTS_TTL_SECONDS", DEFAULT_TTL_SECONDS, minimum=60
     )
+    signals_ttl_seconds = _parse_int_env(
+        env,
+        "MONGODB_SIGNALS_TTL_SECONDS",
+        DEFAULT_SIGNALS_TTL_SECONDS,
+        minimum=60,
+    )
     return TtlIndexConfig(
         database=resolve_database_name(env),
         ttl_seconds=ttl_seconds,
+        signals_ttl_seconds=signals_ttl_seconds,
         dry_run=False,
     )
 
@@ -289,6 +324,92 @@ async def ensure_intents_ttl_index(
     return result
 
 
+async def ensure_signals_ttl_index(
+    db,
+    db_name: str,
+    *,
+    ttl_seconds: int = DEFAULT_SIGNALS_TTL_SECONDS,
+    dry_run: bool = False,
+) -> TtlIndexResult:
+    """Idempotently ensure the TTL index on `signals._ttl_inserted_at`.
+
+    Companion to petrosa-bot-ta-analysis#267 AC6. Mirrors
+    :func:`ensure_intents_ttl_index`'s idempotent create/collmod/noop logic,
+    minus the legacy-index-drop step (no prior broken TTL index exists on
+    this collection — it never had one).
+
+    * No-ops if the index already matches the desired spec.
+    * Repairs the TTL window via ``collMod`` if the field is right but
+      ``expireAfterSeconds`` differs.
+    * Creates the index if absent.
+    * If ``signals`` does not exist yet (no writer has run), still ensures
+      the index will be present at collection-creation time by creating it
+      directly — MongoDB permits creating an index on a not-yet-existing
+      collection, which implicitly creates the collection empty.
+    """
+    coll = db[SIGNALS_COLLECTION]
+    info = await coll.index_information()
+
+    existing = info.get(SIGNALS_TTL_INDEX_NAME)
+    if existing is not None and _index_key_fields(existing) == [SIGNALS_TTL_FIELD]:
+        current_ttl = existing.get("expireAfterSeconds")
+        if current_ttl == ttl_seconds:
+            action = "noop"
+        else:
+            action = "collmod"
+            if not dry_run:
+                await db.command(
+                    "collMod",
+                    SIGNALS_COLLECTION,
+                    index={
+                        "name": SIGNALS_TTL_INDEX_NAME,
+                        "expireAfterSeconds": ttl_seconds,
+                    },
+                )
+    elif existing is not None:
+        # Name squatting on the wrong field — drop and recreate cleanly.
+        action = "recreated"
+        if not dry_run:
+            await coll.drop_index(SIGNALS_TTL_INDEX_NAME)
+            await coll.create_index(
+                [(SIGNALS_TTL_FIELD, ASCENDING)],
+                name=SIGNALS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+    else:
+        action = "created"
+        if not dry_run:
+            await coll.create_index(
+                [(SIGNALS_TTL_FIELD, ASCENDING)],
+                name=SIGNALS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+
+    result = TtlIndexResult(
+        database=db_name,
+        collection=SIGNALS_COLLECTION,
+        index_name=SIGNALS_TTL_INDEX_NAME,
+        field=SIGNALS_TTL_FIELD,
+        ttl_seconds=ttl_seconds,
+        action=action,
+        dropped_legacy=[],
+        dry_run=dry_run,
+    )
+
+    logger.info(
+        "signals_ttl_index: db=%s collection=%s index=%s key={%s: 1} "
+        "expireAfterSeconds=%d action=%s%s",
+        result.database,
+        result.collection,
+        result.index_name,
+        result.field,
+        result.ttl_seconds,
+        result.action,
+        " (dry-run)" if dry_run else "",
+    )
+    return result
+
+
 async def audit_sibling_collections(
     db,
     db_name: str,
@@ -373,6 +494,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="Override MONGODB_INTENTS_TTL_SECONDS for this run.",
     )
+    parser.add_argument(
+        "--signals-ttl-seconds",
+        type=int,
+        default=None,
+        help="Override MONGODB_SIGNALS_TTL_SECONDS for this run.",
+    )
     return parser
 
 
@@ -393,6 +520,8 @@ async def _amain(argv: list[str] | None = None) -> int:
     config.dry_run = bool(args.dry_run)
     if args.ttl_seconds is not None:
         config.ttl_seconds = max(60, args.ttl_seconds)
+    if args.signals_ttl_seconds is not None:
+        config.signals_ttl_seconds = max(60, args.signals_ttl_seconds)
 
     connection_string = os.getenv("MONGODB_URL")
     if not connection_string:
@@ -409,6 +538,14 @@ async def _amain(argv: list[str] | None = None) -> int:
             db,
             config.database,
             ttl_seconds=config.ttl_seconds,
+            dry_run=config.dry_run,
+        )
+        # Companion to petrosa-bot-ta-analysis#267 AC6 — mandatory TTL for
+        # any new high-frequency Mongo write; see module docstring above.
+        await ensure_signals_ttl_index(
+            db,
+            config.database,
+            ttl_seconds=config.signals_ttl_seconds,
             dry_run=config.dry_run,
         )
         await audit_sibling_collections(db, config.database)
