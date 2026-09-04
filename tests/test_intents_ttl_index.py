@@ -243,3 +243,111 @@ async def test_audit_reports_present_and_absent_siblings():
     # (data-manager#254); every sibling now keeps the default decision.
     assert itx.SIBLING_DECISION_OVERRIDES == {}
     assert all(r.decision == itx.SIBLING_RETENTION_DECISION for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# ensure_signals_ttl_index (companion to petrosa-bot-ta-analysis#267 AC6)
+# --------------------------------------------------------------------------- #
+
+
+def test_default_signals_ttl_is_seven_days():
+    assert itx.DEFAULT_SIGNALS_TTL_SECONDS == 604800
+
+
+def test_load_config_from_env_parses_signals_ttl_seconds():
+    config = itx.load_config_from_env({"MONGODB_SIGNALS_TTL_SECONDS": "3600"})
+    assert config.signals_ttl_seconds == 3600
+
+
+def test_load_config_from_env_defaults_signals_ttl():
+    assert (
+        itx.load_config_from_env({}).signals_ttl_seconds
+        == itx.DEFAULT_SIGNALS_TTL_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_signals_creates_index_when_absent():
+    db = _make_db(index_info_by_collection={"signals": {"_id_": {"key": [("_id", 1)]}}})
+    result = await itx.ensure_signals_ttl_index(db, "petrosa_data_manager")
+
+    assert result.action == "created"
+    assert result.database == "petrosa_data_manager"
+    assert result.collection == "signals"
+    assert result.field == "_ttl_inserted_at"
+    coll = db["signals"]
+    coll.create_index.assert_awaited_once()
+    _args, kwargs = coll.create_index.call_args
+    assert kwargs["name"] == itx.SIGNALS_TTL_INDEX_NAME
+    assert kwargs["expireAfterSeconds"] == itx.DEFAULT_SIGNALS_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_ensure_signals_noop_when_index_matches_spec():
+    db = _make_db(
+        index_info_by_collection={
+            "signals": {
+                itx.SIGNALS_TTL_INDEX_NAME: _ttl_meta("_ttl_inserted_at", 604800)
+            }
+        }
+    )
+    result = await itx.ensure_signals_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=604800
+    )
+
+    assert result.action == "noop"
+    coll = db["signals"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+    db.command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_signals_collmod_when_ttl_window_differs():
+    db = _make_db(
+        index_info_by_collection={
+            "signals": {
+                itx.SIGNALS_TTL_INDEX_NAME: _ttl_meta("_ttl_inserted_at", 604800)
+            }
+        }
+    )
+    result = await itx.ensure_signals_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=86400
+    )
+
+    assert result.action == "collmod"
+    db.command.assert_awaited_once()
+    args, kwargs = db.command.call_args
+    assert args[0] == "collMod"
+    assert args[1] == "signals"
+    assert kwargs["index"]["expireAfterSeconds"] == 86400
+
+
+@pytest.mark.asyncio
+async def test_ensure_signals_recreates_when_name_on_wrong_field():
+    db = _make_db(
+        index_info_by_collection={
+            "signals": {itx.SIGNALS_TTL_INDEX_NAME: _ttl_meta("timestamp", 604800)}
+        }
+    )
+    result = await itx.ensure_signals_ttl_index(db, "petrosa_data_manager")
+
+    assert result.action == "recreated"
+    coll = db["signals"]
+    coll.drop_index.assert_awaited_once_with(itx.SIGNALS_TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_signals_dry_run_mutates_nothing():
+    db = _make_db(index_info_by_collection={"signals": {"_id_": {"key": [("_id", 1)]}}})
+    result = await itx.ensure_signals_ttl_index(
+        db, "petrosa_data_manager", dry_run=True
+    )
+
+    assert result.action == "created"
+    assert result.dry_run is True
+    coll = db["signals"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+    db.command.assert_not_awaited()
