@@ -375,6 +375,19 @@ async def insert_records(
             # Add timestamp if not present
             if "timestamp" not in item:
                 item["timestamp"] = datetime.now(UTC)
+            # petrosa-data-manager companion to petrosa-bot-ta-analysis#267
+            # (AC6): stamp an UNCONDITIONAL real BSON Date field for the
+            # `signals` Mongo collection specifically. Callers (e.g. the TA
+            # bot) already send their own `timestamp` as an ISO *string* for
+            # JSON compatibility, so the generic `if "timestamp" not in item`
+            # auto-stamp above never fires for them and a TTL index on
+            # `timestamp` would silently never expire anything — the exact
+            # gotcha already observed on the `alerts` collection. This field
+            # is dedicated to TTL maintenance only; see
+            # data_manager/maintenance/intents_ttl_index.py
+            # `ensure_signals_ttl_index`.
+            if database == "mongodb" and collection == "signals":
+                item["_ttl_inserted_at"] = datetime.now(UTC)
             model_instances.append(GenericModel(**item))
 
         # Execute insert
