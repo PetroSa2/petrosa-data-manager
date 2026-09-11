@@ -58,6 +58,8 @@ under the 512 MB Atlas M0 quota).
 | `MONGODB_DATABASE`            | falls back ↓           | **Explicit** target DB name (AC4).                             |
 | `MONGODB_DB`                  | `petrosa_data_manager` | Repo-convention fallback when `MONGODB_DATABASE` is unset.     |
 | `MONGODB_INTENTS_TTL_SECONDS` | `86400`                | TTL window in seconds (min 60).                                |
+| `MONGODB_SIGNALS_TTL_SECONDS` | `604800`               | `signals` collection TTL in seconds (min 60; #267 AC6).        |
+| `MONGODB_ALERTS_TTL_SECONDS`  | `604800`               | `alerts` collection TTL in seconds (min 60; data-manager#271). |
 
 The job resolves the database name as
 `MONGODB_DATABASE → MONGODB_DB → "petrosa_data_manager"` and selects it
@@ -95,26 +97,39 @@ mongosh "$MONGODB_URL" --eval \
 The job audits these sibling collections every run and logs their current
 TTL-index state:
 
-| Collection         | Decision                                                    |
-| ------------------ | ----------------------------------------------------------- |
-| `alerts`           | Retain — not auto-expired pending volume evidence.          |
-| `cio_decisions`    | Retain — financial/audit trail; not auto-expired.           |
-| `execution_events` | Retain — financial/audit trail; not auto-expired.           |
-| `pnl_events`       | Retain — audit trail (watch: repeated mark-to-market rows). |
-| `trades`           | Retain — financial/audit trail; not auto-expired.           |
+| Collection         | Decision                                                                   |
+| ------------------ | -------------------------------------------------------------------------- |
+| `alerts`           | **Ephemeral** — no confirmed reader; managed `_ttl_inserted_at` TTL (7d). |
+| `cio_decisions`    | Retain — financial/audit trail; not auto-expired.                          |
+| `execution_events` | Retain — financial/audit trail; not auto-expired.                          |
+| `pnl_events`       | Retain — audit trail (watch: repeated mark-to-market rows).                |
+| `trades`           | Retain — financial/audit trail; not auto-expired.                          |
 
-**Rationale.** Only `intents` has demonstrated unbounded growth that breaches
-the quota (~280k docs/day, dominated by pre-CIO and multi-intent-per-decision
-volume). The siblings are audit/financial-event trails with material value and
-no current evidence of runaway growth, so auto-expiry is **deliberately not**
-applied to them yet. The leading-indicator Grafana alert (AC6, in
-`petrosa_k8s`) — WARN at `data_size / quota > 0.7`, P1 at `> 0.85` — is the
-safety net that surfaces any sibling that starts to threaten the quota, at which
-point its row in this table is flipped to a managed TTL (add it to the job's
-managed set with its documented timestamp field).
+**Rationale.** `alerts` is the only sibling confirmed to have no reader (zero
+hits on `grep -r "alerts" data_manager/api/`). On the shared Atlas M0 (512 MB
+cluster) it is the last TTL-less writer, and with no expiry it would be the
+next unbounded collection to hit the quota ceiling (after `intents`). The
+publisher `timestamp` is serialized to an ISO *string* by
+`model_dump(mode="json")` — a native TTL index on that field would index but
+never expire anything — so the dispatcher stamps a dedicated, unconditional,
+real BSON `Date` field `_ttl_inserted_at` on every row (mirroring the `signals`
+stamp from #267), and the TTL index keys on that field under the dedicated
+name `_ttl_inserted_at_ttl` so it never collides with the app-managed
+`timestamp_1` index (the collision that broke `intents` in #244). The operator
+can also kill the write entirely via `PETROSA_ALERT_PERSIST_ENABLED=false` + a
+restart (AC7 kill-switch).
+
+The remaining siblings (`cio_decisions`, `execution_events`, `pnl_events`,
+`trades`) are audit/financial-event trails with material value and no current
+evidence of runaway growth, so auto-expiry is **deliberately not** applied to
+them yet. The leading-indicator Grafana alert (AC6, in `petrosa_k8s`) — WARN at
+`data_size / quota > 0.7`, P1 at `> 0.85` — is the safety net that surfaces
+any sibling that starts to threaten the quota, at which point its row in this
+table is flipped to a managed TTL.
 
 ## Related
 
+- `petrosa-data-manager#271` — `alerts` TTL + kill-switch (this family of fixes).
 - `petrosa_k8s#820` — original TTL job (shipped, broken: name collision + wrong field).
 - `petrosa_k8s#884` / `#887` — collMod 7d→1d follow-up (also broken; superseded).
 - `docs/klines-retention.md` — sibling retention job (MySQL klines).

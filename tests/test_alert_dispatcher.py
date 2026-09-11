@@ -15,6 +15,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,6 +31,7 @@ from data_manager.models.alert import (
 from data_manager.services.alert_dispatcher import (
     ALERTS_COLLECTION,
     AlertDispatcher,
+    _persist_enabled,
 )
 
 try:
@@ -427,6 +429,65 @@ async def test_summary_alert_emitted_when_suppression_count_hits_threshold(
     summary_doc = summary_calls[0].args[1]
     assert summary_doc["category"] == "summary.flood.cat"
     assert summary_doc["summarized_ids"]  # carries the suppressed event IDs
+
+
+# ---------------------------------------------------------------------------
+# data-manager#271 — AC7 kill-switch + AC2 _ttl_inserted_at stamp
+# ---------------------------------------------------------------------------
+
+
+def test_persist_enabled_true_by_default():
+    """_persist_enabled() returns True when PETROSA_ALERT_PERSIST_ENABLED is
+    unset (the safe default: on until explicitly killed)."""
+    env = {k: v for k, v in os.environ.items() if k != "PETROSA_ALERT_PERSIST_ENABLED"}
+    with patch.dict(os.environ, env, clear=True):
+        assert _persist_enabled() is True
+
+
+def test_persist_enabled_respects_kill_switch(monkeypatch):
+    """AC7: setting PETROSA_ALERT_PERSIST_ENABLED=false must return False."""
+    monkeypatch.setenv("PETROSA_ALERT_PERSIST_ENABLED", "false")
+    assert _persist_enabled() is False
+
+
+def test_persist_enabled_case_insensitive(monkeypatch):
+    """lowercase check must accept 'False' → False and 'true' → True."""
+    monkeypatch.setenv("PETROSA_ALERT_PERSIST_ENABLED", "False")
+    assert _persist_enabled() is False
+    monkeypatch.setenv("PETROSA_ALERT_PERSIST_ENABLED", "true")
+    assert _persist_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_persist_stamps_ttl_inserted_at(dispatcher, mock_db_manager):
+    """AC2: _persist must stamp `_ttl_inserted_at` as a real datetime on every
+    doc before the replace_one upsert — the field that keys the TTL index."""
+    await dispatcher.dispatch(
+        subject="alerts.cat.ttl-check",
+        body=_body(decision_id="ttl-d1"),
+    )
+    collection = mock_db_manager.mongodb_adapter.db[ALERTS_COLLECTION]
+    assert collection.replace_one.called, "Expected replace_one call"
+    doc = collection.replace_one.call_args.args[1]
+    assert "_ttl_inserted_at" in doc, "Missing _ttl_inserted_at field"
+    assert isinstance(doc["_ttl_inserted_at"], datetime), (
+        "_ttl_inserted_at must be a real BSON Date (datetime), not a string"
+    )
+
+
+@pytest.mark.asyncio
+async def test_persist_enabled_false_skips_db_write(dispatcher, mock_db_manager):
+    """AC7: when the kill-switch is on, _persist must no-op — no replace_one
+    called, delivery state remains PENDING, no DB write."""
+    with patch.dict(os.environ, {"PETROSA_ALERT_PERSIST_ENABLED": "false"}):
+        event = await dispatcher.dispatch(
+            subject="alerts.killswitch.dry",
+            body=_body(decision_id="ks-d1"),
+        )
+    assert event is not None
+    # DB must NOT have been touched
+    collection = mock_db_manager.mongodb_adapter.db[ALERTS_COLLECTION]
+    collection.replace_one.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

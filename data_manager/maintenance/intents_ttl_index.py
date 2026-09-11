@@ -49,6 +49,8 @@ Environment contract::
     MONGODB_SIGNALS_TTL_SECONDS  signals collection TTL window in seconds
                                  (default 604800 = 7 days; companion to
                                  petrosa-bot-ta-analysis#267 AC6)
+    MONGODB_ALERTS_TTL_SECONDS   alerts collection TTL window in seconds
+                                 (default 604800 = 7 days; data-manager#271 AC6)
 
 Exit codes::
 
@@ -111,6 +113,19 @@ DEFAULT_SIGNALS_TTL_SECONDS = 604800  # 7 days — generous default pending the
 # comfortably bounded rather than unbounded, and operator-overridable via
 # MONGODB_SIGNALS_TTL_SECONDS.
 
+# data-manager#271 — `alerts` TTL companion. The `alerts` collection
+# (alert_dispatcher._persist) is a write-only audit trail with NO confirmed
+# reader (no api/routes read it), so it MUST NOT accumulate unbounded on the
+# shared Atlas M0 (512 MB) cluster that has suffered four quota P0s. The
+# publisher `timestamp` is serialized to an ISO *string* by
+# model_dump(mode="json"), so the dispatcher stamps a dedicated, unconditional,
+# real BSON `Date` field `_ttl_inserted_at` on every document — mirroring the
+# `signals` stamp — and the TTL index here keys on that field.
+ALERTS_COLLECTION = "alerts"
+ALERTS_TTL_FIELD = "_ttl_inserted_at"
+ALERTS_TTL_INDEX_NAME = "_ttl_inserted_at_ttl"
+DEFAULT_ALERTS_TTL_SECONDS = 604800  # 7 days — data-manager#271 AC3
+
 # AC5 — sibling collections that could share the same unbounded-growth defect.
 # Documented decision: these are audit/financial-event trails. They are NOT
 # auto-expired by this job pending per-collection volume evidence; instead they
@@ -135,7 +150,21 @@ SIBLING_RETENTION_DECISION = (
 # removed with the trades retention job (data-manager#254): the `trades`
 # collection is being retired entirely (binance-data-extractor#276), so it now
 # falls back to the default sibling decision until the collection is dropped.
-SIBLING_DECISION_OVERRIDES: dict[str, str] = {}
+SIBLING_DECISION_OVERRIDES: dict[str, str] = {
+    # data-manager#271 AC1 — decision documented as REQUIRED by the ticket:
+    # `alerts` has no confirmed reader (grep across api/routes found zero), so it
+    # is treated as EPHEMERAL and graduated to a managed TTL here. The dedicated
+    # `_ttl_inserted_at` BSON-Date TTL index (7-day default,
+    # MONGODB_ALERTS_TTL_SECONDS) caps storage; the kill-switch
+    # (PETROSA_ALERT_PERSIST_ENABLED) in the dispatcher stops the write entirely.
+    # A separate follow-up ticket must define the intended reader (alerts
+    # dashboard/API vs dispatch-only) before this decision is revisited.
+    "alerts": (
+        "ephemeral — no confirmed reader (data-manager#271); managed by the "
+        "dedicated `_ttl_inserted_at` TTL index, window "
+        "MONGODB_ALERTS_TTL_SECONDS (default 7 days)"
+    ),
+}
 
 
 def _sibling_decision(collection: str) -> str:
@@ -150,6 +179,7 @@ class TtlIndexConfig:
     database: str = DEFAULT_DATABASE
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     signals_ttl_seconds: int = DEFAULT_SIGNALS_TTL_SECONDS
+    alerts_ttl_seconds: int = DEFAULT_ALERTS_TTL_SECONDS
     dry_run: bool = False
 
 
@@ -201,10 +231,17 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> TtlIndexConfi
         DEFAULT_SIGNALS_TTL_SECONDS,
         minimum=60,
     )
+    alerts_ttl_seconds = _parse_int_env(
+        env,
+        "MONGODB_ALERTS_TTL_SECONDS",
+        DEFAULT_ALERTS_TTL_SECONDS,
+        minimum=60,
+    )
     return TtlIndexConfig(
         database=resolve_database_name(env),
         ttl_seconds=ttl_seconds,
         signals_ttl_seconds=signals_ttl_seconds,
+        alerts_ttl_seconds=alerts_ttl_seconds,
         dry_run=False,
     )
 
@@ -410,6 +447,92 @@ async def ensure_signals_ttl_index(
     return result
 
 
+async def ensure_alerts_ttl_index(
+    db,
+    db_name: str,
+    *,
+    ttl_seconds: int = DEFAULT_ALERTS_TTL_SECONDS,
+    dry_run: bool = False,
+) -> TtlIndexResult:
+    """Idempotently ensure the TTL index on `alerts._ttl_inserted_at`.
+
+    data-manager#271 — the `alerts` collection is a write-only audit trail
+    with no confirmed reader; it must NOT accumulate unbounded on the shared
+    Atlas M0 (512 MB). Mirrors :func:`ensure_signals_ttl_index`'s idempotent
+    create/collmod/noop logic (no legacy broken index to clear — this
+    collection never had a TTL).
+
+    * No-ops if the index already matches the desired spec.
+    * Repairs the TTL window via ``collMod`` if the field is right but
+      ``expireAfterSeconds`` differs.
+    * Creates the index if absent.
+    * If ``alerts`` does not exist yet, still ensures the index will be
+      present at collection-creation time by creating it directly — MongoDB
+      permits creating an index on a not-yet-existing collection.
+    """
+    coll = db[ALERTS_COLLECTION]
+    info = await coll.index_information()
+
+    existing = info.get(ALERTS_TTL_INDEX_NAME)
+    if existing is not None and _index_key_fields(existing) == [ALERTS_TTL_FIELD]:
+        current_ttl = existing.get("expireAfterSeconds")
+        if current_ttl == ttl_seconds:
+            action = "noop"
+        else:
+            action = "collmod"
+            if not dry_run:
+                await db.command(
+                    "collMod",
+                    ALERTS_COLLECTION,
+                    index={
+                        "name": ALERTS_TTL_INDEX_NAME,
+                        "expireAfterSeconds": ttl_seconds,
+                    },
+                )
+    elif existing is not None:
+        # Name squatting on the wrong field — drop and recreate cleanly.
+        action = "recreated"
+        if not dry_run:
+            await coll.drop_index(ALERTS_TTL_INDEX_NAME)
+            await coll.create_index(
+                [(ALERTS_TTL_FIELD, ASCENDING)],
+                name=ALERTS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+    else:
+        action = "created"
+        if not dry_run:
+            await coll.create_index(
+                [(ALERTS_TTL_FIELD, ASCENDING)],
+                name=ALERTS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+
+    result = TtlIndexResult(
+        database=db_name,
+        collection=ALERTS_COLLECTION,
+        index_name=ALERTS_TTL_INDEX_NAME,
+        field=ALERTS_TTL_FIELD,
+        ttl_seconds=ttl_seconds,
+        action=action,
+        dropped_legacy=[],
+        dry_run=dry_run,
+    )
+
+    logger.info(
+        "alerts_ttl_index: db=%s collection=%s index=%s key={%s: 1} "
+        "expireAfterSeconds=%d action=%s%s",
+        result.database,
+        result.collection,
+        result.index_name,
+        result.field,
+        result.ttl_seconds,
+        result.action,
+        " (dry-run)" if dry_run else "",
+    )
+    return result
+
+
 async def audit_sibling_collections(
     db,
     db_name: str,
@@ -500,6 +623,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="Override MONGODB_SIGNALS_TTL_SECONDS for this run.",
     )
+    parser.add_argument(
+        "--alerts-ttl-seconds",
+        type=int,
+        default=None,
+        help="Override MONGODB_ALERTS_TTL_SECONDS for this run.",
+    )
     return parser
 
 
@@ -522,6 +651,8 @@ async def _amain(argv: list[str] | None = None) -> int:
         config.ttl_seconds = max(60, args.ttl_seconds)
     if args.signals_ttl_seconds is not None:
         config.signals_ttl_seconds = max(60, args.signals_ttl_seconds)
+    if args.alerts_ttl_seconds is not None:
+        config.alerts_ttl_seconds = max(60, args.alerts_ttl_seconds)
 
     connection_string = os.getenv("MONGODB_URL")
     if not connection_string:
@@ -546,6 +677,14 @@ async def _amain(argv: list[str] | None = None) -> int:
             db,
             config.database,
             ttl_seconds=config.signals_ttl_seconds,
+            dry_run=config.dry_run,
+        )
+        # data-manager#271 AC6 (BLOCKING) — the `alerts` write-only audit
+        # trail must NOT remain a TTL-less Mongo writer on the shared Atlas M0.
+        await ensure_alerts_ttl_index(
+            db,
+            config.database,
+            ttl_seconds=config.alerts_ttl_seconds,
             dry_run=config.dry_run,
         )
         await audit_sibling_collections(db, config.database)

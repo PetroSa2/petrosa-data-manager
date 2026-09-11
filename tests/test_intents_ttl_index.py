@@ -239,10 +239,21 @@ async def test_audit_reports_present_and_absent_siblings():
     assert by_name["alerts"].ttl_indexes == {}
     # cio_decisions / execution_events / trades are absent in this fixture.
     assert by_name["trades"].present is False
-    # The `trades` retention override was removed with the retention job
-    # (data-manager#254); every sibling now keeps the default decision.
-    assert itx.SIBLING_DECISION_OVERRIDES == {}
-    assert all(r.decision == itx.SIBLING_RETENTION_DECISION for r in results)
+    # data-manager#271 AC1: `alerts` graduated to the EPHEMERAL override; every
+    # other documented sibling keeps the default retain-pending-evidence
+    # decision (the `trades` override was removed with data-manager#254).
+    assert itx.SIBLING_DECISION_OVERRIDES.keys() == {"alerts"}
+    assert by_name["alerts"].decision == itx.SIBLING_DECISION_OVERRIDES["alerts"]
+    assert all(
+        r.collection not in itx.SIBLING_DECISION_OVERRIDES
+        or r.decision == itx.SIBLING_DECISION_OVERRIDES[r.collection]
+        for r in results
+    )
+    assert all(
+        r.collection in itx.SIBLING_DECISION_OVERRIDES
+        or r.decision == itx.SIBLING_RETENTION_DECISION
+        for r in results
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -348,6 +359,111 @@ async def test_ensure_signals_dry_run_mutates_nothing():
     assert result.action == "created"
     assert result.dry_run is True
     coll = db["signals"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+    db.command.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------- #
+# ensure_alerts_ttl_index (data-manager#271 AC6)
+# --------------------------------------------------------------------------- #
+
+
+def test_default_alerts_ttl_is_seven_days():
+    assert itx.DEFAULT_ALERTS_TTL_SECONDS == 604800
+    assert itx.ALERTS_COLLECTION == "alerts"
+    assert itx.ALERTS_TTL_FIELD == "_ttl_inserted_at"
+    assert itx.ALERTS_TTL_INDEX_NAME == "_ttl_inserted_at_ttl"
+
+
+def test_load_config_from_env_parses_alerts_ttl_seconds():
+    config = itx.load_config_from_env({"MONGODB_ALERTS_TTL_SECONDS": "3600"})
+    assert config.alerts_ttl_seconds == 3600
+
+
+def test_load_config_from_env_defaults_alerts_ttl():
+    assert (
+        itx.load_config_from_env({}).alerts_ttl_seconds
+        == itx.DEFAULT_ALERTS_TTL_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_alerts_creates_index_when_absent():
+    db = _make_db(index_info_by_collection={"alerts": {"_id_": {"key": [("_id", 1)]}}})
+    result = await itx.ensure_alerts_ttl_index(db, "petrosa_data_manager")
+
+    assert result.action == "created"
+    assert result.database == "petrosa_data_manager"
+    assert result.collection == "alerts"
+    assert result.field == "_ttl_inserted_at"
+    coll = db["alerts"]
+    coll.create_index.assert_awaited_once()
+    _args, kwargs = coll.create_index.call_args
+    assert kwargs["name"] == itx.ALERTS_TTL_INDEX_NAME
+    assert kwargs["expireAfterSeconds"] == itx.DEFAULT_ALERTS_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_ensure_alerts_noop_when_index_matches_spec():
+    db = _make_db(
+        index_info_by_collection={
+            "alerts": {itx.ALERTS_TTL_INDEX_NAME: _ttl_meta("_ttl_inserted_at", 604800)}
+        }
+    )
+    result = await itx.ensure_alerts_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=604800
+    )
+
+    assert result.action == "noop"
+    coll = db["alerts"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+    db.command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_alerts_collmod_when_ttl_window_differs():
+    db = _make_db(
+        index_info_by_collection={
+            "alerts": {itx.ALERTS_TTL_INDEX_NAME: _ttl_meta("_ttl_inserted_at", 604800)}
+        }
+    )
+    result = await itx.ensure_alerts_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=86400
+    )
+
+    assert result.action == "collmod"
+    db.command.assert_awaited_once()
+    args, kwargs = db.command.call_args
+    assert args[0] == "collMod"
+    assert args[1] == "alerts"
+    assert kwargs["index"]["expireAfterSeconds"] == 86400
+
+
+@pytest.mark.asyncio
+async def test_ensure_alerts_recreates_when_name_on_wrong_field():
+    db = _make_db(
+        index_info_by_collection={
+            "alerts": {itx.ALERTS_TTL_INDEX_NAME: _ttl_meta("timestamp", 604800)}
+        }
+    )
+    result = await itx.ensure_alerts_ttl_index(db, "petrosa_data_manager")
+
+    assert result.action == "recreated"
+    coll = db["alerts"]
+    coll.drop_index.assert_awaited_once_with(itx.ALERTS_TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_alerts_dry_run_mutates_nothing():
+    db = _make_db(index_info_by_collection={"alerts": {"_id_": {"key": [("_id", 1)]}}})
+    result = await itx.ensure_alerts_ttl_index(db, "petrosa_data_manager", dry_run=True)
+
+    assert result.action == "created"
+    assert result.dry_run is True
+    coll = db["alerts"]
     coll.create_index.assert_not_awaited()
     coll.drop_index.assert_not_awaited()
     db.command.assert_not_awaited()
