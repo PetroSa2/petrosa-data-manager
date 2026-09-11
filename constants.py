@@ -73,6 +73,20 @@ MONGODB_URL = os.getenv(
 # (data_manager.maintenance.intents_ttl_index) so they never disagree.
 INTENTS_TTL_SECONDS = int(os.getenv("MONGODB_INTENTS_TTL_SECONDS", "86400"))
 
+# Alerts TTL retention (data-manager#271). The `alerts` audit-trail collection is
+# a write-only sink (alert_dispatcher._persist) with NO confirmed reader; on the
+# shared Atlas M0 512 MB cluster it grows unbounded against a hard cap that has
+# already produced four quota P0s (#783/#819/#881/#899). The publisher `timestamp`
+# is serialized to an ISO *string* before persist (model_dump mode="json"), so a
+# TTL index on it would never expire anything; the dispatcher stamps a dedicated
+# real BSON `Date` field `_ttl_inserted_at` on every row (same pattern as the
+# `signals` stamp in #267) and this window config drives the `_ttl_inserted_at_ttl`
+# index. Default 7 days comfortably exceeds any operational alert-review need
+# while capping storage at the retention window. Read by BOTH the app-startup
+# self-heal (MongoDBAdapter.ensure_indexes) and the standalone maintenance job
+# (data_manager.maintenance.intents_ttl_index) so they never disagree.
+ALERTS_TTL_SECONDS = int(os.getenv("MONGODB_ALERTS_TTL_SECONDS", "604800"))
+
 # Trades retention (data-manager#246). The `trades` collection (raw public-trade
 # ticks written directly by the binance-futures extractor) grows unbounded at
 # ~22 MB/day and drove the 4th Atlas M0 quota P0 (2026-07-01: 870k docs / ~349 MB,

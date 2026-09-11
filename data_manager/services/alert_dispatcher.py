@@ -78,6 +78,17 @@ _DEFAULT_PER_CATEGORY_LIMIT = 10  # alerts per minute, per AC text
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
 
 
+def _persist_enabled() -> bool:
+    """AC7 kill-switch (data-manager#271): `PETROSA_ALERT_PERSIST_ENABLED`.
+
+    Gates ONLY the `_persist` DB write — dispatch and webhook delivery
+    continue unchanged. Because no consumer of the `alerts` collection is
+    confirmed, the operator must be able to stop the write immediately via
+    config + restart with no code change.
+    """
+    return os.environ.get("PETROSA_ALERT_PERSIST_ENABLED", "true").lower() == "true"
+
+
 def _category_limit(category: str) -> int:
     """Resolve `PETROSA_ALERT_RATELIMIT_<CATEGORY>` (uppercased, dots → _).
 
@@ -426,7 +437,19 @@ class AlertDispatcher:
     async def _persist(self, event: AlertEvent) -> bool:
         """Upsert the event into the `alerts` collection keyed by
         `f"{category}::{dedupe_key}::{timestamp_iso}"` so NATS replays of
-        the same event collapse into one row (AC3 dedup + AC4 audit-trail)."""
+        the same event collapse into one row (AC3 dedup + AC4 audit-trail).
+
+        data-manager#271 AC7: when `PETROSA_ALERT_PERSIST_ENABLED=false`
+        this no-ops (dispatch/notify remain unaffected).
+        """
+        if not _persist_enabled():
+            logger.info(
+                "Alert persistence disabled (PETROSA_ALERT_PERSIST_ENABLED=false); "
+                "skipping DB write for %s::%s",
+                event.category,
+                event.dedupe_key,
+            )
+            return False
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
             if self.db_manager
@@ -441,6 +464,12 @@ class AlertDispatcher:
             return False
         doc = event.model_dump(exclude_none=False, mode="json")
         doc["_id"] = event.make_id()
+        # data-manager#271 AC2 — `model_dump(mode="json")` serializes the
+        # publisher `timestamp` to an ISO-8601 *string*, which a native TTL
+        # index would index but never expire. Stamp a dedicated, unconditional,
+        # real BSON `Date` field for the `_ttl_inserted_at_ttl` TTL index —
+        # mirroring the `signals` stamp in api/routes/generic.py.
+        doc["_ttl_inserted_at"] = datetime.now(UTC)
         # Severity, state are enums → str post-model_dump.
         doc = adapter._prepare_for_bson(doc)
         try:

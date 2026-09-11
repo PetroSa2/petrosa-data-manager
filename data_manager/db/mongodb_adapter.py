@@ -479,6 +479,28 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("pnl_kind", ASCENDING)]),
                     IndexModel([("order_id", ASCENDING)], sparse=True),
                 ]
+            elif collection == "alerts":
+                # petrosa-data-manager#271 — the `alerts` collection is a
+                # write-only audit trail (alert_dispatcher._persist) with NO
+                # confirmed reader; on the shared Atlas M0 (512 MB) it grows
+                # unbounded (AC6 BLOCKING — TTL is mandatory). The publisher
+                # `timestamp` is serialized to an ISO *string* before persist,
+                # so a native TTL index on it would never expire anything. The
+                # dispatcher stamps a dedicated real BSON `Date` field
+                # `_ttl_inserted_at` on every doc (mirroring the `signals`
+                # stamp in generic.py); this TTL index keys on that field under
+                # a dedicated name so it never collides with the app-managed
+                # `timestamp_1` index (the collision that broke intents in
+                # data-manager#244).
+                indexes = [
+                    IndexModel([("timestamp", ASCENDING)]),
+                    IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)]),
+                    IndexModel(
+                        [("_ttl_inserted_at", ASCENDING)],
+                        expireAfterSeconds=constants.ALERTS_TTL_SECONDS,
+                        name="_ttl_inserted_at_ttl",
+                    ),
+                ]
             else:
                 # Default time-series indexes
                 indexes = [
