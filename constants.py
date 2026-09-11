@@ -235,6 +235,68 @@ CANDLE_DATABASE_TYPE = os.getenv(
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
+# Timeframes the *execution* path actually requests. Sourced from the shared
+# `SUPPORTED_INTERVALS` configmap key (k8s/shared/configmaps/petrosa-common-config.yaml)
+# so the warm-up/readiness grid matches what petrosa-bot-ta-analysis really asks
+# for, instead of the broader historical `SUPPORTED_TIMEFRAMES` list above.
+SUPPORTED_INTERVALS = [
+    tf.strip()
+    for tf in os.getenv("SUPPORTED_INTERVALS", "5m,15m,30m,1h,1d").split(",")
+    if tf.strip()
+]
+
+# --- Candle-store cutover safety (data-manager#275) -------------------------
+# Minimum number of candles every `candles_{pair}_{timeframe}` collection must
+# hold before MongoDB may be promoted to the primary execution candle store
+# (#274 AC1). The value is the contract produced by #276
+# (docs/candle-consumer-retention-contract.md): true max strategy lookback is
+# 265 candles (minervini_trend_template), 1.5x safety margin -> 400. Retention
+# (#274 AC3) must be at least as deep or a freshly cut-over collection would
+# shed candles it just backfilled.
+CANDLE_WARMUP_MIN_CANDLES = int(os.getenv("CANDLE_WARMUP_MIN_CANDLES", "400"))
+
+# How stale the newest candle in a collection may be, expressed as a multiple
+# of the collection's own timeframe, before readiness fails. 3 intervals
+# tolerates one missed extractor tick plus scheduling jitter without declaring
+# a healthy collection cold.
+CANDLE_WARMUP_FRESHNESS_INTERVALS = float(
+    os.getenv("CANDLE_WARMUP_FRESHNESS_INTERVALS", "3")
+)
+
+# Warm-up backfill batch size (documents per MongoDB insert_many call).
+CANDLE_WARMUP_BATCH_SIZE = int(os.getenv("CANDLE_WARMUP_BATCH_SIZE", "500"))
+
+# Self-bounding trim for the warm-up job. Per the standing operator rule
+# ("never leave anything writing to MongoDB without a TTL AND an easy
+# off-flag" — four Atlas M0 quota P0s: k8s#783/#819/#881/#899), the backfill
+# job caps every collection it touches at
+# CANDLE_WARMUP_MIN_CANDLES * CANDLE_WARMUP_TRIM_FACTOR documents so repeated
+# runs cannot grow the namespace. This is the job's own bound; the general
+# `candles_*` retention job is #274 AC3.
+CANDLE_WARMUP_TRIM_ENABLED = (
+    os.getenv("CANDLE_WARMUP_TRIM_ENABLED", "true").lower() == "true"
+)
+CANDLE_WARMUP_TRIM_FACTOR = float(os.getenv("CANDLE_WARMUP_TRIM_FACTOR", "1.5"))
+
+# AC3 — no empty-read window. During the cutover the candle read path falls
+# back to the non-primary backend whenever the primary returns an empty or
+# short result, so execution never sees a starved candle window while Mongo is
+# warming (or while MySQL is catching up after a rollback). Kill-switch:
+# CANDLE_READ_FALLBACK_ENABLED=false restores single-backend reads.
+CANDLE_READ_FALLBACK_ENABLED = (
+    os.getenv("CANDLE_READ_FALLBACK_ENABLED", "true").lower() == "true"
+)
+
+# AC4 — rollback path. With dual-write enabled, candle writes land in BOTH
+# backends, so reverting CANDLE_DATABASE_TYPE to `mysql` after the flip cannot
+# leave a hole in MySQL for the period MongoDB was primary. Default OFF: it
+# doubles the Mongo candle write volume, so it is switched on deliberately for
+# the cutover window (and requires #274 AC3 retention to stay bounded beyond
+# the warm-up job's own trim).
+CANDLE_DUAL_WRITE_ENABLED = (
+    os.getenv("CANDLE_DUAL_WRITE_ENABLED", "false").lower() == "true"
+)
+
 # Leader Election Configuration
 ENABLE_LEADER_ELECTION = os.getenv("ENABLE_LEADER_ELECTION", "true").lower() == "true"
 LEADER_ELECTION_HEARTBEAT_INTERVAL = int(

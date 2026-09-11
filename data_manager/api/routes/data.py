@@ -15,6 +15,7 @@ except ImportError:
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+import constants
 import data_manager.api.app as api_module
 from data_manager.db.repositories import (
     CandleRepository,
@@ -22,10 +23,65 @@ from data_manager.db.repositories import (
     FundingRepository,
     TradeRepository,
 )
+from data_manager.db.repositories.candle_repository import (
+    mongo_collection_name,
+    mysql_table_name,
+)
+from data_manager.maintenance.candle_readiness import evaluate_readiness
+from data_manager.utils.time_utils import parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Fallback lookback when `period` cannot be parsed into an interval.
+DEFAULT_CANDLE_WINDOW_HOURS = 24
+
+# Extra intervals added to a derived lookback window so boundary alignment (a
+# partially-closed newest candle) cannot silently shorten the returned window
+# by one candle.
+CANDLE_WINDOW_EDGE_INTERVALS = 2
+
+
+def _default_candle_start(
+    end: datetime, period: str, limit: int, offset: int
+) -> datetime:
+    """Derive the implicit start timestamp for a candle query.
+
+    The previous behaviour hardcoded a 24-hour lookback regardless of
+    ``period``, so a caller asking for 250 candles of ``1h`` could receive at
+    most 24 and a caller asking for ``1d`` at most 1 — a *partial* window,
+    which is exactly what #275 AC3 forbids on the execution path. Derive the
+    window from what the caller actually asked for instead: ``offset + limit``
+    candles' worth of time, plus a small edge margin.
+    """
+    try:
+        interval_seconds = parse_timeframe_to_seconds(period)
+    except (ValueError, TypeError):
+        return end - timedelta(hours=DEFAULT_CANDLE_WINDOW_HOURS)
+
+    candles_needed = max(1, offset + limit) + CANDLE_WINDOW_EDGE_INTERVALS
+    return end - timedelta(seconds=interval_seconds * candles_needed)
+
+
+def _completeness_pct(
+    start: datetime, end: datetime, period: str, returned: int
+) -> float:
+    """Percentage of the requested window actually covered by data.
+
+    Replaces the hardcoded ``100.0`` — which reported a perfectly complete
+    dataset even when the query returned nothing — so #275 AC5 verification
+    ("no gaps immediately after the flip") has a real signal to read.
+    """
+    try:
+        interval_seconds = parse_timeframe_to_seconds(period)
+    except (ValueError, TypeError):
+        return 100.0 if returned else 0.0
+
+    expected = int((end - start).total_seconds() // interval_seconds)
+    if expected <= 0:
+        return 100.0 if returned else 0.0
+    return round(min(100.0, (returned / expected) * 100), 2)
 
 
 class CandleResponse(BaseModel):
@@ -100,9 +156,8 @@ async def get_candles(
         if not end:
             end = datetime.now(UTC)
         if not start:
-            start = end - timedelta(hours=24)
+            start = _default_candle_start(end, period, limit, offset)
 
-        # Query MongoDB
         candles = await candle_repo.get_range(pair, period, start, end)
 
         # Apply sorting
@@ -153,10 +208,18 @@ async def get_candles(
                 "order": sort_order,
             },
             "metadata": {
-                "data_completeness": 100.0,
+                "data_completeness": _completeness_pct(start, end, period, total_count),
                 "last_updated": datetime.now(UTC).isoformat(),
-                "source": "mongodb",
-                "collection": f"candles_{pair}_{period}",
+                # Report the backend that actually answered instead of a
+                # hardcoded "mongodb" (#275 AC5) — during the cutover the read
+                # may have been served by the fallback backend.
+                "source": candle_repo.last_read_source
+                or constants.CANDLE_DATABASE_TYPE,
+                "collection": (
+                    mongo_collection_name(pair, period)
+                    if candle_repo.last_read_source == "mongodb"
+                    else mysql_table_name(period)
+                ),
                 "records_returned": len(values),
             },
             "parameters": {
@@ -170,6 +233,47 @@ async def get_candles(
     except Exception as e:
         logger.error(f"Error fetching candles: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/candles/readiness")
+async def get_candle_readiness(
+    pairs: str | None = Query(
+        None, description="Comma-separated pairs (default: SUPPORTED_PAIRS)"
+    ),
+    timeframes: str | None = Query(
+        None, description="Comma-separated timeframes (default: SUPPORTED_INTERVALS)"
+    ),
+    min_candles: int | None = Query(
+        None, ge=1, description="Override CANDLE_WARMUP_MIN_CANDLES for this check"
+    ),
+) -> dict:
+    """
+    Mongo candle-store readiness gate (data-manager#275 AC2).
+
+    Reports, per ``candles_{pair}_{timeframe}`` collection, whether MongoDB
+    holds enough *and* fresh enough candles to become the primary execution
+    candle store (#274 AC1). ``ready: false`` means the flip must not happen.
+
+    The check is fail-closed: unreachable database, missing collection or an
+    unparseable timeframe all resolve to not-ready. Always returns 200 — the
+    verdict lives in the ``ready`` field so monitoring can scrape it without
+    treating "not warm yet" as an HTTP error.
+    """
+    if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    def _split(raw: str | None) -> list[str] | None:
+        if not raw:
+            return None
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    report = await evaluate_readiness(
+        api_module.db_manager.mongodb_adapter,
+        pairs=_split(pairs),
+        timeframes=_split(timeframes),
+        required_count=min_candles,
+    )
+    return report.to_dict()
 
 
 @router.get("/trades")
