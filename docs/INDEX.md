@@ -13,6 +13,8 @@
 - [**DEPLOYMENT_GUIDE.md**](DEPLOYMENT_GUIDE.md) - Production deployment and leader election.
 - [**MANUAL_DEPLOYMENT_GUIDE.md**](MANUAL_DEPLOYMENT_GUIDE.md) - Procedures for manual overrides.
 - [**AUDITOR.md**](AUDITOR.md) - Data integrity validation and health scoring.
+- [**klines-retention.md**](klines-retention.md) - MySQL-tier `klines_*` retention job.
+- [**candle-consumer-retention-contract.md**](candle-consumer-retention-contract.md) - Execution-path candle consumer inventory and Mongo `candles_*` retention/warm-up window contract.
 
 ## 🔧 CI/CD & Development
 - [**CI_CD_PIPELINE.md**](CI_CD_PIPELINE.md) - GitHub Actions workflow details.
