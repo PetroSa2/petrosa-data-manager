@@ -48,7 +48,9 @@ trading stops. This runbook closes that gap.
 > **Standing rule:** never leave anything writing to MongoDB without a bound
 > and an off-flag. Atlas M0 (512 MB) has produced four quota P0s
 > (k8s#783/#819/#881/#899). The warm-up job bounds itself via the trim above;
-> ongoing `candles_*` retention is #274 AC3.
+> ongoing `candles_*` retention is #274 AC3, implemented in
+> [`data_manager/maintenance/candles_retention.py`](../data_manager/maintenance/candles_retention.py)
+> — see [`docs/candles-retention.md`](candles-retention.md).
 
 ## Cutover procedure
 
@@ -185,6 +187,32 @@ command: ["python", "-m", "data_manager.maintenance.candle_warmup_backfill"]
 Run it repeatedly (it is idempotent and skips warm collections) until the
 readiness gate returns exit 0, then keep it on a schedule until #274 lands so
 the collections cannot go cold before the flip.
+
+## Status of #274 (this ticket)
+
+- **AC1/AC2 (Mongo primary for execution, MySQL demoted):** the code-level
+  write/read mismatch was already resolved here in #275/#276 — the read
+  path (`CandleRepository.get_range`) has always branched on
+  `CANDLE_DATABASE_TYPE`; only the response metadata was previously
+  hardwired, and that is now fixed too. Flipping `CANDLE_DATABASE_TYPE` in
+  production is the operational step in "Cutover procedure" step 3 above —
+  it is a `petrosa_k8s` ConfigMap change (`k8s/data-manager/configmap.yaml`)
+  gated on the AC2 readiness check passing live, not a data-manager code
+  change. **Not performed by the #274 PR** in this repo: it requires
+  confirming the live cluster's `candles_*` collections have actually been
+  warmed via `candle_warmup_backfill` first (a runtime state this repo's
+  code cannot self-certify), so the flip is left as the next
+  operator-executed step in this runbook rather than bundled into an
+  automated code PR.
+- **AC3 (mandatory TTL/retention on `candles_*`):** implemented —
+  [`docs/candles-retention.md`](candles-retention.md).
+- **AC4 (kill-switch):** already implemented by #275 —
+  `CANDLE_DATABASE_TYPE=mysql` reverts the primary store, and
+  `CANDLE_READ_FALLBACK_ENABLED`/`CANDLE_DUAL_WRITE_ENABLED` provide the
+  transition safety net. No code change needed for #274.
+- **AC5 (retention observability):** implemented as part of AC3 above.
+- **AC7 (verification):** "Verify post-flip (AC5)" section above covers this;
+  the checks are backend-agnostic and apply equally to this ticket's flip.
 
 ## Related
 
