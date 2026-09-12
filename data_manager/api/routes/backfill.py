@@ -13,8 +13,11 @@ except ImportError:
 
     UTC = timezone.utc  # noqa: UP017
 
-from fastapi import APIRouter, Body, Path, Query
+from fastapi import APIRouter, Body, HTTPException, Path, Query
 from pydantic import BaseModel
+
+import data_manager.api.app as api_module
+from data_manager.db.repositories import BackfillRepository
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,37 @@ router = APIRouter()
 
 # Global orchestrator (will be set by main app)
 backfill_orchestrator = None
+
+
+def _get_backfill_repo() -> "BackfillRepository | None":
+    """Build a BackfillRepository from the shared db_manager, or None if unavailable."""
+    if api_module.db_manager and getattr(api_module.db_manager, "mysql_adapter", None):
+        return BackfillRepository(
+            api_module.db_manager.mysql_adapter,
+            getattr(api_module.db_manager, "mongodb_adapter", None),
+        )
+    return None
+
+
+def _row_to_job_response(row: dict) -> "BackfillJobResponse":
+    """Map a backfill_jobs DB row to the API response model."""
+    return BackfillJobResponse(
+        job_id=row["job_id"],
+        status=row["status"],
+        request=BackfillRequestBody(
+            symbol=row["symbol"],
+            data_type=row["data_type"],
+            timeframe=row.get("timeframe"),
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+        ),
+        progress=float(row.get("progress") or 0.0),
+        records_fetched=int(row.get("records_fetched") or 0),
+        records_inserted=int(row.get("records_inserted") or 0),
+        created_at=row["created_at"],
+        started_at=row.get("started_at"),
+        completed_at=row.get("completed_at"),
+    )
 
 
 class BackfillRequestBody(BaseModel):
@@ -140,25 +174,26 @@ async def list_backfill_jobs(
     Returns list of backfill jobs with comprehensive filtering options
     including status, symbol, data type, and time range. Results are paginated and sortable.
     """
-    # TODO: Implement actual job listing from database
-    # This is a placeholder structure showing the expected response format
-    jobs = []
-
-    # Apply filters (when database implementation is added)
-    # if status:
-    #     jobs = filter by status
-    # if symbol:
-    #     jobs = filter by symbol
-    # if data_type:
-    #     jobs = filter by data_type
-    # if from_time/to_time:
-    #     jobs = filter by time range
-
-    total_count = len(jobs)
-
-    # Apply sorting (when database implementation is added)
-    # Apply pagination
-    paginated_jobs = jobs[offset : offset + limit]
+    backfill_repo = _get_backfill_repo()
+    if backfill_repo:
+        rows, total_count = backfill_repo.list_jobs(
+            status=status,
+            symbol=symbol,
+            data_type=data_type,
+            from_time=from_time,
+            to_time=to_time,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset,
+        )
+        paginated_jobs = [_row_to_job_response(row) for row in rows]
+    else:
+        logger.warning(
+            "db_manager/mysql_adapter not available; returning empty job list"
+        )
+        paginated_jobs = []
+        total_count = 0
 
     return {
         "data": paginated_jobs,
@@ -194,21 +229,12 @@ async def get_backfill_job(
 
     Returns detailed information about a specific backfill job.
     """
-    # TODO: Implement actual job retrieval from database
-    return BackfillJobResponse(
-        job_id=job_id,
-        status="completed",
-        request=BackfillRequestBody(
-            symbol="BTCUSDT",
-            data_type="candles",
-            timeframe="1h",
-            start_time=datetime.now(UTC),
-            end_time=datetime.now(UTC),
-        ),
-        progress=100.0,
-        records_fetched=1000,
-        records_inserted=1000,
-        created_at=datetime.now(UTC),
-        started_at=datetime.now(UTC),
-        completed_at=datetime.now(UTC),
-    )
+    backfill_repo = _get_backfill_repo()
+    if not backfill_repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    row = backfill_repo.get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Backfill job {job_id} not found")
+
+    return _row_to_job_response(row)

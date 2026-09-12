@@ -16,10 +16,21 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 import data_manager.api.app as api_module
+from data_manager.db.repositories import HealthRepository
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_health_repo() -> "HealthRepository | None":
+    """Build a HealthRepository from the shared db_manager, or None if unavailable."""
+    if api_module.db_manager and getattr(api_module.db_manager, "mysql_adapter", None):
+        return HealthRepository(
+            api_module.db_manager.mysql_adapter,
+            getattr(api_module.db_manager, "mongodb_adapter", None),
+        )
+    return None
 
 
 class HealthStatus(BaseModel):
@@ -254,22 +265,54 @@ async def data_health(
 
     Returns completeness, freshness, gaps, and duplicates information.
     """
-    # TODO: Implement actual health check from database
+    health_repo = _get_health_repo()
+    latest = (
+        health_repo.get_latest_health(dataset_id=pair, symbol=pair)
+        if health_repo
+        else None
+    )
+
+    if latest:
+        gaps = int(latest.get("gaps_count") or 0)
+        duplicates = int(latest.get("duplicates_count") or 0)
+        health = {
+            "completeness": float(latest.get("completeness") or 0.0),
+            "freshness_sec": int(latest.get("freshness_seconds") or 0),
+            "gaps": gaps,
+            "duplicates": duplicates,
+            "consistency_score": max(0.0, 100.0 - gaps - duplicates),
+            "quality_score": float(latest.get("quality_score") or 0.0),
+        }
+        timestamp = latest.get("timestamp")
+        last_audit = (
+            timestamp.isoformat()
+            if isinstance(timestamp, datetime)
+            else datetime.now(UTC).isoformat()
+        )
+        metadata = {"last_audit": last_audit, "data_source": "mysql"}
+    else:
+        # No recorded health_metrics row yet (or db unavailable) — surface a
+        # neutral, explicitly-flagged "no data" response instead of the
+        # previous hardcoded "everything is perfect" fake values (#281).
+        health = {
+            "completeness": 0.0,
+            "freshness_sec": 0,
+            "gaps": 0,
+            "duplicates": 0,
+            "consistency_score": 0.0,
+            "quality_score": 0.0,
+        }
+        metadata = {
+            "last_audit": None,
+            "data_source": "mysql",
+            "no_data": True,
+        }
+
     return DataQualityResponse(
         pair=pair,
         period=period,
-        health={
-            "completeness": 99.9,
-            "freshness_sec": 5,
-            "gaps": 0,
-            "duplicates": 0,
-            "consistency_score": 100.0,
-            "quality_score": 99.5,
-        },
-        metadata={
-            "last_audit": datetime.now(UTC).isoformat(),
-            "data_source": "mongodb",
-        },
+        health=health,
+        metadata=metadata,
         parameters={
             "pair": pair,
             "period": period,

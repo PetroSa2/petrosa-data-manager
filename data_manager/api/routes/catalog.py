@@ -12,14 +12,25 @@ except ImportError:
 
     UTC = timezone.utc  # noqa: UP017
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel
 
 import data_manager.api.app as api_module
+from data_manager.db.repositories import CatalogRepository
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_catalog_repo() -> "CatalogRepository | None":
+    """Build a CatalogRepository from the shared db_manager, or None if unavailable."""
+    if api_module.db_manager and getattr(api_module.db_manager, "mysql_adapter", None):
+        return CatalogRepository(
+            api_module.db_manager.mysql_adapter,
+            getattr(api_module.db_manager, "mongodb_adapter", None),
+        )
+    return None
 
 
 class DatasetInfo(BaseModel):
@@ -98,12 +109,8 @@ async def list_datasets(
     by category, owner, and text search. Results are paginated and sortable.
     """
     # Get datasets from catalog repository
-    if api_module.db_manager and api_module.db_manager.mysql_adapter:
-        from data_manager.db.repositories import CatalogRepository
-
-        catalog_repo = CatalogRepository(
-            api_module.db_manager.mysql_adapter, api_module.db_manager.mongodb_adapter
-        )
+    catalog_repo = _get_catalog_repo()
+    if catalog_repo:
         datasets_data = catalog_repo.get_all_datasets()
 
         datasets = [
@@ -202,17 +209,24 @@ async def get_dataset_metadata(
 
     Includes schema reference, storage information, and ownership.
     """
-    # TODO: Implement actual dataset metadata retrieval
+    catalog_repo = _get_catalog_repo()
+    if not catalog_repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    dataset = catalog_repo.get_dataset(dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+
     return DatasetDetailResponse(
-        dataset_id=dataset_id,
-        name="Dataset Name",
-        description="Dataset description",
-        category="market_data",
-        schema_id="schema_v1",
-        storage_type="mongodb",
+        dataset_id=dataset.get("dataset_id", dataset_id),
+        name=dataset.get("name", ""),
+        description=dataset.get("description") or "",
+        category=dataset.get("category", ""),
+        schema_id=dataset.get("schema_id") or "",
+        storage_type=dataset.get("storage_type", ""),
         metadata={},
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+        created_at=dataset["created_at"],
+        updated_at=dataset["updated_at"],
     )
 
 
@@ -225,13 +239,20 @@ async def get_schema(
 
     Returns complete field definitions and constraints.
     """
-    # TODO: Implement actual schema retrieval
+    catalog_repo = _get_catalog_repo()
+    if not catalog_repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    dataset = catalog_repo.get_dataset(dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+
     return SchemaResponse(
-        schema_id=f"{dataset_id}_schema",
+        schema_id=dataset.get("schema_id") or f"{dataset_id}_schema",
         version="1.0.0",
         fields=[],
         primary_keys=[],
-        created_at=datetime.now(UTC),
+        created_at=dataset["created_at"],
     )
 
 
@@ -244,11 +265,23 @@ async def get_lineage(
 
     Returns transformation history and source tracking.
     """
-    # TODO: Implement actual lineage retrieval
+    catalog_repo = _get_catalog_repo()
+    if not catalog_repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    dataset = catalog_repo.get_dataset(dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+
+    updated_at = dataset.get("updated_at")
     return LineageResponse(
         dataset_id=dataset_id,
         lineage=[],
         metadata={
-            "last_updated": datetime.now(UTC).isoformat(),
+            "last_updated": (
+                updated_at.isoformat()
+                if isinstance(updated_at, datetime)
+                else datetime.now(UTC).isoformat()
+            ),
         },
     )

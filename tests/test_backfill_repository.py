@@ -119,3 +119,93 @@ def test_get_job_sql_has_no_order_by_timestamp():
 
     assert "job_id" in sql
     assert "timestamp" not in sql.lower()
+
+
+# ---------------------------------------------------------------------------
+# list_jobs() — closes petrosa-data-manager#281 (GET /backfill/jobs was
+# hardcoded to always return an empty list).
+# ---------------------------------------------------------------------------
+
+_ROW_2 = {
+    "job_id": "job-def-456",
+    "symbol": "ETHUSDT",
+    "data_type": "trades",
+    "timeframe": None,
+    "start_time": datetime(2024, 2, 1),
+    "end_time": datetime(2024, 2, 2),
+    "status": "pending",
+    "progress": 0.0,
+    "records_fetched": 0,
+    "records_inserted": 0,
+    "error_message": None,
+    "created_at": datetime(2024, 2, 1),
+    "started_at": None,
+    "completed_at": None,
+}
+
+
+@pytest.mark.unit
+def test_list_jobs_returns_all_rows_with_total_count():
+    repo, table, engine = _make_repo()
+    with engine.connect() as conn:
+        conn.execute(table.insert(), _ROW)
+        conn.execute(table.insert(), _ROW_2)
+        conn.commit()
+
+    jobs, total = repo.list_jobs()
+
+    assert total == 2
+    assert {j["job_id"] for j in jobs} == {"job-abc-123", "job-def-456"}
+
+
+@pytest.mark.unit
+def test_list_jobs_filters_by_status():
+    repo, table, engine = _make_repo()
+    with engine.connect() as conn:
+        conn.execute(table.insert(), _ROW)
+        conn.execute(table.insert(), _ROW_2)
+        conn.commit()
+
+    jobs, total = repo.list_jobs(status="pending")
+
+    assert total == 1
+    assert jobs[0]["job_id"] == "job-def-456"
+
+
+@pytest.mark.unit
+def test_list_jobs_filters_by_symbol():
+    repo, table, engine = _make_repo()
+    with engine.connect() as conn:
+        conn.execute(table.insert(), _ROW)
+        conn.execute(table.insert(), _ROW_2)
+        conn.commit()
+
+    jobs, total = repo.list_jobs(symbol="BTCUSDT")
+
+    assert total == 1
+    assert jobs[0]["job_id"] == "job-abc-123"
+
+
+@pytest.mark.unit
+def test_list_jobs_respects_limit_and_offset():
+    repo, table, engine = _make_repo()
+    with engine.connect() as conn:
+        conn.execute(table.insert(), _ROW)
+        conn.execute(table.insert(), _ROW_2)
+        conn.commit()
+
+    jobs, total = repo.list_jobs(limit=1, offset=0)
+
+    assert total == 2
+    assert len(jobs) == 1
+
+
+@pytest.mark.unit
+def test_list_jobs_returns_empty_on_exception():
+    repo, _table, _engine = _make_repo()
+    repo.mysql._get_table.side_effect = RuntimeError("boom")
+
+    jobs, total = repo.list_jobs()
+
+    assert jobs == []
+    assert total == 0
