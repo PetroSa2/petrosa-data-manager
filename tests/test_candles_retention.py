@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -164,6 +164,50 @@ async def test_prune_candles_collection_never_raises_on_backend_error():
 
 
 @pytest.mark.asyncio
+async def test_prune_candles_collection_never_raises_on_query_latest_error():
+    adapter = AsyncMock()
+    adapter.get_record_count.return_value = 500
+    adapter.query_latest.side_effect = Exception("boom")
+
+    result = await cr.prune_candles_collection(
+        adapter, "candles_BTCUSDT_1h", max_count=400, dry_run=False
+    )
+
+    assert result.docs_deleted == 0
+    assert result.count_before == 500
+    adapter.delete_range.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prune_candles_collection_skips_when_boundary_not_datetime():
+    adapter = AsyncMock()
+    adapter.get_record_count.return_value = 500
+    adapter.query_latest.return_value = [{"timestamp": "not-a-datetime"}]
+
+    result = await cr.prune_candles_collection(
+        adapter, "candles_BTCUSDT_1h", max_count=400, dry_run=False
+    )
+
+    assert result.docs_deleted == 0
+    adapter.delete_range.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prune_candles_collection_never_raises_on_delete_range_error():
+    adapter = AsyncMock()
+    adapter.get_record_count.return_value = 500
+    adapter.query_latest.return_value = [{"timestamp": _aware(2026, 6, 1)}]
+    adapter.delete_range.side_effect = Exception("boom")
+
+    result = await cr.prune_candles_collection(
+        adapter, "candles_BTCUSDT_1h", max_count=400, dry_run=False
+    )
+
+    assert result.docs_deleted == 0
+    assert result.count_before == 500
+
+
+@pytest.mark.asyncio
 async def test_prune_candles_processes_all_discovered_collections():
     adapter = AsyncMock()
     adapter.list_collections.return_value = [
@@ -220,3 +264,94 @@ async def test_prune_candles_defaults_max_count_from_env(monkeypatch):
     )
 
     assert results[0].max_count == 50
+
+
+def test_build_argparser_parses_all_flags():
+    parser = cr._build_argparser()
+    args = parser.parse_args(
+        [
+            "--dry-run",
+            "--collections",
+            "candles_BTCUSDT_1h,candles_ETHUSDT_1h",
+            "--max-count",
+            "123",
+        ]
+    )
+    assert args.dry_run is True
+    assert args.collections == "candles_BTCUSDT_1h,candles_ETHUSDT_1h"
+    assert args.max_count == 123
+
+
+def test_build_argparser_defaults():
+    parser = cr._build_argparser()
+    args = parser.parse_args([])
+    assert args.dry_run is False
+    assert args.collections is None
+    assert args.max_count is None
+
+
+def test_configure_logging_resolves_level_from_env(monkeypatch):
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    with patch.object(cr.logging, "basicConfig") as basic_config:
+        cr._configure_logging()
+    assert basic_config.call_args.kwargs["level"] == cr.logging.DEBUG
+
+
+@pytest.mark.asyncio
+async def test_amain_returns_2_when_mongodb_url_unset(monkeypatch):
+    monkeypatch.delenv("MONGODB_URL", raising=False)
+    rc = await cr._amain([])
+    assert rc == 2
+
+
+@pytest.mark.asyncio
+async def test_amain_connects_prunes_and_disconnects(monkeypatch):
+    monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/test")
+    fake_adapter = MagicMock()
+    fake_adapter.connect = MagicMock()
+    fake_adapter.disconnect = MagicMock()
+
+    with (
+        patch.object(cr, "MongoDBAdapter", return_value=fake_adapter) as adapter_cls,
+        patch.object(cr, "prune_candles", new=AsyncMock(return_value=[])) as prune_mock,
+    ):
+        rc = await cr._amain(
+            ["--dry-run", "--collections", "candles_BTCUSDT_1h", "--max-count", "10"]
+        )
+
+    assert rc == 0
+    adapter_cls.assert_called_once_with(
+        connection_string="mongodb://localhost:27017/test"
+    )
+    fake_adapter.connect.assert_called_once()
+    fake_adapter.disconnect.assert_called_once()
+    prune_mock.assert_awaited_once_with(
+        fake_adapter,
+        max_count=10,
+        dry_run=True,
+        collections_override=["candles_BTCUSDT_1h"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_amain_disconnects_even_when_prune_raises(monkeypatch):
+    monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/test")
+    fake_adapter = MagicMock()
+
+    with (
+        patch.object(cr, "MongoDBAdapter", return_value=fake_adapter),
+        patch.object(
+            cr, "prune_candles", new=AsyncMock(side_effect=RuntimeError("boom"))
+        ),
+        pytest.raises(RuntimeError),
+    ):
+        await cr._amain([])
+
+    fake_adapter.disconnect.assert_called_once()
+
+
+def test_main_delegates_to_amain(monkeypatch):
+    monkeypatch.setenv("MONGODB_URL", "")
+    monkeypatch.delenv("MONGODB_URL", raising=False)
+    rc = cr.main([])
+    assert rc == 2
