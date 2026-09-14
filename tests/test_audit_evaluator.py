@@ -502,6 +502,119 @@ async def test_consume_persist_wins_over_orphan_signal():
 # ----------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------
+# Collection-staleness detector (#300).
+# ----------------------------------------------------------------------
+
+
+def _fixed_latest_doc(by_collection: dict[str, datetime | None]):
+    async def _src(collection: str):
+        return by_collection.get(collection)
+
+    return _src
+
+
+@pytest.mark.asyncio
+async def test_staleness_detector_disabled_by_default():
+    """No latest_doc_source injected → detector is a no-op (back-compat)."""
+    clock = _Clock(T0)
+    ev = AuditEvaluator(
+        counter_source=_counters([{}, {}]),
+        event_source=_empty_events(),
+        time_source=clock,
+    )
+    await ev.evaluate()
+    verdict, _ = await ev.evaluate()
+    assert verdict != "unhealthy"
+
+
+@pytest.mark.asyncio
+async def test_stale_collection_trips_unhealthy():
+    clock = _Clock(T0)
+    latest = _fixed_latest_doc(
+        {
+            "cio_decisions": T0 - timedelta(hours=2),  # older than 1h default
+            "execution_events": T0 - timedelta(minutes=5),
+            "pnl_events": T0 - timedelta(minutes=5),
+        }
+    )
+    ev = AuditEvaluator(
+        counter_source=_counters([{}, {}]),
+        event_source=_empty_events(),
+        time_source=clock,
+        latest_doc_source=latest,
+        staleness_threshold_s=3600,
+    )
+    await ev.evaluate()
+    verdict, reason = await ev.evaluate()
+    assert verdict == "unhealthy"
+    assert "cio_decisions" in reason
+    assert "stale" in reason
+
+
+@pytest.mark.asyncio
+async def test_fresh_collections_do_not_trip_staleness():
+    clock = _Clock(T0)
+    latest = _fixed_latest_doc(
+        {
+            "cio_decisions": T0 - timedelta(minutes=1),
+            "execution_events": T0 - timedelta(minutes=2),
+            "pnl_events": T0 - timedelta(minutes=3),
+        }
+    )
+    ev = AuditEvaluator(
+        counter_source=_counters([{"intent": (5, 5)}, {"intent": (10, 10)}]),
+        event_source=_empty_events(),
+        time_source=clock,
+        latest_doc_source=latest,
+        staleness_threshold_s=3600,
+    )
+    await ev.evaluate()
+    verdict, _ = await ev.evaluate()
+    assert verdict == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_never_written_collection_is_skipped_not_stale():
+    """A collection with no history (None) must not itself trip the detector."""
+    clock = _Clock(T0)
+    latest = _fixed_latest_doc(
+        {
+            "cio_decisions": None,
+            "execution_events": None,
+            "pnl_events": None,
+        }
+    )
+    ev = AuditEvaluator(
+        counter_source=_counters([{"intent": (5, 5)}, {"intent": (10, 10)}]),
+        event_source=_empty_events(),
+        time_source=clock,
+        latest_doc_source=latest,
+        staleness_threshold_s=3600,
+    )
+    await ev.evaluate()
+    verdict, _ = await ev.evaluate()
+    assert verdict == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_staleness_respects_custom_collection_list_and_threshold():
+    clock = _Clock(T0)
+    latest = _fixed_latest_doc({"pnl_events": T0 - timedelta(minutes=20)})
+    ev = AuditEvaluator(
+        counter_source=_counters([{}, {}]),
+        event_source=_empty_events(),
+        time_source=clock,
+        latest_doc_source=latest,
+        staleness_collections=("pnl_events",),
+        staleness_threshold_s=600,  # 10 min — 20 min old trips.
+    )
+    await ev.evaluate()
+    verdict, reason = await ev.evaluate()
+    assert verdict == "unhealthy"
+    assert "pnl_events" in reason
+
+
 @pytest.mark.asyncio
 async def test_old_events_outside_lookback_are_ignored():
     """An orphan order older than the lookback must not trip."""
