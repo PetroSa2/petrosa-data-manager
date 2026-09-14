@@ -26,10 +26,29 @@ detectors run on every tick:
     persisted yet — a partial-loss signal in its own right). Orphans over
     the lookback window trip the detector.
 
+  * **Collection staleness** (petrosa-data-manager#300) — for each
+    collection in ``staleness_collections`` (default ``cio_decisions``,
+    ``execution_events``, ``pnl_events``), the age of the newest document
+    (via the injected ``latest_doc_source``). This is deliberately
+    independent of the consume-without-persist detector above: that
+    detector only sees messages that were *received* from NATS but not
+    persisted, so a producer that stops publishing entirely (zero
+    receipts) never trips it — the delta is 0-0=0, not a loss. A stalled
+    upstream producer (e.g. CIO stuck in FAIL_SAFE/SKIP with nothing to
+    publish to ``signals.trading``) is exactly the failure mode #300
+    diagnosed, and it is invisible to every other detector in this file.
+    Trips when a collection's newest document is older than
+    ``staleness_threshold_s``. A collection with no history at all
+    (``latest_doc_source`` returns ``None``) is skipped rather than
+    treated as stale — an evaluator running against a fresh environment
+    or a genuinely never-used collection should not false-positive.
+
 The evaluator owns no I/O itself — callers inject ``counter_source`` (returns
-``{stream: (received_total, persisted_total)}``) and ``event_source``
-(returns the rows for a collection over a range). Time is injected via
-``time_source`` so the unit tests stay deterministic.
+``{stream: (received_total, persisted_total)}``), ``event_source`` (returns
+the rows for a collection over a range), and optionally ``latest_doc_source``
+(returns the newest document's timestamp for a collection, or ``None`` if it
+has never been written). Time is injected via ``time_source`` so the unit
+tests stay deterministic.
 """
 
 from __future__ import annotations
@@ -79,9 +98,18 @@ ORDER_PLACED_TYPES = {"placed"}
 FILL_TYPES = {"filled", "partial_fill"}
 EVENTS_REQUIRING_DECISION_ID = ORDER_PLACED_TYPES | FILL_TYPES
 
+# Collection-staleness detector defaults (#300).
+DEFAULT_STALENESS_COLLECTIONS: tuple[str, ...] = (
+    "cio_decisions",
+    "execution_events",
+    "pnl_events",
+)
+DEFAULT_STALENESS_THRESHOLD_S = 3600
+
 # Type aliases.
 CounterSource = Callable[[], dict[str, tuple[int, int]]]
 EventSource = Callable[[str, datetime, datetime], Awaitable[list[dict[str, Any]]]]
+LatestDocSource = Callable[[str], Awaitable[datetime | None]]
 
 
 @dataclass
@@ -107,6 +135,9 @@ class AuditEvaluator(Evaluator):
         consume_persist_rel_budget: float = DEFAULT_CONSUME_PERSIST_REL_BUDGET,
         consume_history_size: int = DEFAULT_CONSUME_HISTORY_SIZE,
         time_source: Callable[[], datetime] | None = None,
+        latest_doc_source: LatestDocSource | None = None,
+        staleness_collections: tuple[str, ...] = DEFAULT_STALENESS_COLLECTIONS,
+        staleness_threshold_s: int = DEFAULT_STALENESS_THRESHOLD_S,
     ) -> None:
         super().__init__(
             subsystem=SUBSYSTEM,
@@ -120,6 +151,9 @@ class AuditEvaluator(Evaluator):
         self._rel_budget = consume_persist_rel_budget
         self._history_size = max(1, consume_history_size)
         self._time = time_source or (lambda: datetime.now(UTC))
+        self._latest_doc_source = latest_doc_source
+        self._staleness_collections = staleness_collections
+        self._staleness_threshold = timedelta(seconds=staleness_threshold_s)
         # Per-stream history of (received, persisted) snapshots. Updated
         # on each tick so the rolling-ratio detector can amortize a
         # transient deferral over the window.
@@ -153,10 +187,13 @@ class AuditEvaluator(Evaluator):
         if not (intents or decisions or execution_events) and len(self._snapshots) < 2:
             return "unknown", "no traffic and no counter history yet"
 
+        staleness_signal = await self._staleness_signal(now)
+
         for signal in (
             self._consume_without_persist_signal(current_counters),
             self._decision_id_propagation_signal(execution_events),
             self._join_completeness_signal(execution_events, decisions),
+            staleness_signal,
         ):
             if signal.tripped:
                 return "unhealthy", signal.reason or "audit-trail anomaly"
@@ -218,6 +255,36 @@ class AuditEvaluator(Evaluator):
                 f" = {worst_rel_ratio:.2%} unpersisted "
                 f"(budget {self._rel_budget:.2%})",
             )
+        return _DetectorSignal(False)
+
+    async def _staleness_signal(self, now: datetime) -> _DetectorSignal:
+        """Detect a collection whose newest document has gone stale (#300).
+
+        Independent of ``_consume_without_persist_signal``: that detector
+        can only see a gap between NATS receipts and Mongo persists, so a
+        producer that stops publishing entirely (zero receipts) never
+        trips it. This detector instead asks "how old is the newest
+        document we actually have?" per collection — the same question a
+        human would ask during a manual Atlas audit, just automated.
+        """
+        if self._latest_doc_source is None:
+            return _DetectorSignal(False)
+
+        for collection in self._staleness_collections:
+            newest = await self._latest_doc_source(collection)
+            if newest is None:
+                # Never written — cannot judge staleness, and a fresh/unused
+                # collection is not itself an anomaly.
+                continue
+            age = now - newest
+            if age > self._staleness_threshold:
+                age_s = int(age.total_seconds())
+                threshold_s = int(self._staleness_threshold.total_seconds())
+                return _DetectorSignal(
+                    True,
+                    f"{collection} stale: newest document is {age_s}s old "
+                    f"(threshold {threshold_s}s, newest_ts={newest.isoformat()})",
+                )
         return _DetectorSignal(False)
 
     def _decision_id_propagation_signal(

@@ -415,6 +415,9 @@ class DataManagerApp:
                 counter_source=_audit_counter_source,
                 event_source=_audit_event_source,
                 lookback_s=constants.AUDIT_EVALUATOR_LOOKBACK_S,
+                latest_doc_source=self._audit_latest_doc_source,
+                staleness_collections=constants.AUDIT_STALENESS_COLLECTIONS,
+                staleness_threshold_s=constants.AUDIT_STALENESS_THRESHOLD_S,
                 publisher=NatsVerdictPublisher(
                     nats_client=_DeferredNatsClient(
                         lambda: getattr(self.consumer.nats_client, "nc", None)
@@ -733,6 +736,49 @@ class DataManagerApp:
             except Exception as exc:
                 logger.warning(f"Audit evaluator tick failed: {exc}")
         logger.info("Audit evaluator loop stopped")
+
+    async def _audit_latest_doc_source(self, collection: str):
+        """Newest-document lookup for the AuditEvaluator staleness detector (#300).
+
+        Returns the ``received_at`` (server-side persistence time — immune
+        to a stale or replayed business ``timestamp``) of the newest
+        document in ``collection``, or ``None`` if the collection has
+        never been written or the database is unavailable. Extracted as
+        its own method (rather than an inline closure in :meth:`start`)
+        so it is directly unit-testable, matching the existing
+        ``_seed_pnl_calculator`` / ``_run_mongo_data_size_loop`` pattern.
+        """
+        if not self.db_manager or not getattr(self.db_manager, "mongodb_adapter", None):
+            return None
+
+        try:
+            rows = await self.db_manager.mongodb_adapter.find_filtered(
+                collection,
+                limit=1,
+                sort_field="received_at",
+                sort_order=-1,
+            )
+        except Exception as exc:
+            logger.warning(
+                "audit_staleness_lookup_failed",
+                extra={"collection": collection, "error": str(exc)},
+            )
+            return None
+
+        if not rows:
+            return None
+        newest = rows[0].get("received_at")
+        if newest is None:
+            return None
+        if newest.tzinfo is None:
+            try:
+                from datetime import UTC as _UTC
+            except ImportError:  # pragma: no cover — py310 compatibility
+                from datetime import timezone as _tz
+
+                _UTC = _tz.utc  # noqa: UP017
+            newest = newest.replace(tzinfo=_UTC)
+        return newest
 
     async def _seed_pnl_calculator(self, publisher) -> None:
         """Replay historical execution_events to seed the P&L calculator (#652).

@@ -147,6 +147,27 @@ AUDIT_EVALUATOR_TICK_INTERVAL = int(os.getenv("AUDIT_EVALUATOR_TICK_INTERVAL", "
 # join completeness on each tick.
 AUDIT_EVALUATOR_LOOKBACK_S = int(os.getenv("AUDIT_EVALUATOR_LOOKBACK_S", "1800"))
 
+# Collection-staleness detector (petrosa-data-manager#300). The existing
+# consume-without-persist detector only catches messages RECEIVED from NATS
+# but not persisted — it cannot see an upstream producer (CIO/tradeengine)
+# going silent, because zero receipts minus zero persists is zero delta,
+# not a trip. This detector instead tracks the newest document's age per
+# collection so a stalled audit-persistence pipeline (source went silent,
+# not a data-manager bug) surfaces within one tick interval instead of
+# being found by a manual Atlas audit weeks later.
+AUDIT_STALENESS_COLLECTIONS = tuple(
+    name.strip()
+    for name in os.getenv(
+        "AUDIT_STALENESS_COLLECTIONS", "cio_decisions,execution_events,pnl_events"
+    ).split(",")
+    if name.strip()
+)
+# Threshold (seconds) beyond which a monitored collection's newest document
+# is considered stale. Default 1h — comfortably above normal quiet periods
+# (e.g. a ranging market with no EXECUTE decisions for a few ticks) while
+# still catching a multi-day freeze like #300 well before manual discovery.
+AUDIT_STALENESS_THRESHOLD_S = int(os.getenv("AUDIT_STALENESS_THRESHOLD_S", "3600"))
+
 # MongoDB logical-data-size gauge (data-manager#248) — producer half of the
 # Atlas M0 data-size leading-indicator alert (petrosa_k8s#905, dm#244 AC6).
 # Atlas M0's 512 MiB quota gates on LOGICAL uncompressed `dbStats().dataSize`
