@@ -982,6 +982,10 @@ def test_mysql_create_read_only_engine_does_not_call_create_tables():
     _, kwargs = mock_ce.call_args
     assert kwargs["pool_pre_ping"] is True
     assert kwargs["pool_size"] == 2
+    # petrosa-data-manager#299 AC3: same wait_timeout=15s hazard applies to
+    # the read-only audit engine — recycle below the server timeout.
+    assert kwargs["pool_recycle"] == 10
+    assert kwargs["pool_recycle"] < 15
     # Sanity: there is NO call to metadata.create_all anywhere on the engine
     assert not fake_engine.metadata.create_all.called
 
