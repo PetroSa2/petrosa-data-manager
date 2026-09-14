@@ -109,12 +109,30 @@ class MySQLAdapter(BaseAdapter):
         # Circuit breaker for reliability
         self.circuit_breaker = DatabaseCircuitBreaker("mysql")
 
-        # Engine options
+        # Engine options.
+        #
+        # petrosa-data-manager#299 (gateway hardening, track C of petrosa_k8s#1059):
+        # data-manager is the SOLE holder of a MySQL connection pool once the
+        # gateway consolidation lands, so this config is the single most
+        # important knob against the shared DBaaS limits (probed live
+        # 2026-09-14: max_user_connections=30 shared, wait_timeout=15s).
+        #
+        # - pool_recycle MUST be < the server wait_timeout (15s), else every
+        #   pooled connection is server-killed before reuse and
+        #   pool_pre_ping fires a reconnect on nearly every checkout (the
+        #   Aborted_clients=62541 churn from the mysql audit). 10s leaves a
+        #   safety margin under the 15s cap.
+        # - pool_size + max_overflow is capped so
+        #   (pool_size + max_overflow) * HPA maxReplicas (k8s/data-manager/hpa.yaml, =2)
+        #   stays at the ~24-connection ecosystem budget from #1059 (rather
+        #   than the previous 30 = the ENTIRE user cap, leaving zero headroom
+        #   for peer services still on direct MySQL during the migration
+        #   window). 5 + 7 = 12/pod * 2 pods = 24.
         self.engine_options = {
             "pool_pre_ping": True,
-            "pool_recycle": 1800,  # Recycle connections after 30 minutes
+            "pool_recycle": 10,  # Must stay below server wait_timeout=15s (#299)
             "pool_size": 5,  # Conservative for shared resources
-            "max_overflow": 10,  # Limited overflow
+            "max_overflow": 7,  # Right-sized: (5+7)*maxReplicas(2)=24 ecosystem budget
             "pool_timeout": 30,  # Timeout for connection acquisition
             "connect_args": {
                 "charset": "utf8mb4",
@@ -845,6 +863,10 @@ def create_read_only_engine(connection_string: str) -> "Engine":
         pool_size=2,
         max_overflow=2,
         pool_timeout=30,
+        # petrosa-data-manager#299 AC3: same wait_timeout=15s hazard applies
+        # here — recycle below the server timeout so audit-run connections
+        # are never server-killed before reuse.
+        pool_recycle=10,
         connect_args={"charset": "utf8mb4", "autocommit": True},
     )
 
