@@ -17,4 +17,12 @@ jobs:
       image-name: 'yurisa2/petrosa-data-manager'
       python-version: '3.11'
       skip-docker-build: true
+      # Explicit per-repo floor (petrosa_k8s#1052 epic step 5 / #290). Measured
+      # coverage is 87% (quality-baseline-2026-09.md §1), far above the
+      # shared-workflow default of 40 — per the socket-client precedent
+      # (petrosa-socket-client#136 / PR #140) and siblings extractor#286/
+      # tradeengine#575, pin the canonical Golden Standard floor of 40
+      # explicitly instead of a narrower ratchet that would need repeated
+      # manual bumps as coverage naturally grows.
+      coverage-threshold: '40'
     secrets: inherit

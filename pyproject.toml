@@ -72,18 +72,12 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "N", "UP"]
 ignore = ["E501"]
 
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-strict_optional = true
+# mypy configuration lives in mypy.ini (repo root), not here. mypy reads
+# mypy.ini first when both files are present and silently ignores any
+# [tool.mypy] block in pyproject.toml — a [tool.mypy] block used to exist
+# here and was dead config (petrosa_k8s#1052 epic / petrosa-data-manager#290).
+# Removed to avoid the false impression that these settings are enforced;
+# mypy.ini is the canonical, actually-applied configuration.
 
 [tool.pytest.ini_options]
 minversion = "8.0"
