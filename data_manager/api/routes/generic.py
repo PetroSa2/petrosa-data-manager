@@ -4,6 +4,7 @@ Generic CRUD API endpoints for dynamic database/collection operations.
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 try:
@@ -37,6 +38,23 @@ def _serialize_write_result(result: Any) -> dict[str, Any]:
     duplicates = int(getattr(result, "duplicates", 0) or 0)
     failed = int(getattr(result, "failed", 0) or 0)
     return {"inserted": inserted, "duplicates": duplicates, "failed": failed}
+
+
+def _signals_persist_enabled() -> bool:
+    """AC kill-switch (data-manager#302): ``PETROSA_SIGNALS_PERSIST_ENABLED``.
+
+    Mirrors the `alerts` kill-switch
+    (``data_manager.services.alert_dispatcher._persist_enabled``,
+    data-manager#271 AC7). Live Atlas evidence (data-manager#302) confirms
+    the `signals` Mongo collection has no confirmed reader in the 8-repo
+    ecosystem — a human product decision on whether to build one is still
+    open — so the operator must be able to stop the write immediately via
+    config + restart with no code change. Gates ONLY the MongoDB `signals`
+    insert path; other collections (and the legacy MySQL `signals` path,
+    whose writer was already removed by petrosa-bot-ta-analysis#284) are
+    unaffected.
+    """
+    return os.environ.get("PETROSA_SIGNALS_PERSIST_ENABLED", "true").lower() == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +372,36 @@ async def insert_records(
         raise HTTPException(status_code=503, detail="Database manager not available")
 
     try:
+        # data-manager#302 kill-switch — checked BEFORE touching the adapter
+        # so a disabled write never opens a connection for a collection with
+        # no confirmed reader. Scoped to mongodb.signals only.
+        if (
+            database == "mongodb"
+            and collection == "signals"
+            and not _signals_persist_enabled()
+        ):
+            record_count = len(request.data) if isinstance(request.data, list) else 1
+            logger.info(
+                "Signals persistence disabled (PETROSA_SIGNALS_PERSIST_ENABLED="
+                "false); skipping Mongo write for %d record(s) "
+                "(data-manager#302 kill-switch)",
+                record_count,
+            )
+            return {
+                "message": (
+                    "Signals persistence disabled "
+                    "(PETROSA_SIGNALS_PERSIST_ENABLED=false); write skipped"
+                ),
+                "inserted_count": 0,
+                "duplicates": 0,
+                "failed": 0,
+                "metadata": {
+                    "database": database,
+                    "collection": collection,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+            }
+
         adapter = _get_adapter(database)
 
         # Convert data to list if single record

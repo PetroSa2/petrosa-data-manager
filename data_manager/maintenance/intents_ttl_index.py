@@ -51,6 +51,15 @@ Environment contract::
                                  petrosa-bot-ta-analysis#267 AC6)
     MONGODB_ALERTS_TTL_SECONDS   alerts collection TTL window in seconds
                                  (default 604800 = 7 days; data-manager#271 AC6)
+    MONGODB_CONFIG_RATE_LIMITS_TTL_SECONDS
+                                 config_rate_limits TTL window in seconds
+                                 (default 3600 = 1 hour; data-manager#302,
+                                 matches petrosa_k8s/scripts/mongodb/
+                                 init-rate-limiting.js's documented window)
+    MONGODB_CONFIG_RATE_LIMITS_DATABASE
+                                 database housing config_rate_limits (default
+                                 "petrosa" — the shared cross-service DB, NOT
+                                 this repo's own database; data-manager#302)
 
 Exit codes::
 
@@ -126,6 +135,41 @@ ALERTS_TTL_FIELD = "_ttl_inserted_at"
 ALERTS_TTL_INDEX_NAME = "_ttl_inserted_at_ttl"
 DEFAULT_ALERTS_TTL_SECONDS = 604800  # 7 days — data-manager#271 AC3
 
+# --------------------------------------------------------------------------- #
+# config_rate_limits TTL — data-manager#302
+# --------------------------------------------------------------------------- #
+# Corrected finding (data-manager#302, live Atlas re-query 2026-09-15): unlike
+# `alerts`/`signals`, this collection is NOT readerless — it is written AND
+# read by `petrosa_otel.ConfigRateLimiter.check_rate_limit` (sliding-window
+# quota check, `rate_limiter.py` `coll.find(query)`), wired into tradeengine
+# (`tradeengine/api.py`), petrosa-bot-ta-analysis (`ta_bot/main.py`), this repo
+# (`data_manager/main.py`), and petrosa-realtime-strategies
+# (`strategies/main.py`). It lives in the **shared** `petrosa` Atlas database
+# (`petrosa_k8s/k8s/shared/configmaps/petrosa-common-config.yaml`
+# `MONGODB_DATABASE: "petrosa"`) — a different database than this repo's own
+# `petrosa_data_manager` (which holds `intents`/`signals`/`alerts`).
+#
+# `petrosa_k8s/scripts/mongodb/init-rate-limiting.js` already defines a
+# 1-hour TTL index on `timestamp`, but a live read-only query confirmed it was
+# **never actually applied**: the oldest live document dates to 2026-03-13
+# (six months of unbounded accumulation at the time of this audit) with only
+# the default `_id_` index present. That — not "no consumer" — is the real
+# root cause of the "growing" symptom the ticket described.
+#
+# This repo is one of four writers/readers of the shared collection; the
+# idempotent ensure-function below covers the instance THIS service's own
+# `ConfigRateLimiter` wiring touches (`data_manager/main.py`). Wiring the same
+# self-heal into the other three repos, and/or actually running
+# `init-rate-limiting.js` against the live `petrosa` database, is a cross-repo
+# follow-up flagged for the operator (see docs/readerless-collections-audit-
+# 2026-09-15.md) — not resolved by this change alone.
+CONFIG_RATE_LIMITS_COLLECTION = "config_rate_limits"
+CONFIG_RATE_LIMITS_TTL_FIELD = "timestamp"
+CONFIG_RATE_LIMITS_TTL_INDEX_NAME = "timestamp_ttl_1h"
+DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS = 3600  # 1 hour — matches
+# petrosa_k8s/scripts/mongodb/init-rate-limiting.js's documented window.
+DEFAULT_CONFIG_RATE_LIMITS_DATABASE = "petrosa"  # shared cross-service DB
+
 # AC5 — sibling collections that could share the same unbounded-growth defect.
 # Documented decision: these are audit/financial-event trails. They are NOT
 # auto-expired by this job pending per-collection volume evidence; instead they
@@ -180,6 +224,8 @@ class TtlIndexConfig:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     signals_ttl_seconds: int = DEFAULT_SIGNALS_TTL_SECONDS
     alerts_ttl_seconds: int = DEFAULT_ALERTS_TTL_SECONDS
+    config_rate_limits_database: str = DEFAULT_CONFIG_RATE_LIMITS_DATABASE
+    config_rate_limits_ttl_seconds: int = DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS
     dry_run: bool = False
 
 
@@ -237,11 +283,23 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> TtlIndexConfi
         DEFAULT_ALERTS_TTL_SECONDS,
         minimum=60,
     )
+    config_rate_limits_ttl_seconds = _parse_int_env(
+        env,
+        "MONGODB_CONFIG_RATE_LIMITS_TTL_SECONDS",
+        DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS,
+        minimum=60,
+    )
+    config_rate_limits_database = (
+        env.get("MONGODB_CONFIG_RATE_LIMITS_DATABASE")
+        or DEFAULT_CONFIG_RATE_LIMITS_DATABASE
+    )
     return TtlIndexConfig(
         database=resolve_database_name(env),
         ttl_seconds=ttl_seconds,
         signals_ttl_seconds=signals_ttl_seconds,
         alerts_ttl_seconds=alerts_ttl_seconds,
+        config_rate_limits_database=config_rate_limits_database,
+        config_rate_limits_ttl_seconds=config_rate_limits_ttl_seconds,
         dry_run=False,
     )
 
@@ -533,6 +591,95 @@ async def ensure_alerts_ttl_index(
     return result
 
 
+async def ensure_config_rate_limits_ttl_index(
+    db,
+    db_name: str,
+    *,
+    ttl_seconds: int = DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS,
+    dry_run: bool = False,
+) -> TtlIndexResult:
+    """Idempotently ensure the TTL index on `config_rate_limits.timestamp`.
+
+    data-manager#302 — corrected finding: this collection has a confirmed
+    reader (`petrosa_otel.ConfigRateLimiter.check_rate_limit`) and a
+    documented 1-hour TTL design (`petrosa_k8s/scripts/mongodb/
+    init-rate-limiting.js`), but live re-query showed the TTL index was never
+    actually applied (oldest live document: 2026-03-13). Unlike `signals`/
+    `alerts`, no dedicated stamp field is needed here — `ConfigRateLimiter`
+    already writes a native BSON ``Date`` in `timestamp`
+    (`petrosa_otel/rate_limiter.py`), so the index keys on that field
+    directly, matching the js migration's own design.
+
+    Mirrors :func:`ensure_alerts_ttl_index`'s idempotent create/collmod/noop
+    logic. Callers targeting the shared `petrosa` database MUST pass a `db`
+    handle selected from that database (see :data:`DEFAULT_CONFIG_RATE_LIMITS_DATABASE`)
+    — NOT this repo's own `petrosa_data_manager` database.
+    """
+    coll = db[CONFIG_RATE_LIMITS_COLLECTION]
+    info = await coll.index_information()
+
+    existing = info.get(CONFIG_RATE_LIMITS_TTL_INDEX_NAME)
+    if existing is not None and _index_key_fields(existing) == [
+        CONFIG_RATE_LIMITS_TTL_FIELD
+    ]:
+        current_ttl = existing.get("expireAfterSeconds")
+        if current_ttl == ttl_seconds:
+            action = "noop"
+        else:
+            action = "collmod"
+            if not dry_run:
+                await db.command(
+                    "collMod",
+                    CONFIG_RATE_LIMITS_COLLECTION,
+                    index={
+                        "name": CONFIG_RATE_LIMITS_TTL_INDEX_NAME,
+                        "expireAfterSeconds": ttl_seconds,
+                    },
+                )
+    elif existing is not None:
+        # Name squatting on the wrong field — drop and recreate cleanly.
+        action = "recreated"
+        if not dry_run:
+            await coll.drop_index(CONFIG_RATE_LIMITS_TTL_INDEX_NAME)
+            await coll.create_index(
+                [(CONFIG_RATE_LIMITS_TTL_FIELD, ASCENDING)],
+                name=CONFIG_RATE_LIMITS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+    else:
+        action = "created"
+        if not dry_run:
+            await coll.create_index(
+                [(CONFIG_RATE_LIMITS_TTL_FIELD, ASCENDING)],
+                name=CONFIG_RATE_LIMITS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+
+    result = TtlIndexResult(
+        database=db_name,
+        collection=CONFIG_RATE_LIMITS_COLLECTION,
+        index_name=CONFIG_RATE_LIMITS_TTL_INDEX_NAME,
+        field=CONFIG_RATE_LIMITS_TTL_FIELD,
+        ttl_seconds=ttl_seconds,
+        action=action,
+        dropped_legacy=[],
+        dry_run=dry_run,
+    )
+
+    logger.info(
+        "config_rate_limits_ttl_index: db=%s collection=%s index=%s key={%s: 1} "
+        "expireAfterSeconds=%d action=%s%s",
+        result.database,
+        result.collection,
+        result.index_name,
+        result.field,
+        result.ttl_seconds,
+        result.action,
+        " (dry-run)" if dry_run else "",
+    )
+    return result
+
+
 async def audit_sibling_collections(
     db,
     db_name: str,
@@ -629,6 +776,32 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="Override MONGODB_ALERTS_TTL_SECONDS for this run.",
     )
+    parser.add_argument(
+        "--config-rate-limits-ttl-seconds",
+        type=int,
+        default=None,
+        help="Override MONGODB_CONFIG_RATE_LIMITS_TTL_SECONDS for this run.",
+    )
+    parser.add_argument(
+        "--config-rate-limits-database",
+        type=str,
+        default=None,
+        help=(
+            "Override the database targeted for config_rate_limits (default: "
+            f"MONGODB_CONFIG_RATE_LIMITS_DATABASE env var, else "
+            f"'{DEFAULT_CONFIG_RATE_LIMITS_DATABASE}' — the shared cross-service "
+            "DB, NOT this repo's own database)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-config-rate-limits",
+        action="store_true",
+        help=(
+            "Skip the config_rate_limits TTL check entirely (data-manager#302 "
+            "targets a different, shared database than intents/signals/alerts; "
+            "use this to keep a run scoped to this repo's own database only)."
+        ),
+    )
     return parser
 
 
@@ -653,6 +826,12 @@ async def _amain(argv: list[str] | None = None) -> int:
         config.signals_ttl_seconds = max(60, args.signals_ttl_seconds)
     if args.alerts_ttl_seconds is not None:
         config.alerts_ttl_seconds = max(60, args.alerts_ttl_seconds)
+    if args.config_rate_limits_ttl_seconds is not None:
+        config.config_rate_limits_ttl_seconds = max(
+            60, args.config_rate_limits_ttl_seconds
+        )
+    if args.config_rate_limits_database:
+        config.config_rate_limits_database = args.config_rate_limits_database
 
     connection_string = os.getenv("MONGODB_URL")
     if not connection_string:
@@ -688,6 +867,18 @@ async def _amain(argv: list[str] | None = None) -> int:
             dry_run=config.dry_run,
         )
         await audit_sibling_collections(db, config.database)
+        # data-manager#302 — config_rate_limits lives in a DIFFERENT (shared,
+        # cross-service) database than intents/signals/alerts above; select
+        # it explicitly rather than reusing `db`. Same Atlas cluster/client,
+        # different logical database.
+        if not args.skip_config_rate_limits:
+            rate_limits_db = adapter.client[config.config_rate_limits_database]
+            await ensure_config_rate_limits_ttl_index(
+                rate_limits_db,
+                config.config_rate_limits_database,
+                ttl_seconds=config.config_rate_limits_ttl_seconds,
+                dry_run=config.dry_run,
+            )
     except PyMongoError as exc:
         logger.error("MongoDB error during intents TTL maintenance: %s", exc)
         return 4

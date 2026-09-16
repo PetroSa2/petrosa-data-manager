@@ -562,6 +562,17 @@ class DataManagerApp:
                     else None
                 )
                 if mongodb_client is not None:
+                    # data-manager#302 AC (env kill-switch): the
+                    # `config_rate_limits` collection's TTL index was found
+                    # live-applied nowhere (see docs/readerless-collections-
+                    # audit-2026-09-15.md); mirror the `alerts`/`signals`
+                    # kill-switch pattern so this service's own writer can be
+                    # disabled via config + restart, no code change, while
+                    # `check_rate_limit` continues to no-op-allow per
+                    # `ConfigRateLimiter(enabled=False)`'s documented behavior.
+                    rate_limit_enabled = (
+                        os.getenv("CONFIG_RATE_LIMIT_ENABLED", "true").lower() == "true"
+                    )
                     rate_limiter = ConfigRateLimiter(
                         mongodb_client=mongodb_client,
                         service_name="data-manager",
@@ -571,9 +582,13 @@ class DataManagerApp:
                         cooldown_seconds=int(
                             os.getenv("CONFIG_RATE_LIMIT_COOLDOWN", "300")
                         ),
+                        enabled=rate_limit_enabled,
                     )
                     app.state.rate_limiter = rate_limiter
-                    logger.info("✅ Configuration rate limiter initialized")
+                    logger.info(
+                        "✅ Configuration rate limiter initialized (enabled=%s)",
+                        rate_limit_enabled,
+                    )
                 else:
                     logger.warning(
                         "Database manager or MongoDB adapter not available; "

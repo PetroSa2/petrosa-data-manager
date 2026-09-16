@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -466,4 +466,220 @@ async def test_ensure_alerts_dry_run_mutates_nothing():
     coll = db["alerts"]
     coll.create_index.assert_not_awaited()
     coll.drop_index.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------- #
+# ensure_config_rate_limits_ttl_index (data-manager#302)
+# --------------------------------------------------------------------------- #
+
+
+def test_default_config_rate_limits_ttl_is_one_hour():
+    assert itx.DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS == 3600
+    assert itx.CONFIG_RATE_LIMITS_COLLECTION == "config_rate_limits"
+    assert itx.CONFIG_RATE_LIMITS_TTL_FIELD == "timestamp"
+    assert itx.CONFIG_RATE_LIMITS_TTL_INDEX_NAME == "timestamp_ttl_1h"
+    assert itx.DEFAULT_CONFIG_RATE_LIMITS_DATABASE == "petrosa"
+
+
+def test_load_config_from_env_parses_config_rate_limits_ttl_seconds():
+    config = itx.load_config_from_env(
+        {"MONGODB_CONFIG_RATE_LIMITS_TTL_SECONDS": "7200"}
+    )
+    assert config.config_rate_limits_ttl_seconds == 7200
+
+
+def test_load_config_from_env_defaults_config_rate_limits_ttl_and_database():
+    config = itx.load_config_from_env({})
+    assert (
+        config.config_rate_limits_ttl_seconds
+        == itx.DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS
+    )
+    assert config.config_rate_limits_database == itx.DEFAULT_CONFIG_RATE_LIMITS_DATABASE
+
+
+def test_load_config_from_env_overrides_config_rate_limits_database():
+    config = itx.load_config_from_env(
+        {"MONGODB_CONFIG_RATE_LIMITS_DATABASE": "custom_db"}
+    )
+    assert config.config_rate_limits_database == "custom_db"
+
+
+@pytest.mark.asyncio
+async def test_ensure_config_rate_limits_creates_index_when_absent():
+    db = _make_db(
+        index_info_by_collection={"config_rate_limits": {"_id_": {"key": [("_id", 1)]}}}
+    )
+    result = await itx.ensure_config_rate_limits_ttl_index(db, "petrosa")
+
+    assert result.action == "created"
+    assert result.database == "petrosa"
+    assert result.collection == "config_rate_limits"
+    assert result.field == "timestamp"
+    coll = db["config_rate_limits"]
+    coll.create_index.assert_awaited_once()
+    _args, kwargs = coll.create_index.call_args
+    assert kwargs["name"] == itx.CONFIG_RATE_LIMITS_TTL_INDEX_NAME
+    assert kwargs["expireAfterSeconds"] == itx.DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_ensure_config_rate_limits_noop_when_index_matches_spec():
+    db = _make_db(
+        index_info_by_collection={
+            "config_rate_limits": {
+                itx.CONFIG_RATE_LIMITS_TTL_INDEX_NAME: _ttl_meta("timestamp", 3600)
+            }
+        }
+    )
+    result = await itx.ensure_config_rate_limits_ttl_index(
+        db, "petrosa", ttl_seconds=3600
+    )
+
+    assert result.action == "noop"
+    coll = db["config_rate_limits"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
     db.command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_config_rate_limits_collmod_when_ttl_window_differs():
+    db = _make_db(
+        index_info_by_collection={
+            "config_rate_limits": {
+                itx.CONFIG_RATE_LIMITS_TTL_INDEX_NAME: _ttl_meta("timestamp", 3600)
+            }
+        }
+    )
+    result = await itx.ensure_config_rate_limits_ttl_index(
+        db, "petrosa", ttl_seconds=7200
+    )
+
+    assert result.action == "collmod"
+    db.command.assert_awaited_once()
+    args, kwargs = db.command.call_args
+    assert args[0] == "collMod"
+    assert args[1] == "config_rate_limits"
+    assert kwargs["index"]["expireAfterSeconds"] == 7200
+
+
+@pytest.mark.asyncio
+async def test_ensure_config_rate_limits_recreates_when_name_on_wrong_field():
+    db = _make_db(
+        index_info_by_collection={
+            "config_rate_limits": {
+                itx.CONFIG_RATE_LIMITS_TTL_INDEX_NAME: _ttl_meta("changed_by", 3600)
+            }
+        }
+    )
+    result = await itx.ensure_config_rate_limits_ttl_index(db, "petrosa")
+
+    assert result.action == "recreated"
+    coll = db["config_rate_limits"]
+    coll.drop_index.assert_awaited_once_with(itx.CONFIG_RATE_LIMITS_TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_config_rate_limits_dry_run_mutates_nothing():
+    db = _make_db(
+        index_info_by_collection={"config_rate_limits": {"_id_": {"key": [("_id", 1)]}}}
+    )
+    result = await itx.ensure_config_rate_limits_ttl_index(db, "petrosa", dry_run=True)
+
+    assert result.action == "created"
+    assert result.dry_run is True
+    coll = db["config_rate_limits"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------- #
+# _amain wiring for config_rate_limits (data-manager#302)
+# --------------------------------------------------------------------------- #
+
+
+class TestAmainConfigRateLimits:
+    """`config_rate_limits` lives in a different (shared) database than
+    intents/signals/alerts — verify `_amain` selects it explicitly and
+    respects `--skip-config-rate-limits`."""
+
+    def _fake_adapter(self):
+        adapter = MagicMock()
+        adapter.connect = MagicMock()
+        adapter.disconnect = MagicMock()
+        databases: dict = {}
+
+        def getitem(name):
+            if name not in databases:
+                databases[name] = _make_db()
+            return databases[name]
+
+        adapter.client.__getitem__.side_effect = getitem
+        adapter.client._databases = databases
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_amain_ensures_config_rate_limits_on_shared_petrosa_db(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/test")
+        monkeypatch.setenv("MONGODB_DATABASE", "petrosa_data_manager")
+        fake_adapter = self._fake_adapter()
+
+        with (
+            patch.object(itx, "MongoDBAdapter", return_value=fake_adapter),
+            patch.object(
+                itx,
+                "ensure_config_rate_limits_ttl_index",
+                new=AsyncMock(wraps=itx.ensure_config_rate_limits_ttl_index),
+            ) as ensure_mock,
+        ):
+            rc = await itx._amain(["--dry-run"])
+
+        assert rc == 0
+        ensure_mock.assert_awaited_once()
+        args, _kwargs = ensure_mock.call_args
+        # First positional arg is the `db` handle selected from the shared
+        # "petrosa" database, second is that database's name — NOT this
+        # repo's own "petrosa_data_manager".
+        assert args[1] == "petrosa"
+
+    @pytest.mark.asyncio
+    async def test_amain_skips_config_rate_limits_when_flag_passed(self, monkeypatch):
+        monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/test")
+        fake_adapter = self._fake_adapter()
+
+        with (
+            patch.object(itx, "MongoDBAdapter", return_value=fake_adapter),
+            patch.object(
+                itx, "ensure_config_rate_limits_ttl_index", new=AsyncMock()
+            ) as ensure_mock,
+        ):
+            rc = await itx._amain(["--dry-run", "--skip-config-rate-limits"])
+
+        assert rc == 0
+        ensure_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_amain_honors_config_rate_limits_database_override(self, monkeypatch):
+        monkeypatch.setenv("MONGODB_URL", "mongodb://localhost:27017/test")
+        fake_adapter = self._fake_adapter()
+
+        with (
+            patch.object(itx, "MongoDBAdapter", return_value=fake_adapter),
+            patch.object(
+                itx, "ensure_config_rate_limits_ttl_index", new=AsyncMock()
+            ) as ensure_mock,
+        ):
+            rc = await itx._amain(
+                [
+                    "--dry-run",
+                    "--config-rate-limits-database",
+                    "custom_shared_db",
+                ]
+            )
+
+        assert rc == 0
+        args, _kwargs = ensure_mock.call_args
+        assert args[1] == "custom_shared_db"
