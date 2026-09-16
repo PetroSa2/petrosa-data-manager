@@ -370,6 +370,92 @@ class MongoDBAdapter(BaseAdapter):
                 f"Failed to query {collection} with filters: {e}"
             ) from e
 
+    @staticmethod
+    def _build_equality_query(filter_dict: dict[str, Any] | None) -> dict[str, Any]:
+        """Validate and pass through a flat equality filter.
+
+        Refuses raw MongoDB query operators (keys starting with ``$``, or any
+        dict-valued entry implying an operator like ``{"$gte": 5}``) — mirrors
+        the same guard already applied in :meth:`update`. The generic query
+        API's ``filter`` query param (petrosa-data-manager#282) is reachable
+        without authentication; accepting raw Mongo operators here would let a
+        caller run arbitrary ``$where``/``$expr`` queries against production
+        data instead of the flat equality semantics the route has always
+        documented and the in-memory ``_apply_filter`` helper enforced.
+        """
+        if not filter_dict:
+            return {}
+        query: dict[str, Any] = {}
+        for key, value in filter_dict.items():
+            if key.startswith("$") or isinstance(value, dict):
+                raise DatabaseError(
+                    "filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}: {value!r}"
+                )
+            query[key] = value
+        return query
+
+    async def find_paginated(
+        self,
+        collection: str,
+        *,
+        filter_dict: dict[str, Any] | None = None,
+        sort_list: list[tuple[str, int]] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Query a collection with filter/sort/limit/offset pushed to the driver.
+
+        Resolves petrosa-data-manager#282: the generic query API previously
+        loaded the entire collection into memory via ``query_range(start=
+        datetime.min, end=datetime.max)`` and then filtered/sorted/paginated
+        in Python — response time scaled with collection size instead of
+        ``limit``, making ``klines_5m`` (68k+ docs) effectively unqueryable.
+        Here ``filter``/``sort``/``limit``/``offset`` are all executed by
+        MongoDB itself (``find().sort().skip().limit()``), and ``total`` comes
+        from ``count_documents()`` rather than ``len(records)``.
+
+        Args:
+            collection: Collection name.
+            filter_dict: Flat equality filter (``{field: value}``); operator
+                keys/values are refused, see :meth:`_build_equality_query`.
+            sort_list: Ordered ``[(field, direction), ...]`` pairs, direction
+                is ``1`` (ascending) or ``-1`` (descending). First entry is
+                the primary sort key, matching pymongo's ``cursor.sort()``
+                semantics and the previous in-memory ``_apply_sort`` behavior.
+            limit: Max documents to return.
+            offset: Documents to skip before collecting ``limit``.
+
+        Returns:
+            ``(documents, total_count)`` — ``total_count`` reflects the full
+            filtered set, not just the page returned.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        query = self._build_equality_query(filter_dict)
+
+        try:
+            coll = self.db[collection]
+
+            total = await coll.count_documents(query)
+
+            cursor = coll.find(query)
+            if sort_list:
+                cursor = cursor.sort(sort_list)
+            cursor = cursor.skip(offset).limit(limit)
+            documents = await cursor.to_list(length=limit)
+
+            for doc in documents:
+                doc.pop("_id", None)
+
+            return documents, int(total)
+
+        except PyMongoError as e:
+            raise DatabaseError(
+                f"Failed to query {collection} with pagination: {e}"
+            ) from e
+
     async def get_record_count(
         self,
         collection: str,

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 import constants
 import data_manager.api.app as api_module
+from data_manager.db.base_adapter import DatabaseError
 from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
@@ -71,46 +72,50 @@ async def _execute_query_internal(
     offset: int,
     field_list: list[str] | None,
 ) -> dict[str, Any]:
-    """Internal helper to execute a query against a database and collection."""
+    """Internal helper to execute a query against a database and collection.
+
+    Per petrosa-data-manager#282: filter/sort/limit/offset are pushed down to
+    the driver via ``find_paginated`` instead of loading the entire
+    collection/table into memory and slicing it in Python. Response time now
+    scales with ``limit``, not collection size.
+    """
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
 
     adapter = _get_adapter(database)
 
-    # Execute query
-    if database == "mysql":
-        records = adapter.query_range(
-            collection=collection,
-            start=datetime.min,  # Get all records
-            end=datetime.max,
-            symbol=None,  # No symbol filtering for generic queries
-        )
-    else:  # MongoDB
-        records = await adapter.query_range(
-            collection=collection, start=datetime.min, end=datetime.max, symbol=None
-        )
+    sort_list = list(sort_dict.items()) if sort_dict else None
 
-    # Apply filtering (basic implementation)
-    if filter_dict:
-        records = _apply_filter(records, filter_dict)
+    try:
+        if database == "mysql":
+            records, total_count = adapter.find_paginated(
+                collection=collection,
+                filter_dict=filter_dict,
+                sort_list=sort_list,
+                limit=limit,
+                offset=offset,
+            )
+        else:  # MongoDB
+            records, total_count = await adapter.find_paginated(
+                collection=collection,
+                filter_dict=filter_dict,
+                sort_list=sort_list,
+                limit=limit,
+                offset=offset,
+            )
+    except DatabaseError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    # Apply sorting
-    if sort_dict:
-        records = _apply_sort(records, sort_dict)
-
-    # Apply field selection
+    # Apply field selection (post-fetch — the result set is already bounded
+    # by `limit`, so this no longer touches the whole collection)
     if field_list:
         records = _apply_field_selection(records, field_list)
-
-    # Apply pagination
-    total_count = len(records)
-    paginated_records = records[offset : offset + limit]
 
     # Track metrics
     api_module.db_manager.increment_query_count(database)
 
     return {
-        "data": paginated_records,
+        "data": records,
         "pagination": {
             "total": total_count,
             "limit": limit,
@@ -123,7 +128,7 @@ async def _execute_query_internal(
         "metadata": {
             "database": database,
             "collection": collection,
-            "records_returned": len(paginated_records),
+            "records_returned": len(records),
             "timestamp": datetime.now(UTC).isoformat(),
         },
     }
@@ -349,6 +354,8 @@ async def get_records(
         raise HTTPException(
             status_code=400, detail=f"Invalid JSON in query parameters: {e}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error querying {database}.{collection}: {e}", exc_info=True)
         api_module.db_manager.increment_error_count(database)
