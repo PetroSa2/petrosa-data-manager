@@ -124,7 +124,12 @@ async def get_strategy_performance(strategy_id: str):
                     "win_rate": None,
                     "win_rate_delta": None,
                     "consecutive_losses": None,
-                    "recent_pnl_trend": "unknown",
+                    # "neutral" (not "unknown") — matches petrosa-cio's PnlTrend
+                    # enum vocabulary (positive|negative|neutral). Same bug
+                    # class as the zero-total "flat" fix in #306/#309; this
+                    # sentinel path was explicitly out of that PR's AC and is
+                    # closed by PetroSa2/petrosa-cio#194.
+                    "recent_pnl_trend": "neutral",
                 },
                 "metadata": {
                     "strategy_id": strategy_id,
@@ -160,7 +165,9 @@ async def get_strategy_performance(strategy_id: str):
                     "win_rate": None,
                     "win_rate_delta": None,
                     "consecutive_losses": None,
-                    "recent_pnl_trend": "unknown",
+                    # See comment on the no-DB sentinel above: "neutral", not
+                    # "unknown" — cio#194 sibling fix.
+                    "recent_pnl_trend": "neutral",
                 },
                 "metadata": {
                     "strategy_id": strategy_id,

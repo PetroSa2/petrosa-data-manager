@@ -178,7 +178,12 @@ def test_performance_returns_real_win_rate_and_pnl():
 
 
 def test_performance_degrades_when_db_missing():
-    """No DB should yield 'unknown' trend rather than 500."""
+    """No DB should yield 'neutral' trend (not 'unknown') rather than 500.
+
+    "neutral" matches petrosa-cio's PnlTrend enum vocabulary
+    (positive|negative|neutral); "unknown" fails Pydantic validation the same
+    way "flat" did (#306/#309). See PetroSa2/petrosa-cio#194.
+    """
     app = create_app()
     api_module.db_manager = None
     client = TestClient(app)
@@ -186,8 +191,38 @@ def test_performance_degrades_when_db_missing():
     assert r.status_code == 200
     body = r.json()
     assert body["stats"]["win_rate"] is None
-    assert body["stats"]["recent_pnl_trend"] == "unknown"
+    assert body["stats"]["recent_pnl_trend"] == "neutral"
     assert body["metadata"]["source"] == "data-manager-analysis-no-db"
+
+
+def test_performance_degrades_to_neutral_when_execution_events_read_fails():
+    """A cursor.to_list() failure should also degrade to 'neutral', not '500'.
+
+    Covers the second sentinel branch (mongodb read exception) which shares
+    the no-DB payload shape but was previously untested. See cio#194.
+    """
+    app = create_app()
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(side_effect=RuntimeError("boom"))
+    coll = MagicMock()
+    coll.find = MagicMock(return_value=cursor)
+    mongodb = MagicMock()
+    mongodb.db = {"execution_events": coll}
+    db_manager_stub = MagicMock()
+    db_manager_stub.mongodb_adapter = mongodb
+    db_manager_stub.mysql_adapter = None
+    api_module.db_manager = db_manager_stub
+    try:
+        client = TestClient(app)
+        r = client.get("/analysis/performance/S1")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["stats"]["win_rate"] is None
+        assert body["stats"]["recent_pnl_trend"] == "neutral"
+        assert body["metadata"]["source"] == "data-manager-analysis-no-db"
+    finally:
+        api_module.db_manager = None
 
 
 def test_performance_with_no_closing_fills_has_neutral_trend():
