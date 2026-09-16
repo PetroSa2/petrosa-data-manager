@@ -16,10 +16,12 @@ def client(mock_db_manager):
     # Ensure mongodb_adapter and mysql_adapter are mocks with AsyncMock methods
     mock_db_manager.mongodb_adapter = Mock()
     mock_db_manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
+    mock_db_manager.mongodb_adapter.find_paginated = AsyncMock(return_value=([], 0))
     mock_db_manager.mongodb_adapter.write = AsyncMock(return_value=1)
 
     mock_db_manager.mysql_adapter = Mock()
     mock_db_manager.mysql_adapter.query_range = Mock(return_value=[])
+    mock_db_manager.mysql_adapter.find_paginated = Mock(return_value=([], 0))
     mock_db_manager.mysql_adapter.write = Mock(return_value=1)
 
     app = api_module.create_app()

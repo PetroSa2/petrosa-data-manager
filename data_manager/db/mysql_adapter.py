@@ -775,6 +775,96 @@ class MySQLAdapter(BaseAdapter):
         except Exception as e:
             raise DatabaseError(f"Failed to count records in {collection}: {e}") from e
 
+    def find_paginated(
+        self,
+        collection: str,
+        *,
+        filter_dict: dict[str, Any] | None = None,
+        sort_list: list[tuple[str, int]] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Query a table with filter/sort/limit/offset pushed to the driver.
+
+        Resolves petrosa-data-manager#282: the generic query API previously
+        loaded every row via ``query_range(start=datetime.min, end=
+        datetime.max)`` and filtered/sorted/paginated the resulting Python
+        list — response time scaled with table size instead of ``limit``.
+        Here the equivalent ``WHERE``/``ORDER BY``/``LIMIT``/``OFFSET`` are
+        executed by MySQL itself, and ``total`` comes from
+        ``SELECT COUNT(*)`` rather than ``len(records)``.
+
+        Args:
+            collection: Table name.
+            filter_dict: Flat equality filter (``{column: value}``). Operator
+                keys/dict-valued entries are refused (mirrors :meth:`update`'s
+                guard). A key that does not match any column on the table
+                short-circuits to ``([], 0)`` — no row can ever match a
+                nonexistent column, the same outcome the old in-memory
+                ``_apply_filter`` produced for that case.
+            sort_list: Ordered ``[(column, direction), ...]`` pairs, direction
+                ``1`` = ascending, ``-1`` = descending. Entries naming a
+                nonexistent column are skipped (the old ``_apply_sort`` never
+                errored on an unknown key either — it just failed to
+                differentiate order for it).
+            limit: Max rows to return.
+            offset: Rows to skip before collecting ``limit``.
+
+        Returns:
+            ``(records, total_count)`` — ``total_count`` reflects the full
+            filtered set, not just the page returned.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+
+        table = self._get_table(collection)
+
+        conditions = []
+        if filter_dict:
+            for key, value in filter_dict.items():
+                if key.startswith("$") or isinstance(value, dict):
+                    raise DatabaseError(
+                        "filter must be a flat equality match, "
+                        f"got operator-like entry {key!r}: {value!r}"
+                    )
+                if key not in table.c:
+                    return [], 0
+                conditions.append(table.c[key] == value)
+
+        try:
+            engine = self._ensure_connected()
+            with engine.connect() as conn:
+                count_query = select(func.count()).select_from(table)
+                if conditions:
+                    count_query = count_query.where(and_(*conditions))
+                total = conn.execute(count_query).scalar()
+
+                query = select(table)
+                if conditions:
+                    query = query.where(and_(*conditions))
+                if sort_list:
+                    order_clauses = [
+                        (
+                            table.c[field].desc()
+                            if direction == -1
+                            else table.c[field].asc()
+                        )
+                        for field, direction in sort_list
+                        if field in table.c
+                    ]
+                    if order_clauses:
+                        query = query.order_by(*order_clauses)
+                query = query.limit(limit).offset(offset)
+
+                result = conn.execute(query)
+                records = [dict(row._mapping) for row in result]
+                return records, int(total or 0)
+
+        except Exception as e:
+            raise DatabaseError(
+                f"Failed to query {collection} with pagination: {e}"
+            ) from e
+
     def ensure_indexes(self, collection: str) -> None:
         """Ensure indexes exist (handled during table creation)."""
         logger.info("Indexes already exist for table: %s", collection)

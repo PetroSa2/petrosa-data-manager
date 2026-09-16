@@ -142,11 +142,13 @@ def mock_db_manager(mock_mongodb_client, mock_mysql_connection):
     manager.mongodb_adapter = Mock()
     manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
     manager.mongodb_adapter.query_latest = AsyncMock(return_value=[])
+    manager.mongodb_adapter.find_paginated = AsyncMock(return_value=([], 0))
     manager.mongodb_adapter.write = AsyncMock()
 
     manager.mysql_adapter = Mock()
     manager.mysql_adapter.query_range = Mock(return_value=[])
     manager.mysql_adapter.query_latest = Mock(return_value={})
+    manager.mysql_adapter.find_paginated = Mock(return_value=([], 0))
     manager.mysql_adapter.write = Mock()
 
     # Mock configuration repository
