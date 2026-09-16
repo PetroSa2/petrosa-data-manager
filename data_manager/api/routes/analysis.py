@@ -189,7 +189,9 @@ async def get_strategy_performance(strategy_id: str):
             if breakdown.total > 0
             else "negative"
             if breakdown.total < 0
-            else "flat"
+            # "neutral" (not "flat") — matches petrosa-cio's PnlTrend enum vocabulary
+            # (positive|negative|neutral). See PetroSa2/petrosa-data-manager#306.
+            else "neutral"
         )
 
         return {

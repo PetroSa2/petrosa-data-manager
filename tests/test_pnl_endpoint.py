@@ -190,8 +190,12 @@ def test_performance_degrades_when_db_missing():
     assert body["metadata"]["source"] == "data-manager-analysis-no-db"
 
 
-def test_performance_with_no_closing_fills_has_flat_trend():
-    """Only open longs (no close) → realized==0 → flat trend."""
+def test_performance_with_no_closing_fills_has_neutral_trend():
+    """Only open longs (no close) → realized==0 → neutral trend.
+
+    "neutral" (not "flat") matches petrosa-cio's PnlTrend enum vocabulary
+    (positive|negative|neutral). See PetroSa2/petrosa-data-manager#306.
+    """
     rows = [_fill(side="buy", qty=1, price=100)]
     try:
         client = _client_with_fills(rows)
@@ -201,7 +205,7 @@ def test_performance_with_no_closing_fills_has_flat_trend():
         assert body["stats"]["realized_pnl"] == 0
         # No closes → win_rate is None (no decisions yet)
         assert body["stats"]["win_rate"] is None
-        assert body["stats"]["recent_pnl_trend"] == "flat"
+        assert body["stats"]["recent_pnl_trend"] == "neutral"
     finally:
         api_module.db_manager = None
 
