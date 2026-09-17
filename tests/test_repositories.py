@@ -322,24 +322,27 @@ class TestHealthRepository:
         repo = HealthRepository(mysql_adapter=mysql, mongodb_adapter=None)
         assert await repo.insert("ds-1", "BTCUSDT", make_health_metrics()) is False
 
-    def test_get_latest_health_returns_first_result(self):
+    @pytest.mark.asyncio
+    async def test_get_latest_health_returns_first_result(self):
         mysql = Mock()
         mysql.query_latest = Mock(return_value=[{"quality_score": 99.0}, {"x": 1}])
         repo = HealthRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        result = repo.get_latest_health("ds-1", "BTCUSDT")
+        result = await repo.get_latest_health("ds-1", "BTCUSDT")
         assert result == {"quality_score": 99.0}
         mysql.query_latest.assert_called_once_with(
             "health_metrics", symbol="BTCUSDT", limit=1
         )
 
-    def test_get_latest_health_returns_none_when_empty(self):
+    @pytest.mark.asyncio
+    async def test_get_latest_health_returns_none_when_empty(self):
         mysql = Mock()
         mysql.query_latest = Mock(return_value=[])
         repo = HealthRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_latest_health("ds-1", "BTCUSDT") is None
+        assert await repo.get_latest_health("ds-1", "BTCUSDT") is None
 
-    def test_get_latest_health_returns_none_on_exception(self):
+    @pytest.mark.asyncio
+    async def test_get_latest_health_returns_none_on_exception(self):
         mysql = Mock()
         mysql.query_latest = Mock(side_effect=RuntimeError("read failed"))
         repo = HealthRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_latest_health("ds-1", "BTCUSDT") is None
+        assert await repo.get_latest_health("ds-1", "BTCUSDT") is None

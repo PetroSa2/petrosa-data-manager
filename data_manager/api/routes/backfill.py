@@ -233,7 +233,7 @@ async def get_backfill_job(
     if not backfill_repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    row = backfill_repo.get_job(job_id)
+    row = await backfill_repo.get_job(job_id)
     if not row:
         raise HTTPException(status_code=404, detail=f"Backfill job {job_id} not found")
 

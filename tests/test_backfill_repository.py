@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     create_engine,
 )
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.sql import select
 
 from data_manager.db.repositories.backfill_repository import BackfillRepository
@@ -42,10 +43,22 @@ def _backfill_table(metadata: MetaData) -> Table:
 
 
 def _make_repo():
-    """Return a BackfillRepository wired to an in-memory SQLite engine."""
+    """Return a BackfillRepository wired to an in-memory SQLite engine.
+
+    petrosa-data-manager#312: ``get_job()`` now offloads its query to a
+    worker thread via ``asyncio.to_thread`` so it no longer blocks the
+    event loop. Plain ``sqlite:///:memory:`` engines are per-thread (each
+    new connection gets a fresh, empty database) unless pinned to a single
+    shared connection via ``StaticPool`` -- required here since the table
+    is created on the test thread but queried from the executor thread.
+    """
     metadata = MetaData()
     table = _backfill_table(metadata)
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     metadata.create_all(engine)
 
     mock_mysql = MagicMock()
@@ -76,13 +89,14 @@ _ROW = {
 
 
 @pytest.mark.unit
-def test_get_job_returns_matching_row():
+@pytest.mark.asyncio
+async def test_get_job_returns_matching_row():
     repo, table, engine = _make_repo()
     with engine.connect() as conn:
         conn.execute(table.insert(), _ROW)
         conn.commit()
 
-    result = repo.get_job("job-abc-123")
+    result = await repo.get_job("job-abc-123")
 
     assert result is not None
     assert result["job_id"] == "job-abc-123"
@@ -92,19 +106,21 @@ def test_get_job_returns_matching_row():
 
 
 @pytest.mark.unit
-def test_get_job_returns_none_for_missing_id():
+@pytest.mark.asyncio
+async def test_get_job_returns_none_for_missing_id():
     repo, _table, _engine = _make_repo()
 
-    result = repo.get_job("nonexistent-id")
+    result = await repo.get_job("nonexistent-id")
 
     assert result is None
 
 
 @pytest.mark.unit
-def test_get_job_does_not_call_query_latest():
+@pytest.mark.asyncio
+async def test_get_job_does_not_call_query_latest():
     repo, _table, _engine = _make_repo()
 
-    repo.get_job("any-id")
+    await repo.get_job("any-id")
 
     repo.mysql.query_latest.assert_not_called()
 

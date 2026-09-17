@@ -57,7 +57,7 @@ def test_get_backfill_job_returns_real_data(client):
 
     real_get_job = BackfillRepository.get_job
 
-    def fake_get_job(self, job_id):
+    async def fake_get_job(self, job_id):
         return _JOB_ROW if job_id == _JOB_ROW["job_id"] else None
 
     BackfillRepository.get_job = fake_get_job
@@ -86,7 +86,11 @@ def test_get_backfill_job_404_when_missing(client):
     from data_manager.db.repositories import BackfillRepository
 
     real_get_job = BackfillRepository.get_job
-    BackfillRepository.get_job = lambda self, job_id: None
+
+    async def fake_get_job(self, job_id):
+        return None
+
+    BackfillRepository.get_job = fake_get_job
     try:
         resp = client.get("/backfill/jobs/does-not-exist")
     finally:

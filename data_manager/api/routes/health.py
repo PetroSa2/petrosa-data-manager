@@ -274,7 +274,7 @@ async def data_health(
     """
     health_repo = _get_health_repo()
     latest = (
-        health_repo.get_latest_health(dataset_id=pair, symbol=pair)
+        await health_repo.get_latest_health(dataset_id=pair, symbol=pair)
         if health_repo
         else None
     )

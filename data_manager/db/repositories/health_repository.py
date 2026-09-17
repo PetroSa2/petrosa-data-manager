@@ -2,6 +2,7 @@
 Repository for health metrics operations.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -53,14 +54,21 @@ class HealthRepository(BaseRepository):
                 def model_dump(self):
                     return health_record
 
-            self.mysql.write([HealthMetric()], "health_metrics")
+            # petrosa-data-manager#312: self.mysql.write() is a synchronous
+            # SQLAlchemy call blocking on network I/O; called inline from an
+            # `async def` it stalls the whole event loop (including the
+            # liveness/readiness handlers) for the duration of the DB
+            # round-trip. Offload to a worker thread.
+            await asyncio.to_thread(
+                self.mysql.write, [HealthMetric()], "health_metrics"
+            )
             return True
 
         except Exception as e:
             logger.error(f"Failed to insert health metrics: {e}")
             return False
 
-    def get_latest_health(self, dataset_id: str, symbol: str) -> dict | None:
+    async def get_latest_health(self, dataset_id: str, symbol: str) -> dict | None:
         """
         Get latest health metrics for dataset.
 
@@ -72,8 +80,11 @@ class HealthRepository(BaseRepository):
             Health metrics dictionary or None
         """
         try:
-            # Query latest by dataset_id (using symbol field as filter)
-            results = self.mysql.query_latest("health_metrics", symbol=symbol, limit=1)
+            # Query latest by dataset_id (using symbol field as filter).
+            # petrosa-data-manager#312: see insert() comment above.
+            results = await asyncio.to_thread(
+                self.mysql.query_latest, "health_metrics", symbol=symbol, limit=1
+            )
             return results[0] if results else None
         except Exception as e:
             logger.error(f"Failed to get latest health: {e}")

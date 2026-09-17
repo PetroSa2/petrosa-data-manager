@@ -2,6 +2,7 @@
 Repository for candle/kline data operations.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -254,7 +255,16 @@ class CandleRepository(BaseRepository):
                     candles_by_table.setdefault(table, []).append(candle)
 
                 for table, table_candles in candles_by_table.items():
-                    count = self.mysql.write_batch(table_candles, table)
+                    # petrosa-data-manager#312: self.mysql.write_batch() is a
+                    # synchronous SQLAlchemy call that blocks on network I/O.
+                    # Calling it inline (unlike the mongodb branch below,
+                    # which is genuinely async) freezes the whole asyncio
+                    # event loop -- including the liveness/readiness HTTP
+                    # handlers -- for the duration of the DB round-trip.
+                    # Offload to a worker thread so the loop stays responsive.
+                    count = await asyncio.to_thread(
+                        self.mysql.write_batch, table_candles, table
+                    )
                     total_inserted += count
                     logger.debug(f"Inserted {count} candles to {table}")
             else:
@@ -301,7 +311,12 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(timeframe)
-                rows = self.mysql.query_range(table, start, end, symbol)
+                # petrosa-data-manager#312: offload the blocking SQLAlchemy
+                # call so it doesn't stall the event loop (see write_batch
+                # comment above for the full rationale).
+                rows = await asyncio.to_thread(
+                    self.mysql.query_range, table, start, end, symbol
+                )
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
@@ -345,7 +360,10 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(timeframe)
-                rows = self.mysql.query_latest(table, symbol, limit)
+                # petrosa-data-manager#312: see write_batch comment above.
+                rows = await asyncio.to_thread(
+                    self.mysql.query_latest, table, symbol, limit
+                )
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
@@ -389,7 +407,10 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(timeframe)
-                return self.mysql.get_record_count(table, start, end, symbol)
+                # petrosa-data-manager#312: see write_batch comment above.
+                return await asyncio.to_thread(
+                    self.mysql.get_record_count, table, start, end, symbol
+                )
             else:
                 collection = self._get_collection_name(symbol, timeframe)
                 return await self.mongodb.get_record_count(

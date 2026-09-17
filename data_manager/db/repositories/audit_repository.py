@@ -2,6 +2,7 @@
 Repository for audit log operations.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -58,7 +59,9 @@ class AuditRepository(BaseRepository):
                 def model_dump(self):
                     return audit_log
 
-            self.mysql.write([AuditLog()], "audit_logs")
+            # petrosa-data-manager#312: offload the blocking SQLAlchemy call
+            # (see CandleRepository.write_batch comment for full rationale).
+            await asyncio.to_thread(self.mysql.write, [AuditLog()], "audit_logs")
             return True
 
         except Exception as e:
@@ -95,14 +98,14 @@ class AuditRepository(BaseRepository):
                 def model_dump(self):
                     return audit_log
 
-            self.mysql.write([AuditLog()], "audit_logs")
+            await asyncio.to_thread(self.mysql.write, [AuditLog()], "audit_logs")
             return True
 
         except Exception as e:
             logger.error(f"Failed to log health check: {e}")
             return False
 
-    def get_recent_logs(
+    async def get_recent_logs(
         self, dataset_id: str | None = None, limit: int = 100
     ) -> list[dict]:
         """
@@ -116,7 +119,9 @@ class AuditRepository(BaseRepository):
             List of audit log dictionaries
         """
         try:
-            logs = self.mysql.query_latest("audit_logs", symbol=dataset_id, limit=limit)
+            logs = await asyncio.to_thread(
+                self.mysql.query_latest, "audit_logs", symbol=dataset_id, limit=limit
+            )
             return logs
         except Exception as e:
             logger.error(f"Failed to get recent logs: {e}")

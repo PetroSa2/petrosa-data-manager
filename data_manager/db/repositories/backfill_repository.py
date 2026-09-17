@@ -2,6 +2,7 @@
 Repository for backfill job operations.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -32,13 +33,15 @@ class BackfillRepository(BaseRepository):
                 def model_dump(self):
                     return job
 
-            self.mysql.write([Job()], "backfill_jobs")
+            # petrosa-data-manager#312: offload the blocking SQLAlchemy call
+            # (see CandleRepository.write_batch comment for full rationale).
+            await asyncio.to_thread(self.mysql.write, [Job()], "backfill_jobs")
             return True
         except Exception as e:
             logger.error(f"Failed to create backfill job: {e}")
             return False
 
-    def get_job(self, job_id: str) -> dict | None:
+    async def get_job(self, job_id: str) -> dict | None:
         """
         Get backfill job by ID.
 
@@ -48,13 +51,21 @@ class BackfillRepository(BaseRepository):
         Returns:
             Job dictionary or None
         """
-        try:
+
+        def _query() -> dict | None:
             table = self.mysql._get_table("backfill_jobs")
             engine = self.mysql._ensure_connected()
             stmt = select(table).where(table.c.job_id == job_id).limit(1)
             with engine.connect() as conn:
                 row = conn.execute(stmt).fetchone()
                 return dict(row._mapping) if row else None
+
+        try:
+            # petrosa-data-manager#312: offload the blocking SQLAlchemy call
+            # (see CandleRepository.write_batch comment for full rationale)
+            # -- execute_backfill() runs on the same event loop that serves
+            # the liveness/readiness probes.
+            return await asyncio.to_thread(_query)
         except Exception as e:
             logger.error(f"Failed to get backfill job: {e}")
             return None
