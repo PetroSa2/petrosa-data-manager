@@ -15,11 +15,17 @@ from decimal import Decimal
 
 import pandas as pd
 
+from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.analytics import MetricMetadata, VolumeMetrics
 
 logger = logging.getLogger(__name__)
+
+
+def _required_decimal(value: object, context: str) -> Decimal:
+    """safe_decimal wrapper for VolumeMetrics' non-Optional Decimal fields."""
+    return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
 class VolumeCalculator:
@@ -101,15 +107,28 @@ class VolumeCalculator:
                 computed_at=datetime.now(UTC),
             )
 
-            # Create metrics object
+            # Create metrics object. Rolling/EWM means over a window that
+            # contains any NaN volume samples (missing/malformed candles)
+            # yield NaN -- sanitize every computed field before it reaches
+            # the Pydantic model (#315).
             metrics = VolumeMetrics(
                 symbol=symbol,
                 timeframe=timeframe,
-                total_volume=Decimal(str(total_volume)),
-                volume_sma=Decimal(str(volume_sma)),
-                volume_ema=Decimal(str(volume_ema)),
-                volume_delta=Decimal(str(volume_delta)),
-                volume_spike_ratio=Decimal(str(volume_spike_ratio)),
+                total_volume=_required_decimal(
+                    total_volume, f"{symbol} {timeframe} total_volume"
+                ),
+                volume_sma=_required_decimal(
+                    volume_sma, f"{symbol} {timeframe} volume_sma"
+                ),
+                volume_ema=_required_decimal(
+                    volume_ema, f"{symbol} {timeframe} volume_ema"
+                ),
+                volume_delta=_required_decimal(
+                    volume_delta, f"{symbol} {timeframe} volume_delta"
+                ),
+                volume_spike_ratio=_required_decimal(
+                    volume_spike_ratio, f"{symbol} {timeframe} volume_spike_ratio"
+                ),
                 metadata=metadata,
             )
 
