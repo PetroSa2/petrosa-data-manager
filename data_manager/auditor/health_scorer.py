@@ -15,7 +15,7 @@ except ImportError:
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository, HealthRepository
 from data_manager.models.health import DataHealthMetrics
-from data_manager.utils.time_utils import calculate_expected_records
+from data_manager.utils.time_utils import as_aware_utc, calculate_expected_records
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +82,16 @@ class HealthScorer:
             latest_candles = await self.candle_repo.get_latest(
                 symbol, timeframe, limit=1
             )
-            if latest_candles:
-                latest_timestamp = latest_candles[0].get("timestamp")
-                if isinstance(latest_timestamp, str):
-                    latest_timestamp = datetime.fromisoformat(latest_timestamp)
+            latest_timestamp = (
+                latest_candles[0].get("timestamp") if latest_candles else None
+            )
+            if latest_timestamp is not None:
+                # petrosa-data-manager#312: Mongo/MySQL may return naive
+                # datetimes (or naive ISO strings) even though the value is
+                # always UTC; normalize before arithmetic against the aware
+                # `end` to avoid "can't subtract offset-naive and
+                # offset-aware datetimes".
+                latest_timestamp = as_aware_utc(latest_timestamp)
                 freshness_seconds = int((end - latest_timestamp).total_seconds())
             else:
                 freshness_seconds = int(timedelta(hours=lookback_hours).total_seconds())

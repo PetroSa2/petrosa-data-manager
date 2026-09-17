@@ -20,6 +20,7 @@ from sqlalchemy import (
     Text,
     create_engine,
 )
+from sqlalchemy.pool import StaticPool
 
 from data_manager.db.repositories.audit_repository import AuditRepository
 from data_manager.db.repositories.backfill_repository import BackfillRepository
@@ -99,20 +100,22 @@ class TestAuditRepository:
         repo = AuditRepository(mysql_adapter=mysql, mongodb_adapter=None)
         assert await repo.log_health_check("ds-1", "BTCUSDT", "any") is False
 
-    def test_get_recent_logs_passes_through(self):
+    @pytest.mark.asyncio
+    async def test_get_recent_logs_passes_through(self):
         mysql = Mock()
         mysql.query_latest = Mock(return_value=[{"audit_id": "1"}])
         repo = AuditRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_recent_logs("ds-1", limit=50) == [{"audit_id": "1"}]
+        assert await repo.get_recent_logs("ds-1", limit=50) == [{"audit_id": "1"}]
         mysql.query_latest.assert_called_once_with(
             "audit_logs", symbol="ds-1", limit=50
         )
 
-    def test_get_recent_logs_returns_empty_on_exception(self):
+    @pytest.mark.asyncio
+    async def test_get_recent_logs_returns_empty_on_exception(self):
         mysql = Mock()
         mysql.query_latest = Mock(side_effect=RuntimeError("x"))
         repo = AuditRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_recent_logs() == []
+        assert await repo.get_recent_logs() == []
 
 
 class TestBackfillRepository:
@@ -152,7 +155,14 @@ class TestBackfillRepository:
             Column("started_at", DateTime),
             Column("completed_at", DateTime),
         )
-        engine = create_engine("sqlite:///:memory:")
+        # petrosa-data-manager#312: get_job() now runs via asyncio.to_thread,
+        # so the in-memory sqlite db must be pinned to one shared connection
+        # (StaticPool) instead of the default per-thread connection.
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
         metadata.create_all(engine)
         if rows:
             with engine.connect() as conn:
@@ -163,7 +173,8 @@ class TestBackfillRepository:
         mysql._ensure_connected.return_value = engine
         return mysql
 
-    def test_get_job_finds_matching_job_id(self):
+    @pytest.mark.asyncio
+    async def test_get_job_finds_matching_job_id(self):
         mysql = self._make_sqlite_mysql(
             [
                 {
@@ -187,12 +198,13 @@ class TestBackfillRepository:
             ]
         )
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        result = repo.get_job("j-2")
+        result = await repo.get_job("j-2")
         assert result is not None
         assert result["job_id"] == "j-2"
         assert result["status"] == "running"
 
-    def test_get_job_returns_none_when_not_found(self):
+    @pytest.mark.asyncio
+    async def test_get_job_returns_none_when_not_found(self):
         mysql = self._make_sqlite_mysql(
             [
                 {
@@ -207,13 +219,14 @@ class TestBackfillRepository:
             ]
         )
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_job("missing") is None
+        assert await repo.get_job("missing") is None
 
-    def test_get_job_returns_none_on_exception(self):
+    @pytest.mark.asyncio
+    async def test_get_job_returns_none_on_exception(self):
         mysql = Mock()
         mysql._get_table.side_effect = RuntimeError("x")
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
-        assert repo.get_job("anything") is None
+        assert await repo.get_job("anything") is None
 
     @pytest.mark.asyncio
     async def test_update_status_returns_true(self):

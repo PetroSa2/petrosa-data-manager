@@ -74,8 +74,19 @@ class BackfillOrchestrator:
             created_at=datetime.now(UTC),
         )
 
-        # Store job in MySQL
-        await self.backfill_repo.create_job(job.model_dump())
+        # Store job in MySQL. petrosa-data-manager#312: `backfill_jobs` is a
+        # FLAT table (job_id, symbol, data_type, timeframe, start_time,
+        # end_time, status, ...) -- `job.model_dump()` nests those fields
+        # under a `request` key instead. MySQL silently defaults the
+        # resulting missing NOT NULL `data_type`/`symbol` columns to an
+        # empty string rather than raising, which is why
+        # `execute_backfill()` later logs `Unsupported data type: ` (empty
+        # string) even though the request always carried a valid data_type.
+        # Flatten explicitly so the write matches the table schema.
+        job_dump = job.model_dump()
+        request_dump = job_dump.pop("request")
+        job_record = {**job_dump, **request_dump}
+        await self.backfill_repo.create_job(job_record)
 
         # Start execution in background
         asyncio.create_task(self.execute_backfill(job.job_id))
@@ -93,7 +104,7 @@ class BackfillOrchestrator:
             logger.info(f"Starting backfill job {job_id}")
 
             # Get job from database
-            job_data = self.backfill_repo.get_job(job_id)
+            job_data = await self.backfill_repo.get_job(job_id)
             if not job_data:
                 logger.error(f"Job {job_id} not found")
                 return

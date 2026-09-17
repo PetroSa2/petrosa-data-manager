@@ -64,7 +64,7 @@ async def get_anomalies(
         )
 
         # Query audit logs for anomalies (get more than needed for filtering)
-        logs = audit_repo.get_recent_logs(dataset_id=pair, limit=limit * 10)
+        logs = await audit_repo.get_recent_logs(dataset_id=pair, limit=limit * 10)
 
         # Filter for anomaly type audits
         anomalies = [
@@ -227,7 +227,7 @@ async def anomaly_summary() -> dict:
         )
 
         # Get recent audit logs
-        logs = audit_repo.get_recent_logs(limit=1000)
+        logs = await audit_repo.get_recent_logs(limit=1000)
 
         # Filter anomaly-related logs
         anomaly_logs = [

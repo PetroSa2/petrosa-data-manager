@@ -2,7 +2,40 @@
 Time utility functions for Data Manager.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - py<3.11 fallback, matches rest of repo
+    UTC = timezone.utc  # noqa: UP017
+
+
+def as_aware_utc(value: datetime | str) -> datetime:
+    """Normalize a timestamp value to a timezone-aware UTC ``datetime``.
+
+    MongoDB drivers (PyMongo/Motor) return **naive** ``datetime`` objects for
+    BSON dates by default -- the driver does not attach ``tzinfo`` even
+    though the underlying value is always UTC. Mixing such a naive value
+    with an aware ``datetime.now(timezone.utc)`` in a subtraction or
+    comparison raises ``TypeError: can't subtract/compare offset-naive and
+    offset-aware datetimes`` (petrosa-data-manager#312).
+
+    Mirrors the ``_as_aware_utc()`` helper pattern already used in
+    ``petrosa-otel`` ``rate_limiter.py`` (petrosa_k8s#1095 / commit
+    ``992edc8b``).
+
+    Args:
+        value: An ISO-format string or a ``datetime`` (naive or aware).
+
+    Returns:
+        An aware UTC ``datetime``. Naive values are treated as already UTC,
+        matching how MongoDB stores BSON dates internally.
+    """
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value
 
 
 def parse_timeframe_to_minutes(timeframe: str) -> int:

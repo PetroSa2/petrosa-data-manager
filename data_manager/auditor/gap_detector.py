@@ -12,7 +12,7 @@ from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import AuditRepository, CandleRepository
 from data_manager.models.events import BackfillRequest
 from data_manager.models.health import GapInfo
-from data_manager.utils.time_utils import parse_timeframe_to_seconds
+from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,13 @@ class GapDetector:
             List of GapInfo objects
         """
         try:
+            # petrosa-data-manager#312: normalize caller-supplied bounds too
+            # -- callers occasionally pass naive datetimes, and mixing those
+            # with the aware timestamps read back from Mongo below raises
+            # "can't compare offset-naive and offset-aware datetimes".
+            start = as_aware_utc(start)
+            end = as_aware_utc(end)
+
             logger.debug(
                 f"Detecting gaps for {symbol} {timeframe} from {start} to {end}"
             )
@@ -89,15 +96,10 @@ class GapDetector:
                 await self._log_gap(symbol, timeframe, gap)
                 return [gap]
 
-            # Parse timestamps
-            timestamps = [
-                (
-                    candle["timestamp"]
-                    if isinstance(candle["timestamp"], datetime)
-                    else datetime.fromisoformat(str(candle["timestamp"]))
-                )
-                for candle in candles
-            ]
+            # Parse timestamps. petrosa-data-manager#312: Mongo returns naive
+            # datetimes for BSON dates -- normalize every timestamp to aware
+            # UTC before any comparison/arithmetic against `start`/`end`.
+            timestamps = [as_aware_utc(candle["timestamp"]) for candle in candles]
             timestamps.sort()
 
             # Calculate expected interval
