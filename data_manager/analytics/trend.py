@@ -16,11 +16,17 @@ from decimal import Decimal
 import numpy as np
 import pandas as pd
 
+from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.analytics import MetricMetadata, TrendMetrics
 
 logger = logging.getLogger(__name__)
+
+
+def _required_decimal(value: object, context: str) -> Decimal:
+    """safe_decimal wrapper for TrendMetrics' non-Optional Decimal fields."""
+    return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
 class TrendCalculator:
@@ -124,34 +130,21 @@ class TrendCalculator:
                 computed_at=datetime.now(UTC),
             )
 
-            # Create metrics object
+            # Create metrics object. Sanitize every computed Decimal
+            # through the shared helper (#315) rather than bespoke
+            # pd.isna() guards, so behavior stays consistent with the
+            # other analytics calculators.
             metrics = TrendMetrics(
                 symbol=symbol,
                 timeframe=timeframe,
-                sma=(
-                    Decimal(str(df["sma_20"].iloc[-1]))
-                    if not pd.isna(df["sma_20"].iloc[-1])
-                    else Decimal("0")
+                sma=_required_decimal(df["sma_20"].iloc[-1], f"{symbol} sma"),
+                ema=_required_decimal(df["ema_20"].iloc[-1], f"{symbol} ema"),
+                wma=_required_decimal(df["wma_20"].iloc[-1], f"{symbol} wma"),
+                rate_of_change=_required_decimal(
+                    df["roc"].iloc[-1], f"{symbol} rate_of_change"
                 ),
-                ema=(
-                    Decimal(str(df["ema_20"].iloc[-1]))
-                    if not pd.isna(df["ema_20"].iloc[-1])
-                    else Decimal("0")
-                ),
-                wma=(
-                    Decimal(str(df["wma_20"].iloc[-1]))
-                    if not pd.isna(df["wma_20"].iloc[-1])
-                    else Decimal("0")
-                ),
-                rate_of_change=(
-                    Decimal(str(df["roc"].iloc[-1]))
-                    if not pd.isna(df["roc"].iloc[-1])
-                    else Decimal("0")
-                ),
-                directional_strength=(
-                    Decimal(str(directional_strength.iloc[-1]))
-                    if not pd.isna(directional_strength.iloc[-1])
-                    else Decimal("0")
+                directional_strength=_required_decimal(
+                    directional_strength.iloc[-1], f"{symbol} directional_strength"
                 ),
                 crossover_signal=crossover_signal,
                 rolling_beta=rolling_beta,

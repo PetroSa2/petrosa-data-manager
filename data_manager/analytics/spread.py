@@ -13,11 +13,17 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 from decimal import Decimal
 
+from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import DepthRepository
 from data_manager.models.analytics import MetricMetadata, SpreadMetrics
 
 logger = logging.getLogger(__name__)
+
+
+def _required_decimal(value: object, context: str) -> Decimal:
+    """safe_decimal wrapper for SpreadMetrics' non-Optional Decimal fields."""
+    return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
 class SpreadCalculator:
@@ -64,38 +70,71 @@ class SpreadCalculator:
             if not bids or not asks:
                 return None
 
-            # Extract best bid/ask
-            best_bid_price = Decimal(str(bids[0].get("price", 0)))
-            best_ask_price = Decimal(str(asks[0].get("price", 0)))
+            # Extract best bid/ask. Upstream depth snapshots can carry a
+            # NaN/±inf price on a corrupted/frozen level; sanitize at the
+            # boundary so it can never propagate into downstream arithmetic.
+            best_bid_price = _required_decimal(
+                bids[0].get("price", 0), f"{symbol} best_bid_price"
+            )
+            best_ask_price = _required_decimal(
+                asks[0].get("price", 0), f"{symbol} best_ask_price"
+            )
 
             # Calculate spread
-            bid_ask_spread = best_ask_price - best_bid_price
+            bid_ask_spread = _required_decimal(
+                best_ask_price - best_bid_price, f"{symbol} bid_ask_spread"
+            )
             mid_price = (best_bid_price + best_ask_price) / 2
             spread_percentage = (
-                (bid_ask_spread / mid_price * 100) if mid_price > 0 else Decimal("0")
+                _required_decimal(
+                    bid_ask_spread / mid_price * 100,
+                    f"{symbol} spread_percentage",
+                )
+                if mid_price > 0
+                else Decimal("0")
             )
 
             # Calculate market depth (sum volumes within 1% of mid price)
             threshold_bid = mid_price * Decimal("0.99")
             threshold_ask = mid_price * Decimal("1.01")
 
-            market_depth_bid = sum(
-                Decimal(str(level.get("quantity", 0)))
-                for level in bids
-                if Decimal(str(level.get("price", 0))) >= threshold_bid
+            market_depth_bid = _required_decimal(
+                sum(
+                    (
+                        _required_decimal(level.get("quantity", 0), "depth level qty")
+                        for level in bids
+                        if _required_decimal(level.get("price", 0), "depth level px")
+                        >= threshold_bid
+                    ),
+                    Decimal("0"),
+                ),
+                f"{symbol} market_depth_bid",
             )
 
-            market_depth_ask = sum(
-                Decimal(str(level.get("quantity", 0)))
-                for level in asks
-                if Decimal(str(level.get("price", 0))) <= threshold_ask
+            market_depth_ask = _required_decimal(
+                sum(
+                    (
+                        _required_decimal(level.get("quantity", 0), "depth level qty")
+                        for level in asks
+                        if _required_decimal(level.get("price", 0), "depth level px")
+                        <= threshold_ask
+                    ),
+                    Decimal("0"),
+                ),
+                f"{symbol} market_depth_ask",
             )
 
             # Liquidity ratio (placeholder - needs volume and volatility)
             liquidity_ratio = Decimal("0")  # TODO: Volume / Volatility
 
-            # Slippage estimate (VWAP deviation for common order sizes)
-            slippage_estimate = self._calculate_slippage(bids, asks, mid_price)
+            # Slippage estimate (VWAP deviation for common order sizes).
+            # Optional field on the model -- fall back to None (not a fake
+            # 0) when the estimate cannot be computed as a finite number.
+            slippage_estimate = safe_decimal(
+                self._calculate_slippage(bids, asks, mid_price),
+                default=None,
+                context=f"{symbol} slippage_estimate",
+            )
 
             # Order book imbalance (calculated but not used in response yet)
             # total_bid_volume = sum(Decimal(str(level.get("quantity", 0))) for level in bids[:10])
