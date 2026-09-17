@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import correlate
 
+from data_manager.analytics.sanitize import is_non_finite, safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.analytics import CorrelationMetrics, MetricMetadata
@@ -111,73 +112,111 @@ class CorrelationCalculator:
                 if symbol not in merged.columns:
                     continue
 
-                # Correlation matrix for this symbol (to all others)
-                correlation_matrix = {}
-                for other_symbol in symbols:
-                    if other_symbol in merged.columns:
-                        correlation_matrix[other_symbol] = Decimal(
-                            str(full_corr_matrix.loc[symbol, other_symbol])
-                        )
+                # Per-symbol isolation (#315): a degenerate series (zero
+                # variance, insufficient samples) for THIS symbol must not
+                # abort correlation calculation for the other symbols in
+                # the batch.
+                try:
+                    # Correlation matrix for this symbol (to all others).
+                    # Constant/zero-variance series produce a 0/0 -> NaN
+                    # Pearson correlation; skip those cells (per-cell,
+                    # not per-symbol) rather than persist a non-finite
+                    # value or fake it as 0.
+                    correlation_matrix = {}
+                    for other_symbol in symbols:
+                        if other_symbol not in merged.columns:
+                            continue
+                        raw_corr = full_corr_matrix.loc[symbol, other_symbol]
+                        if is_non_finite(raw_corr):
+                            logger.warning(
+                                f"Excluding non-finite correlation cell "
+                                f"{symbol}->{other_symbol} (likely zero-variance "
+                                f"series); cell omitted from correlation_matrix"
+                            )
+                            continue
+                        correlation_matrix[other_symbol] = Decimal(str(raw_corr))
 
-                # Rolling correlation to benchmark
-                rolling_correlation = Decimal("0")
-                if symbol != benchmark and benchmark in merged.columns:
-                    rolling_corr_series = (
-                        merged[symbol].rolling(window=30).corr(merged[benchmark])
+                    # Rolling correlation to benchmark
+                    rolling_correlation = Decimal("0")
+                    if symbol != benchmark and benchmark in merged.columns:
+                        rolling_corr_series = (
+                            merged[symbol].rolling(window=30).corr(merged[benchmark])
+                        )
+                        if not rolling_corr_series.empty:
+                            rolling_correlation = safe_decimal(
+                                rolling_corr_series.iloc[-1],
+                                default=Decimal("0"),
+                                context=f"{symbol} rolling_correlation",
+                            ) or Decimal("0")
+
+                    # Cross-correlation lag detection
+                    cross_correlation_lag = None
+                    if symbol != benchmark and benchmark in merged.columns:
+                        try:
+                            # Calculate cross-correlation
+                            corr_result = correlate(
+                                merged[benchmark].values,
+                                merged[symbol].values,
+                                mode="same",
+                            )
+                            if np.all(np.isfinite(corr_result)):
+                                lag = int(
+                                    np.argmax(corr_result) - len(corr_result) // 2
+                                )
+                                cross_correlation_lag = lag
+                            else:
+                                logger.warning(
+                                    f"Non-finite cross-correlation series for "
+                                    f"{symbol}; leaving cross_correlation_lag unset"
+                                )
+                        except Exception as e:
+                            logger.debug(f"Cross-correlation failed for {symbol}: {e}")
+
+                    # Volatility correlation (correlation of volatility series)
+                    volatility_correlation = None
+                    if symbol != benchmark and benchmark in merged.columns:
+                        try:
+                            vol_symbol = merged[symbol].rolling(window=20).std()
+                            vol_benchmark = merged[benchmark].rolling(window=20).std()
+                            vol_corr = vol_symbol.corr(vol_benchmark)
+                            if not is_non_finite(vol_corr):
+                                volatility_correlation = Decimal(str(vol_corr))
+                        except Exception as e:
+                            logger.debug(
+                                f"Volatility correlation failed for {symbol}: {e}"
+                            )
+
+                    # Create metadata
+                    metadata = MetricMetadata(
+                        method="pearson_correlation",
+                        window=f"{window_days}d",
+                        parameters={"symbols": len(symbols), "benchmark": benchmark},
+                        completeness=100.0,
+                        computed_at=datetime.now(UTC),
                     )
-                    if not rolling_corr_series.empty:
-                        rolling_correlation = Decimal(str(rolling_corr_series.iloc[-1]))
 
-                # Cross-correlation lag detection
-                cross_correlation_lag = None
-                if symbol != benchmark and benchmark in merged.columns:
-                    try:
-                        # Calculate cross-correlation
-                        corr_result = correlate(
-                            merged[benchmark].values, merged[symbol].values, mode="same"
-                        )
-                        lag = int(np.argmax(corr_result) - len(corr_result) // 2)
-                        cross_correlation_lag = lag
-                    except Exception as e:
-                        logger.debug(f"Cross-correlation failed for {symbol}: {e}")
+                    # Create metrics object
+                    metrics = CorrelationMetrics(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        correlation_matrix=correlation_matrix,
+                        rolling_correlation=rolling_correlation,
+                        cross_correlation_lag=cross_correlation_lag,
+                        volatility_correlation=volatility_correlation,
+                        metadata=metadata,
+                    )
 
-                # Volatility correlation (correlation of volatility series)
-                volatility_correlation = None
-                if symbol != benchmark and benchmark in merged.columns:
-                    try:
-                        vol_symbol = merged[symbol].rolling(window=20).std()
-                        vol_benchmark = merged[benchmark].rolling(window=20).std()
-                        vol_corr = vol_symbol.corr(vol_benchmark)
-                        if not np.isnan(vol_corr):
-                            volatility_correlation = Decimal(str(vol_corr))
-                    except Exception as e:
-                        logger.debug(f"Volatility correlation failed for {symbol}: {e}")
+                    results[symbol] = metrics
 
-                # Create metadata
-                metadata = MetricMetadata(
-                    method="pearson_correlation",
-                    window=f"{window_days}d",
-                    parameters={"symbols": len(symbols), "benchmark": benchmark},
-                    completeness=100.0,
-                    computed_at=datetime.now(UTC),
-                )
-
-                # Create metrics object
-                metrics = CorrelationMetrics(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    correlation_matrix=correlation_matrix,
-                    rolling_correlation=rolling_correlation,
-                    cross_correlation_lag=cross_correlation_lag,
-                    volatility_correlation=volatility_correlation,
-                    metadata=metadata,
-                )
-
-                results[symbol] = metrics
-
-                # Store in MongoDB
-                collection = f"analytics_{symbol}_correlation"
-                await self.db_manager.mongodb_adapter.write([metrics], collection)
+                    # Store in MongoDB
+                    collection = f"analytics_{symbol}_correlation"
+                    await self.db_manager.mongodb_adapter.write([metrics], collection)
+                except Exception as e:
+                    logger.warning(
+                        f"Skipping correlation for {symbol} (per-symbol isolation, "
+                        f"#315): {e}"
+                    )
+                    continue
 
             # Also store the full correlation matrix
             matrix_doc = {

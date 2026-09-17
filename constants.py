@@ -377,3 +377,14 @@ SCHEMA_MAX_VERSIONS = int(os.getenv("SCHEMA_MAX_VERSIONS", "10"))
 SCHEMA_COMPATIBILITY_MODE = os.getenv(
     "SCHEMA_COMPATIBILITY_MODE", "BACKWARD"
 )  # BACKWARD, FORWARD, FULL, NONE
+
+# Streaming Gap Detection Configuration (data-manager#322)
+ENABLE_STREAMING_GAP_DETECTION = (
+    os.getenv("ENABLE_STREAMING_GAP_DETECTION", "true").lower() == "true"
+)
+STREAMING_GAP_DETECTION_INTERVAL = int(
+    os.getenv("STREAMING_GAP_DETECTION_INTERVAL", "60")
+)  # seconds: how often to log heartbeat
+STREAMING_GAP_DETECTION_REPORT_COOLDOWN = int(
+    os.getenv("STREAMING_GAP_DETECTION_REPORT_COOLDOWN", "30")
+)  # seconds: dedup window per (symbol, timeframe)

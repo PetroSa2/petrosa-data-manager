@@ -139,6 +139,10 @@ class BackfillRequest(BaseModel):
     priority: int = Field(
         default=5, ge=1, le=10, description="Priority (1=highest, 10=lowest)"
     )
+    source: str | None = Field(
+        None,
+        description="Origin of the backfill request (e.g. 'streaming_gap_detector')",
+    )
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}

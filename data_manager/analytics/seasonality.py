@@ -18,11 +18,17 @@ import pandas as pd
 from scipy.fft import fft, fftfreq
 from scipy.stats import entropy
 
+from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.analytics import MetricMetadata, SeasonalityMetrics
 
 logger = logging.getLogger(__name__)
+
+
+def _required_decimal(value: object, context: str) -> Decimal:
+    """safe_decimal wrapper for SeasonalityMetrics' non-Optional Decimal fields."""
+    return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
 class SeasonalityCalculator:
@@ -90,7 +96,9 @@ class SeasonalityCalculator:
             for hour in range(24):
                 hour_data = df[df["hour"] == hour]["close"]
                 hourly_pattern[str(hour)] = (
-                    Decimal(str(hour_data.mean()))
+                    _required_decimal(
+                        hour_data.mean(), f"{symbol} hourly_pattern[{hour}]"
+                    )
                     if len(hour_data) > 0
                     else Decimal("0")
                 )
@@ -100,7 +108,9 @@ class SeasonalityCalculator:
             for day in range(7):
                 day_data = df[df["day_of_week"] == day]["close"]
                 daily_pattern[str(day)] = (
-                    Decimal(str(day_data.mean())) if len(day_data) > 0 else Decimal("0")
+                    _required_decimal(day_data.mean(), f"{symbol} daily_pattern[{day}]")
+                    if len(day_data) > 0
+                    else Decimal("0")
                 )
 
             # Seasonal deviation (current vs seasonal average)
@@ -108,7 +118,10 @@ class SeasonalityCalculator:
             seasonal_avg = float(hourly_pattern.get(str(current_hour), Decimal("0")))
             current_price = df["close"].iloc[-1]
             seasonal_deviation = (
-                Decimal(str((current_price - seasonal_avg) / seasonal_avg * 100))
+                _required_decimal(
+                    (current_price - seasonal_avg) / seasonal_avg * 100,
+                    f"{symbol} seasonal_deviation",
+                )
                 if seasonal_avg > 0
                 else Decimal("0")
             )
@@ -132,10 +145,18 @@ class SeasonalityCalculator:
             else:
                 dominant_cycle = None
 
-            # Entropy index (randomness measure)
+            # Entropy index (randomness measure). A constant/near-constant
+            # price series collapses all mass into one histogram bin,
+            # which with density=True can yield an infinite bin height
+            # and a non-finite entropy() result; sanitize before it
+            # reaches the Pydantic model (#315).
             hist, _ = np.histogram(df["close"], bins=50, density=True)
-            hist = hist[hist > 0]  # Remove zeros for entropy calculation
-            entropy_index = Decimal(str(entropy(hist)))
+            hist = hist[np.isfinite(hist) & (hist > 0)]
+            entropy_index = (
+                _required_decimal(entropy(hist), f"{symbol} entropy_index")
+                if len(hist) > 0
+                else Decimal("0")
+            )
 
             # Create metadata
             metadata = MetricMetadata(
