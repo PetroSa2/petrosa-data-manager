@@ -19,8 +19,24 @@ class TestAuditScheduler:
         return MagicMock()
 
     @pytest.fixture
+    def mock_nats_client(self):
+        client = MagicMock()
+        client.is_connected = MagicMock(return_value=True)
+        client.connect = AsyncMock(return_value=True)
+        client.subscribe = AsyncMock(return_value=MagicMock())
+        return client
+
+    @pytest.fixture
     def scheduler(self, mock_db_manager):
         return AuditScheduler(mock_db_manager)
+
+    @pytest.fixture
+    def scheduler_with_nats(self, mock_db_manager, mock_nats_client):
+        return AuditScheduler(
+            mock_db_manager,
+            backfill_orchestrator=MagicMock(),
+            nats_client=mock_nats_client,
+        )
 
     @pytest.mark.asyncio
     async def test_run_audit_cycle_success(self, scheduler):
@@ -63,6 +79,62 @@ class TestAuditScheduler:
             await scheduler.run_audit_cycle()
             # Should not raise exception
             assert scheduler.last_audit_time is not None
+
+
+class TestAuditSchedulerStreaming:
+    """Tests for AuditScheduler streaming gap detector integration."""
+
+    @pytest.fixture
+    def mock_db_manager(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_nats_client(self):
+        client = MagicMock()
+        client.is_connected = MagicMock(return_value=True)
+        client.connect = AsyncMock(return_value=True)
+        client.subscribe = AsyncMock(return_value=MagicMock())
+        return client
+
+    @pytest.mark.asyncio
+    async def test_streaming_detector_initialized_when_enabled(
+        self, mock_db_manager, mock_nats_client
+    ):
+        """When ENABLE_STREAMING_GAP_DETECTION is true, the scheduler creates a streaming detector."""
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_STREAMING_GAP_DETECTION = True
+            scheduler = AuditScheduler(mock_db_manager, nats_client=mock_nats_client)
+            assert scheduler.streaming_detector is not None
+
+    @pytest.mark.asyncio
+    async def test_streaming_detector_not_initialized_when_disabled(
+        self, mock_db_manager
+    ):
+        """When ENABLE_STREAMING_GAP_DETECTION is false, no streaming detector is created."""
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_STREAMING_GAP_DETECTION = False
+            scheduler = AuditScheduler(mock_db_manager)
+            assert scheduler.streaming_detector is None
+
+    @pytest.mark.asyncio
+    async def test_get_status_includes_streaming_info(
+        self, mock_db_manager, mock_nats_client
+    ):
+        """get_status includes streaming detector info when available."""
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_STREAMING_GAP_DETECTION = True
+            scheduler = AuditScheduler(mock_db_manager, nats_client=mock_nats_client)
+            status = scheduler.get_status()
+            assert "streaming_detector" in status
+
+    @pytest.mark.asyncio
+    async def test_get_status_without_streaming(self, mock_db_manager):
+        """get_status does not include streaming info when detector is None."""
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_STREAMING_GAP_DETECTION = False
+            scheduler = AuditScheduler(mock_db_manager)
+            status = scheduler.get_status()
+            assert "streaming_detector" not in status
 
 
 class TestAnalyticsScheduler:
