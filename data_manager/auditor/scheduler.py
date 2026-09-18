@@ -21,6 +21,7 @@ from data_manager.auditor.duplicate_detector import DuplicateDetector
 from data_manager.auditor.evaluator import GapDetectorEvaluator
 from data_manager.auditor.gap_detector import GapDetector
 from data_manager.auditor.health_scorer import HealthScorer
+from data_manager.auditor.streaming_gap_detector import StreamingGapDetector
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.leader_election import LeaderElectionManager
 
@@ -54,6 +55,10 @@ audit_backfills_triggered = Counter(
     "data_manager_audit_backfills_triggered_total",
     "Auto-triggered backfill jobs",
     ["symbol", "timeframe"],
+)
+streaming_detector_active = Gauge(
+    "data_manager_streaming_detector_active",
+    "Streaming gap detector active status (1=active, 0=inactive)",
 )
 
 
@@ -106,6 +111,15 @@ class AuditScheduler:
         )
         self.evaluator: GapDetectorEvaluator = GapDetectorEvaluator(publisher=publisher)
 
+        # Streaming gap detector (data-manager#322)
+        self.streaming_detector: StreamingGapDetector | None = None
+        if constants.ENABLE_STREAMING_GAP_DETECTION:
+            self.streaming_detector = StreamingGapDetector(
+                candle_repo=self.gap_detector.candle_repo,
+                backfill_orchestrator=backfill_orchestrator,
+                nats_client=nats_client,
+            )
+
     async def start(self) -> None:
         """Start the audit scheduler."""
         # Check if leader election is enabled and required
@@ -141,6 +155,18 @@ class AuditScheduler:
             f"Audit scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)"
         )
 
+        # Start streaming gap detector if enabled
+        if self.streaming_detector:
+            streaming_started = await self.streaming_detector.start()
+            streaming_detector_active.set(1 if streaming_started else 0)
+            if streaming_started:
+                logger.info("Streaming gap detector active alongside batch scheduler")
+            else:
+                logger.warning(
+                    "Streaming gap detector failed to start; falling back to "
+                    "batch-only gap detection"
+                )
+
         # Give the service time to stabilize and pass health checks before starting cycles
         await asyncio.sleep(constants.INITIAL_STARTUP_DELAY)
 
@@ -173,6 +199,11 @@ class AuditScheduler:
     async def stop(self) -> None:
         """Stop the audit scheduler."""
         self.running = False
+
+        # Stop streaming gap detector
+        if self.streaming_detector:
+            await self.streaming_detector.stop()
+            streaming_detector_active.set(0)
 
     async def run_audit_cycle(self) -> None:
         """Run a single audit cycle for all symbols and timeframes."""
@@ -336,5 +367,11 @@ class AuditScheduler:
 
         if self.leader_election:
             status.update(self.leader_election.get_status())
+
+        if self.streaming_detector:
+            status["streaming_detector"] = {
+                "running": self.streaming_detector.running,
+                "tracked_pairs": len(self.streaming_detector._last_seen),
+            }
 
         return status
