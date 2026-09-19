@@ -36,6 +36,7 @@ from data_manager.services.alert_dispatcher import AlertDispatcher
 if TYPE_CHECKING:
     from data_manager.backfiller.orchestrator import BackfillOrchestrator
     from data_manager.leader_election import LeaderElectionManager
+    from data_manager.services.backfill_trigger import BackfillTrigger
 
 # Configure structured logging
 structlog.configure(
@@ -648,6 +649,12 @@ class DataManagerApp:
         if self.consumer is not None and getattr(self.consumer, "nats_client", None):
             evaluator_nats_client = getattr(self.consumer.nats_client, "nc", None)
 
+        # Per petrosa-data-manager#317 AC4: wire the analytics bridge
+        # (BackfillTrigger) so evaluator verdicts can trigger backfill
+        # requests. Import here to avoid circular dependency at module load.
+        from data_manager.services.backfill_trigger import BackfillTrigger  # noqa: F401
+
+        backfill_trigger: BackfillTrigger | None = None
         try:
             audit_scheduler = AuditScheduler(
                 self.db_manager,
@@ -655,9 +662,23 @@ class DataManagerApp:
                 backfill_orchestrator=self.backfill_orchestrator,
                 nats_client=evaluator_nats_client,
             )
+
+            # Wire the analytics bridge (BackfillTrigger) so evaluator
+            # verdicts can trigger backfill requests. The trigger is
+            # started alongside the audit scheduler and runs for the
+            # lifetime of the auditor subsystem.
+            backfill_trigger = BackfillTrigger(
+                self.db_manager,
+                backfill_orchestrator=self.backfill_orchestrator,
+            )
+            await backfill_trigger.start()
+
             await audit_scheduler.start()
         except Exception as e:
             logger.error(f"Error in auditor: {e}", exc_info=True)
+        finally:
+            if backfill_trigger is not None:
+                await backfill_trigger.stop()
 
         logger.info("Auditor stopped")
 
