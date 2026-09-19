@@ -299,6 +299,42 @@ CANDLE_WARMUP_TRIM_ENABLED = (
 )
 CANDLE_WARMUP_TRIM_FACTOR = float(os.getenv("CANDLE_WARMUP_TRIM_FACTOR", "1.5"))
 
+# --- Continuous warm-up backfill scheduler (#319) ------------------------
+# #275 shipped the warm-up backfill as a one-shot cutover tool. Gaps that form
+# AFTER the cutover were never refilled, so collections drift stale. The
+# scheduler re-runs the very same `run_backfill()` on a fixed cadence from
+# inside the long-lived data-manager process (leader-elected, so N replicas
+# still produce one writer).
+#
+# Off by default: it writes to MongoDB, and the standing operator rule after
+# four Atlas M0 quota P0s (k8s#783/#819/#881/#899) is that no new Mongo writer
+# is enabled implicitly. Enable per-environment via the ConfigMap. The write is
+# bounded regardless — the backfill trims every collection it touches back to
+# CANDLE_WARMUP_MIN_CANDLES * CANDLE_WARMUP_TRIM_FACTOR.
+ENABLE_CANDLE_WARMUP_SCHEDULER = (
+    os.getenv("ENABLE_CANDLE_WARMUP_SCHEDULER", "false").lower() == "true"
+)
+
+# Seconds between warm-up cycles. 3600 (hourly) comfortably beats the tightest
+# freshness budget in the grid (5m x CANDLE_WARMUP_FRESHNESS_INTERVALS = 15m)
+# for depth maintenance, while the per-cycle readiness gate means a healthy
+# grid costs 50 cheap count/latest queries and zero writes.
+CANDLE_WARMUP_SCHEDULER_INTERVAL = int(
+    os.getenv("CANDLE_WARMUP_SCHEDULER_INTERVAL", "3600")
+)
+
+# Delay before the first cycle, so the pod passes its readiness probe and the
+# database connections settle before a 50-collection sweep starts.
+CANDLE_WARMUP_SCHEDULER_INITIAL_DELAY = int(
+    os.getenv("CANDLE_WARMUP_SCHEDULER_INITIAL_DELAY", "300")
+)
+
+# Backoff applied after a cycle raises, so a persistently broken backend is
+# retried politely instead of hot-looping.
+CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF = int(
+    os.getenv("CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF", "300")
+)
+
 # AC3 — no empty-read window. During the cutover the candle read path falls
 # back to the non-primary backend whenever the primary returns an empty or
 # short result, so execution never sees a starved candle window while Mongo is
