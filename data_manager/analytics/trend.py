@@ -16,6 +16,7 @@ from decimal import Decimal
 import numpy as np
 import pandas as pd
 
+from data_manager.analytics.base import BaseCalculator
 from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
@@ -29,7 +30,7 @@ def _required_decimal(value: object, context: str) -> Decimal:
     return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
-class TrendCalculator:
+class TrendCalculator(BaseCalculator):
     """Calculates trend and momentum indicators from candle data."""
 
     def __init__(self, db_manager: DatabaseManager):
@@ -68,8 +69,13 @@ class TrendCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 50:  # Need minimum data points
-                logger.warning(
-                    f"Insufficient data for trend calculation: {len(candles)} candles"
+                await self._insufficient_data(
+                    symbol,
+                    timeframe,
+                    len(candles),
+                    50,
+                    window_days,
+                    calculator_name="trend",
                 )
                 return None
 

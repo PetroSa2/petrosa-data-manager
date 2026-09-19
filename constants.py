@@ -334,6 +334,18 @@ MAX_AUTO_BACKFILL_JOBS = int(
     os.getenv("MAX_AUTO_BACKFILL_JOBS", "5")
 )  # concurrent jobs
 
+# Backfill request queue (petrosa-data-manager#320)
+# In-memory queue used when the backfill orchestrator is unavailable.
+BACKFILL_QUEUE_MAX_SIZE = int(
+    os.getenv("BACKFILL_QUEUE_MAX_SIZE", "100")
+)  # max queued requests
+BACKFILL_QUEUE_MAX_RETRIES = int(
+    os.getenv("BACKFILL_QUEUE_MAX_RETRIES", "3")
+)  # max retries per request on flush
+BACKFILL_QUEUE_FLUSH_INTERVAL = int(
+    os.getenv("BACKFILL_QUEUE_FLUSH_INTERVAL", "60")
+)  # seconds between flush attempts
+
 # Duplicate Handling Configuration
 ENABLE_DUPLICATE_REMOVAL = (
     os.getenv("ENABLE_DUPLICATE_REMOVAL", "false").lower() == "true"

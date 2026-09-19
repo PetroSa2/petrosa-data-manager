@@ -16,6 +16,7 @@ from decimal import Decimal
 import numpy as np
 import pandas as pd
 
+from data_manager.analytics.base import BaseCalculator
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.analytics import DeviationMetrics, MetricMetadata
@@ -23,7 +24,7 @@ from data_manager.models.analytics import DeviationMetrics, MetricMetadata
 logger = logging.getLogger(__name__)
 
 
-class DeviationCalculator:
+class DeviationCalculator(BaseCalculator):
     """Calculates deviation and statistical metrics from candle data."""
 
     def __init__(self, db_manager: DatabaseManager):
@@ -62,8 +63,13 @@ class DeviationCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 20:
-                logger.warning(
-                    f"Insufficient data for deviation calculation: {len(candles)} candles"
+                await self._insufficient_data(
+                    symbol,
+                    timeframe,
+                    len(candles),
+                    20,
+                    window_days,
+                    calculator_name="deviation",
                 )
                 return None
 

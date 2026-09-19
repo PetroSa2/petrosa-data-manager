@@ -450,6 +450,18 @@ class DataManagerApp:
         else:
             self.backfill_orchestrator = None
 
+        # In-memory backfill request queue (petrosa-data-manager#320).
+        # Always created as a safety net: even when the orchestrator is
+        # available, transient failures will use the queue.
+        from data_manager.services.backfill_queue import BackfillRequestQueue
+
+        self.backfill_queue = BackfillRequestQueue(
+            max_size=constants.BACKFILL_QUEUE_MAX_SIZE,
+        )
+        logger.info(
+            f"Backfill request queue initialized (max_size={constants.BACKFILL_QUEUE_MAX_SIZE})"
+        )
+
         # Start background workers
         asyncio.create_task(self._run_auditor())
         asyncio.create_task(self._run_analytics())
@@ -661,6 +673,7 @@ class DataManagerApp:
                 leader_election=self.leader_election,
                 backfill_orchestrator=self.backfill_orchestrator,
                 nats_client=evaluator_nats_client,
+                backfill_queue=self.backfill_queue,
             )
 
             # Wire the analytics bridge (BackfillTrigger) so evaluator
@@ -670,6 +683,7 @@ class DataManagerApp:
             backfill_trigger = BackfillTrigger(
                 self.db_manager,
                 backfill_orchestrator=self.backfill_orchestrator,
+                backfill_queue=self.backfill_queue,
             )
             await backfill_trigger.start()
 
