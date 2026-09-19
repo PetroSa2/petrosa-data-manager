@@ -106,6 +106,30 @@ Receives `BackfillRequest` objects and fetches missing candles from the
 Binance API. The binance-data-extractor's `extract_klines_gap_filler.py`
 (extended in PR #301) writes to both MySQL and MongoDB.
 
+
+### 6. Backfill Request Queue (petrosa-data-manager#320)
+
+**File:** `data_manager/services/backfill_queue.py`
+
+In-memory FIFO queue that bridges the gap when the backfill orchestrator is
+unavailable (crash, restart, or `ENABLE_BACKFILLER=false`).  When `ENABLE_AUTO_BACKFILL=true`
+but the orchestrator is not running, gaps are **not silently dropped** — they are
+collected here and flushed to the orchestrator once it becomes available again.
+
+- **Max size:** `BACKFILL_QUEUE_MAX_SIZE` (default: 100). Oldest requests are dropped
+  when full (logged as a warning).
+- **Max retries:** `BACKFILL_QUEUE_MAX_RETRIES` (default: 3). Requests that fail flush
+  more than this are dropped.
+- **Flush interval:** Every audit cycle (default every 60s via `BACKFILL_QUEUE_FLUSH_INTERVAL`).
+- **Dedup:** The orchestrator handles dedup internally; the queue is a best-effort
+  bridge.
+
+**Activation:** Always active (created at startup regardless of `ENABLE_BACKFILLER`).
+The queue is only *used* when the orchestrator is unavailable or its call fails.
+
+**Wiring:** The queue is created in `main.py` and passed to `GapDetector`,
+`StreamingGapDetector`, and `BackfillTrigger` at construction time.
+
 ## Metrics
 
 | Metric | Description | Labels |
@@ -118,6 +142,11 @@ Binance API. The binance-data-extractor's `extract_klines_gap_filler.py`
 | `data_manager_trigger_backfills_total` | Backfill jobs triggered by analytics bridge | trigger_source, symbol, timeframe |
 | `data_manager_backfill_request_latency_seconds` | Time from verdict to backfill request | trigger_source |
 | `data_manager_candle_read_fallbacks_total` | Candle reads served by non-primary backend | primary, operation |
+| `data_manager_gaps_filled_auto_total` | Total gaps auto-filled (auto vs manual fill ratio) | symbol, timeframe |
+| `data_manager_gaps_queued_total` | Total gaps queued for later backfill (orchestrator unavailable) | symbol, timeframe |
+| `data_manager_backfill_queue_size` | Number of backfill requests waiting in the in-memory queue | (gauge) |
+| `data_manager_backfill_queue_flushed_total` | Total backfill requests flushed from queue to orchestrator | symbol, timeframe |
+| `data_manager_backfill_queue_failed_total` | Total backfill requests that failed to flush | (counter) |
 
 ## Alerting
 
@@ -169,9 +198,22 @@ groups:
    - `data_manager_backfills_triggered_total` should be low (indicating healthy data)
    - `data_manager_candle_read_fallbacks_total` should be zero post-cutover
 
-### Responding to Fallback Alerts
 
-1. Check `candle_readiness` gate: `python -m data_manager.maintenance.candle_readiness --json`
+### Responding to Queue Alerts
+
+When the backfill request queue grows (indicated by `data_manager_backfill_queue_size`):
+
+1. **Check orchestrator health:** `kubectl get pods -l app=backfill-orchestrator`
+2. **Check `ENABLE_BACKFILLER` env var:** Ensure it is `true` in the deployment.
+3. **Monitor `data_manager_backfill_queue_flushed_total`:** If this is zero while
+   `data_manager_backfill_queue_size` is growing, the orchestrator may be unreachable.
+4. **If queue exceeds 50:** Investigate immediately — the service may be unable to
+   keep up with gap detection.
+5. **After fix:** Verify queue drains: `data_manager_backfill_queue_size` should return
+   to zero within the flush interval (default 60s).
+
+### Responding to Fallback Alerts
+ `python -m data_manager.maintenance.candle_readiness --json`
 2. If not ready, the warmup backfill is running or needs to be triggered
 3. If ready but fallbacks persist, check MongoDB health and network connectivity
 4. If `CANDLE_DATABASE_TYPE` is already `mongodb`, the warm-up is incomplete
@@ -198,6 +240,7 @@ python -m data_manager.backfiller.orchestrator \
 | AC5: Fallback metric/alert | ✅ | `CANDLE_READ_FALLBACKS` counter + alert rules |
 | AC6: Integration tests | ✅ | `tests/test_gap_filling_pipeline.py` (NEW) |
 | AC7: Operator documentation | ✅ | This document + alerting section |
+| AC8: Backfill queue (petrosa-data-manager#320) | ✅ | `data_manager/services/backfill_queue.py` + operator procedures |
 
 ## Related Tickets
 
@@ -206,3 +249,4 @@ python -m data_manager.backfiller.orchestrator \
 - #276: Candle consumer retention contract
 - #301: Extend gap filler to fill MongoDB candles (PR, merged)
 - #322: Streaming gap detector (PR)
+- #320: Decouple gap detection from orchestrator requirement (this PR)
