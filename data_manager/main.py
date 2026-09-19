@@ -83,6 +83,7 @@ class DataManagerApp:
         self.audit_evaluator = None  # P2.5 (#596) — set in start()
         self.pnl_publisher = None  # P4.1 follow-up (#652) — set in start()
         self.alert_dispatcher: AlertDispatcher | None = None  # #183 alert spine
+        self.candle_warmup_scheduler = None  # #319 — set in start()
         self.running = False
         self._shutdown_event = asyncio.Event()
 
@@ -466,6 +467,7 @@ class DataManagerApp:
         asyncio.create_task(self._run_auditor())
         asyncio.create_task(self._run_analytics())
         asyncio.create_task(self._run_drawdown_scheduler())
+        asyncio.create_task(self._run_candle_warmup_scheduler())
 
         self.running = True
         logger.info("All components started successfully")
@@ -492,6 +494,16 @@ class DataManagerApp:
             logger.info("✅ Telemetry flushed")
         except ImportError:
             pass
+
+        # Stop the continuous candle warm-up scheduler (#319) before leader
+        # election goes away, so the loop exits on its own flag rather than
+        # discovering a dead LeaderElectionManager mid-cycle.
+        if self.candle_warmup_scheduler:
+            try:
+                await self.candle_warmup_scheduler.stop()
+                logger.info("Candle warm-up scheduler stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping candle warm-up scheduler: {e}")
 
         # Stop leader election
         if self.leader_election:
@@ -963,6 +975,52 @@ class DataManagerApp:
             )
         except Exception as e:
             logger.error(f"Error in DrawdownScheduler: {e}", exc_info=True)
+
+    async def _run_candle_warmup_scheduler(self) -> None:
+        """Continuous candle warm-up backfill (petrosa-data-manager#319).
+
+        #275's warm-up backfill only ever ran once, at the #274 cutover, so
+        gaps opened afterwards were never refilled and the ``candles_*``
+        collections silently went shallow/stale. This task re-runs that exact
+        backfill on a cadence, skipping every collection that still passes the
+        #275 readiness gate.
+
+        Opt-in (``ENABLE_CANDLE_WARMUP_SCHEDULER``) because it writes to
+        MongoDB, and leader-elected so replicas do not double-write. Failures
+        are isolated inside the scheduler; this wrapper is defense-in-depth so
+        an unexpected error cannot take the process down.
+        """
+        if not constants.ENABLE_CANDLE_WARMUP_SCHEDULER:
+            logger.info("Candle warm-up backfill scheduler is disabled")
+            return
+
+        if not self.db_manager:
+            logger.warning(
+                "Candle warm-up scheduler requires database, but db_manager "
+                "not available"
+            )
+            return
+
+        if not self.db_manager.is_healthy():
+            logger.warning(
+                "Candle warm-up scheduler not started: database connections not healthy"
+            )
+            return
+
+        from data_manager.maintenance.candle_warmup_scheduler import (
+            CandleWarmupScheduler,
+        )
+
+        try:
+            self.candle_warmup_scheduler = CandleWarmupScheduler(
+                self.db_manager,
+                leader_election=self.leader_election,
+            )
+            await self.candle_warmup_scheduler.start()
+        except Exception as e:
+            logger.error(f"Error in candle warm-up scheduler: {e}", exc_info=True)
+
+        logger.info("Candle warm-up scheduler stopped")
 
     async def _run_mongo_data_size_loop(self) -> None:
         """Periodic MongoDB logical-data-size gauge refresh (dm#248).
