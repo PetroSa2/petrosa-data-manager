@@ -15,6 +15,7 @@ from decimal import Decimal
 
 import pandas as pd
 
+from data_manager.analytics.base import BaseCalculator
 from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
@@ -28,7 +29,7 @@ def _required_decimal(value: object, context: str) -> Decimal:
     return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
-class VolumeCalculator:
+class VolumeCalculator(BaseCalculator):
     """Calculates volume metrics from candle data."""
 
     def __init__(self, db_manager: DatabaseManager):
@@ -67,8 +68,13 @@ class VolumeCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 5:  # Need minimum data points
-                logger.warning(
-                    f"Insufficient data for volume calculation: {len(candles)} candles"
+                await self._insufficient_data(
+                    symbol,
+                    timeframe,
+                    len(candles),
+                    5,
+                    int(window_hours / 24) + 1,
+                    calculator_name="volume",
                 )
                 return None
 

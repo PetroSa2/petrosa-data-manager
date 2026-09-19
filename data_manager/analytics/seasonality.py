@@ -18,6 +18,7 @@ import pandas as pd
 from scipy.fft import fft, fftfreq
 from scipy.stats import entropy
 
+from data_manager.analytics.base import BaseCalculator
 from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
@@ -31,7 +32,7 @@ def _required_decimal(value: object, context: str) -> Decimal:
     return safe_decimal(value, default=Decimal("0"), context=context) or Decimal("0")
 
 
-class SeasonalityCalculator:
+class SeasonalityCalculator(BaseCalculator):
     """Calculates seasonality and cyclical patterns from candle data."""
 
     def __init__(self, db_manager: DatabaseManager):
@@ -70,8 +71,13 @@ class SeasonalityCalculator:
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
 
             if len(candles) < 100:
-                logger.warning(
-                    f"Insufficient data for seasonality calculation: {len(candles)} candles"
+                await self._insufficient_data(
+                    symbol,
+                    timeframe,
+                    len(candles),
+                    100,
+                    window_days,
+                    calculator_name="seasonality",
                 )
                 return None
 

@@ -26,14 +26,16 @@ class AnalyticsScheduler:
     Runs metric calculators for all symbols and timeframes.
     """
 
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, backfill_trigger=None):
         """
         Initialize analytics scheduler.
 
         Args:
             db_manager: Database manager instance
+            backfill_trigger: Optional BackfillTrigger to wire into calculators
         """
         self.db_manager = db_manager
+        self.backfill_trigger = backfill_trigger
         self.volatility_calc = VolatilityCalculator(db_manager)
         self.volume_calc = VolumeCalculator(db_manager)
         self.spread_calc = SpreadCalculator(db_manager)
@@ -43,6 +45,16 @@ class AnalyticsScheduler:
         self.correlation_calc = CorrelationCalculator(db_manager)
         self.regime_classifier = RegimeClassifier(db_manager)
         self.running = False
+
+        # Wire backfill trigger to all calculators that inherit from BaseCalculator
+        for calc in (
+            self.volatility_calc,
+            self.volume_calc,
+            self.trend_calc,
+            self.deviation_calc,
+            self.seasonality_calc,
+        ):
+            calc.backfill_trigger = backfill_trigger
 
     async def start(self) -> None:
         """Start the analytics scheduler."""
