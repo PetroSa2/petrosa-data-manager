@@ -34,6 +34,7 @@ import constants
 from data_manager.auditor.gap_detector import GapDetector
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.models.events import BackfillRequest
+from data_manager.services.backfill_queue import BackfillRequestQueue
 from data_manager.utils.time_utils import parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
@@ -67,11 +68,15 @@ class BackfillTrigger:
         self,
         db_manager: DatabaseManager,
         backfill_orchestrator=None,
+        backfill_queue: BackfillRequestQueue | None = None,
     ):
         self.db_manager = db_manager
         self.backfill_orchestrator = backfill_orchestrator
+        self.backfill_queue = backfill_queue
         self.gap_detector = GapDetector(
-            db_manager, backfill_orchestrator=backfill_orchestrator
+            db_manager,
+            backfill_orchestrator=backfill_orchestrator,
+            backfill_queue=backfill_queue,
         )
         self.running = False
         # Track recent verdicts to avoid duplicate triggers
@@ -109,7 +114,16 @@ class BackfillTrigger:
         Returns:
             List of BackfillRequest objects that were triggered.
         """
-        if not self.running or not self.backfill_orchestrator:
+        if not self.running:
+            return []
+
+        if not self.backfill_orchestrator:
+            # No orchestrator — queue if we have one, otherwise skip
+            if self.backfill_queue:
+                logger.warning(
+                    "Backfill orchestrator unavailable; verdict-driven backfill "
+                    "requests will be queued"
+                )
             return []
 
         key = self._verdict_key(verdict, reason)
@@ -154,9 +168,6 @@ class BackfillTrigger:
         Expected format (from GapDetectorEvaluator.REASON_TEMPLATE_UNHEALTHY):
         "{count} gap(s) detected in cycle (worst: {symbol} {timeframe}, {duration_s}s)"
         """
-        if not self.backfill_orchestrator:
-            return []
-
         requests: list[BackfillRequest] = []
 
         # Parse the worst gap from the reason string
@@ -210,10 +221,23 @@ class BackfillTrigger:
             )
             requests.append(request)
         except Exception as e:
-            logger.error(
-                f"Failed to trigger backfill for {symbol} {timeframe}: {e}",
-                exc_info=True,
+            logger.warning(
+                f"Orchestrator call failed for {symbol} {timeframe}: {e}. "
+                "Queuing request for later delivery."
             )
+            # Fallback: queue the request
+            if self.backfill_queue:
+                await self.backfill_queue.add(request)
+                logger.info(
+                    f"Queued backfill for {symbol} {timeframe} "
+                    f"(queue size: {self.backfill_queue.size})"
+                )
+                requests.append(request)
+            else:
+                logger.error(
+                    f"Failed to trigger backfill for {symbol} {timeframe}: {e}",
+                    exc_info=True,
+                )
 
         return requests
 
@@ -224,9 +248,6 @@ class BackfillTrigger:
         This is called from the analytics scheduler when it detects that
         analytics data is insufficient due to missing candles.
         """
-        if not self.backfill_orchestrator:
-            return []
-
         from data_manager.db.mongodb_adapter import MongoDBAdapter
         from data_manager.maintenance.candle_readiness import evaluate_readiness
 
@@ -296,10 +317,19 @@ class BackfillTrigger:
                         )
                         requests.append(request)
                     except Exception as e:
-                        logger.error(
-                            f"Failed to trigger backfill for {coll.pair} {coll.timeframe}: {e}",
-                            exc_info=True,
+                        logger.warning(
+                            f"Orchestrator call failed for {coll.pair} {coll.timeframe}: {e}. "
+                            "Queuing request for later delivery."
                         )
+                        # Fallback: queue the request
+                        if self.backfill_queue:
+                            await self.backfill_queue.add(request)
+                            requests.append(request)
+                        else:
+                            logger.error(
+                                f"Failed to trigger backfill for {coll.pair} {coll.timeframe}: {e}",
+                                exc_info=True,
+                            )
             finally:
                 adapter.disconnect()
 

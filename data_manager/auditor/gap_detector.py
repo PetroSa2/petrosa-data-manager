@@ -5,13 +5,18 @@ Gap detection for time series data.
 import logging
 from datetime import datetime, timedelta
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 import constants
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import AuditRepository, CandleRepository
 from data_manager.models.events import BackfillRequest
 from data_manager.models.health import GapInfo
+from data_manager.services.backfill_queue import (
+    BackfillRequestQueue,
+    gaps_filled_auto_total,
+    gaps_queued_total,
+)
 from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
@@ -24,6 +29,9 @@ auto_backfill_triggered_counter = Counter(
 )
 
 
+# Metric: gaps queued when orchestrator unavailable
+
+
 class GapDetector:
     """
     Detects gaps in time series data.
@@ -31,13 +39,20 @@ class GapDetector:
     Uses MongoDB queries to find missing data ranges.
     """
 
-    def __init__(self, db_manager: DatabaseManager, backfill_orchestrator=None):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        backfill_orchestrator=None,
+        backfill_queue: BackfillRequestQueue | None = None,
+    ):
         """
         Initialize gap detector.
 
         Args:
             db_manager: Database manager instance
             backfill_orchestrator: Optional backfill orchestrator for auto-backfill
+            backfill_queue: Optional in-memory queue for when orchestrator is
+                unavailable (petrosa-data-manager#320).
         """
         self.db_manager = db_manager
         self.candle_repo = CandleRepository(
@@ -47,6 +62,7 @@ class GapDetector:
             db_manager.mysql_adapter, db_manager.mongodb_adapter
         )
         self.backfill_orchestrator = backfill_orchestrator
+        self.backfill_queue = backfill_queue
 
     async def detect_gaps(
         self,
@@ -200,6 +216,9 @@ class GapDetector:
         """
         Trigger automatic backfill for detected gap.
 
+        Attempts the orchestrator first; if unavailable or the call fails,
+        queues the request for later delivery (petrosa-data-manager#320).
+
         Args:
             symbol: Trading pair symbol
             timeframe: Timeframe
@@ -215,13 +234,6 @@ class GapDetector:
                 )
                 return
 
-            # Check if backfill orchestrator is available
-            if not self.backfill_orchestrator:
-                logger.warning(
-                    "Auto-backfill enabled but no backfill orchestrator available"
-                )
-                return
-
             # Create backfill request
             request = BackfillRequest(
                 symbol=symbol,
@@ -230,6 +242,7 @@ class GapDetector:
                 start_time=gap.start_time,
                 end_time=gap.end_time,
                 priority=1 if severity == "high" else 5,
+                source="gap_detector",
             )
 
             logger.info(
@@ -238,15 +251,43 @@ class GapDetector:
                 f"(duration: {gap.duration_seconds}s, severity: {severity})"
             )
 
-            # Create backfill job
-            job = await self.backfill_orchestrator.create_backfill_job(request)
+            # Try orchestrator first
+            if self.backfill_orchestrator:
+                try:
+                    job = await self.backfill_orchestrator.create_backfill_job(request)
+                    logger.info(
+                        f"Backfill job created: {job.job_id} for {symbol} {timeframe}"
+                    )
+                    # Update metrics
+                    auto_backfill_triggered_counter.labels(
+                        symbol=symbol, timeframe=timeframe, reason="gap_detected"
+                    ).inc()
+                    gaps_filled_auto_total.labels(
+                        symbol=symbol, timeframe=timeframe
+                    ).inc()
+                    return
+                except Exception as e:
+                    logger.warning(
+                        f"Orchestrator call failed for {symbol} {timeframe}: {e}. "
+                        "Queuing request for later delivery."
+                    )
+            else:
+                logger.debug("Backfill orchestrator not available; queuing request")
 
-            logger.info(f"Backfill job created: {job.job_id} for {symbol} {timeframe}")
-
-            # Update metrics
-            auto_backfill_triggered_counter.labels(
-                symbol=symbol, timeframe=timeframe, reason="gap_detected"
-            ).inc()
+            # Fallback: queue the request
+            if self.backfill_queue:
+                await self.backfill_queue.add(request)
+                gaps_queued_total.labels(symbol=symbol, timeframe=timeframe).inc()
+                logger.info(
+                    f"Queued backfill for {symbol} {timeframe}: "
+                    f"{gap.duration_seconds}s gap "
+                    f"(queue size: {self.backfill_queue.size})"
+                )
+            else:
+                logger.warning(
+                    f"No backfill orchestrator and no queue available — "
+                    f"gap for {symbol} {timeframe} will NOT be filled."
+                )
 
         except Exception as e:
             logger.error(

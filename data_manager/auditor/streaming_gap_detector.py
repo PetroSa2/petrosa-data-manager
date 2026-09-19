@@ -23,6 +23,11 @@ from prometheus_client import Counter, Gauge, Histogram
 import constants
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.events import BackfillRequest, EventType, MarketDataEvent
+from data_manager.services.backfill_queue import (
+    BackfillRequestQueue,
+    gaps_filled_auto_total,
+    gaps_queued_total,
+)
 from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,7 @@ backfills_triggered_total = Counter(
     "Total backfills triggered by streaming detector",
     ["symbol", "timeframe", "source"],
 )
+
 streaming_detector_status = Gauge(
     "data_manager_streaming_detector_status",
     "Streaming detector status (1=active, 0=inactive)",
@@ -88,6 +94,7 @@ class StreamingGapDetector:
         backfill_orchestrator=None,
         nats_client=None,
         subscription_subject: str | None = None,
+        backfill_queue: BackfillRequestQueue | None = None,
     ):
         """
         Initialize the streaming gap detector.
@@ -98,6 +105,8 @@ class StreamingGapDetector:
             nats_client: NATS client for subscribing to kline events.
             subscription_subject: NATS subject to subscribe to. Defaults
                 to constants.NATS_CONSUMER_SUBJECT.
+            backfill_queue: Optional in-memory queue for when orchestrator is
+                unavailable (petrosa-data-manager#320).
         """
         self.candle_repo = candle_repo
         self.backfill_orchestrator = backfill_orchestrator
@@ -105,6 +114,7 @@ class StreamingGapDetector:
         self.subscription_subject = (
             subscription_subject or constants.NATS_CONSUMER_SUBJECT
         )
+        self.backfill_queue = backfill_queue
         self.running = False
         self._subscription = None
         # Last seen timestamp per (symbol, timeframe)
@@ -287,6 +297,9 @@ class StreamingGapDetector:
         """
         Trigger a backfill for the detected gap.
 
+        Attempts the orchestrator first; if unavailable or the call fails,
+        queues the request for later delivery (petrosa-data-manager#320).
+
         Args:
             symbol: Trading pair symbol.
             timeframe: Candle timeframe.
@@ -294,9 +307,6 @@ class StreamingGapDetector:
             gap_end: The timestamp of the first candle after the gap.
             gap_duration: Duration of the gap in seconds.
         """
-        if not self.backfill_orchestrator:
-            return
-
         try:
             # Apply minimum gap threshold
             if gap_duration < MIN_GAP_DURATION_SECONDS:
@@ -322,16 +332,43 @@ class StreamingGapDetector:
                 source="streaming_gap_detector",
             )
 
-            job = await self.backfill_orchestrator.create_backfill_job(request)
+            # Try orchestrator first
+            if self.backfill_orchestrator:
+                try:
+                    job = await self.backfill_orchestrator.create_backfill_job(request)
+                    backfills_triggered_total.labels(
+                        symbol=symbol, timeframe=timeframe, source="streaming"
+                    ).inc()
+                    gaps_filled_auto_total.labels(
+                        symbol=symbol, timeframe=timeframe
+                    ).inc()
+                    logger.info(
+                        f"Streaming backfill triggered: {job.job_id} for "
+                        f"{symbol} {timeframe} ({gap_duration:.0f}s gap)"
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(
+                        f"Orchestrator call failed for {symbol} {timeframe}: {e}. "
+                        "Queuing request for later delivery."
+                    )
+            else:
+                logger.debug("Backfill orchestrator not available; queuing request")
 
-            backfills_triggered_total.labels(
-                symbol=symbol, timeframe=timeframe, source="streaming"
-            ).inc()
-
-            logger.info(
-                f"Streaming backfill triggered: {job.job_id} for "
-                f"{symbol} {timeframe} ({gap_duration:.0f}s gap)"
-            )
+            # Fallback: queue the request
+            if self.backfill_queue:
+                await self.backfill_queue.add(request)
+                gaps_queued_total.labels(symbol=symbol, timeframe=timeframe).inc()
+                logger.info(
+                    f"Queued streaming backfill for {symbol} {timeframe}: "
+                    f"{gap_duration:.0f}s gap "
+                    f"(queue size: {self.backfill_queue.size})"
+                )
+            else:
+                logger.warning(
+                    f"No backfill orchestrator and no queue available — "
+                    f"gap for {symbol} {timeframe} will NOT be filled."
+                )
 
         except Exception as e:
             logger.error(

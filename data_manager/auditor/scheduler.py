@@ -24,6 +24,7 @@ from data_manager.auditor.health_scorer import HealthScorer
 from data_manager.auditor.streaming_gap_detector import StreamingGapDetector
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.leader_election import LeaderElectionManager
+from data_manager.services.backfill_queue import BackfillRequestQueue
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,12 @@ streaming_detector_active = Gauge(
     "data_manager_streaming_detector_active",
     "Streaming gap detector active status (1=active, 0=inactive)",
 )
+# AC4 of petrosa-data-manager#320: tracks queue flush outcomes.
+backfill_queue_flushed_total = Counter(
+    "data_manager_backfill_queue_flushed_total",
+    "Total backfill requests flushed from the in-memory queue to the orchestrator",
+    ["symbol", "timeframe"],
+)
 
 
 class AuditScheduler:
@@ -75,6 +82,7 @@ class AuditScheduler:
         leader_election: LeaderElectionManager | None = None,
         backfill_orchestrator=None,
         nats_client=None,
+        backfill_queue: BackfillRequestQueue | None = None,
     ):
         """
         Initialize audit scheduler.
@@ -89,10 +97,15 @@ class AuditScheduler:
                 evaluator is still instantiated but no verdicts are
                 published — useful for tests and local runs without a
                 broker.
+            backfill_queue: In-memory queue for backfill requests when the
+                orchestrator is unavailable (petrosa-data-manager#320).
         """
         self.db_manager = db_manager
+        self.backfill_queue = backfill_queue
         self.gap_detector = GapDetector(
-            db_manager, backfill_orchestrator=backfill_orchestrator
+            db_manager,
+            backfill_orchestrator=backfill_orchestrator,
+            backfill_queue=backfill_queue,
         )
         self.duplicate_detector = DuplicateDetector(db_manager)
         self.health_scorer = HealthScorer(db_manager)
@@ -118,6 +131,7 @@ class AuditScheduler:
                 candle_repo=self.gap_detector.candle_repo,
                 backfill_orchestrator=backfill_orchestrator,
                 nats_client=nats_client,
+                backfill_queue=backfill_queue,
             )
 
     async def start(self) -> None:
@@ -205,8 +219,36 @@ class AuditScheduler:
             await self.streaming_detector.stop()
             streaming_detector_active.set(0)
 
+    async def flush_backfill_queue(self) -> int:
+        """
+        Flush queued backfill requests to the orchestrator.
+
+        Called periodically during audit cycles (default every 60s) so that
+        requests queued while the orchestrator was unavailable are delivered
+        promptly (petrosa-data-manager#320, AC5: within 60 seconds).
+
+        Returns:
+            Number of requests successfully flushed.
+        """
+        if not self.backfill_queue:
+            return 0
+
+        flushed = await self.backfill_queue.flush(self.backfill_orchestrator)
+        if flushed:
+            logger.info(
+                f"Flushed {flushed} queued backfill(s) to orchestrator "
+                f"(queue size: {self.backfill_queue.size})"
+            )
+        return flushed
+
     async def run_audit_cycle(self) -> None:
         """Run a single audit cycle for all symbols and timeframes."""
+        # Flush any queued backfill requests (petrosa-data-manager#320)
+        try:
+            await self.flush_backfill_queue()
+        except Exception as e:
+            logger.warning(f"Backfill queue flush failed: {e}")
+
         logger.info("Starting audit cycle")
         audit_start = datetime.now(UTC)
 
