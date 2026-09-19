@@ -24,7 +24,10 @@ from data_manager.auditor.health_scorer import HealthScorer
 from data_manager.auditor.streaming_gap_detector import StreamingGapDetector
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.leader_election import LeaderElectionManager
-from data_manager.services.backfill_queue import BackfillRequestQueue
+from data_manager.services.backfill_queue import (
+    BackfillRequestQueue,
+    backfill_queue_flushed_total,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +63,6 @@ audit_backfills_triggered = Counter(
 streaming_detector_active = Gauge(
     "data_manager_streaming_detector_active",
     "Streaming gap detector active status (1=active, 0=inactive)",
-)
-# AC4 of petrosa-data-manager#320: tracks queue flush outcomes.
-backfill_queue_flushed_total = Counter(
-    "data_manager_backfill_queue_flushed_total",
-    "Total backfill requests flushed from the in-memory queue to the orchestrator",
-    ["symbol", "timeframe"],
 )
 
 
