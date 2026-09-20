@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -36,6 +37,26 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 CIO_DECISIONS_COLLECTION = "cio_decisions"
+
+
+def _cio_decisions_mysql_persist_enabled() -> bool:
+    """Kill-switch for the `cio_decisions` MySQL dual-write:
+    ``PETROSA_CIO_DECISIONS_MYSQL_PERSIST_ENABLED``.
+
+    2026-09-20: Mongo `cio_decisions` was cut to a 1-day TTL (see
+    ``constants.CIO_DECISIONS_TTL_SECONDS``) since it has confirmed readers
+    that only need a bounded recent window (`audit_evaluator.py`,
+    `api/routes/lifecycle.py`, `portfolio/state_service.py`). MySQL
+    `cio_decisions` (`mysql_adapter.py`) is the unbounded permanent copy.
+    Independent of Mongo persistence — a MySQL outage must never block or
+    fail decision processing, and disabling this switch must never affect
+    the Mongo write.
+    """
+    return (
+        os.environ.get("PETROSA_CIO_DECISIONS_MYSQL_PERSIST_ENABLED", "true").lower()
+        == "true"
+    )
+
 
 _meter = get_meter(__name__)
 _METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "decision"}
@@ -260,6 +281,9 @@ class DecisionConsumer:
             )
 
     async def _persist(self, event: DecisionEvent) -> bool:
+        if _cio_decisions_mysql_persist_enabled():
+            self._dual_write_mysql(event)
+
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
             if self.db_manager
@@ -289,3 +313,23 @@ class DecisionConsumer:
         except Exception as e:
             logger.error(f"Failed to persist decision {event.decision_id}: {e}")
             return False
+
+    def _dual_write_mysql(self, event: DecisionEvent) -> None:
+        """Best-effort dual-write of a decision into the durable MySQL
+        historic store (``mysql_adapter.py`` ``cio_decisions`` table). Never
+        raises — a MySQL hiccup must not block or fail decision processing,
+        which remains driven by the primary, synchronous Mongo write.
+        """
+        mysql_adapter = (
+            getattr(self.db_manager, "mysql_adapter", None) if self.db_manager else None
+        )
+        if mysql_adapter is None:
+            return
+        try:
+            mysql_adapter.write([event], CIO_DECISIONS_COLLECTION)
+        except Exception:
+            logger.error(
+                "MySQL cio_decisions dual-write failed for decision %s",
+                event.decision_id,
+                exc_info=True,
+            )

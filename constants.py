@@ -87,6 +87,24 @@ INTENTS_TTL_SECONDS = int(os.getenv("MONGODB_INTENTS_TTL_SECONDS", "86400"))
 # (data_manager.maintenance.intents_ttl_index) so they never disagree.
 ALERTS_TTL_SECONDS = int(os.getenv("MONGODB_ALERTS_TTL_SECONDS", "604800"))
 
+# CIO decisions TTL retention (2026-09-20). Unlike `signals`/`alerts`,
+# `cio_decisions` has confirmed live readers: `audit_evaluator.py`'s staleness
+# detector (30 min lookback), `api/routes/lifecycle.py`'s intents/decisions/
+# execution_events join, and `portfolio/state_service.py`'s point-in-time
+# reconstruction. The binding constraint is the join against `intents`, which
+# already expires at 1 day (INTENTS_TTL_SECONDS) — a lifecycle lookup can't
+# succeed past that anyway, so 1 day is the minimal window that keeps every
+# current read working (the staleness detector needs far less; state_at's
+# `recent_decisions` chain degrades gracefully, not incorrectly, for `at`
+# older than the window — see `PortfolioStateService.state_at`). MySQL
+# `cio_decisions` (see `mysql_adapter.py`, dual-written by
+# `decision_consumer.py`) is the unbounded permanent copy. Read by BOTH the
+# app-startup self-heal (MongoDBAdapter.ensure_indexes) and the standalone
+# maintenance job (data_manager.maintenance.intents_ttl_index) so they never
+# disagree — the same discipline that was missing for `signals` and let it
+# grow silently for 4 days.
+CIO_DECISIONS_TTL_SECONDS = int(os.getenv("MONGODB_CIO_DECISIONS_TTL_SECONDS", "86400"))
+
 # Trades retention (data-manager#246). The `trades` collection (raw public-trade
 # ticks written directly by the binance-futures extractor) grows unbounded at
 # ~22 MB/day and drove the 4th Atlas M0 quota P0 (2026-07-01: 870k docs / ~349 MB,

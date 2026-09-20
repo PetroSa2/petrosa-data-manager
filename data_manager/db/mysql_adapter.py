@@ -14,6 +14,7 @@ from pydantic import BaseModel
 try:
     import sqlalchemy as sa
     from sqlalchemy import (
+        JSON,
         Column,
         DateTime,
         Enum,
@@ -310,6 +311,36 @@ class MySQLAdapter(BaseAdapter):
             Column("created_at", DateTime, nullable=False),
             Column("updated_at", DateTime, nullable=False),
             Index("idx_daily_pnl_date", "date", unique=True),
+        )
+
+        # 2026-09-20 — cio_decisions: the permanent, unbounded historic copy.
+        # Mongo `cio_decisions` was cut to a 1-day TTL (see
+        # constants.CIO_DECISIONS_TTL_SECONDS) since it has confirmed
+        # readers that only need a bounded recent window; this table is the
+        # forever archive, dual-written by `decision_consumer.py._persist`.
+        # `decision_id` is the natural PK (CIO already assigns it before
+        # publishing — same cross-service identifier contract Mongo uses),
+        # so no synthetic id/auto-increment is needed. Self-managed (like
+        # `daily_pnl` above): self-heals via metadata.create_all() on every
+        # connect(), no manual migration step required for it to exist.
+        self.tables["cio_decisions"] = Table(
+            "cio_decisions",
+            self.metadata,
+            Column("decision_id", String(128), primary_key=True),
+            Column("strategy_id", String(128), nullable=False),
+            Column("timestamp", DateTime, nullable=False),
+            Column("symbol", String(20)),
+            Column("action", String(20)),
+            Column("price", Numeric(20, 8)),
+            Column("quantity", Numeric(20, 8)),
+            Column("confidence", Numeric(6, 5)),
+            Column("source", String(50)),
+            Column("reasoning", JSON),
+            Column("subject", String(150)),
+            Column("payload", JSON),
+            Column("received_at", DateTime, nullable=False),
+            Index("idx_cio_decisions_strategy_timestamp", "strategy_id", "timestamp"),
+            Index("idx_cio_decisions_timestamp", "timestamp"),
         )
 
         # Create all tables
