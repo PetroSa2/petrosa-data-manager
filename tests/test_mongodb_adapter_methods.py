@@ -292,6 +292,69 @@ class TestQueryRange:
                 datetime(2026, 1, 2, tzinfo=UTC),
             )
 
+    @pytest.mark.asyncio
+    async def test_limit_pushes_skip_and_limit_onto_cursor(self, adapter):
+        # petrosa-data-manager#331: limit/offset must be pushed onto the
+        # Mongo cursor (skip/limit), not applied by slicing the full result
+        # list in Python.
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.skip.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(
+            return_value=[{"_id": "a", "symbol": "BTCUSDT", "value": 1}]
+        )
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        results = await adapter.query_range(
+            "x",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            symbol="BTCUSDT",
+            limit=5,
+            offset=10,
+        )
+        assert len(results) == 1
+        cursor.skip.assert_called_once_with(10)
+        cursor.limit.assert_called_once_with(5)
+
+    @pytest.mark.asyncio
+    async def test_descending_sorts_newest_first(self, adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.query_range(
+            "x",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            descending=True,
+        )
+        # DESCENDING == -1 in pymongo.
+        cursor.sort.assert_called_once_with("timestamp", -1)
+
+    @pytest.mark.asyncio
+    async def test_no_limit_does_not_call_skip_or_limit(self, adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.query_range(
+            "x",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        cursor.skip.assert_not_called()
+        cursor.limit.assert_not_called()
+
 
 class TestQueryLatest:
     @pytest.mark.asyncio

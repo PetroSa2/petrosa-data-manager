@@ -688,8 +688,20 @@ class MySQLAdapter(BaseAdapter):
         start: datetime,
         end: datetime,
         symbol: str | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        descending: bool = False,
     ) -> list[dict[str, Any]]:
-        """Query records within time range."""
+        """Query records within time range.
+
+        ``limit``/``offset``/``descending`` push the row cap and sort
+        direction down to the database (petrosa-data-manager#331) instead of
+        the caller fetching the full range and slicing it in Python. When
+        ``limit`` is ``None`` the full range is returned, preserving the
+        original behaviour for callers that still need every row (e.g. the
+        cutover fallback path, analytics calculators).
+        """
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
@@ -703,7 +715,10 @@ class MySQLAdapter(BaseAdapter):
             if symbol:
                 query = query.where(table.c.symbol == symbol)
 
-            query = query.order_by(time_col)
+            query = query.order_by(time_col.desc() if descending else time_col)
+
+            if limit is not None:
+                query = query.limit(limit).offset(offset)
 
             engine = self._ensure_connected()
             with engine.connect() as conn:

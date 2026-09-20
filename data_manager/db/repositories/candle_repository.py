@@ -117,7 +117,15 @@ class CandleRepository(BaseRepository):
         return self.mysql if self._primary_is_mysql() is False else self.mongodb
 
     async def _read_fallback_range(
-        self, symbol: str, timeframe: str, start: datetime, end: datetime
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        descending: bool = False,
     ) -> list[dict]:
         """Query the non-primary backend for a time range. Never raises."""
         adapter = self._fallback_adapter()
@@ -126,10 +134,22 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 return await adapter.query_range(
-                    self._get_collection_name(symbol, timeframe), start, end, symbol
+                    self._get_collection_name(symbol, timeframe),
+                    start,
+                    end,
+                    symbol,
+                    limit=limit,
+                    offset=offset,
+                    descending=descending,
                 )
             rows = adapter.query_range(
-                self._get_mysql_table_name(timeframe), start, end, symbol
+                self._get_mysql_table_name(timeframe),
+                start,
+                end,
+                symbol,
+                limit=limit,
+                offset=offset,
+                descending=descending,
             )
             return [map_mysql_row(row) for row in rows]
         except Exception as e:
@@ -289,7 +309,15 @@ class CandleRepository(BaseRepository):
             return 0
 
     async def get_range(
-        self, symbol: str, timeframe: str, start: datetime, end: datetime
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        descending: bool = False,
     ) -> list[dict]:
         """
         Get candles within time range.
@@ -297,11 +325,24 @@ class CandleRepository(BaseRepository):
         Falls back to the non-primary backend when the primary returns nothing
         (#275 AC3) so execution never reads an empty window mid-cutover.
 
+        ``limit``/``offset``/``descending`` are pushed down to the adapter
+        query itself (petrosa-data-manager#331) rather than the caller
+        fetching the full range and slicing it in Python. ``descending``
+        determines the DB-side ``ORDER BY`` direction *before* ``LIMIT`` is
+        applied, so a caller asking for the newest N candles (``descending=
+        True``) gets the newest N — not the oldest N reversed, which is what
+        the previous Python-side ``reversed()`` + slice actually did once a
+        row cap is introduced.
+
         Args:
             symbol: Trading pair symbol
             timeframe: Timeframe (e.g., '1m', '1h')
             start: Start datetime
             end: End datetime
+            limit: Maximum rows to return (``None`` = full range, unchanged
+                behaviour for callers that need every row).
+            offset: Rows to skip before ``limit`` is applied.
+            descending: Sort newest-first when ``True`` (default oldest-first).
 
         Returns:
             List of candle dictionaries
@@ -315,12 +356,27 @@ class CandleRepository(BaseRepository):
                 # call so it doesn't stall the event loop (see write_batch
                 # comment above for the full rationale).
                 rows = await asyncio.to_thread(
-                    self.mysql.query_range, table, start, end, symbol
+                    self.mysql.query_range,
+                    table,
+                    start,
+                    end,
+                    symbol,
+                    limit=limit,
+                    offset=offset,
+                    descending=descending,
                 )
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
-                candles = await self.mongodb.query_range(collection, start, end, symbol)
+                candles = await self.mongodb.query_range(
+                    collection,
+                    start,
+                    end,
+                    symbol,
+                    limit=limit,
+                    offset=offset,
+                    descending=descending,
+                )
         except Exception as e:
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             candles = []
@@ -329,7 +385,15 @@ class CandleRepository(BaseRepository):
         if candles:
             return candles
 
-        fallback = await self._read_fallback_range(symbol, timeframe, start, end)
+        fallback = await self._read_fallback_range(
+            symbol,
+            timeframe,
+            start,
+            end,
+            limit=limit,
+            offset=offset,
+            descending=descending,
+        )
         if fallback:
             self._record_fallback("get_range", symbol, timeframe)
             self.last_read_source = "mongodb" if primary == "mysql" else "mysql"
