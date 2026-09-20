@@ -5,7 +5,9 @@ the current drawdown / envelope state on demand, alongside the
 periodic NATS breach surface. The endpoint deliberately mirrors the
 shape of ``DrawdownResult.to_dict()`` — dashboards consume the same
 payload from both the HTTP route and the
-``portfolio.drawdown.breach.>`` NATS subject.
+``alerts.portfolio.drawdown.breach.>`` NATS subject (petrosa-cio#215 —
+renamed from ``portfolio.drawdown.breach.>``, which had zero
+subscribers, to land under CIO's ``alerts.>`` consumer).
 """
 
 from __future__ import annotations
