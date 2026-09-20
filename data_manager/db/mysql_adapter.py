@@ -469,8 +469,15 @@ class MySQLAdapter(BaseAdapter):
         records: list[dict[str, Any]] = []
         for instance in model_instances:
             record = instance.model_dump()
-            if "id" in table.c and ("id" not in record or not record["id"]):
-                record["id"] = str(uuid.uuid4())
+            if "id" in table.c and not record.get("id"):
+                if isinstance(table.c["id"].type, sa.Integer):
+                    # Auto-increment integer PK (e.g. the reflected `signals`
+                    # table, `id int(11) auto_increment`) — never inject a
+                    # value here; a UUID string would violate the column
+                    # type. Drop the falsy placeholder so MySQL assigns it.
+                    record.pop("id", None)
+                else:
+                    record["id"] = str(uuid.uuid4())
             for key, value in record.items():
                 if isinstance(value, str) and key.endswith(("_at", "timestamp")):
                     try:

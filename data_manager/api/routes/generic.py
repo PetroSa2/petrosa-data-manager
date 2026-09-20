@@ -58,6 +58,93 @@ def _signals_persist_enabled() -> bool:
     return os.environ.get("PETROSA_SIGNALS_PERSIST_ENABLED", "true").lower() == "true"
 
 
+def _signals_mysql_persist_enabled() -> bool:
+    """Kill-switch for the `signals` MySQL dual-write: ``PETROSA_SIGNALS_MYSQL_PERSIST_ENABLED``.
+
+    2026-09-20: MySQL `petrosa_crypto.signals` is the durable historic
+    store (no TTL) going forward — its own writer was previously removed
+    (petrosa-bot-ta-analysis#284) leaving it a frozen archive, and the Mongo
+    `signals` window was cut to 1 hour (see `intents_ttl_index.py`
+    ``DEFAULT_SIGNALS_TTL_SECONDS``) since it can no longer double as
+    long-term storage. This gate is independent of
+    ``PETROSA_SIGNALS_PERSIST_ENABLED`` (the Mongo-side switch) so either
+    store can be disabled without affecting the other.
+    """
+    return (
+        os.environ.get("PETROSA_SIGNALS_MYSQL_PERSIST_ENABLED", "true").lower()
+        == "true"
+    )
+
+
+def _build_mysql_signal_record(item: dict[str, Any]) -> dict[str, Any]:
+    """Map a `signals` payload onto the legacy MySQL `signals` schema.
+
+    Mirrors the field mapping the raw-pymysql path used before it was
+    removed (petrosa-bot-ta-analysis#284), confirmed against the 14.38M
+    existing historic rows (2026-09-20 live read): ``period`` historically
+    mirrors ``timeframe``, and ``signal_type`` is the signal's ``action``
+    (buy/sell/hold/close). Extra fields the ta_bot `Signal` model carries
+    (``strategy_id``, ``current_price``, ``price``, ``strategy_mode``,
+    ``strength``, ``quantity``, ``source``, ``order_type``, ...) have no
+    column of their own in this table and are intentionally dropped —
+    ``metadata`` carries only the strategy's own metadata dict, matching
+    existing history exactly. ``id``/``created_at`` are omitted on purpose:
+    ``id`` is an ``auto_increment`` PK (see the integer-PK guard in
+    ``MySQLAdapter.write``) and ``created_at`` defaults to
+    ``CURRENT_TIMESTAMP`` in the live schema.
+    """
+    timeframe = item.get("timeframe") or "15m"
+    return {
+        "symbol": item["symbol"],
+        "timeframe": timeframe,
+        "period": timeframe,
+        "signal_type": item.get("action") or item.get("signal_type") or "hold",
+        "confidence": item.get("confidence", 0.0),
+        "strategy": item.get("strategy") or item.get("strategy_id") or "",
+        "metadata": item.get("metadata") or {},
+        "timestamp": item.get("timestamp") or datetime.now(UTC).isoformat(),
+    }
+
+
+def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
+    """Best-effort dual-write of `signals` payloads into the durable MySQL
+    historic store. Never raises — a MySQL hiccup must not block or fail
+    the live Mongo signal-persist path, which remains the primary,
+    synchronous write. Caller is responsible for checking
+    `_signals_mysql_persist_enabled()` first.
+    """
+    mysql_adapter = getattr(api_module.db_manager, "mysql_adapter", None)
+    if mysql_adapter is None:
+        return
+
+    from pydantic import BaseModel, ConfigDict
+
+    class _MySQLSignalModel(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    records = []
+    for item in data_list:
+        if not item.get("symbol"):
+            logger.warning(
+                "Skipping MySQL signals dual-write: payload missing 'symbol'"
+            )
+            continue
+        try:
+            records.append(_MySQLSignalModel(**_build_mysql_signal_record(item)))
+        except Exception:
+            logger.warning(
+                "Skipping malformed signal for MySQL dual-write", exc_info=True
+            )
+
+    if not records:
+        return
+
+    try:
+        mysql_adapter.write(records, "signals")
+    except Exception:
+        logger.error("MySQL signals dual-write failed", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Shared Internal Helpers
 # ---------------------------------------------------------------------------
@@ -379,6 +466,21 @@ async def insert_records(
         raise HTTPException(status_code=503, detail="Database manager not available")
 
     try:
+        data_list_raw = (
+            request.data if isinstance(request.data, list) else [request.data]
+        )
+
+        # 2026-09-20: independent of the Mongo kill-switch below — MySQL is
+        # the durable historic store now (no TTL there; the Mongo TTL was
+        # cut to 1h) and must keep receiving signals even if the Mongo
+        # short-window write is separately disabled, and vice versa.
+        if (
+            database == "mongodb"
+            and collection == "signals"
+            and _signals_mysql_persist_enabled()
+        ):
+            _dual_write_signals_to_mysql(data_list_raw)
+
         # data-manager#302 kill-switch — checked BEFORE touching the adapter
         # so a disabled write never opens a connection for a collection with
         # no confirmed reader. Scoped to mongodb.signals only.
@@ -412,7 +514,7 @@ async def insert_records(
         adapter = _get_adapter(database)
 
         # Convert data to list if single record
-        data_list = request.data if isinstance(request.data, list) else [request.data]
+        data_list = data_list_raw
 
         # Schema validation (if enabled)
         if validate and schema:
