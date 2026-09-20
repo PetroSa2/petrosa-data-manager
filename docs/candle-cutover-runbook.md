@@ -8,6 +8,11 @@ the flip itself is owned by
 sizing comes from [`docs/candle-consumer-retention-contract.md`](candle-consumer-retention-contract.md)
 (#276): **`MIN_WARMUP_CANDLES = 400`** per `(pair, timeframe)`.
 
+When following linked GitHub issues from an MCP-capable agent runtime, use the
+official `github` MCP server. Use `gh` only as the fallback for non-MCP clients,
+deterministic scripts, runners, or unsupported operations, with authentication from
+the configured file-backed token or environment.
+
 ## Why this is not a config flip
 
 Candle **writes** currently land in MySQL `klines_*` (`CANDLE_DATABASE_TYPE=mysql`)
