@@ -261,8 +261,12 @@ async def test_audit_reports_present_and_absent_siblings():
 # --------------------------------------------------------------------------- #
 
 
-def test_default_signals_ttl_is_seven_days():
-    assert itx.DEFAULT_SIGNALS_TTL_SECONDS == 604800
+def test_default_signals_ttl_is_one_hour():
+    # Tightened 2026-09-20 from 604800 (7 days): the TTL index had never
+    # actually been applied in prod, letting the collection grow 204 ->
+    # 132k+ docs in 4 days (83% of the Atlas M0 quota). MySQL
+    # `petrosa_crypto.signals` is now the durable historic store.
+    assert itx.DEFAULT_SIGNALS_TTL_SECONDS == 3600
 
 
 def test_load_config_from_env_parses_signals_ttl_seconds():
@@ -332,6 +336,61 @@ async def test_ensure_signals_collmod_when_ttl_window_differs():
     assert args[0] == "collMod"
     assert args[1] == "signals"
     assert kwargs["index"]["expireAfterSeconds"] == 86400
+
+
+@pytest.mark.asyncio
+async def test_ensure_signals_falls_back_to_recreate_when_collmod_denied():
+    """2026-09-20 live incident: the Atlas DB user is not granted `collMod`
+    on this cluster (AtlasError code 8000), even though it holds
+    dropIndex/createIndex. `_repair_ttl_window` must catch that and fall
+    back to drop+recreate so a TTL-window change (e.g. 7 days -> 1 hour)
+    still actually lands instead of silently failing."""
+    db = _make_db(
+        index_info_by_collection={
+            "signals": {
+                itx.SIGNALS_TTL_INDEX_NAME: _ttl_meta("_ttl_inserted_at", 604800)
+            }
+        }
+    )
+    db.command = AsyncMock(
+        side_effect=itx.PyMongoError(
+            "user is not allowed to do action [collMod] on "
+            "[petrosa_data_manager.signals]"
+        )
+    )
+
+    result = await itx.ensure_signals_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=3600
+    )
+
+    assert result.action == "recreated"
+    coll = db["signals"]
+    coll.drop_index.assert_awaited_once_with(itx.SIGNALS_TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
+    _args, kwargs = coll.create_index.call_args
+    assert kwargs["name"] == itx.SIGNALS_TTL_INDEX_NAME
+    assert kwargs["expireAfterSeconds"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_ensure_intents_falls_back_to_recreate_when_collmod_denied():
+    """Same collMod-permission fallback, covered once more on `intents` to
+    prove `_repair_ttl_window` is shared correctly across collections."""
+    db = _make_db(
+        index_info_by_collection={
+            "intents": {itx.TTL_INDEX_NAME: _ttl_meta("received_at", 604800)}
+        }
+    )
+    db.command = AsyncMock(side_effect=itx.PyMongoError("collMod not allowed"))
+
+    result = await itx.ensure_intents_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=86400
+    )
+
+    assert result.action == "recreated"
+    coll = db["intents"]
+    coll.drop_index.assert_awaited_once_with(itx.TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
 
 
 @pytest.mark.asyncio

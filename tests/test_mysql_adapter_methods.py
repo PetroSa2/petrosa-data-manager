@@ -191,6 +191,138 @@ class TestDisconnectedGuards:
         assert result is None
 
 
+class TestWriteIntegerAutoIncrementId:
+    """2026-09-20: `write()` used to unconditionally synthesize a UUID
+    string for any table with an `id` column, assuming a String PK (true
+    for the manually-defined tables, which actually use `audit_id`/
+    `metric_id`/etc. rather than a literal `id`). The reflected `signals`
+    table (MySQL `petrosa_crypto.signals`) has a real `id int(11)
+    auto_increment` PK — injecting a UUID string there would violate the
+    column type. `write()` must leave integer auto-increment `id` columns
+    alone and let the database assign them."""
+
+    @pytest.fixture
+    def signals_like_adapter(self, sqlite_adapter):
+        """Register a table shaped like the real MySQL `signals` table:
+        `id int auto_increment` PK, not a UUID string."""
+        table = sa.Table(
+            "signals",
+            sqlite_adapter.metadata,
+            sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+            sa.Column("symbol", sa.String(20), nullable=False),
+            sa.Column("signal_type", sa.String(10), nullable=False),
+            sa.Column("confidence", sa.Float, nullable=False),
+            sa.Column("strategy", sa.String(50), nullable=False),
+            sa.Column("timestamp", sa.DateTime, nullable=False),
+        )
+        table.create(sqlite_adapter.engine, checkfirst=True)
+        sqlite_adapter.tables["signals"] = table
+        return sqlite_adapter
+
+    @staticmethod
+    def _fake_engine(captured: dict):
+        """A fake engine/connection that records the `records` payload
+        passed to `conn.execute(stmt, records)` without needing real
+        `INSERT IGNORE` support (SQLite's dialect doesn't have it, unlike
+        MySQL, so the real sqlite_adapter engine can't run `write()`'s
+        actual SQL — this fake lets the test isolate the id-handling logic
+        in `write()` from dialect-specific SQL execution)."""
+
+        class FakeResult:
+            rowcount = 1
+
+        class FakeConn:
+            def execute(self, stmt, records):
+                captured["records"] = records
+                return FakeResult()
+
+            def begin(self):
+                return self
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        fake_engine = MagicMock()
+        fake_engine.connect.return_value = FakeConn()
+        return fake_engine
+
+    def test_write_does_not_inject_uuid_into_integer_id_column(
+        self, signals_like_adapter
+    ):
+        from pydantic import BaseModel, ConfigDict
+
+        class SignalRecord(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            symbol: str
+            signal_type: str
+            confidence: float
+            strategy: str
+            timestamp: datetime
+
+        captured: dict = {}
+        with patch.object(
+            signals_like_adapter,
+            "_ensure_connected",
+            return_value=self._fake_engine(captured),
+        ):
+            result = signals_like_adapter.write(
+                [
+                    SignalRecord(
+                        symbol="BTCUSDT",
+                        signal_type="buy",
+                        confidence=0.9,
+                        strategy="ema_pullback_continuation",
+                        timestamp=datetime(2026, 9, 20, tzinfo=UTC),
+                    )
+                ],
+                "signals",
+            )
+
+        assert result.inserted == 1
+        # The auto-increment column must never receive an injected value —
+        # a UUID string would violate the integer column type.
+        assert "id" not in captured["records"][0]
+
+    def test_write_still_injects_uuid_for_string_id_tables(self, sqlite_adapter):
+        """Regression guard: tables with a genuine String `id` PK must keep
+        getting an auto-generated UUID when none is supplied."""
+        table = sa.Table(
+            "widgets",
+            sqlite_adapter.metadata,
+            sa.Column("id", sa.String(64), primary_key=True),
+            sa.Column("name", sa.String(50), nullable=False),
+        )
+        table.create(sqlite_adapter.engine, checkfirst=True)
+        sqlite_adapter.tables["widgets"] = table
+
+        from pydantic import BaseModel, ConfigDict
+
+        class WidgetRecord(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            name: str
+
+        captured: dict = {}
+        with patch.object(
+            sqlite_adapter,
+            "_ensure_connected",
+            return_value=self._fake_engine(captured),
+        ):
+            sqlite_adapter.write([WidgetRecord(name="thing")], "widgets")
+
+        record = captured["records"][0]
+        assert isinstance(record["id"], str)
+        assert len(record["id"]) == 36  # uuid4 string length
+
+
 class TestTimeColumnFallback:
     """#548-adjacent (petrosa-tradeengine) discovery: query_range/query_latest/
     get_record_count hardcoded ``table.c.timestamp`` for every collection, but
