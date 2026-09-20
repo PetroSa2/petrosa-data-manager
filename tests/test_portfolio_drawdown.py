@@ -309,10 +309,19 @@ async def test_publisher_publishes_breach():
     assert published is True
     nats.publish.assert_awaited_once()
     subject, data = nats.publish.call_args.args
-    assert subject == "portfolio.drawdown.breach.ta-momentum"
+    # petrosa-cio#215: renamed from "portfolio.drawdown.breach.*" (zero
+    # subscribers) to land under CIO's "alerts.>" consumer, and distinct
+    # from "alerts.drawdown.breach.*" (tradeengine's per-position breach,
+    # consumed by DrawdownBreachSubscriber with an incompatible schema).
+    assert subject == "alerts.portfolio.drawdown.breach.ta-momentum"
     body = json.loads(data.decode())
     assert body["breached"] is True
     assert body["strategy_id"] == "ta-momentum"
+    # FR66-style alert envelope so CIO's alerts.> consumer can render it.
+    assert body["category"] == "portfolio_drawdown_breach"
+    assert body["severity"] == "critical"
+    assert "ta-momentum" in body["message"]
+    assert "timestamp" in body
 
 
 @pytest.mark.asyncio

@@ -928,8 +928,10 @@ class DataManagerApp:
 
         Iterates known strategies on each tick, computes current
         drawdown against the latest characterization envelope, and
-        emits a breach event on ``portfolio.drawdown.breach.{sid}``
-        so CIO can intervene. Healthy ticks do not publish — only
+        emits a breach event on ``alerts.portfolio.drawdown.breach.{sid}``
+        (petrosa-cio#215 — renamed from ``portfolio.drawdown.breach.{sid}``,
+        which had zero subscribers) so CIO's ``alerts.>`` consumer can
+        forward it to Telegram. Healthy ticks do not publish — only
         envelope breaches do.
 
         Surfaced as the FR30 production-wiring gap by the 2026-05-22
