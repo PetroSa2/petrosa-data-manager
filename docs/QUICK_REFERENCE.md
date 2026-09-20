@@ -229,3 +229,11 @@ curl http://localhost:9090/metrics
 kubectl --kubeconfig=k8s/kubeconfig.yaml -n petrosa-apps port-forward svc/petrosa-data-manager 9090:9090
 curl http://localhost:9090/metrics
 ```
+
+## GitHub tooling
+
+For direct GitHub work, MCP-capable agents should use the official `github` MCP
+server for repository, issue, pull request, review, release, and GitHub Actions
+operations, and `github-projects` MCP for Projects v2. Use `gh` only for non-MCP
+clients, deterministic scripts, runners, or unsupported operations. Use configured
+file-backed authentication or environment variables; never put credentials in docs.

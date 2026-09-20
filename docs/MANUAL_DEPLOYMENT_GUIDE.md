@@ -17,7 +17,18 @@ The manual deployment workflow allows you to:
 - Access to the GitHub repository
 - Permissions to trigger GitHub Actions workflows
 - `KUBECONFIG` secret configured in repository settings
-- `GITHUB_TOKEN` with package write permissions (automatic)
+- GitHub Actions' configured workflow token with package write permissions (automatic)
+
+## MCP-capable agent runtime
+
+Use the official `github` MCP Actions operation to dispatch this workflow and its
+Actions read operations to inspect runs and logs. Use `github-projects` MCP for any
+Projects v2 update.
+
+The UI and `gh` sections below remain the fallback for human operators, non-MCP
+clients, deterministic scripts, GitHub Actions runners, and unsupported operations.
+Use only the configured file-backed token or environment; never document credentials
+or bypass branch protection with `--admin`.
 
 ## Triggering from GitHub UI
 
