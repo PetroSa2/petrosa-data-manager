@@ -77,6 +77,12 @@ class HealthScorer:
             completeness = (
                 (actual_count / expected_count * 100) if expected_count > 0 else 0.0
             )
+            # A duplicate timestamp inflates actual_count above expected_count
+            # (petrosa-data-manager#330), which would otherwise push
+            # completeness above the DataHealthMetrics le=100.0 bound and
+            # raise a ValidationError. The duplicate is still reported via
+            # duplicates_count, so clamping here does not hide it.
+            completeness = min(completeness, 100.0)
 
             # Get freshness (seconds since last data point)
             latest_candles = await self.candle_repo.get_latest(
@@ -128,6 +134,10 @@ class HealthScorer:
                 + consistency_score * 0.4  # 40% weight on consistency
                 + freshness_score * 0.2  # 20% weight on freshness
             )
+            # Belt-and-suspenders: guaranteed <= 100 once completeness is
+            # clamped above, but guard explicitly against future weight/input
+            # changes that could push this over the DataHealthMetrics bound.
+            quality_score = min(quality_score, 100.0)
 
             metrics = DataHealthMetrics(
                 completeness=completeness,
