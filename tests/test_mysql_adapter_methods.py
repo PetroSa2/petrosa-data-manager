@@ -261,6 +261,125 @@ class TestTimeColumnFallback:
         table = sqlite_adapter._get_table("audit_logs")
         assert sqlite_adapter._time_column(table) is table.c.timestamp
 
+    def test_query_range_enforces_db_side_limit(self, sqlite_adapter):
+        # petrosa-data-manager#331: query_range must cap rows at the SQL
+        # level (LIMIT), not return everything for the caller to slice.
+        table = sqlite_adapter._get_table("audit_logs")
+        with sqlite_adapter.engine.connect() as conn:
+            conn.execute(
+                table.insert(),
+                [
+                    {
+                        "audit_id": f"a{i}",
+                        "dataset_id": "d1",
+                        "symbol": "BTCUSDT",
+                        "audit_type": "x",
+                        "timestamp": datetime(2026, 1, 1, i, tzinfo=UTC),
+                    }
+                    for i in range(5)
+                ],
+            )
+            conn.commit()
+
+        rows = sqlite_adapter.query_range(
+            "audit_logs",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            "BTCUSDT",
+            limit=2,
+        )
+        # A DB-side LIMIT returns exactly 2 rows, not all 5 sliced in Python.
+        assert len(rows) == 2
+        assert [r["audit_id"] for r in rows] == ["a0", "a1"]
+
+    def test_query_range_descending_limit_returns_newest_first(self, sqlite_adapter):
+        # petrosa-data-manager#331 correctness warning: LIMIT must be applied
+        # AFTER an ORDER BY that matches the caller's requested direction, or
+        # a `sort_order="desc"` caller silently gets the oldest rows instead
+        # of the newest.
+        table = sqlite_adapter._get_table("audit_logs")
+        with sqlite_adapter.engine.connect() as conn:
+            conn.execute(
+                table.insert(),
+                [
+                    {
+                        "audit_id": f"a{i}",
+                        "dataset_id": "d1",
+                        "symbol": "BTCUSDT",
+                        "audit_type": "x",
+                        "timestamp": datetime(2026, 1, 1, i, tzinfo=UTC),
+                    }
+                    for i in range(5)
+                ],
+            )
+            conn.commit()
+
+        rows = sqlite_adapter.query_range(
+            "audit_logs",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            "BTCUSDT",
+            limit=2,
+            descending=True,
+        )
+        assert [r["audit_id"] for r in rows] == ["a4", "a3"]
+
+    def test_query_range_offset_skips_rows_at_db_level(self, sqlite_adapter):
+        table = sqlite_adapter._get_table("audit_logs")
+        with sqlite_adapter.engine.connect() as conn:
+            conn.execute(
+                table.insert(),
+                [
+                    {
+                        "audit_id": f"a{i}",
+                        "dataset_id": "d1",
+                        "symbol": "BTCUSDT",
+                        "audit_type": "x",
+                        "timestamp": datetime(2026, 1, 1, i, tzinfo=UTC),
+                    }
+                    for i in range(5)
+                ],
+            )
+            conn.commit()
+
+        rows = sqlite_adapter.query_range(
+            "audit_logs",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            "BTCUSDT",
+            limit=2,
+            offset=2,
+        )
+        assert [r["audit_id"] for r in rows] == ["a2", "a3"]
+
+    def test_query_range_without_limit_returns_full_range(self, sqlite_adapter):
+        # Backward compatibility: callers that don't pass `limit` (analytics
+        # calculators, the cutover fallback path) must still get everything.
+        table = sqlite_adapter._get_table("audit_logs")
+        with sqlite_adapter.engine.connect() as conn:
+            conn.execute(
+                table.insert(),
+                [
+                    {
+                        "audit_id": f"a{i}",
+                        "dataset_id": "d1",
+                        "symbol": "BTCUSDT",
+                        "audit_type": "x",
+                        "timestamp": datetime(2026, 1, 1, i, tzinfo=UTC),
+                    }
+                    for i in range(5)
+                ],
+            )
+            conn.commit()
+
+        rows = sqlite_adapter.query_range(
+            "audit_logs",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
+            "BTCUSDT",
+        )
+        assert len(rows) == 5
+
     def test_time_column_raises_for_table_with_no_known_time_column(
         self, sqlite_adapter
     ):

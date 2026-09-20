@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 try:
     from motor import motor_asyncio
-    from pymongo import ASCENDING, IndexModel
+    from pymongo import ASCENDING, DESCENDING, IndexModel
     from pymongo.errors import DuplicateKeyError, PyMongoError
 
     MOTOR_AVAILABLE = True
@@ -254,8 +254,20 @@ class MongoDBAdapter(BaseAdapter):
         start: datetime,
         end: datetime,
         symbol: str | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        descending: bool = False,
     ) -> list[dict[str, Any]]:
-        """Query records within time range."""
+        """Query records within time range.
+
+        ``limit``/``offset``/``descending`` push the row cap and sort
+        direction down to the cursor (petrosa-data-manager#331) instead of
+        the caller fetching the full range and slicing it in Python. When
+        ``limit`` is ``None`` the full range is returned, preserving the
+        original behaviour for callers that still need every row (e.g. the
+        cutover fallback path, analytics calculators).
+        """
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
@@ -266,8 +278,11 @@ class MongoDBAdapter(BaseAdapter):
             if symbol:
                 query["symbol"] = symbol
 
-            cursor = coll.find(query).sort("timestamp", ASCENDING)
-            documents = await cursor.to_list(length=None)
+            sort_direction = DESCENDING if descending else ASCENDING
+            cursor = coll.find(query).sort("timestamp", sort_direction)
+            if limit is not None:
+                cursor = cursor.skip(offset).limit(limit)
+            documents = await cursor.to_list(length=limit)
 
             # Remove _id from results
             for doc in documents:

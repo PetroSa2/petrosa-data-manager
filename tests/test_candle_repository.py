@@ -148,7 +148,13 @@ class TestMongoPath:
                 {"close": "100"}
             ]
             mongodb.query_range.assert_called_once_with(
-                "candles_BTCUSDT_1h", start, end, "BTCUSDT"
+                "candles_BTCUSDT_1h",
+                start,
+                end,
+                "BTCUSDT",
+                limit=None,
+                offset=0,
+                descending=False,
             )
 
     @pytest.mark.asyncio

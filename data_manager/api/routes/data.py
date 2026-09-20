@@ -158,16 +158,24 @@ async def get_candles(
         if not start:
             start = _default_candle_start(end, period, limit, offset)
 
-        candles = await candle_repo.get_range(pair, period, start, end)
+        # Push the row cap, pagination offset and sort direction down into
+        # the database query (petrosa-data-manager#331) instead of fetching
+        # the full range, reversing it in Python and slicing the result.
+        # ``ORDER BY`` direction must match ``sort_order`` *before* ``LIMIT``
+        # is applied, or a DB-side cap would silently return the oldest N
+        # candles for `sort_order="desc"` callers instead of the newest N.
+        descending = sort_order.lower() == "desc"
+        paginated_candles = await candle_repo.get_range(
+            pair,
+            period,
+            start,
+            end,
+            limit=limit,
+            offset=offset,
+            descending=descending,
+        )
 
-        # Apply sorting
-        if sort_order.lower() == "desc":
-            candles = list(reversed(candles))
-
-        total_count = len(candles)
-
-        # Apply pagination
-        paginated_candles = candles[offset : offset + limit]
+        total_count = await candle_repo.count(pair, period, start, end)
 
         # Format response
         values = [
