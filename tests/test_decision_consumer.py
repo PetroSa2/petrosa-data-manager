@@ -1,5 +1,6 @@
 """Tests for the CIO decision consumer (P0.2b)."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -150,10 +151,17 @@ def _build_msg(payload, subject="signals.trading.strat_momentum_v1"):
     return msg
 
 
+async def _drain_mysql_persist_tasks(decision_consumer):
+    tasks = tuple(decision_consumer._mysql_persist_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_process_message_persists_decision(decision_consumer, mock_db_manager):
     msg = _build_msg(_decision_payload())
     await decision_consumer._process_message(msg)
+    await _drain_mysql_persist_tasks(decision_consumer)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_awaited_once()
     inserted = collection.insert_one.await_args.args[0]
@@ -191,6 +199,7 @@ async def test_process_message_sets_decision_context_attrs(decision_consumer):
         "data_manager.consumer.decision_consumer.set_decision_context"
     ) as mock_set:
         await decision_consumer._process_message(msg)
+    await _drain_mysql_persist_tasks(decision_consumer)
     assert mock_set.called
     _, kwargs = mock_set.call_args
     assert kwargs["decision_id"] == "dec_20260518T120000000_xyz789"
@@ -210,6 +219,7 @@ async def test_persist_tolerates_duplicate_key(decision_consumer, mock_db_manage
     event = DecisionEvent.from_nats_message(_decision_payload())
     assert event is not None
     assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
 
 
 @pytest.mark.asyncio
@@ -270,6 +280,7 @@ async def test_persist_dual_writes_to_mysql(decision_consumer, mock_db_manager):
     assert event is not None
 
     assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
 
     mock_db_manager.mysql_adapter.write.assert_called_once()
     records, collection = mock_db_manager.mysql_adapter.write.call_args[0]
@@ -301,6 +312,7 @@ async def test_persist_mysql_failure_does_not_block_mongo_write(
     assert event is not None
 
     assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_awaited_once()
 
@@ -314,6 +326,35 @@ async def test_persist_without_mysql_adapter_does_not_raise(
     assert event is not None
 
     assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
+
+
+@pytest.mark.asyncio
+async def test_persist_does_not_wait_for_mysql_before_mongo_write(
+    decision_consumer, mock_db_manager
+):
+    mysql_started = asyncio.Event()
+    release_mysql = asyncio.Event()
+
+    async def blocked_mysql_write(_event):
+        mysql_started.set()
+        await release_mysql.wait()
+
+    with patch.object(
+        decision_consumer,
+        "_dual_write_mysql",
+        new=blocked_mysql_write,
+    ):
+        event = DecisionEvent.from_nats_message(_decision_payload())
+        assert event is not None
+
+        assert await decision_consumer._persist(event) is True
+        collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+        collection.insert_one.assert_awaited_once()
+
+        await asyncio.wait_for(mysql_started.wait(), timeout=1)
+        release_mysql.set()
+        await _drain_mysql_persist_tasks(decision_consumer)
 
 
 @pytest.mark.asyncio
@@ -328,3 +369,4 @@ async def test_persist_dual_writes_even_without_db_manager_mongo_adapter(
     assert event is not None
 
     assert await decision_consumer._persist(event) is False
+    await _drain_mysql_persist_tasks(decision_consumer)

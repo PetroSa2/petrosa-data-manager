@@ -104,6 +104,7 @@ class DecisionConsumer:
             maxsize=constants.MESSAGE_QUEUE_SIZE
         )
         self._processing_tasks: list[asyncio.Task] = []
+        self._mysql_persist_tasks: set[asyncio.Task[Any]] = set()
         self._owns_nats_client = nats_client is None
 
     async def start(self) -> bool:
@@ -149,6 +150,13 @@ class DecisionConsumer:
             for task in self._processing_tasks:
                 task.cancel()
             await asyncio.gather(*self._processing_tasks, return_exceptions=True)
+
+        if self._mysql_persist_tasks:
+            mysql_tasks = tuple(self._mysql_persist_tasks)
+            for task in mysql_tasks:
+                task.cancel()
+            await asyncio.gather(*mysql_tasks, return_exceptions=True)
+            self._mysql_persist_tasks.clear()
 
         if self.subscription:
             try:
@@ -280,9 +288,14 @@ class DecisionConsumer:
                 time.monotonic() - start_time, _METRIC_ATTRS
             )
 
+    def _schedule_mysql_dual_write(self, event: DecisionEvent) -> None:
+        task = asyncio.create_task(self._dual_write_mysql(event))
+        self._mysql_persist_tasks.add(task)
+        task.add_done_callback(self._mysql_persist_tasks.discard)
+
     async def _persist(self, event: DecisionEvent) -> bool:
         if _cio_decisions_mysql_persist_enabled():
-            self._dual_write_mysql(event)
+            self._schedule_mysql_dual_write(event)
 
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
@@ -314,7 +327,7 @@ class DecisionConsumer:
             logger.error(f"Failed to persist decision {event.decision_id}: {e}")
             return False
 
-    def _dual_write_mysql(self, event: DecisionEvent) -> None:
+    async def _dual_write_mysql(self, event: DecisionEvent) -> None:
         """Best-effort dual-write of a decision into the durable MySQL
         historic store (``mysql_adapter.py`` ``cio_decisions`` table). Never
         raises — a MySQL hiccup must not block or fail decision processing,
@@ -326,7 +339,9 @@ class DecisionConsumer:
         if mysql_adapter is None:
             return
         try:
-            mysql_adapter.write([event], CIO_DECISIONS_COLLECTION)
+            await asyncio.to_thread(
+                mysql_adapter.write, [event], CIO_DECISIONS_COLLECTION
+            )
         except Exception:
             logger.error(
                 "MySQL cio_decisions dual-write failed for decision %s",
