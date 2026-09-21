@@ -239,10 +239,12 @@ async def test_audit_reports_present_and_absent_siblings():
     assert by_name["alerts"].ttl_indexes == {}
     # cio_decisions / execution_events / trades are absent in this fixture.
     assert by_name["trades"].present is False
-    # data-manager#271 AC1: `alerts` graduated to the EPHEMERAL override; every
-    # other documented sibling keeps the default retain-pending-evidence
-    # decision (the `trades` override was removed with data-manager#254).
-    assert itx.SIBLING_DECISION_OVERRIDES.keys() == {"alerts"}
+    # data-manager#271 AC1: `alerts` graduated to the EPHEMERAL override;
+    # 2026-09-20: `cio_decisions` graduated to the BOUNDED override (confirmed
+    # readers, unlike alerts). Every other documented sibling keeps the
+    # default retain-pending-evidence decision (the `trades` override was
+    # removed with data-manager#254).
+    assert itx.SIBLING_DECISION_OVERRIDES.keys() == {"alerts", "cio_decisions"}
     assert by_name["alerts"].decision == itx.SIBLING_DECISION_OVERRIDES["alerts"]
     assert all(
         r.collection not in itx.SIBLING_DECISION_OVERRIDES
@@ -523,6 +525,146 @@ async def test_ensure_alerts_dry_run_mutates_nothing():
     assert result.action == "created"
     assert result.dry_run is True
     coll = db["alerts"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------- #
+# ensure_cio_decisions_ttl_index (2026-09-20 — confirmed-reader collection,
+# bounded rather than ephemeral; see constants.CIO_DECISIONS_TTL_SECONDS)
+# --------------------------------------------------------------------------- #
+
+
+def test_default_cio_decisions_ttl_is_one_day():
+    assert itx.DEFAULT_CIO_DECISIONS_TTL_SECONDS == 86400
+    assert itx.CIO_DECISIONS_COLLECTION == "cio_decisions"
+    assert itx.CIO_DECISIONS_TTL_FIELD == "received_at"
+    assert itx.CIO_DECISIONS_TTL_INDEX_NAME == "received_at_ttl_1d"
+
+
+def test_load_config_from_env_parses_cio_decisions_ttl_seconds():
+    config = itx.load_config_from_env({"MONGODB_CIO_DECISIONS_TTL_SECONDS": "43200"})
+    assert config.cio_decisions_ttl_seconds == 43200
+
+
+def test_load_config_from_env_defaults_cio_decisions_ttl():
+    assert (
+        itx.load_config_from_env({}).cio_decisions_ttl_seconds
+        == itx.DEFAULT_CIO_DECISIONS_TTL_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_cio_decisions_creates_index_when_absent():
+    db = _make_db(
+        index_info_by_collection={"cio_decisions": {"_id_": {"key": [("_id", 1)]}}}
+    )
+    result = await itx.ensure_cio_decisions_ttl_index(db, "petrosa_data_manager")
+
+    assert result.action == "created"
+    assert result.database == "petrosa_data_manager"
+    assert result.collection == "cio_decisions"
+    assert result.field == "received_at"
+    coll = db["cio_decisions"]
+    coll.create_index.assert_awaited_once()
+    _args, kwargs = coll.create_index.call_args
+    assert kwargs["name"] == itx.CIO_DECISIONS_TTL_INDEX_NAME
+    assert kwargs["expireAfterSeconds"] == itx.DEFAULT_CIO_DECISIONS_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_ensure_cio_decisions_noop_when_index_matches_spec():
+    db = _make_db(
+        index_info_by_collection={
+            "cio_decisions": {
+                itx.CIO_DECISIONS_TTL_INDEX_NAME: _ttl_meta("received_at", 86400)
+            }
+        }
+    )
+    result = await itx.ensure_cio_decisions_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=86400
+    )
+
+    assert result.action == "noop"
+    coll = db["cio_decisions"]
+    coll.create_index.assert_not_awaited()
+    coll.drop_index.assert_not_awaited()
+    db.command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_cio_decisions_collmod_when_ttl_window_differs():
+    db = _make_db(
+        index_info_by_collection={
+            "cio_decisions": {
+                itx.CIO_DECISIONS_TTL_INDEX_NAME: _ttl_meta("received_at", 86400)
+            }
+        }
+    )
+    result = await itx.ensure_cio_decisions_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=43200
+    )
+
+    assert result.action == "collmod"
+    db.command.assert_awaited_once()
+    args, kwargs = db.command.call_args
+    assert args[0] == "collMod"
+    assert args[1] == "cio_decisions"
+    assert kwargs["index"]["expireAfterSeconds"] == 43200
+
+
+@pytest.mark.asyncio
+async def test_ensure_cio_decisions_falls_back_to_recreate_when_collmod_denied():
+    """Same Atlas collMod-permission gap live-confirmed on `signals` — the
+    shared `_repair_ttl_window` fallback must cover `cio_decisions` too."""
+    db = _make_db(
+        index_info_by_collection={
+            "cio_decisions": {
+                itx.CIO_DECISIONS_TTL_INDEX_NAME: _ttl_meta("received_at", 86400)
+            }
+        }
+    )
+    db.command = AsyncMock(side_effect=itx.PyMongoError("collMod not allowed"))
+
+    result = await itx.ensure_cio_decisions_ttl_index(
+        db, "petrosa_data_manager", ttl_seconds=43200
+    )
+
+    assert result.action == "recreated"
+    coll = db["cio_decisions"]
+    coll.drop_index.assert_awaited_once_with(itx.CIO_DECISIONS_TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_cio_decisions_recreates_when_name_on_wrong_field():
+    db = _make_db(
+        index_info_by_collection={
+            "cio_decisions": {
+                itx.CIO_DECISIONS_TTL_INDEX_NAME: _ttl_meta("timestamp", 86400)
+            }
+        }
+    )
+    result = await itx.ensure_cio_decisions_ttl_index(db, "petrosa_data_manager")
+
+    assert result.action == "recreated"
+    coll = db["cio_decisions"]
+    coll.drop_index.assert_awaited_once_with(itx.CIO_DECISIONS_TTL_INDEX_NAME)
+    coll.create_index.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_cio_decisions_dry_run_mutates_nothing():
+    db = _make_db(
+        index_info_by_collection={"cio_decisions": {"_id_": {"key": [("_id", 1)]}}}
+    )
+    result = await itx.ensure_cio_decisions_ttl_index(
+        db, "petrosa_data_manager", dry_run=True
+    )
+
+    assert result.action == "created"
+    assert result.dry_run is True
+    coll = db["cio_decisions"]
     coll.create_index.assert_not_awaited()
     coll.drop_index.assert_not_awaited()
 

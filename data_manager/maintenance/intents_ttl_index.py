@@ -143,6 +143,21 @@ ALERTS_TTL_INDEX_NAME = "_ttl_inserted_at_ttl"
 DEFAULT_ALERTS_TTL_SECONDS = 604800  # 7 days — data-manager#271 AC3
 
 # --------------------------------------------------------------------------- #
+# cio_decisions TTL — 2026-09-20. Unlike signals/alerts, this collection has
+# confirmed live readers (audit_evaluator's staleness detector,
+# api/routes/lifecycle.py's join, portfolio/state_service.py's point-in-time
+# reconstruction) — see constants.CIO_DECISIONS_TTL_SECONDS for the full
+# rationale on why 1 day is the minimal window that keeps every current read
+# working. MySQL `cio_decisions` (mysql_adapter.py, dual-written by
+# decision_consumer.py) is the unbounded permanent copy.
+# --------------------------------------------------------------------------- #
+CIO_DECISIONS_COLLECTION = "cio_decisions"
+CIO_DECISIONS_TTL_FIELD = "received_at"
+CIO_DECISIONS_TTL_INDEX_NAME = "received_at_ttl_1d"
+DEFAULT_CIO_DECISIONS_TTL_SECONDS = 86400  # 1 day — bounded by the `intents`
+# join (also 1 day); see constants.CIO_DECISIONS_TTL_SECONDS.
+
+# --------------------------------------------------------------------------- #
 # config_rate_limits TTL — data-manager#302
 # --------------------------------------------------------------------------- #
 # Corrected finding (data-manager#302, live Atlas re-query 2026-09-15): unlike
@@ -215,6 +230,19 @@ SIBLING_DECISION_OVERRIDES: dict[str, str] = {
         "dedicated `_ttl_inserted_at` TTL index, window "
         "MONGODB_ALERTS_TTL_SECONDS (default 7 days)"
     ),
+    # 2026-09-20 — cio_decisions graduated from "retain, audit-only" to
+    # actively managed: it DOES have confirmed readers (audit_evaluator,
+    # lifecycle.py, portfolio/state_service.py), so unlike `alerts` this is
+    # not "ephemeral, no reader" — it's "bounded to the minimal window every
+    # current reader needs" while MySQL keeps the unbounded copy forever.
+    "cio_decisions": (
+        "bounded — confirmed readers (audit_evaluator 30min lookback, "
+        "lifecycle.py join, portfolio/state_service.py point-in-time "
+        "reconstruction); managed by the dedicated `received_at` TTL index, "
+        "window MONGODB_CIO_DECISIONS_TTL_SECONDS (default 1 day, matching "
+        "the `intents` join it's bounded by); MySQL `cio_decisions` "
+        "(dual-written by decision_consumer.py) is the unbounded permanent copy"
+    ),
 }
 
 
@@ -231,6 +259,7 @@ class TtlIndexConfig:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     signals_ttl_seconds: int = DEFAULT_SIGNALS_TTL_SECONDS
     alerts_ttl_seconds: int = DEFAULT_ALERTS_TTL_SECONDS
+    cio_decisions_ttl_seconds: int = DEFAULT_CIO_DECISIONS_TTL_SECONDS
     config_rate_limits_database: str = DEFAULT_CONFIG_RATE_LIMITS_DATABASE
     config_rate_limits_ttl_seconds: int = DEFAULT_CONFIG_RATE_LIMITS_TTL_SECONDS
     dry_run: bool = False
@@ -290,6 +319,12 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> TtlIndexConfi
         DEFAULT_ALERTS_TTL_SECONDS,
         minimum=60,
     )
+    cio_decisions_ttl_seconds = _parse_int_env(
+        env,
+        "MONGODB_CIO_DECISIONS_TTL_SECONDS",
+        DEFAULT_CIO_DECISIONS_TTL_SECONDS,
+        minimum=60,
+    )
     config_rate_limits_ttl_seconds = _parse_int_env(
         env,
         "MONGODB_CONFIG_RATE_LIMITS_TTL_SECONDS",
@@ -305,6 +340,7 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> TtlIndexConfi
         ttl_seconds=ttl_seconds,
         signals_ttl_seconds=signals_ttl_seconds,
         alerts_ttl_seconds=alerts_ttl_seconds,
+        cio_decisions_ttl_seconds=cio_decisions_ttl_seconds,
         config_rate_limits_database=config_rate_limits_database,
         config_rate_limits_ttl_seconds=config_rate_limits_ttl_seconds,
         dry_run=False,
@@ -640,6 +676,92 @@ async def ensure_alerts_ttl_index(
     return result
 
 
+async def ensure_cio_decisions_ttl_index(
+    db,
+    db_name: str,
+    *,
+    ttl_seconds: int = DEFAULT_CIO_DECISIONS_TTL_SECONDS,
+    dry_run: bool = False,
+) -> TtlIndexResult:
+    """Idempotently ensure the TTL index on `cio_decisions.received_at`.
+
+    2026-09-20. Unlike `signals`/`alerts`, `cio_decisions` has confirmed live
+    readers (`audit_evaluator.py`, `api/routes/lifecycle.py`,
+    `portfolio/state_service.py`) — see `constants.CIO_DECISIONS_TTL_SECONDS`
+    for why 1 day is the minimal window that keeps every current read
+    working. Mirrors :func:`ensure_alerts_ttl_index`'s idempotent
+    create/collmod-or-recreate/noop logic.
+
+    * No-ops if the index already matches the desired spec.
+    * Repairs the TTL window via `_repair_ttl_window` (collMod, falling back
+      to drop+recreate) if the field is right but `expireAfterSeconds` differs.
+    * Creates the index if absent.
+    """
+    coll = db[CIO_DECISIONS_COLLECTION]
+    info = await coll.index_information()
+
+    existing = info.get(CIO_DECISIONS_TTL_INDEX_NAME)
+    if existing is not None and _index_key_fields(existing) == [
+        CIO_DECISIONS_TTL_FIELD
+    ]:
+        current_ttl = existing.get("expireAfterSeconds")
+        if current_ttl == ttl_seconds:
+            action = "noop"
+        elif dry_run:
+            action = "collmod"
+        else:
+            action = await _repair_ttl_window(
+                db,
+                coll,
+                CIO_DECISIONS_COLLECTION,
+                CIO_DECISIONS_TTL_INDEX_NAME,
+                CIO_DECISIONS_TTL_FIELD,
+                ttl_seconds,
+            )
+    elif existing is not None:
+        # Name squatting on the wrong field — drop and recreate cleanly.
+        action = "recreated"
+        if not dry_run:
+            await coll.drop_index(CIO_DECISIONS_TTL_INDEX_NAME)
+            await coll.create_index(
+                [(CIO_DECISIONS_TTL_FIELD, ASCENDING)],
+                name=CIO_DECISIONS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+    else:
+        action = "created"
+        if not dry_run:
+            await coll.create_index(
+                [(CIO_DECISIONS_TTL_FIELD, ASCENDING)],
+                name=CIO_DECISIONS_TTL_INDEX_NAME,
+                expireAfterSeconds=ttl_seconds,
+            )
+
+    result = TtlIndexResult(
+        database=db_name,
+        collection=CIO_DECISIONS_COLLECTION,
+        index_name=CIO_DECISIONS_TTL_INDEX_NAME,
+        field=CIO_DECISIONS_TTL_FIELD,
+        ttl_seconds=ttl_seconds,
+        action=action,
+        dropped_legacy=[],
+        dry_run=dry_run,
+    )
+
+    logger.info(
+        "cio_decisions_ttl_index: db=%s collection=%s index=%s key={%s: 1} "
+        "expireAfterSeconds=%d action=%s%s",
+        result.database,
+        result.collection,
+        result.index_name,
+        result.field,
+        result.ttl_seconds,
+        result.action,
+        " (dry-run)" if dry_run else "",
+    )
+    return result
+
+
 async def ensure_config_rate_limits_ttl_index(
     db,
     db_name: str,
@@ -826,6 +948,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Override MONGODB_ALERTS_TTL_SECONDS for this run.",
     )
     parser.add_argument(
+        "--cio-decisions-ttl-seconds",
+        type=int,
+        default=None,
+        help="Override MONGODB_CIO_DECISIONS_TTL_SECONDS for this run.",
+    )
+    parser.add_argument(
         "--config-rate-limits-ttl-seconds",
         type=int,
         default=None,
@@ -875,6 +1003,8 @@ async def _amain(argv: list[str] | None = None) -> int:
         config.signals_ttl_seconds = max(60, args.signals_ttl_seconds)
     if args.alerts_ttl_seconds is not None:
         config.alerts_ttl_seconds = max(60, args.alerts_ttl_seconds)
+    if args.cio_decisions_ttl_seconds is not None:
+        config.cio_decisions_ttl_seconds = max(60, args.cio_decisions_ttl_seconds)
     if args.config_rate_limits_ttl_seconds is not None:
         config.config_rate_limits_ttl_seconds = max(
             60, args.config_rate_limits_ttl_seconds
@@ -913,6 +1043,16 @@ async def _amain(argv: list[str] | None = None) -> int:
             db,
             config.database,
             ttl_seconds=config.alerts_ttl_seconds,
+            dry_run=config.dry_run,
+        )
+        # 2026-09-20 — cio_decisions has confirmed live readers (unlike
+        # signals/alerts), so it's bounded to the minimal window every
+        # current reader needs rather than treated as ephemeral; see
+        # constants.CIO_DECISIONS_TTL_SECONDS.
+        await ensure_cio_decisions_ttl_index(
+            db,
+            config.database,
+            ttl_seconds=config.cio_decisions_ttl_seconds,
             dry_run=config.dry_run,
         )
         await audit_sibling_collections(db, config.database)
