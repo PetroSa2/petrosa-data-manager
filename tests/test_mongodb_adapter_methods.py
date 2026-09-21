@@ -449,6 +449,28 @@ class TestEnsureIndexes:
         assert ttl[0].document["expireAfterSeconds"] == constants.INTENTS_TTL_SECONDS
 
     @pytest.mark.asyncio
+    async def test_creates_cio_decisions_collection_indexes(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+        await adapter.ensure_indexes("cio_decisions")
+        indexes = coll.create_indexes.call_args[0][0]
+        # decision_id (unique), strategy_id, timestamp, action,
+        # received_at TTL (2026-09-20) = 5
+        assert len(indexes) == 5
+        # 2026-09-20: unlike signals (maintenance-job-only, which is exactly
+        # why it went unapplied in prod undetected), cio_decisions bakes its
+        # TTL self-heal into ensure_indexes from day one, mirroring intents.
+        import constants
+
+        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
+        assert len(ttl) == 1
+        assert ttl[0].document["name"] == "received_at_ttl_1d"
+        assert (
+            ttl[0].document["expireAfterSeconds"] == constants.CIO_DECISIONS_TTL_SECONDS
+        )
+
+    @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):
         coll = MagicMock()
         coll.create_indexes = AsyncMock(side_effect=PyMongoError("x"))

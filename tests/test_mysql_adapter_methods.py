@@ -14,6 +14,42 @@ from data_manager.db.base_adapter import DatabaseError
 from data_manager.db.mysql_adapter import MySQLAdapter
 
 
+def _fake_write_engine(captured: dict):
+    """A fake engine/connection that records the `records` payload passed
+    to `conn.execute(stmt, records)` without needing real `INSERT IGNORE`
+    support (SQLite's dialect doesn't have it, unlike MySQL, so the real
+    sqlite_adapter engine can't run `write()`'s actual SQL — this fake lets
+    tests isolate `write()`'s record-building logic from dialect-specific
+    SQL execution)."""
+
+    class FakeResult:
+        rowcount = 1
+
+    class FakeConn:
+        def execute(self, stmt, records):
+            captured["records"] = records
+            return FakeResult()
+
+        def begin(self):
+            return self
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    fake_engine = MagicMock()
+    fake_engine.connect.return_value = FakeConn()
+    return fake_engine
+
+
 @pytest.fixture
 def sqlite_adapter():
     """Build an adapter backed by an in-memory SQLite engine."""
@@ -103,6 +139,7 @@ class TestCreateTablesViaConnect:
             "lineage_records",
             "schemas",
             "daily_pnl",
+            "cio_decisions",
         ):
             assert table_name in a.tables
 
@@ -119,6 +156,14 @@ class TestGetTable:
         # NoSuchTableError / "Unknown collection or failed to reflect".
         table = sqlite_adapter._get_table("daily_pnl")
         assert table.name == "daily_pnl"
+
+    def test_returns_cio_decisions_table_without_reflecting(self, sqlite_adapter):
+        # 2026-09-20: cio_decisions is self-managed the same way daily_pnl
+        # is — must not fall into the reflect-or-fail branch.
+        table = sqlite_adapter._get_table("cio_decisions")
+        assert table.name == "cio_decisions"
+        assert "decision_id" in table.c
+        assert "id" not in table.c  # decision_id IS the PK; no synthetic id
 
     def test_creates_klines_table_from_binance_interval(self, sqlite_adapter):
         # klines_15m → physical klines_m15
@@ -219,42 +264,6 @@ class TestWriteIntegerAutoIncrementId:
         sqlite_adapter.tables["signals"] = table
         return sqlite_adapter
 
-    @staticmethod
-    def _fake_engine(captured: dict):
-        """A fake engine/connection that records the `records` payload
-        passed to `conn.execute(stmt, records)` without needing real
-        `INSERT IGNORE` support (SQLite's dialect doesn't have it, unlike
-        MySQL, so the real sqlite_adapter engine can't run `write()`'s
-        actual SQL — this fake lets the test isolate the id-handling logic
-        in `write()` from dialect-specific SQL execution)."""
-
-        class FakeResult:
-            rowcount = 1
-
-        class FakeConn:
-            def execute(self, stmt, records):
-                captured["records"] = records
-                return FakeResult()
-
-            def begin(self):
-                return self
-
-            def commit(self):
-                pass
-
-            def rollback(self):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_exc):
-                return False
-
-        fake_engine = MagicMock()
-        fake_engine.connect.return_value = FakeConn()
-        return fake_engine
-
     def test_write_does_not_inject_uuid_into_integer_id_column(
         self, signals_like_adapter
     ):
@@ -272,7 +281,7 @@ class TestWriteIntegerAutoIncrementId:
         with patch.object(
             signals_like_adapter,
             "_ensure_connected",
-            return_value=self._fake_engine(captured),
+            return_value=_fake_write_engine(captured),
         ):
             result = signals_like_adapter.write(
                 [
@@ -314,13 +323,73 @@ class TestWriteIntegerAutoIncrementId:
         with patch.object(
             sqlite_adapter,
             "_ensure_connected",
-            return_value=self._fake_engine(captured),
+            return_value=_fake_write_engine(captured),
         ):
             sqlite_adapter.write([WidgetRecord(name="thing")], "widgets")
 
         record = captured["records"][0]
         assert isinstance(record["id"], str)
         assert len(record["id"]) == 36  # uuid4 string length
+
+
+class TestCioDecisionsTable:
+    """2026-09-20: `cio_decisions` is the permanent MySQL historic copy of
+    the Mongo collection (which was cut to a 1-day TTL). Dual-written by
+    `decision_consumer.py._persist`."""
+
+    def test_write_stores_decision_id_pk_and_json_columns(self, sqlite_adapter):
+        from pydantic import BaseModel, ConfigDict
+
+        class DecisionRecord(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            decision_id: str
+            strategy_id: str
+            timestamp: datetime
+            symbol: str | None = None
+            action: str | None = None
+            price: float | None = None
+            quantity: float | None = None
+            confidence: float | None = None
+            source: str | None = None
+            reasoning: dict
+            subject: str | None = None
+            payload: dict
+            received_at: datetime
+
+        captured: dict = {}
+        with patch.object(
+            sqlite_adapter,
+            "_ensure_connected",
+            return_value=_fake_write_engine(captured),
+        ):
+            result = sqlite_adapter.write(
+                [
+                    DecisionRecord(
+                        decision_id="dec_20260920T120000000_abc123",
+                        strategy_id="strat_momentum_v1",
+                        timestamp=datetime(2026, 9, 20, 12, 0, tzinfo=UTC),
+                        symbol="BTCUSDT",
+                        action="buy",
+                        price=65000.0,
+                        quantity=0.001,
+                        confidence=0.9,
+                        source="petrosa-cio",
+                        reasoning={"cio_justification": "Momentum confluence"},
+                        subject="signals.trading.strat_momentum_v1",
+                        payload={"current_price": 65000.0},
+                        received_at=datetime(2026, 9, 20, 12, 0, 1, tzinfo=UTC),
+                    )
+                ],
+                "cio_decisions",
+            )
+
+        assert result.inserted == 1
+        record = captured["records"][0]
+        # decision_id IS the PK — no synthetic id column exists on this table.
+        assert record["decision_id"] == "dec_20260920T120000000_abc123"
+        assert "id" not in record
+        assert record["reasoning"] == {"cio_justification": "Momentum confluence"}
+        assert record["payload"] == {"current_price": 65000.0}
 
 
 class TestTimeColumnFallback:

@@ -1,5 +1,6 @@
 """Tests for the CIO decision consumer (P0.2b)."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,6 +10,7 @@ import pytest
 from data_manager.consumer.decision_consumer import (
     CIO_DECISIONS_COLLECTION,
     DecisionConsumer,
+    _cio_decisions_mysql_persist_enabled,
 )
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.decision import DecisionEvent
@@ -35,6 +37,7 @@ def mock_db_manager():
     collection.insert_one = AsyncMock()
     mongo.db.__getitem__.return_value = collection
     db_manager.mongodb_adapter = mongo
+    db_manager.mysql_adapter = MagicMock()
     return db_manager
 
 
@@ -148,10 +151,17 @@ def _build_msg(payload, subject="signals.trading.strat_momentum_v1"):
     return msg
 
 
+async def _drain_mysql_persist_tasks(decision_consumer):
+    tasks = tuple(decision_consumer._mysql_persist_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_process_message_persists_decision(decision_consumer, mock_db_manager):
     msg = _build_msg(_decision_payload())
     await decision_consumer._process_message(msg)
+    await _drain_mysql_persist_tasks(decision_consumer)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_awaited_once()
     inserted = collection.insert_one.await_args.args[0]
@@ -189,6 +199,7 @@ async def test_process_message_sets_decision_context_attrs(decision_consumer):
         "data_manager.consumer.decision_consumer.set_decision_context"
     ) as mock_set:
         await decision_consumer._process_message(msg)
+    await _drain_mysql_persist_tasks(decision_consumer)
     assert mock_set.called
     _, kwargs = mock_set.call_args
     assert kwargs["decision_id"] == "dec_20260518T120000000_xyz789"
@@ -208,6 +219,7 @@ async def test_persist_tolerates_duplicate_key(decision_consumer, mock_db_manage
     event = DecisionEvent.from_nats_message(_decision_payload())
     assert event is not None
     assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
 
 
 @pytest.mark.asyncio
@@ -244,3 +256,117 @@ async def test_start_returns_false_when_subscribe_fails(
     decision_consumer._owns_nats_client = False
     started = await decision_consumer.start()
     assert started is False
+
+
+# --------------------------------------------------------------------------- #
+# MySQL cio_decisions dual-write (2026-09-20) — MySQL is the unbounded
+# permanent copy since Mongo cio_decisions was cut to a 1-day TTL.
+# --------------------------------------------------------------------------- #
+
+
+def test_cio_decisions_mysql_persist_enabled_defaults_to_true(monkeypatch):
+    monkeypatch.delenv("PETROSA_CIO_DECISIONS_MYSQL_PERSIST_ENABLED", raising=False)
+    assert _cio_decisions_mysql_persist_enabled() is True
+
+
+def test_cio_decisions_mysql_persist_enabled_false_when_env_false(monkeypatch):
+    monkeypatch.setenv("PETROSA_CIO_DECISIONS_MYSQL_PERSIST_ENABLED", "false")
+    assert _cio_decisions_mysql_persist_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_persist_dual_writes_to_mysql(decision_consumer, mock_db_manager):
+    event = DecisionEvent.from_nats_message(_decision_payload())
+    assert event is not None
+
+    assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
+
+    mock_db_manager.mysql_adapter.write.assert_called_once()
+    records, collection = mock_db_manager.mysql_adapter.write.call_args[0]
+    assert collection == CIO_DECISIONS_COLLECTION
+    assert records == [event]
+
+
+@pytest.mark.asyncio
+async def test_persist_skips_mysql_when_kill_switch_disabled(
+    decision_consumer, mock_db_manager, monkeypatch
+):
+    monkeypatch.setenv("PETROSA_CIO_DECISIONS_MYSQL_PERSIST_ENABLED", "false")
+    event = DecisionEvent.from_nats_message(_decision_payload())
+    assert event is not None
+
+    # Mongo write must still happen — the switches are independent.
+    assert await decision_consumer._persist(event) is True
+    mock_db_manager.mysql_adapter.write.assert_not_called()
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_persist_mysql_failure_does_not_block_mongo_write(
+    decision_consumer, mock_db_manager
+):
+    mock_db_manager.mysql_adapter.write.side_effect = RuntimeError("mysql down")
+    event = DecisionEvent.from_nats_message(_decision_payload())
+    assert event is not None
+
+    assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_persist_without_mysql_adapter_does_not_raise(
+    decision_consumer, mock_db_manager
+):
+    mock_db_manager.mysql_adapter = None
+    event = DecisionEvent.from_nats_message(_decision_payload())
+    assert event is not None
+
+    assert await decision_consumer._persist(event) is True
+    await _drain_mysql_persist_tasks(decision_consumer)
+
+
+@pytest.mark.asyncio
+async def test_persist_does_not_wait_for_mysql_before_mongo_write(
+    decision_consumer, mock_db_manager
+):
+    mysql_started = asyncio.Event()
+    release_mysql = asyncio.Event()
+
+    async def blocked_mysql_write(_event):
+        mysql_started.set()
+        await release_mysql.wait()
+
+    with patch.object(
+        decision_consumer,
+        "_dual_write_mysql",
+        new=blocked_mysql_write,
+    ):
+        event = DecisionEvent.from_nats_message(_decision_payload())
+        assert event is not None
+
+        assert await decision_consumer._persist(event) is True
+        collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+        collection.insert_one.assert_awaited_once()
+
+        await asyncio.wait_for(mysql_started.wait(), timeout=1)
+        release_mysql.set()
+        await _drain_mysql_persist_tasks(decision_consumer)
+
+
+@pytest.mark.asyncio
+async def test_persist_dual_writes_even_without_db_manager_mongo_adapter(
+    decision_consumer,
+):
+    """MySQL and Mongo persistence are independent: if db_manager itself is
+    unset, `_dual_write_mysql` must no-op quietly rather than raise, and
+    `_persist` still returns False (Mongo unavailable) without blowing up."""
+    decision_consumer.db_manager = None
+    event = DecisionEvent.from_nats_message(_decision_payload())
+    assert event is not None
+
+    assert await decision_consumer._persist(event) is False
+    await _drain_mysql_persist_tasks(decision_consumer)
