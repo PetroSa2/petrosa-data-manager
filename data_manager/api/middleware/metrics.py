@@ -60,6 +60,12 @@ MYSQL_WRITE_FAILURES = Counter(
     ["database", "collection", "reason"],
 )
 
+MYSQL_READ_FAILURES = Counter(
+    "data_manager_mysql_read_failures_total",
+    "MySQL read failures that did not return rows",
+    ["database", "collection", "reason"],
+)
+
 DATABASE_OPERATION_DURATION = Histogram(
     "data_manager_database_operation_duration_seconds",
     "Database operation duration in seconds",
