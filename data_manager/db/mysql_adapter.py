@@ -140,6 +140,14 @@ class MySQLAdapter(BaseAdapter):
             },
             **kwargs,
         }
+        if connection_string.startswith("mysql"):
+            self.engine_options["connect_args"].update(
+                {
+                    "connect_timeout": constants.DB_CONNECTION_TIMEOUT,
+                    "read_timeout": constants.DB_CONNECTION_TIMEOUT,
+                    "write_timeout": constants.DB_CONNECTION_TIMEOUT,
+                }
+            )
 
     def _build_connection_string(self) -> str:
         """Build MySQL connection string from constants."""
@@ -561,6 +569,43 @@ class MySQLAdapter(BaseAdapter):
         except Exception:  # pragma: no cover - metrics must never break writes
             logger.debug("Failed to record write-failure metric", exc_info=True)
 
+    def _record_read_failure(self, collection: str, reason: str) -> None:
+        """Increment the read-failure counter — fire-and-forget; never raise."""
+        try:
+            from data_manager.api.middleware import metrics as _metrics
+
+            counter = getattr(_metrics, "MYSQL_READ_FAILURES", None)
+            if counter is not None:
+                counter.labels(
+                    database="mysql", collection=collection, reason=reason
+                ).inc()
+        except Exception:  # pragma: no cover - metrics must never break reads
+            logger.debug("Failed to record read-failure metric", exc_info=True)
+
+    def _read_with_resilience(self, collection: str, operation: str, read_attempt):
+        """Run one read cycle with retry and circuit-breaker protection."""
+        max_retries = max(0, constants.DB_RECONNECT_MAX_ATTEMPTS - 1)
+        try:
+            return self.circuit_breaker.call(
+                lambda: retry_transient(
+                    read_attempt,
+                    max_retries=max_retries,
+                    backoff_base=float(constants.DB_RECONNECT_BACKOFF_BASE),
+                )
+            )
+        except Exception as exc:
+            reason = (
+                "circuit_or_unknown"
+                if exc.__class__.__name__ == "CircuitBreakerOpenError"
+                else "database_error"
+            )
+            self._record_read_failure(collection, reason)
+            if isinstance(exc, DatabaseError):
+                raise
+            raise DatabaseError(
+                f"Failed to {operation} from {collection}: {exc}"
+            ) from exc
+
     def write_batch(
         self, model_instances: list[BaseModel], collection: str, batch_size: int = 1000
     ) -> WriteResult:
@@ -708,8 +753,6 @@ class MySQLAdapter(BaseAdapter):
         try:
             table = self._get_table(collection)
             time_col = self._time_column(table)
-
-            # Build query
             query = select(table).where(and_(time_col >= start, time_col < end))
 
             if symbol:
@@ -720,12 +763,17 @@ class MySQLAdapter(BaseAdapter):
             if limit is not None:
                 query = query.limit(limit).offset(offset)
 
-            engine = self._ensure_connected()
-            with engine.connect() as conn:
-                result = conn.execute(query)
-                return [dict(row._mapping) for row in result]
+            def read_attempt():
+                engine = self._ensure_connected()
+                with engine.connect() as conn:
+                    result = conn.execute(query)
+                    return [dict(row._mapping) for row in result]
 
+            return self._read_with_resilience(collection, "query range", read_attempt)
+        except DatabaseError:
+            raise
         except Exception as e:
+            self._record_read_failure(collection, "database_error")
             raise DatabaseError(f"Failed to query range from {collection}: {e}") from e
 
     def query_latest(
@@ -738,19 +786,23 @@ class MySQLAdapter(BaseAdapter):
         try:
             table = self._get_table(collection)
             time_col = self._time_column(table)
-
             query = select(table)
             if symbol:
                 query = query.where(table.c.symbol == symbol)
 
             query = query.order_by(time_col.desc()).limit(limit)
 
-            engine = self._ensure_connected()
-            with engine.connect() as conn:
-                result = conn.execute(query)
-                return [dict(row._mapping) for row in result]
+            def read_attempt():
+                engine = self._ensure_connected()
+                with engine.connect() as conn:
+                    result = conn.execute(query)
+                    return [dict(row._mapping) for row in result]
 
+            return self._read_with_resilience(collection, "query latest", read_attempt)
+        except DatabaseError:
+            raise
         except Exception as e:
+            self._record_read_failure(collection, "database_error")
             raise DatabaseError(f"Failed to query latest from {collection}: {e}") from e
 
     def get_record_count(
@@ -767,7 +819,6 @@ class MySQLAdapter(BaseAdapter):
         try:
             table = self._get_table(collection)
             time_col = self._time_column(table) if (start or end) else None
-
             query = select(func.count()).select_from(table)
 
             conditions = []
@@ -781,13 +832,18 @@ class MySQLAdapter(BaseAdapter):
             if conditions:
                 query = query.where(and_(*conditions))
 
-            engine = self._ensure_connected()
-            with engine.connect() as conn:
-                result = conn.execute(query)
-                count = result.scalar()
-                return count if count is not None else 0
+            def read_attempt():
+                engine = self._ensure_connected()
+                with engine.connect() as conn:
+                    result = conn.execute(query)
+                    count = result.scalar()
+                    return count if count is not None else 0
 
+            return self._read_with_resilience(collection, "count records", read_attempt)
+        except DatabaseError:
+            raise
         except Exception as e:
+            self._record_read_failure(collection, "database_error")
             raise DatabaseError(f"Failed to count records in {collection}: {e}") from e
 
     def find_paginated(
@@ -847,35 +903,43 @@ class MySQLAdapter(BaseAdapter):
                 conditions.append(table.c[key] == value)
 
         try:
-            engine = self._ensure_connected()
-            with engine.connect() as conn:
-                count_query = select(func.count()).select_from(table)
-                if conditions:
-                    count_query = count_query.where(and_(*conditions))
-                total = conn.execute(count_query).scalar()
 
-                query = select(table)
-                if conditions:
-                    query = query.where(and_(*conditions))
-                if sort_list:
-                    order_clauses = [
-                        (
-                            table.c[field].desc()
-                            if direction == -1
-                            else table.c[field].asc()
-                        )
-                        for field, direction in sort_list
-                        if field in table.c
-                    ]
-                    if order_clauses:
-                        query = query.order_by(*order_clauses)
-                query = query.limit(limit).offset(offset)
+            def read_attempt():
+                engine = self._ensure_connected()
+                with engine.connect() as conn:
+                    count_query = select(func.count()).select_from(table)
+                    if conditions:
+                        count_query = count_query.where(and_(*conditions))
+                    total = conn.execute(count_query).scalar()
 
-                result = conn.execute(query)
-                records = [dict(row._mapping) for row in result]
-                return records, int(total or 0)
+                    query = select(table)
+                    if conditions:
+                        query = query.where(and_(*conditions))
+                    if sort_list:
+                        order_clauses = [
+                            (
+                                table.c[field].desc()
+                                if direction == -1
+                                else table.c[field].asc()
+                            )
+                            for field, direction in sort_list
+                            if field in table.c
+                        ]
+                        if order_clauses:
+                            query = query.order_by(*order_clauses)
+                    query = query.limit(limit).offset(offset)
 
+                    result = conn.execute(query)
+                    records = [dict(row._mapping) for row in result]
+                    return records, int(total or 0)
+
+            return self._read_with_resilience(
+                collection, "query with pagination", read_attempt
+            )
+        except DatabaseError:
+            raise
         except Exception as e:
+            self._record_read_failure(collection, "database_error")
             raise DatabaseError(
                 f"Failed to query {collection} with pagination: {e}"
             ) from e
