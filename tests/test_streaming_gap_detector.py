@@ -123,7 +123,7 @@ class TestStreamingGapDetector:
 
     async def _process_kline(self, detector, msg):
         """Helper: call _on_kline_event and wait for background tasks."""
-        detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
+        await detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
         # Wait for any background tasks created by _on_kline_event
         await asyncio.sleep(0.01)
 
@@ -384,11 +384,11 @@ class TestStreamingGapDetector:
         """Invalid kline messages should not raise errors."""
         # Missing symbol
         msg = {"k": {"i": "1m", "T": 1000}, "e": "kline"}
-        detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
+        await detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
 
         # Not a kline
         msg2 = {"e": "trade", "s": "BTCUSDT"}
-        detector._on_kline_event(MagicMock(data=json.dumps(msg2).encode()))
+        await detector._on_kline_event(MagicMock(data=json.dumps(msg2).encode()))
 
         # Should not raise
         assert detector.running is False  # never started, so not running
@@ -458,7 +458,7 @@ class TestStreamingGapDetectorIntegration:
             "k": {"i": "1m", "T": base_time, "x": True},
             "e": "kline",
         }
-        detector._on_kline_event(MagicMock(data=json.dumps(msg1).encode()))
+        await detector._on_kline_event(MagicMock(data=json.dumps(msg1).encode()))
 
         # Simulate the service going down for 3 minutes, then coming back
         # with the next candle at T-7 min (3-minute gap for 1m candles)
@@ -468,7 +468,7 @@ class TestStreamingGapDetectorIntegration:
             "k": {"i": "1m", "T": gap_time, "x": True},
             "e": "kline",
         }
-        detector._on_kline_event(MagicMock(data=json.dumps(msg2).encode()))
+        await detector._on_kline_event(MagicMock(data=json.dumps(msg2).encode()))
 
         # Wait for background tasks
         await asyncio.sleep(0.01)
@@ -503,7 +503,7 @@ class TestStreamingGapDetectorIntegration:
                 "k": {"i": "1m", "T": ts, "x": True},
                 "e": "kline",
             }
-            detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
+            await detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
 
         await asyncio.sleep(0.01)
 
