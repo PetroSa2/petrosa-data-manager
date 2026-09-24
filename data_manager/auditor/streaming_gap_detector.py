@@ -123,6 +123,7 @@ class StreamingGapDetector:
         self._reported_gaps: set[tuple[str, str, str]] = set()
         self._report_cooldown_seconds = 30  # dedup window per symbol/timeframe
         self._last_report_time: dict[tuple[str, str], float] = defaultdict(float)
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> bool:
         """
@@ -182,7 +183,7 @@ class StreamingGapDetector:
 
         logger.info("Streaming gap detector stopped")
 
-    def _on_kline_event(self, msg) -> None:
+    async def _on_kline_event(self, msg) -> None:
         """
         NATS callback for incoming kline events.
 
@@ -198,7 +199,9 @@ class StreamingGapDetector:
 
             # _process_kline is async; run it in the background via asyncio
             # so the NATS callback remains non-blocking.
-            asyncio.create_task(self._process_kline(data))
+            task = asyncio.create_task(self._process_kline(data))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.warning(f"Failed to parse kline event: {e}")
         except Exception as e:

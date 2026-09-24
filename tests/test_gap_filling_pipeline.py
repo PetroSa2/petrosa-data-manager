@@ -110,7 +110,7 @@ def _make_kline_msg(symbol: str, timeframe: str, close_time_ms: int) -> dict:
 
 
 async def _process_kline(detector, msg: dict) -> None:
-    detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
+    await detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
     await asyncio.sleep(0.01)
 
 
