@@ -85,7 +85,7 @@ def test_all_nats_callback_keywords_resolve_to_async_methods():
         async_methods = {
             node.name
             for node in ast.walk(tree)
-            if isinstance(node, (ast.AsyncFunctionDef,))
+            if isinstance(node, ast.AsyncFunctionDef)
         }
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
