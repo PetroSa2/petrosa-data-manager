@@ -65,6 +65,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_auditor_nats_client(consumer) -> Any:
+    """Resolve the NATS client to pass to AuditScheduler.
+
+    Returns the wrapper ``consumer.nats_client`` when available, or ``None``.
+    This is the single injection point that feeds both
+    ``NatsVerdictPublisher.publish`` and ``StreamingGapDetector.start()``.
+    """
+    if consumer is not None and getattr(consumer, "nats_client", None):
+        return consumer.nats_client
+    return None
+
+
 class DataManagerApp:
     """Main application coordinator."""
 
@@ -661,17 +673,17 @@ class DataManagerApp:
         # Import here to avoid circular dependency
         from data_manager.auditor.scheduler import AuditScheduler
 
-        # Per #634: thread the underlying nats-py client into the
-        # scheduler so the P2.1 evaluator framework can publish
-        # `evaluator.data-manager.verdict` after each audit cycle.
-        # `self.consumer.nats_client.nc` is the raw nats.aio.client.Client
-        # the framework's `NatsVerdictPublisher` expects. Fall back to
-        # ``None`` when the consumer hasn't connected (e.g. local dev
-        # without a broker) — the scheduler then runs without publishing,
-        # which is safe and was the legacy behavior.
-        evaluator_nats_client = None
-        if self.consumer is not None and getattr(self.consumer, "nats_client", None):
-            evaluator_nats_client = getattr(self.consumer.nats_client, "nc", None)
+        # Per #634: pass the NATS wrapper to the scheduler so both the
+        # P2.1 evaluator framework (NatsVerdictPublisher.publish) and the
+        # StreamingGapDetector (is_connected / connect / subscribe) receive
+        # an object with the contract they expect.  The wrapper satisfies
+        # both consumers; passing the raw ``.nc`` client broke the
+        # detector because ``nats.aio.client.Client.is_connected`` is a
+        # bool property, not a callable method.  Fall back to ``None``
+        # when the consumer hasn't connected (e.g. local dev without a
+        # broker) — the scheduler then runs without publishing, which is
+        # safe and was the legacy behavior.
+        auditor_nats_client = _resolve_auditor_nats_client(self.consumer)
 
         # Per petrosa-data-manager#317 AC4: wire the analytics bridge
         # (BackfillTrigger) so evaluator verdicts can trigger backfill
@@ -684,7 +696,7 @@ class DataManagerApp:
                 self.db_manager,
                 leader_election=self.leader_election,
                 backfill_orchestrator=self.backfill_orchestrator,
-                nats_client=evaluator_nats_client,
+                nats_client=auditor_nats_client,
                 backfill_queue=self.backfill_queue,
             )
 

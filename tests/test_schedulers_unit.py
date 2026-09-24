@@ -173,3 +173,57 @@ class TestAnalyticsScheduler:
             scheduler.volatility_calc.calculate_volatility.assert_called()
             scheduler.regime_classifier.classify_regime.assert_called()
             scheduler.correlation_calc.calculate_correlation.assert_called()
+
+
+class TestAuditorNatsWiring:
+    """Verify the NATS client injection choice in main.py.
+
+    These tests assert the wiring-contract: the auditor must receive the
+    wrapper (NATSClient), not the raw nats.aio.client.Client (.nc).
+    """
+
+    @pytest.mark.asyncio
+    async def test_resolve_injects_wrapper_not_raw_client(self):
+        """_resolve_auditor_nats_client must return the wrapper, not .nc.
+
+        This is the only thing the fix changes.  A test that constructs
+        AuditScheduler(nats_client=<autospec NATSClient>) directly proves
+        nothing — it injects the correct object by hand and therefore
+        passes identically before and after the fix.
+
+        We test the selection expression itself via the helper.
+        """
+        from unittest.mock import create_autospec
+
+        from data_manager.consumer.nats_client import NATSClient
+        from data_manager.main import _resolve_auditor_nats_client
+
+        # Build a stub consumer whose nats_client is an autospec NATSClient
+        # and which also carries a distinct .nc attribute.
+        wrapper = create_autospec(NATSClient, spec_set=True, instance=True)
+        raw_client = MagicMock()  # distinct from wrapper
+        stub_consumer = MagicMock()
+        stub_consumer.nats_client = wrapper
+        stub_consumer.nc = raw_client  # .nc is a separate object
+
+        selected = _resolve_auditor_nats_client(stub_consumer)
+
+        # The selected object MUST be the wrapper, NOT .nc
+        assert selected is wrapper
+        assert selected is not raw_client
+
+    @pytest.mark.asyncio
+    async def test_resolve_returns_none_when_no_consumer(self):
+        """When consumer is None, resolution returns None."""
+        from data_manager.main import _resolve_auditor_nats_client
+
+        assert _resolve_auditor_nats_client(None) is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_returns_none_when_no_nats_client_attr(self):
+        """When consumer has no nats_client attr, resolution returns None."""
+        from data_manager.main import _resolve_auditor_nats_client
+
+        stub_consumer = MagicMock(spec=[])  # no nats_client attribute
+        stub_consumer.nats_client = None
+        assert _resolve_auditor_nats_client(stub_consumer) is None

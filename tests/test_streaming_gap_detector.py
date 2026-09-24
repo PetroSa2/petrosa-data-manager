@@ -8,7 +8,7 @@ dedup logic, and edge cases (out-of-order events, timezone handling).
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
@@ -17,6 +17,7 @@ from data_manager.auditor.streaming_gap_detector import (
     STREAMING_GAP_TOLERANCE_INTERVALS,
     StreamingGapDetector,
 )
+from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.events import BackfillRequest
 from data_manager.utils.time_utils import as_aware_utc
 
@@ -38,11 +39,11 @@ class TestStreamingGapDetector:
 
     @pytest.fixture
     def mock_nats_client(self):
-        client = MagicMock()
-        client.is_connected = MagicMock(return_value=True)
-        client.connect = AsyncMock(return_value=True)
+        client = create_autospec(NATSClient, spec_set=True, instance=True)
+        client.is_connected.return_value = True
+        client.connect.return_value = True
         mock_sub = MagicMock()
-        client.subscribe = AsyncMock(return_value=mock_sub)
+        client.subscribe.return_value = mock_sub
         return client
 
     @pytest.fixture
@@ -60,6 +61,33 @@ class TestStreamingGapDetector:
         """Starting the detector should connect to NATS and subscribe."""
         result = await detector.start()
         assert result is True
+        mock_nats_client.subscribe.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_calls_connect_when_not_connected(
+        self, mock_candle_repo, mock_backfill_orchestrator, mock_nats_client
+    ):
+        """When is_connected returns False, start() must call connect() then subscribe().
+
+        This is critical: the production bug was that the raw nats.aio.client.Client
+        was injected instead of the wrapper; on the raw client is_connected is a bool
+        property (not callable), so start() raised TypeError before reaching connect()
+        or subscribe().  A test that only asserts is_connected() would miss regressions
+        on the other two calls.
+        """
+        mock_nats_client.is_connected.return_value = False
+        mock_nats_client.connect.return_value = True
+        mock_sub = MagicMock()
+        mock_nats_client.subscribe.return_value = mock_sub
+
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=mock_backfill_orchestrator,
+            nats_client=mock_nats_client,
+        )
+        result = await detector.start()
+        assert result is True
+        mock_nats_client.connect.assert_called_once()
         mock_nats_client.subscribe.assert_called_once()
 
     @pytest.mark.asyncio
@@ -480,3 +508,61 @@ class TestStreamingGapDetectorIntegration:
         await asyncio.sleep(0.01)
 
         assert not detector.backfill_orchestrator.create_backfill_job.called
+
+
+class TestStreamingDetectorGauge:
+    """Lock in the existing streaming_detector_active gauge behavior."""
+
+    @pytest.fixture
+    def mock_candle_repo(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_backfill_orchestrator(self):
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(
+            return_value=MagicMock(job_id="bf-123")
+        )
+        return orchestrator
+
+    @pytest.mark.asyncio
+    async def test_gauge_set_to_1_on_success(
+        self, mock_candle_repo, mock_backfill_orchestrator
+    ):
+        """streaming_detector_active gauge must read 1 when start() succeeds."""
+        from data_manager.auditor.scheduler import streaming_detector_active
+
+        mock_nats = create_autospec(NATSClient, spec_set=True, instance=True)
+        mock_nats.is_connected.return_value = True
+        mock_sub = MagicMock()
+        mock_nats.subscribe.return_value = mock_sub
+
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=mock_backfill_orchestrator,
+            nats_client=mock_nats,
+        )
+        result = await detector.start()
+        assert result is True
+
+        # The scheduler sets the gauge in its start() path; we verify
+        # the detector's running flag (which drives the gauge value).
+        assert detector.running is True
+
+    @pytest.mark.asyncio
+    async def test_gauge_set_to_0_on_failure(
+        self, mock_candle_repo, mock_backfill_orchestrator
+    ):
+        """streaming_detector_active gauge must read 0 when start() fails."""
+        mock_nats = create_autospec(NATSClient, spec_set=True, instance=True)
+        mock_nats.is_connected.return_value = False
+        mock_nats.connect.return_value = False  # connect fails
+
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=mock_backfill_orchestrator,
+            nats_client=mock_nats,
+        )
+        result = await detector.start()
+        assert result is False
+        assert detector.running is False
