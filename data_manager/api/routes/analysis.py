@@ -179,17 +179,40 @@ async def get_strategy_performance(strategy_id: str):
         calc = PnlCalculator()
         wins = 0
         losses = 0
+        outcomes: list[bool] = []
         for row in rows:
             impact = calc.apply_fill(row)
             if impact is None or impact.realized_pnl == 0:
                 continue
             if impact.realized_pnl > 0:
                 wins += 1
+                outcomes.append(True)
             else:
                 losses += 1
+                outcomes.append(False)
 
         decisions = wins + losses
         win_rate = (wins / decisions) if decisions else None
+        comparable_window_size = decisions // 2
+        if comparable_window_size:
+            previous_window = outcomes[
+                -2 * comparable_window_size : -comparable_window_size
+            ]
+            current_window = outcomes[-comparable_window_size:]
+            previous_win_rate = sum(previous_window) / comparable_window_size
+            current_win_rate = sum(current_window) / comparable_window_size
+            win_rate_delta = current_win_rate - previous_win_rate
+        else:
+            win_rate_delta = None
+
+        consecutive_losses = None
+        if outcomes:
+            consecutive_losses = 0
+            for won in reversed(outcomes):
+                if won:
+                    break
+                consecutive_losses += 1
+
         breakdown = calc.strategy_pnl(strategy_id)
         recent_trend = (
             "positive"
@@ -204,8 +227,8 @@ async def get_strategy_performance(strategy_id: str):
         return {
             "stats": {
                 "win_rate": win_rate,
-                "win_rate_delta": None,
-                "consecutive_losses": None,
+                "win_rate_delta": win_rate_delta,
+                "consecutive_losses": consecutive_losses,
                 "recent_pnl_trend": recent_trend,
                 "realized_pnl": breakdown.realized,
                 "unrealized_pnl": breakdown.unrealized,

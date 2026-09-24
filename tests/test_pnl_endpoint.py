@@ -177,6 +177,28 @@ def test_performance_returns_real_win_rate_and_pnl():
         api_module.db_manager = None
 
 
+def test_performance_returns_win_rate_delta_and_consecutive_losses():
+    rows = [
+        _fill(side="buy", qty=1, price=100, seconds_before=800),
+        _fill(side="sell", qty=1, price=110, seconds_before=700),
+        _fill(side="buy", qty=1, price=100, seconds_before=600),
+        _fill(side="sell", qty=1, price=120, seconds_before=500),
+        _fill(side="buy", qty=1, price=100, seconds_before=400),
+        _fill(side="sell", qty=1, price=90, seconds_before=300),
+        _fill(side="buy", qty=1, price=100, seconds_before=200),
+        _fill(side="sell", qty=1, price=80, seconds_before=100),
+    ]
+    try:
+        client = _client_with_fills(rows)
+        response = client.get("/analysis/performance/S1")
+        assert response.status_code == 200
+        stats = response.json()["stats"]
+        assert stats["win_rate_delta"] == -1.0
+        assert stats["consecutive_losses"] == 2
+    finally:
+        api_module.db_manager = None
+
+
 def test_performance_degrades_when_db_missing():
     """No DB should yield 'neutral' trend (not 'unknown') rather than 500.
 
@@ -191,6 +213,8 @@ def test_performance_degrades_when_db_missing():
     assert r.status_code == 200
     body = r.json()
     assert body["stats"]["win_rate"] is None
+    assert body["stats"]["win_rate_delta"] is None
+    assert body["stats"]["consecutive_losses"] is None
     assert body["stats"]["recent_pnl_trend"] == "neutral"
     assert body["metadata"]["source"] == "data-manager-analysis-no-db"
 
@@ -219,6 +243,8 @@ def test_performance_degrades_to_neutral_when_execution_events_read_fails():
         assert r.status_code == 200
         body = r.json()
         assert body["stats"]["win_rate"] is None
+        assert body["stats"]["win_rate_delta"] is None
+        assert body["stats"]["consecutive_losses"] is None
         assert body["stats"]["recent_pnl_trend"] == "neutral"
         assert body["metadata"]["source"] == "data-manager-analysis-no-db"
     finally:
@@ -240,6 +266,8 @@ def test_performance_with_no_closing_fills_has_neutral_trend():
         assert body["stats"]["realized_pnl"] == 0
         # No closes → win_rate is None (no decisions yet)
         assert body["stats"]["win_rate"] is None
+        assert body["stats"]["win_rate_delta"] is None
+        assert body["stats"]["consecutive_losses"] is None
         assert body["stats"]["recent_pnl_trend"] == "neutral"
     finally:
         api_module.db_manager = None
