@@ -45,7 +45,10 @@ from typing import Any
 import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
-from data_manager.db.repositories.candle_repository import mysql_table_name
+from data_manager.db.repositories.candle_repository import (
+    MYSQL_CANDLE_COLUMNS,
+    mysql_table_name,
+)
 from data_manager.maintenance.candle_readiness import (
     collection_name,
     evaluate_collection,
@@ -238,7 +241,13 @@ async def backfill_pair(
                 logger.info("candle_warmup: %s — %s", coll, result.skip_reason)
                 return result
 
-        rows = mysql.query_latest(table, pair, config.min_candles)
+        rows = mysql.query_latest(
+            table,
+            pair,
+            config.min_candles,
+            columns=MYSQL_CANDLE_COLUMNS
+            + ("open_time", "quote_asset_volume", "number_of_trades"),
+        )
         result.source_rows = len(rows)
         if not rows:
             result.skip_reason = f"no source rows in {table} for {pair}"
