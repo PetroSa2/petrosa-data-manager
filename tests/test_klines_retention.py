@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
-from unittest.mock import AsyncMock
+from typing import cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -38,6 +39,43 @@ def test_resolve_window_days_prefers_override_then_default_then_fallback():
     assert kr.resolve_window_days(None, overrides) == kr.FALLBACK_RETENTION_DAYS
 
 
+@pytest.mark.parametrize(
+    ("financial", "binance"),
+    [
+        ("m5", "5m"),
+        ("m15", "15m"),
+        ("m30", "30m"),
+        ("h1", "1h"),
+        ("h4", "4h"),
+        ("d1", "1d"),
+    ],
+)
+def test_normalize_timeframe_maps_mysql_suffixes(financial, binance):
+    assert kr.normalize_timeframe(financial) == binance
+
+
+def test_normalize_timeframe_preserves_unknown_suffix():
+    assert kr.normalize_timeframe("quarter") == "quarter"
+    assert (
+        kr.resolve_window_days(kr.normalize_timeframe("quarter"), {})
+        == kr.FALLBACK_RETENTION_DAYS
+    )
+
+
+def test_mysql_windows_keep_at_least_400_candles():
+    intervals = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "30m": 1800,
+        "1h": 3600,
+        "4h": 14400,
+        "1d": 86400,
+    }
+    for timeframe, seconds in intervals.items():
+        assert kr.DEFAULT_RETENTION_DAYS[timeframe] * 86400 >= 400 * seconds
+
+
 def test_compute_cutoff_subtracts_days_from_now():
     now = _aware(2026, 6, 2)
     assert kr.compute_cutoff(now, 7) == _aware(2026, 5, 26)
@@ -69,6 +107,214 @@ def test_load_config_from_env_ignores_non_integer_values_and_clamps_below_minimu
     config = kr.load_config_from_env(env)
     assert config.windows_days["1h"] == kr.DEFAULT_RETENTION_DAYS["1h"]
     assert config.batch_days == 1
+
+
+def test_load_config_from_env_defaults_to_mongodb_and_mysql_dry_run():
+    config = kr.load_config_from_env({})
+    assert config.backends == ("mongodb",)
+    assert config.mysql_dry_run is True
+    assert config.mysql_chunk_sleep_ms == 250
+    assert config.mysql_max_rows_per_chunk == 50_000
+
+
+def test_load_config_from_env_reads_mysql_controls():
+    config = kr.load_config_from_env(
+        {
+            "KLINES_RETENTION_BACKENDS": "mongodb,mysql",
+            "KLINES_RETENTION_MYSQL_DRY_RUN": "false",
+            "KLINES_RETENTION_MYSQL_CHUNK_SLEEP_MS": "0",
+            "KLINES_RETENTION_MYSQL_MAX_ROWS_PER_CHUNK": "123",
+        }
+    )
+    assert config.backends == ("mongodb", "mysql")
+    assert config.mysql_dry_run is False
+    assert config.mysql_chunk_sleep_ms == 0
+    assert config.mysql_max_rows_per_chunk == 123
+
+
+class _FakeMySQLAdapter:
+    engine = object()
+
+    def __init__(self):
+        self.query_calls = []
+
+    def query_range(self, *args, **kwargs):
+        self.query_calls.append((args, kwargs))
+        return [{"timestamp": _aware(2026, 5, 1)}]
+
+
+@pytest.mark.asyncio
+async def test_mysql_discovery_filters_views_and_oldest_query_is_bounded(monkeypatch):
+    adapter = _FakeMySQLAdapter()
+    monkeypatch.setattr(
+        kr.mysql_adapter,
+        "table_inventory",
+        lambda engine, schema: [
+            {"TABLE_NAME": "klines_m5", "TABLE_TYPE": "BASE TABLE"},
+            {"TABLE_NAME": "klines_5m", "TABLE_TYPE": "VIEW"},
+            {"TABLE_NAME": "other", "TABLE_TYPE": "BASE TABLE"},
+        ],
+    )
+    backend = kr.MySQLRetentionBackend(
+        cast(kr.MySQLAdapter, adapter), schema="petrosa_crypto"
+    )
+    assert await backend.list_klines_collections() == ["klines_m5"]
+    assert await backend.oldest_timestamp(
+        "klines_m5", before=_aware(2026, 6, 1)
+    ) == _aware(2026, 5, 1)
+    assert adapter.query_calls[0][1]["limit"] == 1
+
+
+@pytest.mark.asyncio
+async def test_mysql_backend_delegates_count_and_delete_to_threads():
+    adapter = Mock()
+    adapter.get_record_count.return_value = 4
+    adapter.delete_range.return_value = 4
+    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
+    assert await backend.count_range("klines_m5", end=_aware(2026, 6, 1)) == 4
+    assert (
+        await backend.delete_range(
+            "klines_m5", start=_aware(2026, 5, 1), end=_aware(2026, 6, 1)
+        )
+        == 4
+    )
+    adapter.get_record_count.assert_called_once()
+    adapter.delete_range.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_mysql_discovery_requires_connected_engine():
+    adapter = cast(kr.MySQLAdapter, object())
+    backend = kr.MySQLRetentionBackend(adapter)
+    with pytest.raises(RuntimeError, match="connected engine"):
+        await backend.list_klines_collections()
+
+
+class _FakeBackend:
+    name = "mysql"
+
+    def __init__(self):
+        self.deleted = []
+        self.counted = []
+
+    async def list_klines_collections(self):
+        return ["klines_m5"]
+
+    async def count_range(self, collection, *, start=None, end=None):
+        self.counted.append((start, end))
+        if start is not None and end is not None and end - start >= timedelta(days=1):
+            return 100_000
+        return 10
+
+    async def oldest_timestamp(self, collection, *, before):
+        return _aware(2026, 5, 1)
+
+    async def delete_range(self, collection, *, start, end):
+        self.deleted.append((start, end))
+        return 10
+
+
+@pytest.mark.asyncio
+async def test_mysql_prune_splits_oversized_chunks_and_paces(monkeypatch):
+    backend = _FakeBackend()
+    sleep = AsyncMock()
+    monkeypatch.setattr(kr.asyncio, "sleep", sleep)
+    result = await kr.prune_collection(
+        backend,
+        "klines_m5",
+        cutoff=_aware(2026, 5, 3),
+        batch_days=1,
+        max_chunks=1,
+        dry_run=False,
+        mysql_chunk_sleep_ms=250,
+        mysql_max_rows_per_chunk=50_000,
+    )
+    assert result.backend == "mysql"
+    assert result.chunks_processed == 1
+    assert backend.deleted[0][1] - backend.deleted[0][0] == timedelta(hours=12)
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mysql_prune_dry_run_counts_without_deleting():
+    backend = _FakeBackend()
+    result = await kr.prune_collection(
+        backend,
+        "klines_m5",
+        cutoff=_aware(2026, 5, 2),
+        batch_days=1,
+        max_chunks=1,
+        dry_run=True,
+        mysql_max_rows_per_chunk=50_000,
+    )
+    assert result.dry_run is True
+    assert result.docs_deleted == 10
+    assert backend.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_mysql_prune_dry_run_paces_between_chunks(monkeypatch):
+    backend = _FakeBackend()
+    sleep = AsyncMock()
+    monkeypatch.setattr(kr.asyncio, "sleep", sleep)
+    result = await kr.prune_collection(
+        backend,
+        "klines_m5",
+        cutoff=_aware(2026, 5, 3),
+        batch_days=1,
+        max_chunks=2,
+        dry_run=True,
+        mysql_chunk_sleep_ms=1,
+        mysql_max_rows_per_chunk=50_000,
+    )
+    assert result.chunks_processed == 2
+    sleep.assert_awaited_once_with(0.001)
+
+
+@pytest.mark.asyncio
+async def test_prune_klines_normalizes_mysql_timeframes():
+    backend = _FakeBackend()
+    config = kr.RetentionConfig(
+        windows_days={"5m": 14},
+        collections_override=["klines_m5"],
+        mysql_dry_run=True,
+        max_chunks_per_collection=1,
+    )
+    results = await kr.prune_klines(backend, config, now=_aware(2026, 6, 1))
+    assert results[0].backend == "mysql"
+    assert results[0].dry_run is True
+
+
+class _EmptyBackend:
+    name = "mysql"
+
+    async def list_klines_collections(self):
+        return []
+
+    async def count_range(self, collection, *, start=None, end=None):
+        return 0
+
+    async def oldest_timestamp(self, collection, *, before):
+        return None
+
+    async def delete_range(self, collection, *, start, end):
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_prune_klines_skips_backend_without_collections():
+    config = kr.RetentionConfig()
+    assert await kr.prune_klines(_EmptyBackend(), config) == []
+
+
+@pytest.mark.asyncio
+async def test_amain_skips_missing_mysql_without_failing(monkeypatch):
+    monkeypatch.setenv("KLINES_RETENTION_BACKENDS", "mysql")
+    monkeypatch.setattr(kr.constants, "MYSQL_URI", None)
+    prune = AsyncMock()
+    monkeypatch.setattr(kr, "prune_klines", prune)
+    assert await kr._amain([]) == 0
+    prune.assert_awaited_once()
 
 
 @pytest.mark.asyncio

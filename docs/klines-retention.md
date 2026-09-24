@@ -1,17 +1,20 @@
 # Klines retention
 
-Periodic deletion of old klines from MongoDB to prevent the shared Atlas cluster
-from re-filling its storage quota. Implements **AC2** of the umbrella incident
+Periodic deletion of old klines from MongoDB and MySQL to prevent the shared
+databases from re-filling their storage quotas. Implements **W2** of the umbrella
+incident
 [`PetroSa2/petrosa_k8s#783`](https://github.com/PetroSa2/petrosa_k8s/issues/783)
 and is tracked under [`PetroSa2/petrosa-data-manager#210`](https://github.com/PetroSa2/petrosa-data-manager/issues/210).
 
 ## What it does
 
-Walks every `klines_*` collection in MongoDB, computes a per-timeframe cutoff
-(`now - retention_window`), and deletes all klines older than the cutoff in
-day-sized chunks. The chunked walk keeps a single run's blast radius bounded
-so a long-accumulated backlog is reclaimed across several scheduled invocations
-rather than one multi-million-document `delete_many`.
+Walks every `klines_*` collection or MySQL base table, computes a per-timeframe
+cutoff (`now - retention_window`), and deletes all klines older than the cutoff
+in day-sized chunks. MongoDB retains its existing behaviour; MySQL tables are
+discovered from `information_schema.TABLES`, views are excluded, and MySQL
+deletes are dry-run by default. The chunked walk keeps a single run's blast
+radius bounded so a long-accumulated backlog is reclaimed across several
+scheduled invocations rather than one multi-million-row delete.
 
 The job is **idempotent**: re-running it on a freshly-pruned collection is a
 no-op (no eligible docs → zero deletes).
@@ -61,13 +64,14 @@ Per-timeframe windows (in days) override the in-code defaults:
 | `KLINES_RETENTION_DAYS_6H` | 180 |
 | `KLINES_RETENTION_DAYS_8H` | 180 |
 | `KLINES_RETENTION_DAYS_12H` | 365 |
-| `KLINES_RETENTION_DAYS_1D` | 365 |
+| `KLINES_RETENTION_DAYS_1D` | 450 |
 | `KLINES_RETENTION_DAYS_3D` | 365 |
 | `KLINES_RETENTION_DAYS_1W` | 730 |
 
 Each default exceeds the longest strategy lookback at that timeframe by a
-comfortable margin so analysis is never starved by deletion. Tune downward
-only when you understand the lookbacks of every active strategy.
+comfortable margin so analysis is never starved by deletion. The `1d` default
+is 450 days so it always retains at least 400 daily candles. Tune downward only
+when you understand the lookbacks of every active strategy.
 
 The Binance `1M` (uppercase, monthly) timeframe is intentionally **not** in
 the override map — its env-var name would collide with `1m` (minute) after
@@ -84,12 +88,22 @@ to `365` days. The fallback is conservative on purpose.
 |---|---|---|
 | `KLINES_RETENTION_BATCH_DAYS` | `1` | Width of each chunked `delete_range` window. Smaller = more, smaller deletes per run. |
 | `KLINES_RETENTION_MAX_CHUNKS_PER_COLLECTION` | `400` | Per-run cap on chunks per collection. Once hit, the run logs `capped=true` and stops; the next scheduled run resumes where it left off. |
-| `KLINES_RETENTION_DRY_RUN` | unset | Set to `true` to force dry-run mode regardless of `--dry-run`. |
+| `KLINES_RETENTION_DRY_RUN` | unset | Set to `true` to force MongoDB dry-run mode regardless of `--dry-run`. |
+
+### Backends
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `KLINES_RETENTION_BACKENDS` | `mongodb` | Comma-separated backends to run sequentially: `mongodb`, `mysql`. |
+| `KLINES_RETENTION_MYSQL_DRY_RUN` | `true` | Count MySQL rows without deleting them until explicitly set to `false`. |
+| `KLINES_RETENTION_MYSQL_CHUNK_SLEEP_MS` | `250` | Delay between MySQL chunks to yield the shared connection. |
+| `KLINES_RETENTION_MYSQL_MAX_ROWS_PER_CHUNK` | `50000` | Halve an oversized MySQL time chunk before deleting, down to one hour. |
 
 ### Connection
 
-Reuses the canonical `MONGODB_URL` env var (same one used by the rest of the
-data-manager service). The job exits with code `2` when it is not set.
+Reuses the canonical `MONGODB_URL` and `MYSQL_URI` env vars. A missing or
+unreachable `MYSQL_URI` logs a warning and skips MySQL while MongoDB continues;
+MongoDB still exits with code `2` when `MONGODB_URL` is not set.
 
 ## Observability
 
@@ -102,7 +116,7 @@ klines_retention: klines_1h chunk 3 2026-05-31T00:00:00+00:00 → 2026-06-01T00:
 On completion the job summarises the run:
 
 ```
-klines_retention: run complete — 14 collections processed, 482917 docs deleted
+klines_retention: run complete — 14 collections processed, docs per backend={'mongodb': 482917} deleted
 ```
 
 Run under `opentelemetry-instrument` (the production pattern, mirroring the
