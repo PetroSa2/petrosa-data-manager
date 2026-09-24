@@ -46,6 +46,7 @@ _MYSQL_COLUMN_MAP = {
     "symbol": "symbol",
     "interval": "interval",
 }
+MYSQL_CANDLE_COLUMNS = tuple(_MYSQL_COLUMN_MAP.values())
 
 
 def mongo_collection_name(symbol: str, timeframe: str) -> str:
@@ -150,6 +151,7 @@ class CandleRepository(BaseRepository):
                 limit=limit,
                 offset=offset,
                 descending=descending,
+                columns=MYSQL_CANDLE_COLUMNS,
             )
             return [map_mysql_row(row) for row in rows]
         except Exception as e:
@@ -171,7 +173,10 @@ class CandleRepository(BaseRepository):
                     self._get_collection_name(symbol, timeframe), symbol, limit
                 )
             rows = adapter.query_latest(
-                self._get_mysql_table_name(timeframe), symbol, limit
+                self._get_mysql_table_name(timeframe),
+                symbol,
+                limit,
+                columns=MYSQL_CANDLE_COLUMNS,
             )
             return [map_mysql_row(row) for row in rows]
         except Exception as e:
@@ -364,6 +369,7 @@ class CandleRepository(BaseRepository):
                     limit=limit,
                     offset=offset,
                     descending=descending,
+                    columns=MYSQL_CANDLE_COLUMNS,
                 )
                 candles = [map_mysql_row(row) for row in rows]
             else:
@@ -426,7 +432,11 @@ class CandleRepository(BaseRepository):
                 table = self._get_mysql_table_name(timeframe)
                 # petrosa-data-manager#312: see write_batch comment above.
                 rows = await asyncio.to_thread(
-                    self.mysql.query_latest, table, symbol, limit
+                    self.mysql.query_latest,
+                    table,
+                    symbol,
+                    limit,
+                    columns=MYSQL_CANDLE_COLUMNS,
                 )
                 candles = [map_mysql_row(row) for row in rows]
             else:

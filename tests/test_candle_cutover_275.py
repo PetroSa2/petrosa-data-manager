@@ -16,6 +16,7 @@ import pytest
 
 from data_manager.api.routes.data import _completeness_pct, _default_candle_start
 from data_manager.db.repositories.candle_repository import (
+    MYSQL_CANDLE_COLUMNS,
     CandleRepository,
     map_mysql_row,
     mongo_collection_name,
@@ -279,7 +280,13 @@ class TestWarmupBackfill:
         assert result.source_rows == 3
         assert result.written == 3
         assert mongo.write.await_count == 2  # batch_size=2 over 3 candles
-        mysql.query_latest.assert_called_once_with("klines_h1", "BTCUSDT", 3)
+        mysql.query_latest.assert_called_once_with(
+            "klines_h1",
+            "BTCUSDT",
+            3,
+            columns=MYSQL_CANDLE_COLUMNS
+            + ("open_time", "quote_asset_volume", "number_of_trades"),
+        )
         mongo.ensure_indexes.assert_awaited_once_with("candles_BTCUSDT_1h")
 
     @pytest.mark.asyncio

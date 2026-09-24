@@ -6,6 +6,7 @@ Based on petrosa-binance-data-extractor patterns.
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -435,6 +436,21 @@ class MySQLAdapter(BaseAdapter):
                 f"Unknown collection or failed to reflect: {collection}"
             )
 
+    def _select_table_columns(
+        self, table: "Table", columns: Sequence[str] | None
+    ) -> Any:
+        if columns is None:
+            return select(table)
+
+        resolved = [table.c[name] for name in columns if name in table.c]
+        if not resolved:
+            logger.warning(
+                "No requested columns exist on table %s; selecting all columns",
+                table.name,
+            )
+            return select(table)
+        return select(*resolved)
+
     def write(self, model_instances: list[BaseModel], collection: str) -> WriteResult:
         """Write model instances to MySQL with retry + circuit breaker.
 
@@ -729,6 +745,7 @@ class MySQLAdapter(BaseAdapter):
         limit: int | None = None,
         offset: int = 0,
         descending: bool = False,
+        columns: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Query records within time range.
 
@@ -745,7 +762,9 @@ class MySQLAdapter(BaseAdapter):
         try:
             table = self._get_table(collection)
             time_col = self._time_column(table)
-            query = select(table).where(and_(time_col >= start, time_col < end))
+            query = self._select_table_columns(table, columns).where(
+                and_(time_col >= start, time_col < end)
+            )
 
             if symbol:
                 query = query.where(table.c.symbol == symbol)
@@ -769,7 +788,12 @@ class MySQLAdapter(BaseAdapter):
             raise DatabaseError(f"Failed to query range from {collection}: {e}") from e
 
     def query_latest(
-        self, collection: str, symbol: str | None = None, limit: int = 1
+        self,
+        collection: str,
+        symbol: str | None = None,
+        limit: int = 1,
+        *,
+        columns: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Query most recent records."""
         if not self._connected:
@@ -778,7 +802,7 @@ class MySQLAdapter(BaseAdapter):
         try:
             table = self._get_table(collection)
             time_col = self._time_column(table)
-            query = select(table)
+            query = self._select_table_columns(table, columns)
             if symbol:
                 query = query.where(table.c.symbol == symbol)
 
@@ -846,6 +870,7 @@ class MySQLAdapter(BaseAdapter):
         sort_list: list[tuple[str, int]] | None = None,
         limit: int = 100,
         offset: int = 0,
+        columns: Sequence[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Query a table with filter/sort/limit/offset pushed to the driver.
 
@@ -904,7 +929,7 @@ class MySQLAdapter(BaseAdapter):
                         count_query = count_query.where(and_(*conditions))
                     total = conn.execute(count_query).scalar()
 
-                    query = select(table)
+                    query = self._select_table_columns(table, columns)
                     if conditions:
                         query = query.where(and_(*conditions))
                     if sort_list:

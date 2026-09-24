@@ -94,6 +94,7 @@ async def _execute_query_internal(
                 sort_list=sort_list,
                 limit=limit,
                 offset=offset,
+                columns=field_list,
             )
         else:  # MongoDB
             records, total_count = await adapter.find_paginated(
