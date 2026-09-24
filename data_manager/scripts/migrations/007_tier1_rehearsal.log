@@ -1,0 +1,1826 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SELECT VERSION()
+--------------
+
++-----------+
+| VERSION() |
++-----------+
+| 5.7.44    |
++-----------+
+1 row in set (0.01 sec)
+
+Bye
+PHASE: apply
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+CREATE DATABASE IF NOT EXISTS petrosa_crypto
+--------------
+
+Query OK, 1 row affected, 1 warning (0.01 sec)
+
+--------------
+CREATE TABLE audit_logs (id INT NOT NULL, dataset_id INT, symbol VARCHAR(32), timestamp DATETIME, KEY idx_audit_logs_dataset_timestamp (dataset_id, timestamp), KEY idx_audit_logs_symbol (symbol), KEY idx_audit_logs_symbol_timestamp (symbol, timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.25 sec)
+
+--------------
+CREATE TABLE health_metrics (id INT NOT NULL, dataset_id INT, symbol VARCHAR(32), timestamp DATETIME, KEY idx_health_metrics_dataset_timestamp (dataset_id, timestamp), KEY idx_health_metrics_symbol (symbol), KEY idx_health_metrics_symbol_timestamp (symbol, timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.13 sec)
+
+--------------
+CREATE TABLE backfill_jobs (id INT NOT NULL, symbol VARCHAR(32), status VARCHAR(32), KEY idx_backfill_jobs_status (status), KEY idx_backfill_jobs_symbol (symbol)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+--------------
+CREATE TABLE signals (id INT NOT NULL, strategy_id VARCHAR(64), symbol VARCHAR(32), period VARCHAR(16), KEY idx_strategy (strategy_id), KEY idx_symbol_period (symbol, period)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+--------------
+CREATE TABLE positions (id INT NOT NULL, strategy_id VARCHAR(64), symbol VARCHAR(32), exchange VARCHAR(32), status VARCHAR(16), entry_time DATETIME, KEY idx_entry_time (entry_time), KEY idx_exchange (exchange), KEY idx_positions_status_entry_time (status, entry_time), KEY idx_strategy_id (strategy_id), KEY idx_symbol (symbol), KEY idx_status (status)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.07 sec)
+
+--------------
+CREATE TABLE klines_m1 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, open_time DATETIME, KEY idx_klines_m1_open_time (open_time), KEY idx_klines_m1_timestamp (timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+--------------
+CREATE TABLE klines_m15 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, open_time DATETIME, KEY idx_klines_15m_open_time (open_time)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+CREATE TABLE klines_m30 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, open_time DATETIME, KEY idx_klines_m30_symbol_timestamp (symbol, timestamp), KEY idx_klines_m30_open_time (open_time)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.05 sec)
+
+--------------
+CREATE TABLE klines_h1 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, KEY idx_klines_h1_symbol_timestamp (symbol, timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.05 sec)
+
+--------------
+CREATE TABLE klines_d1 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, KEY idx_klines_d1_symbol_timestamp (symbol, timestamp), KEY idx_klines_d1_timestamp (timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+--------------
+CREATE TABLE klines_h4 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, open_time DATETIME, KEY idx_klines_h4_open_time (open_time), KEY idx_klines_h4_timestamp (timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+--------------
+CREATE TABLE klines_m5 (id INT NOT NULL, symbol VARCHAR(32), timestamp DATETIME, KEY idx_klines_m5_symbol_timestamp (symbol, timestamp)) ENGINE=InnoDB
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+Bye
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m5' AND INDEX_NAME = 'idx_klines_m5_symbol_timestamp') > 0, 'DROP INDEX idx_klines_m5_symbol_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.08 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m5 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m5 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.26 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_symbol_timestamp') > 0, 'DROP INDEX idx_klines_m30_symbol_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_open_time') > 0, 'DROP INDEX idx_klines_m30_open_time', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.15 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m30 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m30 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.36 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h1' AND INDEX_NAME = 'idx_klines_h1_symbol_timestamp') > 0, 'DROP INDEX idx_klines_h1_symbol_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_h1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_h1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.18 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_symbol_timestamp') > 0, 'DROP INDEX idx_klines_d1_symbol_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_timestamp') > 0, 'DROP INDEX idx_klines_d1_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_d1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_d1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.27 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_dataset_timestamp') > 0, 'DROP INDEX idx_audit_logs_dataset_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_symbol') > 0, 'DROP INDEX idx_audit_logs_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''audit_logs already clean'' AS migration_note', CONCAT('ALTER TABLE audit_logs ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.27 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_dataset_timestamp') > 0, 'DROP INDEX idx_health_metrics_dataset_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_symbol') > 0, 'DROP INDEX idx_health_metrics_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''health_metrics already clean'' AS migration_note', CONCAT('ALTER TABLE health_metrics ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.28 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_status') > 0, 'DROP INDEX idx_backfill_jobs_status', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_symbol') > 0, 'DROP INDEX idx_backfill_jobs_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.13 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''backfill_jobs already clean'' AS migration_note', CONCAT('ALTER TABLE backfill_jobs ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.39 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_strategy') > 0, 'DROP INDEX idx_strategy', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_symbol_period') > 0, 'DROP INDEX idx_symbol_period', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.14 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''signals already clean'' AS migration_note', CONCAT('ALTER TABLE signals ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.29 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_entry_time') > 0, 'DROP INDEX idx_entry_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_exchange') > 0, 'DROP INDEX idx_exchange', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_positions_status_entry_time') > 0, 'DROP INDEX idx_positions_status_entry_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_strategy_id') > 0, 'DROP INDEX idx_strategy_id', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_symbol') > 0, 'DROP INDEX idx_symbol', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_status') > 0, 'DROP INDEX idx_status', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''positions already clean'' AS migration_note', CONCAT('ALTER TABLE positions ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.23 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_open_time') > 0, 'DROP INDEX idx_klines_m1_open_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_timestamp') > 0, 'DROP INDEX idx_klines_m1_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.21 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.26 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @drop_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m15' AND INDEX_NAME = 'idx_klines_15m_open_time') > 0, 'DROP INDEX idx_klines_15m_open_time', NULL)
+--------------
+
+Query OK, 0 rows affected (0.08 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql IS NULL, 'SELECT ''klines_m15 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m15 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.04 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.18 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_open_time') > 0, 'DROP INDEX idx_klines_h4_open_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_timestamp') > 0, 'DROP INDEX idx_klines_h4_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_h4 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_h4 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.32 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+Bye
+PHASE: re-apply
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m5' AND INDEX_NAME = 'idx_klines_m5_symbol_timestamp') > 0, 'DROP INDEX idx_klines_m5_symbol_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m5 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m5 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-------------------------+
+| migration_note          |
++-------------------------+
+| klines_m5 already clean |
++-------------------------+
+1 row in set (0.01 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_symbol_timestamp') > 0, 'DROP INDEX idx_klines_m30_symbol_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_open_time') > 0, 'DROP INDEX idx_klines_m30_open_time', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m30 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m30 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++--------------------------+
+| migration_note           |
++--------------------------+
+| klines_m30 already clean |
++--------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h1' AND INDEX_NAME = 'idx_klines_h1_symbol_timestamp') > 0, 'DROP INDEX idx_klines_h1_symbol_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_h1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_h1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-------------------------+
+| migration_note          |
++-------------------------+
+| klines_h1 already clean |
++-------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_symbol_timestamp') > 0, 'DROP INDEX idx_klines_d1_symbol_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_timestamp') > 0, 'DROP INDEX idx_klines_d1_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_d1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_d1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-------------------------+
+| migration_note          |
++-------------------------+
+| klines_d1 already clean |
++-------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_dataset_timestamp') > 0, 'DROP INDEX idx_audit_logs_dataset_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_symbol') > 0, 'DROP INDEX idx_audit_logs_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''audit_logs already clean'' AS migration_note', CONCAT('ALTER TABLE audit_logs ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++--------------------------+
+| migration_note           |
++--------------------------+
+| audit_logs already clean |
++--------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_dataset_timestamp') > 0, 'DROP INDEX idx_health_metrics_dataset_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_symbol') > 0, 'DROP INDEX idx_health_metrics_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''health_metrics already clean'' AS migration_note', CONCAT('ALTER TABLE health_metrics ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++------------------------------+
+| migration_note               |
++------------------------------+
+| health_metrics already clean |
++------------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_status') > 0, 'DROP INDEX idx_backfill_jobs_status', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_symbol') > 0, 'DROP INDEX idx_backfill_jobs_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''backfill_jobs already clean'' AS migration_note', CONCAT('ALTER TABLE backfill_jobs ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-----------------------------+
+| migration_note              |
++-----------------------------+
+| backfill_jobs already clean |
++-----------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_strategy') > 0, 'DROP INDEX idx_strategy', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_symbol_period') > 0, 'DROP INDEX idx_symbol_period', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''signals already clean'' AS migration_note', CONCAT('ALTER TABLE signals ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-----------------------+
+| migration_note        |
++-----------------------+
+| signals already clean |
++-----------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_entry_time') > 0, 'DROP INDEX idx_entry_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_exchange') > 0, 'DROP INDEX idx_exchange', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_positions_status_entry_time') > 0, 'DROP INDEX idx_positions_status_entry_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_strategy_id') > 0, 'DROP INDEX idx_strategy_id', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_symbol') > 0, 'DROP INDEX idx_symbol', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_status') > 0, 'DROP INDEX idx_status', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''positions already clean'' AS migration_note', CONCAT('ALTER TABLE positions ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-------------------------+
+| migration_note          |
++-------------------------+
+| positions already clean |
++-------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_open_time') > 0, 'DROP INDEX idx_klines_m1_open_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_timestamp') > 0, 'DROP INDEX idx_klines_m1_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-------------------------+
+| migration_note          |
++-------------------------+
+| klines_m1 already clean |
++-------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m15' AND INDEX_NAME = 'idx_klines_15m_open_time') > 0, 'DROP INDEX idx_klines_15m_open_time', NULL)
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql IS NULL, 'SELECT ''klines_m15 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m15 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++--------------------------+
+| migration_note           |
++--------------------------+
+| klines_m15 already clean |
++--------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_open_time') > 0, 'DROP INDEX idx_klines_h4_open_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_timestamp') > 0, 'DROP INDEX idx_klines_h4_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_h4 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_h4 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
++-------------------------+
+| migration_note          |
++-------------------------+
+| klines_h4 already clean |
++-------------------------+
+1 row in set (0.00 sec)
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+Bye
+PHASE: rollback
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SET @add_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m5' AND INDEX_NAME = 'idx_klines_m5_symbol_timestamp') = 0, 'ADD INDEX idx_klines_m5_symbol_timestamp (symbol, timestamp)', NULL)
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql IS NULL, 'SELECT ''klines_m5 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_m5 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.25 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_symbol_timestamp') = 0, 'ADD INDEX idx_klines_m30_symbol_timestamp (symbol, timestamp)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_open_time') = 0, 'ADD INDEX idx_klines_m30_open_time (open_time)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''klines_m30 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_m30 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.31 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @add_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h1' AND INDEX_NAME = 'idx_klines_h1_symbol_timestamp') = 0, 'ADD INDEX idx_klines_h1_symbol_timestamp (symbol, timestamp)', NULL)
+--------------
+
+Query OK, 0 rows affected (0.08 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql IS NULL, 'SELECT ''klines_h1 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_h1 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.37 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_symbol_timestamp') = 0, 'ADD INDEX idx_klines_d1_symbol_timestamp (symbol, timestamp)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_timestamp') = 0, 'ADD INDEX idx_klines_d1_timestamp (timestamp)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.07 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''klines_d1 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_d1 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.31 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_dataset_timestamp') = 0, 'ADD INDEX idx_audit_logs_dataset_timestamp (dataset_id, timestamp)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_symbol') = 0, 'ADD INDEX idx_audit_logs_symbol (symbol)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''audit_logs already restored'' AS migration_note', CONCAT('ALTER TABLE audit_logs ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.30 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_dataset_timestamp') = 0, 'ADD INDEX idx_health_metrics_dataset_timestamp (dataset_id, timestamp)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_symbol') = 0, 'ADD INDEX idx_health_metrics_symbol (symbol)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.10 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''health_metrics already restored'' AS migration_note', CONCAT('ALTER TABLE health_metrics ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.32 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_status') = 0, 'ADD INDEX idx_backfill_jobs_status (status)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_symbol') = 0, 'ADD INDEX idx_backfill_jobs_symbol (symbol)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''backfill_jobs already restored'' AS migration_note', CONCAT('ALTER TABLE backfill_jobs ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.37 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_strategy') = 0, 'ADD INDEX idx_strategy (strategy_id)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_symbol_period') = 0, 'ADD INDEX idx_symbol_period (symbol, period)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.10 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''signals already restored'' AS migration_note', CONCAT('ALTER TABLE signals ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.33 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_entry_time') = 0, 'ADD INDEX idx_entry_time (entry_time)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_exchange') = 0, 'ADD INDEX idx_exchange (exchange)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_positions_status_entry_time') = 0, 'ADD INDEX idx_positions_status_entry_time (status, entry_time)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_strategy_id') = 0, 'ADD INDEX idx_strategy_id (strategy_id)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_symbol') = 0, 'ADD INDEX idx_symbol (symbol)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_status') = 0, 'ADD INDEX idx_status (status)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''positions already restored'' AS migration_note', CONCAT('ALTER TABLE positions ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.45 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_open_time') = 0, 'ADD INDEX idx_klines_m1_open_time (open_time)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_timestamp') = 0, 'ADD INDEX idx_klines_m1_timestamp (timestamp)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.10 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''klines_m1 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_m1 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.36 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m15' AND INDEX_NAME = 'idx_klines_15m_open_time') = 0, 'ADD INDEX idx_klines_15m_open_time (open_time)', NULL)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql IS NULL, 'SELECT ''klines_m15 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_m15 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.34 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @add_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_open_time') = 0, 'ADD INDEX idx_klines_h4_open_time (open_time)', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_timestamp') = 0, 'ADD INDEX idx_klines_h4_timestamp (timestamp)', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.07 sec)
+
+--------------
+SET @alter_sql = IF(@add_sql = '', 'SELECT ''klines_h4 already restored'' AS migration_note', CONCAT('ALTER TABLE klines_h4 ', @add_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.29 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+Bye
+PHASE: re-apply
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m5' AND INDEX_NAME = 'idx_klines_m5_symbol_timestamp') > 0, 'DROP INDEX idx_klines_m5_symbol_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m5 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m5 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.19 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_symbol_timestamp') > 0, 'DROP INDEX idx_klines_m30_symbol_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m30' AND INDEX_NAME = 'idx_klines_m30_open_time') > 0, 'DROP INDEX idx_klines_m30_open_time', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m30 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m30 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.28 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h1' AND INDEX_NAME = 'idx_klines_h1_symbol_timestamp') > 0, 'DROP INDEX idx_klines_h1_symbol_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.08 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_h1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_h1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.19 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_symbol_timestamp') > 0, 'DROP INDEX idx_klines_d1_symbol_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_d1' AND INDEX_NAME = 'idx_klines_d1_timestamp') > 0, 'DROP INDEX idx_klines_d1_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.17 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_d1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_d1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.26 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_dataset_timestamp') > 0, 'DROP INDEX idx_audit_logs_dataset_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND INDEX_NAME = 'idx_audit_logs_symbol') > 0, 'DROP INDEX idx_audit_logs_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.08 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''audit_logs already clean'' AS migration_note', CONCAT('ALTER TABLE audit_logs ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.21 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_dataset_timestamp') > 0, 'DROP INDEX idx_health_metrics_dataset_timestamp', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_metrics' AND INDEX_NAME = 'idx_health_metrics_symbol') > 0, 'DROP INDEX idx_health_metrics_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''health_metrics already clean'' AS migration_note', CONCAT('ALTER TABLE health_metrics ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.38 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_status') > 0, 'DROP INDEX idx_backfill_jobs_status', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backfill_jobs' AND INDEX_NAME = 'idx_backfill_jobs_symbol') > 0, 'DROP INDEX idx_backfill_jobs_symbol', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.11 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''backfill_jobs already clean'' AS migration_note', CONCAT('ALTER TABLE backfill_jobs ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.26 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_strategy') > 0, 'DROP INDEX idx_strategy', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'signals' AND INDEX_NAME = 'idx_symbol_period') > 0, 'DROP INDEX idx_symbol_period', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.07 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''signals already clean'' AS migration_note', CONCAT('ALTER TABLE signals ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.21 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_entry_time') > 0, 'DROP INDEX idx_entry_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_exchange') > 0, 'DROP INDEX idx_exchange', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_positions_status_entry_time') > 0, 'DROP INDEX idx_positions_status_entry_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_strategy_id') > 0, 'DROP INDEX idx_strategy_id', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_symbol') > 0, 'DROP INDEX idx_symbol', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND INDEX_NAME = 'idx_status') > 0, 'DROP INDEX idx_status', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.16 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''positions already clean'' AS migration_note', CONCAT('ALTER TABLE positions ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.28 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_open_time') > 0, 'DROP INDEX idx_klines_m1_open_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m1' AND INDEX_NAME = 'idx_klines_m1_timestamp') > 0, 'DROP INDEX idx_klines_m1_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.09 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_m1 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m1 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.21 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+SET @drop_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m15' AND INDEX_NAME = 'idx_klines_15m_open_time') > 0, 'DROP INDEX idx_klines_15m_open_time', NULL)
+--------------
+
+Query OK, 0 rows affected (0.08 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql IS NULL, 'SELECT ''klines_m15 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_m15 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.03 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.23 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.00 sec)
+
+--------------
+SET @drop_sql = CONCAT_WS(', ',
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_open_time') > 0, 'DROP INDEX idx_klines_h4_open_time', NULL),
+    IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_h4' AND INDEX_NAME = 'idx_klines_h4_timestamp') > 0, 'DROP INDEX idx_klines_h4_timestamp', NULL)
+)
+--------------
+
+Query OK, 0 rows affected (0.10 sec)
+
+--------------
+SET @alter_sql = IF(@drop_sql = '', 'SELECT ''klines_h4 already clean'' AS migration_note', CONCAT('ALTER TABLE klines_h4 ', @drop_sql, ', ALGORITHM=INPLACE, LOCK=NONE'))
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+--------------
+PREPARE stmt FROM @alter_sql
+--------------
+
+Query OK, 0 rows affected (0.01 sec)
+Statement prepared
+
+--------------
+EXECUTE stmt
+--------------
+
+Query OK, 0 rows affected (0.26 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+--------------
+DEALLOCATE PREPARE stmt
+--------------
+
+Query OK, 0 rows affected (0.02 sec)
+
+Bye
+TIER1 REHEARSAL: PASS

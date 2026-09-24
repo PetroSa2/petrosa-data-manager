@@ -219,8 +219,6 @@ class MySQLAdapter(BaseAdapter):
             Column("severity", String(20)),
             Column("details", Text),
             Column("timestamp", DateTime, nullable=False),
-            Index("idx_audit_logs_dataset_timestamp", "dataset_id", "timestamp"),
-            Index("idx_audit_logs_symbol", "symbol"),
             Index("idx_audit_logs_symbol_timestamp", "symbol", "timestamp"),
         )
 
@@ -237,8 +235,6 @@ class MySQLAdapter(BaseAdapter):
             Column("duplicates_count", Integer, default=0),
             Column("quality_score", Numeric(5, 2)),
             Column("timestamp", DateTime, nullable=False),
-            Index("idx_health_metrics_dataset_timestamp", "dataset_id", "timestamp"),
-            Index("idx_health_metrics_symbol", "symbol"),
             Index("idx_health_metrics_symbol_timestamp", "symbol", "timestamp"),
         )
 
@@ -264,8 +260,6 @@ class MySQLAdapter(BaseAdapter):
             Column("created_at", DateTime, nullable=False),
             Column("started_at", DateTime),
             Column("completed_at", DateTime),
-            Index("idx_backfill_jobs_status", "status"),
-            Index("idx_backfill_jobs_symbol", "symbol"),
         )
 
         # Lineage records table
@@ -368,8 +362,6 @@ class MySQLAdapter(BaseAdapter):
             Column("extracted_at", DateTime, nullable=False),
             Column("extractor_version", String(20), nullable=False),
             Column("source", String(50), nullable=False),
-            Index(f"idx_{physical_table_name}_symbol_timestamp", "symbol", "timestamp"),
-            Index(f"idx_{physical_table_name}_timestamp", "timestamp"),
             extend_existing=True,
         )
 
