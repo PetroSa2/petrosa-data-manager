@@ -1,0 +1,55 @@
+PENDING-OPERATOR — fixture only; replace with output from 007_pre_snapshot.sql
+before applying migration 007. No production database was contacted by the
+implementing agent.
+
+CREATE TABLE audit_logs (...
+  KEY idx_audit_logs_dataset_timestamp (dataset_id, timestamp),
+  KEY idx_audit_logs_symbol (symbol),
+  KEY idx_audit_logs_symbol_timestamp (symbol, timestamp)
+);
+CREATE TABLE health_metrics (...
+  KEY idx_health_metrics_dataset_timestamp (dataset_id, timestamp),
+  KEY idx_health_metrics_symbol (symbol),
+  KEY idx_health_metrics_symbol_timestamp (symbol, timestamp)
+);
+CREATE TABLE backfill_jobs (...
+  KEY idx_backfill_jobs_status (status),
+  KEY idx_backfill_jobs_symbol (symbol)
+);
+CREATE TABLE signals (...
+  KEY idx_strategy (strategy_id),
+  KEY idx_symbol_period (symbol, period)
+);
+CREATE TABLE positions (...
+  KEY idx_entry_time (entry_time),
+  KEY idx_exchange (exchange),
+  KEY idx_positions_status_entry_time (status, entry_time),
+  KEY idx_strategy_id (strategy_id),
+  KEY idx_symbol (symbol),
+  KEY idx_status (status)
+);
+CREATE TABLE klines_m1 (...
+  KEY idx_klines_m1_open_time (open_time),
+  KEY idx_klines_m1_timestamp (timestamp)
+);
+CREATE TABLE klines_m15 (...
+  KEY idx_klines_15m_open_time (open_time)
+);
+CREATE TABLE klines_m30 (...
+  KEY idx_klines_m30_symbol_timestamp (symbol, timestamp),
+  KEY idx_klines_m30_open_time (open_time)
+);
+CREATE TABLE klines_h1 (...
+  KEY idx_klines_h1_symbol_timestamp (symbol, timestamp)
+);
+CREATE TABLE klines_d1 (...
+  KEY idx_klines_d1_symbol_timestamp (symbol, timestamp),
+  KEY idx_klines_d1_timestamp (timestamp)
+);
+CREATE TABLE klines_h4 (...
+  KEY idx_klines_h4_open_time (open_time),
+  KEY idx_klines_h4_timestamp (timestamp)
+);
+CREATE TABLE klines_m5 (...
+  KEY idx_klines_m5_symbol_timestamp (symbol, timestamp)
+);
