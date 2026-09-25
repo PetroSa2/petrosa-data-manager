@@ -172,6 +172,8 @@ class DataManagerApp:
             self.db_manager = DatabaseManager()
             await self.db_manager.initialize()
             logger.info("Database connections initialized successfully")
+            if self.db_manager.mongodb_adapter:
+                await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
 
             # Update API server with initialized db_manager
             if self.api_server_task:
