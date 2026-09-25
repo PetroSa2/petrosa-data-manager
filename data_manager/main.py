@@ -88,6 +88,7 @@ class DataManagerApp:
         self.execution_events_consumer: ExecutionEventsConsumer | None = None
         self.pnl_consumer: PnlConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
+        self.loop_lag_monitor_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
         self.ingest_evaluator = None  # P2.2 (#593) — set in start()
@@ -484,6 +485,14 @@ class DataManagerApp:
         self.running = True
         logger.info("All components started successfully")
 
+        if constants.DM_LOOP_LAG_MONITOR:
+            from data_manager.utils.event_loop_monitor import monitor_event_loop_lag
+
+            self.loop_lag_monitor_task = asyncio.create_task(
+                monitor_event_loop_lag(stop_event=self._shutdown_event)
+            )
+            logger.info("Event-loop lag monitor enabled")
+
         # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
         # AFTER self.running=True so the `while self.running` loop runs its
         # first iteration immediately (the series appears within one refresh
@@ -497,6 +506,13 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
+        if self.loop_lag_monitor_task:
+            self.loop_lag_monitor_task.cancel()
+            try:
+                await self.loop_lag_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self.loop_lag_monitor_task = None
 
         # Flush telemetry first
         try:

@@ -78,7 +78,7 @@ class DatabaseManager:
             # Initialize MySQL adapter (synchronous)
             logger.info("Connecting to MySQL...")
             self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-            self.mysql_adapter.connect()
+            await asyncio.to_thread(self.mysql_adapter.connect)
             self._stats["mysql"]["connection_count"] += 1
             self._stats["mysql"]["last_connected"] = datetime.now(UTC)
             logger.info("MySQL connection established")
@@ -127,7 +127,7 @@ class DatabaseManager:
 
         if self.mysql_adapter:
             try:
-                self.mysql_adapter.disconnect()
+                await asyncio.to_thread(self.mysql_adapter.disconnect)
                 self._stats["mysql"]["last_disconnected"] = datetime.now(UTC)
                 logger.info("MySQL disconnected")
             except Exception as e:
@@ -250,7 +250,7 @@ class DatabaseManager:
 
             # Attempt reconnection
             self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-            self.mysql_adapter.connect()
+            await asyncio.to_thread(self.mysql_adapter.connect)
 
             self._stats["mysql"]["connection_count"] += 1
             self._stats["mysql"]["last_connected"] = datetime.now(UTC)

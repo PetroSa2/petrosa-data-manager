@@ -2,6 +2,7 @@
 Generic CRUD API endpoints for dynamic database/collection operations.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -165,7 +166,10 @@ def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
         return
 
     try:
-        mysql_adapter.write(records, "signals")
+        awaitable = asyncio.to_thread(mysql_adapter.write, records, "signals")
+        # The caller schedules this best-effort operation without blocking the
+        # request path; keep the helper synchronous for existing callers.
+        asyncio.create_task(awaitable)
     except Exception:
         logger.error("MySQL signals dual-write failed", exc_info=True)
 
@@ -578,7 +582,9 @@ async def insert_records(
             from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
             try:
-                write_result = adapter.write(model_instances, collection)
+                write_result = await asyncio.to_thread(
+                    adapter.write, model_instances, collection
+                )
             except CircuitBreakerOpenError as exc:
                 # Per #213 AC2.4: surface the OPEN-circuit case as 503 so callers
                 # (urllib3 Retry, k8s ingress) treat it as transient and back off.
@@ -702,8 +708,8 @@ async def update_records(
                 from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
                 try:
-                    updated_count = adapter.update(
-                        collection, request.filter, update_data
+                    updated_count = await asyncio.to_thread(
+                        adapter.update, collection, request.filter, update_data
                     )
                 except CircuitBreakerOpenError as exc:
                     api_module.db_manager.increment_error_count(database)
@@ -733,7 +739,9 @@ async def update_records(
             model_instance = GenericModel(**new_record)
 
             if database == "mysql":
-                write_result = adapter.write([model_instance], collection)
+                write_result = await asyncio.to_thread(
+                    adapter.write, [model_instance], collection
+                )
                 updated_count = write_result.inserted
             else:  # MongoDB
                 updated_count = await adapter.write([model_instance], collection)
@@ -784,8 +792,12 @@ async def delete_records(
 
         # Query existing records
         if database == "mysql":
-            existing_records = adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
+            existing_records = await asyncio.to_thread(
+                adapter.query_range,
+                collection=collection,
+                start=datetime.min,
+                end=datetime.max,
+                symbol=None,
             )
         else:  # MongoDB
             existing_records = await adapter.query_range(
@@ -864,7 +876,9 @@ async def batch_operations(
                     model_instances.append(GenericModel(**item))
 
                 if database == "mysql":
-                    count = adapter.write(model_instances, collection)
+                    count = await asyncio.to_thread(
+                        adapter.write, model_instances, collection
+                    )
                 else:  # MongoDB
                     count = await adapter.write(model_instances, collection)
 
@@ -877,8 +891,12 @@ async def batch_operations(
 
                 # Query and update records
                 if database == "mysql":
-                    records = adapter.query_range(
-                        collection, datetime.min, datetime.max, None
+                    records = await asyncio.to_thread(
+                        adapter.query_range,
+                        collection,
+                        datetime.min,
+                        datetime.max,
+                        None,
                     )
                 else:
                     records = await adapter.query_range(
@@ -897,8 +915,12 @@ async def batch_operations(
                 filter_dict = operation.get("filter", {})
 
                 if database == "mysql":
-                    records = adapter.query_range(
-                        collection, datetime.min, datetime.max, None
+                    records = await asyncio.to_thread(
+                        adapter.query_range,
+                        collection,
+                        datetime.min,
+                        datetime.max,
+                        None,
                     )
                 else:
                     records = await adapter.query_range(

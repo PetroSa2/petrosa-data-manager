@@ -121,6 +121,7 @@ ENABLE_AUDITOR = os.getenv("ENABLE_AUDITOR", "true").lower() == "true"
 ENABLE_BACKFILLER = os.getenv("ENABLE_BACKFILLER", "true").lower() == "true"
 ENABLE_ANALYTICS = os.getenv("ENABLE_ANALYTICS", "true").lower() == "true"
 ENABLE_API = os.getenv("ENABLE_API", "true").lower() == "true"
+DM_LOOP_LAG_MONITOR = os.getenv("DM_LOOP_LAG_MONITOR", "false").lower() == "true"
 ENABLE_INTENT_CONSUMER = os.getenv("ENABLE_INTENT_CONSUMER", "true").lower() == "true"
 ENABLE_DECISION_CONSUMER = (
     os.getenv("ENABLE_DECISION_CONSUMER", "true").lower() == "true"
