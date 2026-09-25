@@ -57,6 +57,30 @@ class MySQLKlineRow(BaseModel):
     source: str
 
 
+class MongoKlineDoc(BaseModel):
+    """Extractor-compatible document stored in ``klines_*`` collections."""
+
+    symbol: str
+    timestamp: datetime
+    open_time: str
+    close_time: str
+    interval: str
+    open_price: str
+    high_price: str
+    low_price: str
+    close_price: str
+    volume: str
+    quote_asset_volume: str
+    number_of_trades: int
+    taker_buy_base_asset_volume: str
+    taker_buy_quote_asset_volume: str
+    price_change: str
+    price_change_percent: str
+    extracted_at: datetime
+    extractor_version: str
+    source: str
+
+
 class Trade(BaseModel):
     """Individual trade data."""
 

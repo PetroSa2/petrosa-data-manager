@@ -29,11 +29,26 @@ def make_candle(symbol: str = "BTCUSDT", timeframe: str = "1h") -> Candle:
     )
 
 
+def mongo_doc(close: str = "105") -> dict:
+    return {
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "open_price": "100",
+        "high_price": "110",
+        "low_price": "90",
+        "close_price": close,
+        "volume": "1000",
+        "quote_asset_volume": "100000",
+        "number_of_trades": 1,
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+    }
+
+
 class TestCollectionNaming:
     def test_collection_name_format(self):
         repo = CandleRepository(mysql_adapter=None, mongodb_adapter=None)
-        assert repo._get_collection_name("BTCUSDT", "1h") == "candles_BTCUSDT_1h"
-        assert repo._get_collection_name("ETHUSDT", "15m") == "candles_ETHUSDT_15m"
+        assert repo._get_collection_name("BTCUSDT", "1h") == "klines_1h"
+        assert repo._get_collection_name("ETHUSDT", "15m") == "klines_15m"
 
 
 class TestMysqlTableNaming:
@@ -59,7 +74,7 @@ class TestMysqlTableNaming:
 
 class TestMongoPath:
     @pytest.mark.asyncio
-    async def test_insert_writes_to_candles_collection(self):
+    async def test_insert_writes_to_klines_collection(self):
         with patch(
             "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",
             "mongodb",
@@ -68,7 +83,8 @@ class TestMongoPath:
             mongodb.write = AsyncMock(return_value=1)
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
             assert await repo.insert(make_candle("BTCUSDT", "1h")) is True
-            assert mongodb.write.call_args[0][1] == "candles_BTCUSDT_1h"
+            assert mongodb.write.call_args[0][1] == "klines_1h"
+            assert mongodb.write.call_args[0][0][0].open_price == "100"
 
     @pytest.mark.asyncio
     async def test_insert_returns_false_when_no_records_written(self):
@@ -108,7 +124,7 @@ class TestMongoPath:
             "mongodb",
         ):
             mongodb = Mock()
-            mongodb.write = AsyncMock(side_effect=[2, 1, 1])
+            mongodb.write = AsyncMock(side_effect=[3, 1])
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
             total = await repo.insert_batch(
                 [
@@ -119,8 +135,7 @@ class TestMongoPath:
                 ]
             )
             assert total == 4
-            # Three distinct collections: BTCUSDT-1h, BTCUSDT-15m, ETHUSDT-1h
-            assert mongodb.write.call_count == 3
+            assert mongodb.write.call_count == 2
 
     @pytest.mark.asyncio
     async def test_batch_returns_zero_on_exception(self):
@@ -140,15 +155,26 @@ class TestMongoPath:
             "mongodb",
         ):
             mongodb = Mock()
-            mongodb.query_range = AsyncMock(return_value=[{"close": "100"}])
+            mongodb.query_range = AsyncMock(return_value=[mongo_doc()])
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
             start = datetime(2026, 1, 1, tzinfo=UTC)
             end = datetime(2026, 1, 2, tzinfo=UTC)
             assert await repo.get_range("BTCUSDT", "1h", start, end) == [
-                {"close": "100"}
+                {
+                    "open": Decimal("100"),
+                    "high": Decimal("110"),
+                    "low": Decimal("90"),
+                    "close": Decimal("105"),
+                    "volume": Decimal("1000"),
+                    "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1h",
+                    "quote_volume": Decimal("100000"),
+                    "trades_count": 1,
+                }
             ]
             mongodb.query_range.assert_called_once_with(
-                "candles_BTCUSDT_1h",
+                "klines_1h",
                 start,
                 end,
                 "BTCUSDT",
@@ -183,12 +209,23 @@ class TestMongoPath:
             "mongodb",
         ):
             mongodb = Mock()
-            mongodb.query_latest = AsyncMock(return_value=[{"close": "1"}])
+            mongodb.query_latest = AsyncMock(return_value=[mongo_doc(close="1")])
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
-            assert await repo.get_latest("BTCUSDT", "1h", limit=5) == [{"close": "1"}]
-            mongodb.query_latest.assert_called_once_with(
-                "candles_BTCUSDT_1h", "BTCUSDT", 5
-            )
+            assert await repo.get_latest("BTCUSDT", "1h", limit=5) == [
+                {
+                    "open": Decimal("100"),
+                    "high": Decimal("110"),
+                    "low": Decimal("90"),
+                    "close": Decimal("1"),
+                    "volume": Decimal("1000"),
+                    "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1h",
+                    "quote_volume": Decimal("100000"),
+                    "trades_count": 1,
+                }
+            ]
+            mongodb.query_latest.assert_called_once_with("klines_1h", "BTCUSDT", 5)
 
     @pytest.mark.asyncio
     async def test_get_latest_returns_empty_on_exception(self):
@@ -212,7 +249,7 @@ class TestMongoPath:
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
             assert await repo.count("BTCUSDT", "1h") == 100
             mongodb.get_record_count.assert_called_once_with(
-                "candles_BTCUSDT_1h", None, None, "BTCUSDT"
+                "klines_1h", None, None, "BTCUSDT"
             )
 
     @pytest.mark.asyncio
@@ -236,7 +273,7 @@ class TestMongoPath:
             mongodb.ensure_indexes = AsyncMock()
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
             await repo.ensure_indexes("BTCUSDT", "1h")
-            mongodb.ensure_indexes.assert_called_once_with("candles_BTCUSDT_1h")
+            mongodb.ensure_indexes.assert_called_once_with("klines_1h")
 
     @pytest.mark.asyncio
     async def test_ensure_indexes_swallows_exception(self):

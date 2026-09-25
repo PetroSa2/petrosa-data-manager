@@ -85,7 +85,11 @@ class DatabaseManager:
 
             # Initialize MongoDB adapter (async)
             logger.info("Connecting to MongoDB...")
-            self.mongodb_adapter = get_adapter("mongodb", constants.MONGODB_URL)
+            self.mongodb_adapter = get_adapter(
+                "mongodb",
+                constants.MONGODB_URL,
+                database_name=constants.CANDLE_MONGO_DATABASE,
+            )
             self.mongodb_adapter.connect()
             self._stats["mongodb"]["connection_count"] += 1
             self._stats["mongodb"]["last_connected"] = datetime.now(UTC)
@@ -277,7 +281,11 @@ class DatabaseManager:
             await asyncio.sleep(backoff_delay)
 
             # Attempt reconnection
-            self.mongodb_adapter = get_adapter("mongodb", constants.MONGODB_URL)
+            self.mongodb_adapter = get_adapter(
+                "mongodb",
+                constants.MONGODB_URL,
+                database_name=constants.CANDLE_MONGO_DATABASE,
+            )
             self.mongodb_adapter.connect()
 
             self._stats["mongodb"]["connection_count"] += 1

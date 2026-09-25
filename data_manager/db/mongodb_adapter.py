@@ -61,7 +61,13 @@ class MongoDBAdapter(BaseAdapter):
     Uses Motor async client for time series data operations.
     """
 
-    def __init__(self, connection_string: str | None = None, **kwargs):
+    def __init__(
+        self,
+        connection_string: str | None = None,
+        *,
+        database_name: str | None = None,
+        **kwargs,
+    ):
         """
         Initialize MongoDB adapter.
 
@@ -78,7 +84,7 @@ class MongoDBAdapter(BaseAdapter):
 
         self.client = None
         self.db = None
-        self.db_name = self._extract_db_name(connection_string)
+        self.db_name = database_name or self._extract_db_name(connection_string)
 
     def _extract_db_name(self, connection_string: str) -> str:
         """Extract database name from connection string."""
@@ -622,6 +628,13 @@ class MongoDBAdapter(BaseAdapter):
                         name="_ttl_inserted_at_ttl",
                     ),
                 ]
+            elif collection.startswith("klines_"):
+                indexes = [
+                    IndexModel(
+                        [("symbol", ASCENDING), ("timestamp", DESCENDING)],
+                        unique=False,
+                    )
+                ]
             else:
                 # Default time-series indexes
                 indexes = [
@@ -629,7 +642,13 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)]),
                 ]
 
-            await coll.create_indexes(indexes)
+            if collection.startswith("klines_"):
+                await coll.create_index(
+                    [("symbol", ASCENDING), ("timestamp", DESCENDING)],
+                    unique=False,
+                )
+            else:
+                await coll.create_indexes(indexes)
             logger.info(
                 f"Indexes created/verified for MongoDB collection: {collection}"
             )
