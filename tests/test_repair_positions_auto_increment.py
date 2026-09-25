@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import sqlalchemy as sa
 
@@ -77,6 +79,63 @@ def test_apply_requires_both_confirmations(monkeypatch: pytest.MonkeyPatch) -> N
     assert mod.main(["--apply", "--confirm-table", "positions"]) != 0
 
 
+def test_main_requires_database_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MYSQL_URI", raising=False)
+    assert mod.main(["--dry-run"]) == 2
+
+
+def test_main_dry_run_uses_engine_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = _engine()
+    monkeypatch.setattr(mod, "_make_engine_from_env", lambda: engine)
+    assert mod.main(["--dry-run"]) == 0
+
+
+def test_main_rejects_confirmation_in_dry_run() -> None:
+    with pytest.raises(SystemExit) as error:
+        mod.main(["--dry-run", "--confirm-table", "positions"])
+    assert error.value.code == 2
+
+
+def test_sqlite_foreign_key_is_detected() -> None:
+    engine = _engine()
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "CREATE TABLE fills (id INTEGER PRIMARY KEY, position_id BIGINT "
+                "REFERENCES positions(id))"
+            )
+        )
+    references = mod.foreign_key_references(engine)
+    assert references[0]["table_name"] == "fills"
+
+
+def test_mysql_metadata_and_ddl_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _FakeConnection(
+        [
+            {"auto_increment": 8},
+            {"TABLE_NAME": "fills", "CONSTRAINT_NAME": "fk_fill_position", "COLUMN_NAME": "position_id"},
+        ]
+    )
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="mysql"))
+    monkeypatch.setattr(
+        engine, "connect", lambda: _ConnectionContext(connection), raising=False
+    )
+    monkeypatch.setattr(
+        engine, "begin", lambda: _ConnectionContext(connection), raising=False
+    )
+
+    assert mod.read_auto_increment(engine) == 8
+    assert mod.foreign_key_references(engine) == [
+        {"TABLE_NAME": "fills", "CONSTRAINT_NAME": "fk_fill_position", "COLUMN_NAME": "position_id"}
+    ]
+    mod.set_auto_increment(engine, 8)
+    assert "ALTER TABLE positions AUTO_INCREMENT = 8" in connection.statements[-1]
+
+
+def test_row_value_falls_back_to_sequence() -> None:
+    assert mod._row_value((8,), "missing") == 8
+
+
 def _rows(engine: sa.Engine) -> list[tuple[object, ...]]:
     with engine.connect() as connection:
         return [
@@ -85,3 +144,37 @@ def _rows(engine: sa.Engine) -> list[tuple[object, ...]]:
                 sa.text("SELECT * FROM positions ORDER BY id")
             )
         ]
+
+
+class _FakeConnection:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+        self.statements: list[str] = []
+
+    def execute(self, statement: object, *_args: object, **_kwargs: object) -> _FakeResult:
+        self.statements.append(str(statement))
+        if "AUTO_INCREMENT" in str(statement):
+            return _FakeResult(self.rows[:1])
+        return _FakeResult(self.rows[1:])
+
+
+class _FakeResult:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = [SimpleNamespace(_mapping=row) for row in rows]
+
+    def fetchone(self) -> SimpleNamespace | None:
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self) -> list[SimpleNamespace]:
+        return self.rows
+
+
+class _ConnectionContext:
+    def __init__(self, connection: _FakeConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self) -> _FakeConnection:
+        return self.connection
+
+    def __exit__(self, *_args: object) -> None:
+        return None
