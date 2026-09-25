@@ -628,6 +628,15 @@ class MongoDBAdapter(BaseAdapter):
                         name="_ttl_inserted_at_ttl",
                     ),
                 ]
+            elif collection == "service_leases":
+                indexes = [
+                    IndexModel([("name", ASCENDING)], unique=True, name="name_unique"),
+                    IndexModel(
+                        [("expires_at", ASCENDING)],
+                        expireAfterSeconds=3600,
+                        name="expires_at_ttl",
+                    ),
+                ]
             elif collection.startswith("klines_"):
                 indexes = [
                     IndexModel(

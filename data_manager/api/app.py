@@ -31,6 +31,7 @@ from data_manager.api.routes import (
     fidelity,
     generic,
     health,
+    leases,
     leverage_bounds,
     lifecycle,
     pnl,
@@ -189,6 +190,7 @@ def create_app() -> FastAPI:
     app.include_router(strategies.router, tags=["Strategies"])
 
     # New API routes
+    app.include_router(leases.router, tags=["Leases"])
     app.include_router(generic.router, tags=["Generic CRUD"])
 
     # Root endpoint
