@@ -39,7 +39,9 @@ async def monitor_event_loop_lag(
                 continue
             last_report = now
             thread_id = threading.current_thread().ident
-            frame = sys._current_frames().get(thread_id) if thread_id is not None else None
+            frame = (
+                sys._current_frames().get(thread_id) if thread_id is not None else None
+            )
             if frame is not None:
                 stack = "".join(traceback.format_stack(frame, limit=20))
                 logger.warning("EVENT_LOOP_LAG stack:\n%s", stack)
