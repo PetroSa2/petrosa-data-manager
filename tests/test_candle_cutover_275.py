@@ -28,7 +28,7 @@ from data_manager.maintenance.candle_readiness import (
     evaluate_collection,
     evaluate_readiness,
 )
-from data_manager.models.market_data import Candle
+from data_manager.models.market_data import Candle, MySQLKlineRow
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
@@ -621,6 +621,8 @@ class TestDualWrite:
             assert await repo.insert(_candle()) is True
             mysql.write_batch.assert_called_once()
             assert mysql.write_batch.call_args[0][1] == "klines_h1"
+            assert isinstance(mysql.write_batch.call_args[0][0][0], MySQLKlineRow)
+            mongodb.write.assert_awaited_once_with([_candle()], "candles_BTCUSDT_1h")
 
     @pytest.mark.asyncio
     async def test_enabled_mirrors_mysql_writes_into_mongo(self):
