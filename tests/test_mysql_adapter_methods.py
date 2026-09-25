@@ -213,6 +213,36 @@ class TestGetTable:
             sqlite_adapter.write([event], "execution_events")
         assert captured["records"][0]["event_key"] == "order-1:filled"
 
+    def test_pnl_event_write_derives_idempotency_key(self, sqlite_adapter):
+        from pydantic import BaseModel
+
+        class PnlRecord(BaseModel):
+            decision_id: str
+            strategy_id: str
+            timestamp: datetime
+            pnl_kind: str
+            payload: dict = {}
+            received_at: datetime
+
+        captured: dict = {}
+        timestamp = datetime(2026, 9, 25, 12, 0, 1, tzinfo=UTC)
+        event = PnlRecord(
+            decision_id="decision-1",
+            strategy_id="strategy-1",
+            timestamp=timestamp,
+            pnl_kind="closed",
+            received_at=timestamp,
+        )
+        with patch.object(
+            sqlite_adapter,
+            "_ensure_connected",
+            return_value=_fake_write_engine(captured),
+        ):
+            sqlite_adapter.write([event], "pnl_events")
+        assert captured["records"][0]["event_key"].startswith(
+            "decision-1:closed:"
+        )
+
     def test_creates_klines_table_from_binance_interval(self, sqlite_adapter):
         # klines_15m → physical klines_m15
         table = sqlite_adapter._get_table("klines_15m")

@@ -221,6 +221,15 @@ async def test_persist_returns_false_without_adapter(pnl_consumer):
 
 
 @pytest.mark.asyncio
+async def test_persist_returns_false_when_mongo_fails(pnl_consumer, mock_db_manager):
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.side_effect = RuntimeError("mongo down")
+    event = PnlEvent.from_nats_message(_pnl_payload())
+    assert event is not None
+    assert await pnl_consumer._persist(event) is False
+
+
+@pytest.mark.asyncio
 async def test_persist_dual_writes_to_mysql(pnl_consumer, mock_db_manager):
     event = PnlEvent.from_nats_message(_pnl_payload())
     assert event is not None
