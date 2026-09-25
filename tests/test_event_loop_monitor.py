@@ -3,6 +3,8 @@ import logging
 
 import pytest
 
+import constants
+from data_manager.main import DataManagerApp
 from data_manager.utils.event_loop_monitor import monitor_event_loop_lag
 
 
@@ -43,3 +45,24 @@ async def test_monitor_logs_lag_and_rate_limits_stack(caplog):
     assert (
         sum("EVENT_LOOP_LAG stack:" in record.message for record in caplog.records) <= 1
     )
+
+
+def test_application_does_not_create_monitor_when_disabled(monkeypatch):
+    app = DataManagerApp()
+    monkeypatch.setattr(constants, "DM_LOOP_LAG_MONITOR", False)
+
+    app._start_loop_lag_monitor()
+
+    assert app.loop_lag_monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_application_creates_monitor_when_enabled(monkeypatch):
+    app = DataManagerApp()
+    monkeypatch.setattr(constants, "DM_LOOP_LAG_MONITOR", True)
+
+    app._start_loop_lag_monitor()
+    assert app.loop_lag_monitor_task is not None
+
+    app.loop_lag_monitor_task.cancel()
+    await asyncio.gather(app.loop_lag_monitor_task, return_exceptions=True)

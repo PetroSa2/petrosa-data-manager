@@ -144,6 +144,18 @@ class DataManagerApp:
         except Exception as e:
             logger.warning(f"Failed to unwire route publishers: {e}")
 
+    def _start_loop_lag_monitor(self) -> None:
+        """Start optional event-loop diagnostics after application startup."""
+        if not constants.DM_LOOP_LAG_MONITOR:
+            return
+
+        from data_manager.utils.event_loop_monitor import monitor_event_loop_lag
+
+        self.loop_lag_monitor_task = asyncio.create_task(
+            monitor_event_loop_lag(stop_event=self._shutdown_event)
+        )
+        logger.info("Event-loop lag monitor enabled")
+
     async def start(self) -> None:
         """Start all application components."""
         logger.info(
@@ -485,13 +497,7 @@ class DataManagerApp:
         self.running = True
         logger.info("All components started successfully")
 
-        if constants.DM_LOOP_LAG_MONITOR:
-            from data_manager.utils.event_loop_monitor import monitor_event_loop_lag
-
-            self.loop_lag_monitor_task = asyncio.create_task(
-                monitor_event_loop_lag(stop_event=self._shutdown_event)
-            )
-            logger.info("Event-loop lag monitor enabled")
+        self._start_loop_lag_monitor()
 
         # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
         # AFTER self.running=True so the `while self.running` loop runs its
