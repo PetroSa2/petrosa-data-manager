@@ -368,15 +368,6 @@ class ExecutionEventsConsumer:
 
     async def _persist(self, event: ExecutionEvent) -> bool:
         self._last_persist_was_insert = False
-        if (
-            os.environ.get(
-                "PETROSA_EXECUTION_EVENTS_MYSQL_PERSIST_ENABLED", "true"
-            ).lower()
-            == "true"
-        ):
-            task = asyncio.create_task(self._dual_write_mysql(event))
-            self._mysql_persist_tasks.add(task)
-            task.add_done_callback(self._mysql_persist_tasks.discard)
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
             if self.db_manager
@@ -395,6 +386,7 @@ class ExecutionEventsConsumer:
             try:
                 await adapter.db[EXECUTION_EVENTS_COLLECTION].insert_one(doc)
                 self._last_persist_was_insert = True
+                self._schedule_mysql_persist(event)
                 return True
             except DuplicateKeyError:
                 self._last_persist_was_insert = False
@@ -402,6 +394,7 @@ class ExecutionEventsConsumer:
                     "execution_event_already_persisted",
                     extra={"order_id": event.order_id, "event_type": event.event_type},
                 )
+                self._schedule_mysql_persist(event)
                 return True
         except Exception as e:
             logger.error(
@@ -409,6 +402,17 @@ class ExecutionEventsConsumer:
                 f"{event.order_id}:{event.event_type}: {e}"
             )
             return False
+
+    def _schedule_mysql_persist(self, event: ExecutionEvent) -> None:
+        if (
+            os.environ.get(
+                "PETROSA_EXECUTION_EVENTS_MYSQL_PERSIST_ENABLED", "true"
+            ).lower()
+            == "true"
+        ):
+            task = asyncio.create_task(self._dual_write_mysql(event))
+            self._mysql_persist_tasks.add(task)
+            task.add_done_callback(self._mysql_persist_tasks.discard)
 
     async def _dual_write_mysql(self, event: ExecutionEvent) -> None:
         mysql_adapter = (

@@ -227,6 +227,8 @@ async def test_persist_returns_false_when_mongo_fails(pnl_consumer, mock_db_mana
     event = PnlEvent.from_nats_message(_pnl_payload())
     assert event is not None
     assert await pnl_consumer._persist(event) is False
+    await _drain_mysql_tasks(pnl_consumer)
+    mock_db_manager.mysql_adapter.write.assert_not_called()
 
 
 @pytest.mark.asyncio

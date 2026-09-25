@@ -271,13 +271,6 @@ class PnlConsumer:
             pnl_processing_time.record(time.monotonic() - start_time, _METRIC_ATTRS)
 
     async def _persist(self, event: PnlEvent) -> bool:
-        if (
-            os.environ.get("PETROSA_PNL_EVENTS_MYSQL_PERSIST_ENABLED", "true").lower()
-            == "true"
-        ):
-            task = asyncio.create_task(self._dual_write_mysql(event))
-            self._mysql_persist_tasks.add(task)
-            task.add_done_callback(self._mysql_persist_tasks.discard)
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
             if self.db_manager
@@ -300,6 +293,7 @@ class PnlConsumer:
                 DuplicateKeyError = Exception  # type: ignore[assignment, misc]
             try:
                 await adapter.db[PNL_EVENTS_COLLECTION].insert_one(doc)
+                self._schedule_mysql_persist(event)
                 return True
             except DuplicateKeyError:
                 logger.debug(
@@ -309,12 +303,22 @@ class PnlConsumer:
                         "pnl_kind": event.pnl_kind,
                     },
                 )
+                self._schedule_mysql_persist(event)
                 return True
         except Exception as e:
             logger.error(
                 f"Failed to persist pnl event {event.decision_id}:{event.pnl_kind}: {e}"
             )
             return False
+
+    def _schedule_mysql_persist(self, event: PnlEvent) -> None:
+        if (
+            os.environ.get("PETROSA_PNL_EVENTS_MYSQL_PERSIST_ENABLED", "true").lower()
+            == "true"
+        ):
+            task = asyncio.create_task(self._dual_write_mysql(event))
+            self._mysql_persist_tasks.add(task)
+            task.add_done_callback(self._mysql_persist_tasks.discard)
 
     async def _dual_write_mysql(self, event: PnlEvent) -> None:
         mysql_adapter = (
