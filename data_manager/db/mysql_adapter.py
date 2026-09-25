@@ -1052,6 +1052,27 @@ class MySQLAdapter(BaseAdapter):
             self._record_read_failure(collection, "database_error")
             raise DatabaseError(f"Failed to count records in {collection}: {e}") from e
 
+    def delete(self, collection: str, filter_dict: dict[str, Any]) -> int:
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+        if not filter_dict:
+            raise DatabaseError("delete() refused: empty filter")
+        table = self._get_table(collection)
+        conditions = [
+            table.c[key] == value
+            for key, value in filter_dict.items()
+            if key in table.c
+        ]
+        if not conditions:
+            raise DatabaseError(
+                f"delete() refused: filter matches no columns on {collection}"
+            )
+        engine = self._ensure_connected()
+        with engine.begin() as conn:
+            return int(
+                conn.execute(delete(table).where(and_(*conditions))).rowcount or 0
+            )
+
     def find_paginated(
         self,
         collection: str,

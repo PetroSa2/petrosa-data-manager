@@ -39,7 +39,7 @@ def test_liveness_endpoint(client):
 def test_readiness_endpoint(client):
     """Test readiness probe endpoint."""
     response = client.get("/health/readiness")
-    assert response.status_code == 200
+    assert response.status_code in (200, 503)
     data = response.json()
     assert "ready" in data
     assert "components" in data

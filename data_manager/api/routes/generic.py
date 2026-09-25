@@ -2,6 +2,7 @@
 Generic CRUD API endpoints for dynamic database/collection operations.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -200,7 +201,8 @@ async def _execute_query_internal(
 
     try:
         if database == "mysql":
-            records, total_count = adapter.find_paginated(
+            records, total_count = await asyncio.to_thread(
+                adapter.find_paginated,
                 collection=collection,
                 filter_dict=filter_dict,
                 sort_list=sort_list,
@@ -405,6 +407,12 @@ class UpdateRequest(BaseModel):
     upsert: bool = Field(False, description="Create record if not found")
     schema: str | None = Field(None, description="Schema name for validation")
     validate: bool = Field(False, description="Enable schema validation")
+
+
+class FindOneAndUpdateRequest(BaseModel):
+    filter: dict[str, Any]
+    set: dict[str, Any]
+    upsert: bool = False
 
 
 class DeleteRequest(BaseModel):
@@ -657,89 +665,39 @@ async def update_records(
             # For updates, validate the updated data
             await _validate_data_against_schema(database, schema, [request.data])
 
-        # Determine which records match the filter (drives the early-return /
-        # upsert-create branching below); the actual persistence happens via
-        # adapter.update() further down, not by re-writing these in-memory rows.
-
-        # Query existing records
+        update_data = {**request.data, "updated_at": datetime.now(UTC)}
+        upserted = False
         if database == "mysql":
-            existing_records = adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
-            )
-        else:  # MongoDB
-            existing_records = await adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
-            )
-
-        # Apply filter to find matching records
-        matching_records = _apply_filter(existing_records, request.filter)
-
-        if not matching_records and not request.upsert:
-            response: dict[str, Any] = {
-                "message": "No records found matching filter",
-                "updated_count": 0,
-                "metadata": {
-                    "database": database,
-                    "collection": collection,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                },
-            }
-            if ignored_fields:
-                response["ignored_fields"] = ignored_fields
-            return response
-
-        # Update records: persist via a real UPDATE (mysql) / update_many
-        # (MongoDB) so changes actually land in the database instead of only
-        # mutating the in-memory dicts pulled from query_range() — those were
-        # previously discarded, and `updated_count` was only ever assigned on
-        # the empty-match/upsert branch below, causing an UnboundLocalError
-        # (500) on every update of an existing record (petrosa-data-manager#262).
-        if matching_records:
-            update_data = dict(request.data)
-            update_data["updated_at"] = datetime.now(UTC)
-
-            if database == "mysql":
-                from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
-
-                try:
-                    updated_count = adapter.update(
-                        collection, request.filter, update_data
-                    )
-                except CircuitBreakerOpenError as exc:
-                    api_module.db_manager.increment_error_count(database)
-                    raise HTTPException(status_code=503, detail=str(exc)) from exc
-            else:  # MongoDB
-                updated_count = await adapter.update(
-                    collection, request.filter, update_data
+            try:
+                updated_count = await asyncio.to_thread(
+                    adapter.update, collection, request.filter, update_data
                 )
+            except CircuitBreakerOpenError as exc:
+                api_module.db_manager.increment_error_count(database)
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            if updated_count == 0 and request.upsert:
+                from pydantic import BaseModel, ConfigDict
 
-        # If upsert and no matches, create new record
+                class GenericModel(BaseModel):
+                    model_config = ConfigDict(extra="allow")
+
+                if ignored_fields:
+                    adapter.record_ignored_fields(collection, ignored_fields)
+                result = await asyncio.to_thread(
+                    adapter.write,
+                    [GenericModel(**{**request.filter, **update_data})],
+                    collection,
+                )
+                updated_count = result.inserted
+                upserted = bool(updated_count)
         elif request.upsert:
-            new_record = {
-                key: value
-                for key, value in request.data.items()
-                if key not in ignored_fields
-            }
-            if ignored_fields and database == "mysql":
-                adapter.record_ignored_fields(collection, ignored_fields)
-            new_record["created_at"] = datetime.now(UTC)
-            new_record["updated_at"] = datetime.now(UTC)
-
-            from pydantic import BaseModel, ConfigDict
-
-            class GenericModel(BaseModel):
-                model_config = ConfigDict(extra="allow")
-
-            model_instance = GenericModel(**new_record)
-
-            if database == "mysql":
-                write_result = adapter.write([model_instance], collection)
-                updated_count = write_result.inserted
-            else:  # MongoDB
-                updated_count = await adapter.write([model_instance], collection)
-
+            result = await adapter.upsert_one(collection, request.filter, update_data)
+            upserted = bool(result["upserted_id"])
+            updated_count = result["modified"] + int(upserted)
         else:
-            updated_count = 0
+            updated_count = await adapter.update(
+                collection, request.filter, update_data
+            )
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
@@ -747,6 +705,7 @@ async def update_records(
         response: dict[str, Any] = {
             "message": f"Successfully updated {updated_count} records",
             "updated_count": updated_count,
+            "upserted": upserted,
             "metadata": {
                 "database": database,
                 "collection": collection,
@@ -763,6 +722,25 @@ async def update_records(
         logger.error(f"Error updating {database}.{collection}: {e}", exc_info=True)
         api_module.db_manager.increment_error_count(database)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/{database}/{collection}/find-one-and-update")
+async def find_one_and_update(
+    database: str, collection: str, request: FindOneAndUpdateRequest
+) -> dict[str, Any]:
+    if database != "mongodb":
+        raise HTTPException(
+            status_code=400, detail="find-one-and-update is MongoDB-only"
+        )
+    if not api_module.db_manager:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+    try:
+        document = await _get_adapter(database).find_one_and_update(
+            collection, request.filter, request.set, upsert=request.upsert
+        )
+        return {"matched": document is not None, "document": document}
+    except DatabaseError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/api/v1/{database}/{collection}")
@@ -782,22 +760,13 @@ async def delete_records(
     try:
         adapter = _get_adapter(database)
 
-        # Query existing records
-        if database == "mysql":
-            existing_records = adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
-            )
-        else:  # MongoDB
-            existing_records = await adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
-            )
-
-        # Apply filter to find matching records
-        matching_records = _apply_filter(existing_records, request.filter)
-        deleted_count = len(matching_records)
-
-        # For now, we'll just return the count
-        # In a real implementation, you'd use proper delete operations
+        if not request.filter:
+            raise HTTPException(status_code=400, detail="Delete filter cannot be empty")
+        deleted_count = (
+            await asyncio.to_thread(adapter.delete, collection, request.filter)
+            if database == "mysql"
+            else await adapter.delete_many(collection, request.filter)
+        )
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
@@ -864,7 +833,9 @@ async def batch_operations(
                     model_instances.append(GenericModel(**item))
 
                 if database == "mysql":
-                    count = adapter.write(model_instances, collection)
+                    count = await asyncio.to_thread(
+                        adapter.write, model_instances, collection
+                    )
                 else:  # MongoDB
                     count = await adapter.write(model_instances, collection)
 
@@ -875,38 +846,36 @@ async def batch_operations(
                 filter_dict = operation.get("filter", {})
                 data = operation.get("data", {})
 
-                # Query and update records
-                if database == "mysql":
-                    records = adapter.query_range(
-                        collection, datetime.min, datetime.max, None
+                updated = (
+                    await asyncio.to_thread(
+                        adapter.update,
+                        collection,
+                        filter_dict,
+                        {**data, "updated_at": datetime.now(UTC)},
                     )
-                else:
-                    records = await adapter.query_range(
-                        collection, datetime.min, datetime.max, None
+                    if database == "mysql"
+                    else await adapter.update(
+                        collection,
+                        filter_dict,
+                        {**data, "updated_at": datetime.now(UTC)},
                     )
-
-                matching = _apply_filter(records, filter_dict)
-                for record in matching:
-                    record.update(data)
-                    record["updated_at"] = datetime.now(UTC)
-
-                results.append({"type": "update", "count": len(matching)})
+                )
+                results.append({"type": "update", "count": updated})
 
             elif op_type == "delete":
                 # Handle delete operation
                 filter_dict = operation.get("filter", {})
 
-                if database == "mysql":
-                    records = adapter.query_range(
-                        collection, datetime.min, datetime.max, None
+                if not filter_dict:
+                    raise HTTPException(
+                        status_code=400, detail="Delete filter cannot be empty"
                     )
-                else:
-                    records = await adapter.query_range(
-                        collection, datetime.min, datetime.max, None
-                    )
-
-                matching = _apply_filter(records, filter_dict)
-                results.append({"type": "delete", "count": len(matching)})
+                deleted = (
+                    await asyncio.to_thread(adapter.delete, collection, filter_dict)
+                    if database == "mysql"
+                    else await adapter.delete_many(collection, filter_dict)
+                )
+                results.append({"type": "delete", "count": deleted})
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
