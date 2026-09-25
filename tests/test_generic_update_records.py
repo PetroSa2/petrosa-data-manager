@@ -30,6 +30,17 @@ def client(mock_db_manager):
     mock_db_manager.mysql_adapter.query_range = Mock(return_value=[])
     mock_db_manager.mysql_adapter.write = Mock()
     mock_db_manager.mysql_adapter.update = Mock(return_value=1)
+    mock_db_manager.mysql_adapter.get_column_names = Mock(
+        return_value={
+            "symbol",
+            "side",
+            "quantity",
+            "pnl",
+            "status",
+            "created_at",
+            "updated_at",
+        }
+    )
 
     app = api_module.create_app()
     api_module.db_manager = mock_db_manager
@@ -160,3 +171,57 @@ def test_update_circuit_breaker_open_returns_503(client):
     )
 
     assert response.status_code == 503
+
+
+def test_mysql_update_rejects_operator_payload_without_calling_adapter(client):
+    api_module.db_manager.mysql_adapter.query_range = Mock(
+        return_value=[{"symbol": "BTCUSDT", "status": "open"}]
+    )
+
+    response = client.put(
+        "/api/v1/mysql/positions",
+        json={
+            "filter": {"symbol": "BTCUSDT"},
+            "data": {"$set": {"status": "closed"}},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "$set" in response.json()["detail"]
+    api_module.db_manager.mysql_adapter.update.assert_not_called()
+
+
+def test_mysql_update_rejects_zero_column_payload(client):
+    api_module.db_manager.mysql_adapter.query_range = Mock(
+        return_value=[{"symbol": "BTCUSDT", "status": "open"}]
+    )
+
+    response = client.put(
+        "/api/v1/mysql/positions",
+        json={
+            "filter": {"symbol": "BTCUSDT"},
+            "data": {"nonexistent": 1},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "nonexistent" in response.json()["detail"]
+    api_module.db_manager.mysql_adapter.update.assert_not_called()
+
+
+def test_mysql_update_reports_partially_ignored_fields(client):
+    api_module.db_manager.mysql_adapter.query_range = Mock(
+        return_value=[{"symbol": "BTCUSDT", "status": "open"}]
+    )
+
+    response = client.put(
+        "/api/v1/mysql/positions",
+        json={
+            "filter": {"symbol": "BTCUSDT"},
+            "data": {"status": "closed", "nonexistent": 1},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ignored_fields"] == ["nonexistent"]
+    api_module.db_manager.mysql_adapter.update.assert_called_once()

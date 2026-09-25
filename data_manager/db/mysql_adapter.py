@@ -5,6 +5,7 @@ Based on petrosa-binance-data-extractor patterns.
 """
 
 import logging
+import threading
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
@@ -43,6 +44,9 @@ from data_manager.utils.retry import retry_transient
 
 logger = logging.getLogger(__name__)
 
+_IGNORED_FIELD_WARNINGS: set[tuple[str, str]] = set()
+_IGNORED_FIELD_WARNINGS_LOCK = threading.Lock()
+
 
 class WriteResult(int):
     """Outcome of a MySQL write — explicit ``inserted`` / ``duplicates`` / ``failed`` counts.
@@ -59,13 +63,20 @@ class WriteResult(int):
     duplicates: int
     failed: int
 
+    ignored_count: int
+
     def __new__(
-        cls, inserted: int = 0, duplicates: int = 0, failed: int = 0
+        cls,
+        inserted: int = 0,
+        duplicates: int = 0,
+        failed: int = 0,
+        ignored_count: int | None = None,
     ) -> "WriteResult":
         obj = super().__new__(cls, inserted)
         obj.inserted = inserted
         obj.duplicates = duplicates
         obj.failed = failed
+        obj.ignored_count = duplicates if ignored_count is None else ignored_count
         return obj
 
     def as_dict(self) -> dict[str, int]:
@@ -482,6 +493,51 @@ class MySQLAdapter(BaseAdapter):
             return select(table)
         return select(*resolved)
 
+    def get_column_names(self, collection: str) -> set[str]:
+        """Return the reflected column names for a collection."""
+        return set(self._get_table(collection).c.keys())
+
+    def _record_ignored_field(self, collection: str, field: str) -> None:
+        """Record an ignored field and warn once for each collection/field pair."""
+        try:
+            from data_manager.api.middleware import metrics as _metrics
+
+            counter = getattr(_metrics, "MYSQL_WRITE_IGNORED", None)
+            if counter is not None:
+                counter.labels(collection=collection, reason="unknown_field").inc()
+        except Exception:  # pragma: no cover - metrics must never break writes
+            logger.debug("Failed to record ignored-field metric", exc_info=True)
+
+        key = (collection, field)
+        with _IGNORED_FIELD_WARNINGS_LOCK:
+            should_warn = key not in _IGNORED_FIELD_WARNINGS
+            if should_warn:
+                _IGNORED_FIELD_WARNINGS.add(key)
+        if should_warn:
+            logger.warning(
+                "Ignoring unknown MySQL update field %s for collection %s",
+                field,
+                collection,
+            )
+
+    def record_ignored_fields(self, collection: str, fields: Sequence[str]) -> None:
+        """Record fields discarded before a MySQL upsert is written."""
+        for field in fields:
+            self._record_ignored_field(collection, field)
+
+    def _record_ignored_insert(self, collection: str, count: int) -> None:
+        """Record rows skipped by INSERT IGNORE without affecting the write."""
+        if count <= 0:
+            return
+        try:
+            from data_manager.api.middleware import metrics as _metrics
+
+            counter = getattr(_metrics, "MYSQL_WRITE_IGNORED", None)
+            if counter is not None:
+                counter.labels(collection=collection, reason="duplicate").inc(count)
+        except Exception:  # pragma: no cover - metrics must never break writes
+            logger.debug("Failed to record ignored-insert metric", exc_info=True)
+
     def write(self, model_instances: list[BaseModel], collection: str) -> WriteResult:
         """Write model instances to MySQL with retry + circuit breaker.
 
@@ -508,7 +564,7 @@ class MySQLAdapter(BaseAdapter):
             raise DatabaseError("Not connected to database")
 
         if not model_instances:
-            return WriteResult(0, 0, 0)
+            return WriteResult(0, 0, 0, 0)
 
         # Prepare records once outside the retry loop so a retry never
         # mutates a payload that the previous attempt already normalized.
@@ -582,7 +638,7 @@ class MySQLAdapter(BaseAdapter):
             rowcount = self.circuit_breaker.call(_write_with_retry)
         except IntegrityError:
             self._record_write_failure(collection, "integrity_error")
-            return WriteResult(inserted=0, duplicates=0, failed=total)
+            return WriteResult(inserted=0, duplicates=0, failed=total, ignored_count=0)
         except DatabaseError:
             self._record_write_failure(collection, "database_error")
             raise
@@ -596,11 +652,19 @@ class MySQLAdapter(BaseAdapter):
             # ON DUPLICATE KEY UPDATE: MySQL reports 1 per insert, 2 per update.
             # duplicates = rowcount - total; inserts = total - duplicates.
             duplicates = max(0, rowcount - total)
+            ignored_count = 0
         else:
             # INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
             duplicates = max(0, total - rowcount)
+            ignored_count = duplicates
+            self._record_ignored_insert(collection, ignored_count)
         inserts = total - duplicates
-        return WriteResult(inserted=inserts, duplicates=duplicates, failed=0)
+        return WriteResult(
+            inserted=inserts,
+            duplicates=duplicates,
+            failed=0,
+            ignored_count=ignored_count,
+        )
 
     def _record_write_failure(self, collection: str, reason: str) -> None:
         """Increment the write-failure counter — fire-and-forget; never raise."""
@@ -658,6 +722,7 @@ class MySQLAdapter(BaseAdapter):
         """Write model instances in batches, aggregating per-batch counts."""
         inserted = 0
         duplicates = 0
+        ignored_count = 0
         failed = 0
 
         for i in range(0, len(model_instances), batch_size):
@@ -665,6 +730,7 @@ class MySQLAdapter(BaseAdapter):
             result = self.write(batch, collection)
             inserted += result.inserted
             duplicates += result.duplicates
+            ignored_count += result.ignored_count
             failed += result.failed
 
             if i + batch_size < len(model_instances):
@@ -677,7 +743,12 @@ class MySQLAdapter(BaseAdapter):
                     collection,
                 )
 
-        return WriteResult(inserted=inserted, duplicates=duplicates, failed=failed)
+        return WriteResult(
+            inserted=inserted,
+            duplicates=duplicates,
+            failed=failed,
+            ignored_count=ignored_count,
+        )
 
     def update(
         self, collection: str, filter_dict: dict[str, Any], data: dict[str, Any]
@@ -726,6 +797,7 @@ class MySQLAdapter(BaseAdapter):
         values: dict[str, Any] = {}
         for key, value in data.items():
             if key not in table.c:
+                self._record_ignored_field(collection, key)
                 continue
             if isinstance(value, str) and key.endswith(("_at", "timestamp")):
                 try:
