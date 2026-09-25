@@ -4,14 +4,16 @@ Repository for candle/kline data operations.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from prometheus_client import Counter
 
 import constants
 from data_manager.db.repositories.base_repository import BaseRepository
-from data_manager.models.market_data import Candle
+from data_manager.models.market_data import Candle, MongoKlineDoc, MySQLKlineRow
+from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,12 @@ CANDLE_DUAL_WRITES = Counter(
     ["mirror", "outcome"],
 )
 
+CANDLE_INVALID_DOCS = Counter(
+    "data_manager_candle_invalid_docs_total",
+    "Mongo extractor candle documents rejected before serving",
+    ["reason"],
+)
+
 # MySQL klines columns -> canonical candle keys returned to API consumers.
 _MYSQL_COLUMN_MAP = {
     "open": "open_price",
@@ -50,8 +58,9 @@ MYSQL_CANDLE_COLUMNS = tuple(_MYSQL_COLUMN_MAP.values())
 
 
 def mongo_collection_name(symbol: str, timeframe: str) -> str:
-    """Return the Mongo collection holding candles for ``symbol``/``timeframe``."""
-    return f"candles_{symbol}_{timeframe}"
+    """Return the extractor Mongo collection holding a timeframe's candles."""
+    del symbol
+    return f"klines_{timeframe}"
 
 
 def mysql_table_name(timeframe: str) -> str:
@@ -67,6 +76,120 @@ def mysql_table_name(timeframe: str) -> str:
 def map_mysql_row(row: dict[str, Any]) -> dict[str, Any]:
     """Rename MySQL klines columns onto the canonical candle keys."""
     return {key: row.get(column) for key, column in _MYSQL_COLUMN_MAP.items()}
+
+
+def map_mongo_kline_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one extractor kline document to the API's canonical candle shape."""
+    price_fields = ("open_price", "high_price", "low_price", "close_price")
+    if any(field not in doc or doc[field] is None for field in price_fields):
+        CANDLE_INVALID_DOCS.labels(reason="missing_ohlc").inc()
+        return None
+
+    try:
+        prices = {field: Decimal(str(doc[field])) for field in price_fields}
+    except (ArithmeticError, TypeError, ValueError):
+        CANDLE_INVALID_DOCS.labels(reason="non_numeric_ohlc").inc()
+        return None
+
+    if any(not price.is_finite() or price == 0 for price in prices.values()):
+        CANDLE_INVALID_DOCS.labels(reason="zero_ohlc").inc()
+        return None
+
+    return {
+        "open": prices["open_price"],
+        "high": prices["high_price"],
+        "low": prices["low_price"],
+        "close": prices["close_price"],
+        "volume": Decimal(str(doc.get("volume", "0"))),
+        "timestamp": doc.get("timestamp"),
+        "symbol": doc.get("symbol"),
+        "timeframe": doc.get("interval"),
+        "quote_volume": (
+            Decimal(str(doc["quote_asset_volume"]))
+            if doc.get("quote_asset_volume") is not None
+            else None
+        ),
+        "trades_count": doc.get("number_of_trades"),
+    }
+
+
+def candle_to_mysql_kline(
+    candle: Candle, *, extracted_at: datetime | None = None
+) -> MySQLKlineRow:
+    """Convert a canonical candle into a complete MySQL klines row."""
+    open_time_aware = as_aware_utc(candle.timestamp)
+    open_time = open_time_aware.replace(tzinfo=None)
+    close_time = open_time + timedelta(
+        minutes=parse_timeframe_to_minutes(candle.timeframe)
+    )
+    extracted_at_aware = as_aware_utc(extracted_at or datetime.now(UTC))
+    price_change = candle.close - candle.open
+    price_change_percent = (
+        (price_change / candle.open * 100).quantize(Decimal("0.0001"))
+        if candle.open != 0
+        else Decimal("0")
+    )
+
+    return MySQLKlineRow(
+        id=f"{candle.symbol}_{int(open_time_aware.timestamp() * 1000)}",
+        symbol=candle.symbol,
+        timestamp=open_time,
+        open_time=open_time,
+        close_time=close_time,
+        interval=candle.timeframe,
+        open_price=candle.open,
+        high_price=candle.high,
+        low_price=candle.low,
+        close_price=candle.close,
+        volume=candle.volume,
+        quote_asset_volume=(
+            candle.quote_volume if candle.quote_volume is not None else Decimal("0")
+        ),
+        number_of_trades=(
+            candle.trades_count if candle.trades_count is not None else 0
+        ),
+        taker_buy_base_asset_volume=(
+            candle.taker_buy_base_volume
+            if candle.taker_buy_base_volume is not None
+            else Decimal("0")
+        ),
+        taker_buy_quote_asset_volume=(
+            candle.taker_buy_quote_volume
+            if candle.taker_buy_quote_volume is not None
+            else Decimal("0")
+        ),
+        price_change=price_change,
+        price_change_percent=price_change_percent,
+        extracted_at=extracted_at_aware.replace(tzinfo=None),
+        extractor_version=constants.KLINE_WRITER_VERSION,
+        source=constants.KLINE_WRITER_SOURCE,
+    )
+
+
+def candle_to_mongo_kline(candle: Candle) -> MongoKlineDoc:
+    """Convert a canonical candle into the extractor's Mongo document schema."""
+    row = candle_to_mysql_kline(candle)
+    return MongoKlineDoc(
+        symbol=row.symbol,
+        timestamp=row.timestamp,
+        open_time=row.open_time.isoformat(),
+        close_time=row.close_time.isoformat(),
+        interval=row.interval,
+        open_price=str(row.open_price),
+        high_price=str(row.high_price),
+        low_price=str(row.low_price),
+        close_price=str(row.close_price),
+        volume=str(row.volume),
+        quote_asset_volume=str(row.quote_asset_volume),
+        number_of_trades=row.number_of_trades,
+        taker_buy_base_asset_volume=str(row.taker_buy_base_asset_volume),
+        taker_buy_quote_asset_volume=str(row.taker_buy_quote_asset_volume),
+        price_change=str(row.price_change or Decimal("0")),
+        price_change_percent=str(row.price_change_percent or Decimal("0")),
+        extracted_at=row.extracted_at,
+        extractor_version=row.extractor_version,
+        source=row.source,
+    )
 
 
 class CandleRepository(BaseRepository):
@@ -134,7 +257,7 @@ class CandleRepository(BaseRepository):
             return []
         try:
             if self._primary_is_mysql():
-                return await adapter.query_range(
+                documents = await adapter.query_range(
                     self._get_collection_name(symbol, timeframe),
                     start,
                     end,
@@ -143,6 +266,11 @@ class CandleRepository(BaseRepository):
                     offset=offset,
                     descending=descending,
                 )
+                return [
+                    mapped
+                    for document in documents
+                    if (mapped := map_mongo_kline_doc(document)) is not None
+                ]
             rows = adapter.query_range(
                 self._get_mysql_table_name(timeframe),
                 start,
@@ -169,9 +297,14 @@ class CandleRepository(BaseRepository):
             return []
         try:
             if self._primary_is_mysql():
-                return await adapter.query_latest(
+                documents = await adapter.query_latest(
                     self._get_collection_name(symbol, timeframe), symbol, limit
                 )
+                return [
+                    mapped
+                    for document in documents
+                    if (mapped := map_mongo_kline_doc(document)) is not None
+                ]
             rows = adapter.query_latest(
                 self._get_mysql_table_name(timeframe),
                 symbol,
@@ -215,14 +348,18 @@ class CandleRepository(BaseRepository):
                     key = self._get_collection_name(candle.symbol, candle.timeframe)
                     by_collection.setdefault(key, []).append(candle)
                 for collection, batch in by_collection.items():
-                    await adapter.write(batch, collection)
+                    await adapter.write(
+                        [candle_to_mongo_kline(candle) for candle in batch], collection
+                    )
             else:
                 by_table: dict[str, list[Candle]] = {}
                 for candle in candles:
                     key = self._get_mysql_table_name(candle.timeframe)
                     by_table.setdefault(key, []).append(candle)
                 for table, batch in by_table.items():
-                    adapter.write_batch(batch, table)
+                    adapter.write_batch(
+                        [candle_to_mysql_kline(candle) for candle in batch], table
+                    )
             CANDLE_DUAL_WRITES.labels(mirror=mirror, outcome="success").inc()
         except Exception as e:
             CANDLE_DUAL_WRITES.labels(mirror=mirror, outcome="error").inc()
@@ -245,10 +382,12 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(candle.timeframe)
-                count = self.mysql.write([candle], table)
+                count = self.mysql.write([candle_to_mysql_kline(candle)], table)
             else:
                 collection = self._get_collection_name(candle.symbol, candle.timeframe)
-                count = await self.mongodb.write([candle], collection)
+                count = await self.mongodb.write(
+                    [candle_to_mongo_kline(candle)], collection
+                )
             await self._mirror_write([candle])
             return count > 0
         except Exception as e:
@@ -288,7 +427,9 @@ class CandleRepository(BaseRepository):
                     # handlers -- for the duration of the DB round-trip.
                     # Offload to a worker thread so the loop stays responsive.
                     count = await asyncio.to_thread(
-                        self.mysql.write_batch, table_candles, table
+                        self.mysql.write_batch,
+                        [candle_to_mysql_kline(candle) for candle in table_candles],
+                        table,
                     )
                     total_inserted += count
                     logger.debug(f"Inserted {count} candles to {table}")
@@ -302,7 +443,13 @@ class CandleRepository(BaseRepository):
                     candles_by_collection.setdefault(collection, []).append(candle)
 
                 for collection, collection_candles in candles_by_collection.items():
-                    count = await self.mongodb.write(collection_candles, collection)
+                    count = await self.mongodb.write(
+                        [
+                            candle_to_mongo_kline(candle)
+                            for candle in collection_candles
+                        ],
+                        collection,
+                    )
                     total_inserted += count
                     logger.debug(f"Inserted {count} candles to {collection}")
 
@@ -374,7 +521,7 @@ class CandleRepository(BaseRepository):
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
-                candles = await self.mongodb.query_range(
+                documents = await self.mongodb.query_range(
                     collection,
                     start,
                     end,
@@ -383,6 +530,11 @@ class CandleRepository(BaseRepository):
                     offset=offset,
                     descending=descending,
                 )
+                candles = [
+                    mapped
+                    for document in documents
+                    if (mapped := map_mongo_kline_doc(document)) is not None
+                ]
         except Exception as e:
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             candles = []
@@ -441,7 +593,12 @@ class CandleRepository(BaseRepository):
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
-                candles = await self.mongodb.query_latest(collection, symbol, limit)
+                documents = await self.mongodb.query_latest(collection, symbol, limit)
+                candles = [
+                    mapped
+                    for document in documents
+                    if (mapped := map_mongo_kline_doc(document)) is not None
+                ]
         except Exception as e:
             logger.error(
                 f"Failed to query latest candles for {symbol} {timeframe}: {e}"

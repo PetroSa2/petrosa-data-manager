@@ -25,6 +25,13 @@ def adapter():
 
 
 class TestExtractDbName:
+    def test_explicit_database_name_overrides_connection_string(self):
+        a = MongoDBAdapter(
+            "mongodb://localhost:27017/wrong_database",
+            database_name="petrosa_data_manager",
+        )
+        assert a.db_name == "petrosa_data_manager"
+
     def test_extracts_db_name_from_uri(self):
         a = MongoDBAdapter("mongodb://localhost:27017/mydb")
         assert a.db_name == "mydb"
@@ -428,6 +435,18 @@ class TestEnsureIndexes:
         indexes = coll.create_indexes.call_args[0][0]
         # Default time-series indexes: 2.
         assert len(indexes) == 2
+
+    @pytest.mark.asyncio
+    async def test_creates_non_unique_extractor_kline_index(self, adapter):
+        coll = MagicMock()
+        coll.create_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("klines_1h")
+
+        coll.create_index.assert_awaited_once_with(
+            [("symbol", 1), ("timestamp", -1)], unique=False
+        )
 
     @pytest.mark.asyncio
     async def test_creates_intents_collection_indexes(self, adapter):

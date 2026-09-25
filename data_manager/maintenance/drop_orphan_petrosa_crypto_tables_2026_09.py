@@ -1,39 +1,12 @@
 """Guarded drop migration for the 2026-09-02 `petrosa_crypto` dead-table audit.
 
-Targets AC3 of `PetroSa2/petrosa-data-manager#272` (follow-up to #221 / PR
+Targets the retained legacy table from `PetroSa2/petrosa-data-manager#272` (follow-up to #221 / PR
 #225's `drop_orphan_position_contributions.py`, which this module mirrors).
 
-The full AC1 evidence pack (per-table writer/reader trace, corrected root
-cause) is in `docs/audit-orphan-tables-2026-09-13.md`. Summary: six 0-row
-tables in the live `petrosa_crypto` schema have no active writer in the
-currently deployed images:
-
-* ``strategy_positions``, ``exchange_positions``, ``position_contributions``
-  — provisioned by ``petrosa_k8s/k8s/tradeengine/strategy-positions-schema-job.yaml``
-  (``CREATE TABLE IF NOT EXISTS``); tradeengine keeps live positions in-memory
-  and never persists under these names.
-* ``extraction_metadata``, ``trades`` — legacy extractor tables; `trades` was
-  retired per `petrosa-binance-data-extractor#276`. Neither has a
-  re-registration source in any currently deployed image, so a plain DROP
-  sticks for these two.
-* ``funding_rates`` (MySQL side only — NOT the Mongo ``funding_rates_*``
-  collections) — extractor's `db/mysql_adapter.py` still defines the
-  ``Table()`` and re-creates it via its own `create_all` on connect; real
-  funding data lives in Mongo.
-
-IMPORTANT — this repo does NOT own the resurrection mechanism for four of
-the six tables. Per AC2/AC4, the *drop sticks* immediately only for
-``extraction_metadata`` and ``trades``. For ``strategy_positions``,
-``exchange_positions``, ``position_contributions`` the k8s schema Job will
-re-provision them on its next run until a `petrosa_k8s` change removes/
-neutralizes that Job. For ``funding_rates`` (MySQL), the extractor's own
-`create_all()` will re-create the empty table on its next pod restart until
-a `petrosa-binance-data-extractor` change removes the `Table()` def. This
-script still drops all six (each independently zero-row-guarded) because
-periodic re-application is harmless (idempotent `DROP TABLE IF EXISTS`) and
-because dropping now stops any *current* reader/tooling from seeing them —
-but AC2's "root-fix" is only complete once the two cross-repo changes land.
-See the doc's "Cross-repo follow-up" section.
+The persistence registry is the source of truth for durable tables. This
+script retains only ``extraction_metadata`` and must never include a
+registry-durable table; the registry test enforces that invariant before CI
+can merge a change.
 
 ``datasets`` and ``lineage_records`` are explicitly NOT in ``TARGET_TABLES``
 (AC5 — retained latent-feature tables; not orphan schema).
@@ -50,7 +23,7 @@ Operator invocation:
         data_manager.maintenance.drop_orphan_petrosa_crypto_tables_2026_09 --apply
 
     # Restrict to a subset (repeatable):
-    ... --apply --table extraction_metadata --table trades
+    ... --apply --table extraction_metadata
 
 Exit codes:
     0  — success (all requested tables processed; any row-count guard trips
@@ -82,14 +55,7 @@ TARGET_SCHEMA = "petrosa_crypto"
 
 # Ordered so log output reads newest-evidence-first; order has no functional
 # effect (each table is independently guarded).
-TARGET_TABLES: tuple[str, ...] = (
-    "strategy_positions",
-    "exchange_positions",
-    "position_contributions",
-    "extraction_metadata",
-    "trades",
-    "funding_rates",
-)
+TARGET_TABLES: tuple[str, ...] = ("extraction_metadata",)
 
 EXISTS_SQL = (
     "SELECT TABLE_NAME FROM information_schema.tables "
@@ -203,8 +169,8 @@ def _build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m data_manager.maintenance.drop_orphan_petrosa_crypto_tables_2026_09",
         description=(
-            "Guarded drop of confirmed-dead petrosa_crypto MySQL tables. "
-            "See docs/audit-orphan-tables-2026-09-13.md for the AC1 evidence."
+            "Guarded drop of the retained legacy petrosa_crypto MySQL table. "
+            "See docs/persistence-architecture.md for the current policy."
         ),
     )
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -224,7 +190,7 @@ def _build_argparser() -> argparse.ArgumentParser:
         dest="tables",
         choices=TARGET_TABLES,
         default=None,
-        help="Restrict to this table (repeatable). Default: all six target tables.",
+        help="Restrict to this table (repeatable). Default: extraction_metadata.",
     )
     return parser
 

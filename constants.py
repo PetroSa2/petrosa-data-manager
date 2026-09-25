@@ -56,6 +56,7 @@ MONGODB_PORT = int(os.getenv("MONGODB_PORT", "27017"))
 MONGODB_USER = os.getenv("MONGODB_USER", "")
 MONGODB_PASSWORD = os.getenv("MONGODB_PASSWORD", "")
 MONGODB_DB = os.getenv("MONGODB_DB", "petrosa_data_manager")
+CANDLE_MONGO_DATABASE = os.getenv("CANDLE_MONGO_DATABASE", "petrosa_data_manager")
 MONGODB_URL = os.getenv(
     "MONGODB_URL",
     f"mongodb://{MONGODB_USER}:{MONGODB_PASSWORD}@{MONGODB_HOST}:{MONGODB_PORT}/{MONGODB_DB}"
@@ -270,6 +271,9 @@ CANDLE_DATABASE_TYPE = os.getenv(
     "CANDLE_DATABASE_TYPE",
     os.getenv("DB_ADAPTER", os.getenv("EXTRACTOR_DB_ADAPTER", "mongodb")),
 ).lower()
+
+KLINE_WRITER_VERSION = "data-manager"
+KLINE_WRITER_SOURCE = "data-manager-backfill"
 
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]

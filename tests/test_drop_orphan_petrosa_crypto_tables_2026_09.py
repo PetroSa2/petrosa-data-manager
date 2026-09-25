@@ -1,11 +1,4 @@
-"""Unit tests for `data_manager.maintenance.drop_orphan_petrosa_crypto_tables_2026_09`.
-
-Mirrors the SQLite in-memory approach from
-`tests/test_drop_orphan_position_contributions.py`: real SQLAlchemy code
-path (existence check, row count, DROP TABLE) without a live MySQL
-instance. `table_exists` is mocked because the production query targets
-`information_schema.tables`, which SQLite doesn't have.
-"""
+"""Unit tests for the guarded legacy-table drop migration."""
 
 from __future__ import annotations
 
@@ -20,19 +13,13 @@ from data_manager.maintenance import (
 
 
 def _make_engine(existing_tables: dict[str, int]) -> sa.Engine:
-    """Build a SQLite engine with the given tables pre-populated with
-    `rows` empty-schema rows each (keyed by table name -> row count)."""
     engine = sa.create_engine("sqlite+pysqlite:///:memory:", future=True)
     metadata = sa.MetaData()
     for table_name in existing_tables:
-        sa.Table(
-            table_name,
-            metadata,
-            sa.Column("id", sa.String(64), primary_key=True),
-        )
+        sa.Table(table_name, metadata, sa.Column("id", sa.String(64), primary_key=True))
     metadata.create_all(engine)
     for table_name, rows in existing_tables.items():
-        if rows > 0:
+        if rows:
             with engine.begin() as conn:
                 conn.execute(
                     sa.text(f"INSERT INTO {table_name} (id) VALUES (:c)"),
@@ -48,100 +35,71 @@ def _patch_table_exists(existing: set[str]):
     return patch.object(mod, "table_exists", side_effect=_fake_exists)
 
 
-def test_target_tables_are_the_six_confirmed_dead_tables():
-    """Lock the target list — matches the AC1 evidence doc's six tables.
-    `datasets` / `lineage_records` (AC5 — retained) must never appear."""
-    assert set(mod.TARGET_TABLES) == {
-        "strategy_positions",
-        "exchange_positions",
-        "position_contributions",
-        "extraction_metadata",
-        "trades",
-        "funding_rates",
-    }
-    assert "datasets" not in mod.TARGET_TABLES
-    assert "lineage_records" not in mod.TARGET_TABLES
-    assert mod.TARGET_SCHEMA == "petrosa_crypto"
+def test_target_tables_keep_only_legacy_metadata():
+    assert mod.TARGET_TABLES == ("extraction_metadata",)
+    assert "trades" not in mod.TARGET_TABLES
+    assert "funding_rates" not in mod.TARGET_TABLES
+    assert "strategy_positions" not in mod.TARGET_TABLES
 
 
-def test_dry_run_all_tables_absent_is_noop():
+def test_dry_run_absent_is_noop():
     engine = _make_engine({})
     with _patch_table_exists(set()):
         results = mod.execute_migration(engine, dry_run=True)
-    assert len(results) == len(mod.TARGET_TABLES)
-    assert all(r["table_existed"] is False for r in results)
-    assert all(r["dropped"] is False for r in results)
+    assert results == [
+        {
+            "target_schema": "petrosa_crypto",
+            "target_table": "extraction_metadata",
+            "dry_run": True,
+            "table_existed": False,
+            "row_count": 0,
+            "dropped": False,
+            "guard_tripped": False,
+            "sql_planned": "DROP TABLE IF EXISTS extraction_metadata",
+        }
+    ]
 
 
-def test_dry_run_zero_row_tables_report_would_drop_but_do_not():
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    engine = _make_engine(existing)
-    with _patch_table_exists(set(existing)):
+def test_dry_run_does_not_drop_zero_row_table():
+    engine = _make_engine({"extraction_metadata": 0})
+    with _patch_table_exists({"extraction_metadata"}):
         results = mod.execute_migration(engine, dry_run=True)
-    assert all(r["table_existed"] is True for r in results)
-    assert all(r["row_count"] == 0 for r in results)
-    assert all(r["dropped"] is False for r in results)
-    assert all(r["guard_tripped"] is False for r in results)
-    insp = sa.inspect(engine)
-    for t in mod.TARGET_TABLES:
-        assert t in insp.get_table_names()
+    assert results[0]["table_existed"] is True
+    assert results[0]["dropped"] is False
+    assert "extraction_metadata" in sa.inspect(engine).get_table_names()
 
 
-def test_apply_zero_row_tables_all_drop():
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    engine = _make_engine(existing)
-    with _patch_table_exists(set(existing)):
+def test_apply_zero_row_table_drops_it():
+    engine = _make_engine({"extraction_metadata": 0})
+    with _patch_table_exists({"extraction_metadata"}):
         results = mod.execute_migration(engine, dry_run=False)
-    assert all(r["dropped"] is True for r in results)
-    insp = sa.inspect(engine)
-    for t in mod.TARGET_TABLES:
-        assert t not in insp.get_table_names()
+    assert results[0]["dropped"] is True
+    assert "extraction_metadata" not in sa.inspect(engine).get_table_names()
 
 
-def test_apply_skips_table_with_rows_but_drops_the_rest():
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    existing["trades"] = 5
-    engine = _make_engine(existing)
-    with _patch_table_exists(set(existing)):
+def test_apply_skips_table_with_rows():
+    engine = _make_engine({"extraction_metadata": 5})
+    with _patch_table_exists({"extraction_metadata"}):
         results = mod.execute_migration(engine, dry_run=False)
-    by_table = {r["target_table"]: r for r in results}
-    assert by_table["trades"]["dropped"] is False
-    assert by_table["trades"]["guard_tripped"] is True
-    assert by_table["trades"]["row_count"] == 5
-    for t in mod.TARGET_TABLES:
-        if t != "trades":
-            assert by_table[t]["dropped"] is True
-    insp = sa.inspect(engine)
-    assert "trades" in insp.get_table_names()
-    assert "extraction_metadata" not in insp.get_table_names()
+    assert results[0]["dropped"] is False
+    assert results[0]["guard_tripped"] is True
+    assert results[0]["row_count"] == 5
+    assert "extraction_metadata" in sa.inspect(engine).get_table_names()
 
 
-def test_restrict_to_single_table():
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    engine = _make_engine(existing)
-    with _patch_table_exists(set(existing)):
-        results = mod.execute_migration(
-            engine, dry_run=False, tables=("extraction_metadata",)
-        )
-    assert len(results) == 1
-    assert results[0]["target_table"] == "extraction_metadata"
-    insp = sa.inspect(engine)
-    assert "extraction_metadata" not in insp.get_table_names()
-    assert "trades" in insp.get_table_names()
-
-
-def test_drop_sql_is_idempotent_per_table():
+def test_drop_sql_is_idempotent():
     engine = sa.create_engine("sqlite+pysqlite:///:memory:", future=True)
     with _patch_table_exists(set()):
-        for t in mod.TARGET_TABLES:
-            result = mod.execute_migration_for_table(engine, t, dry_run=True)
-            assert "IF EXISTS" in str(result["sql_planned"])
+        result = mod.execute_migration_for_table(
+            engine, "extraction_metadata", dry_run=True
+        )
+    assert "IF EXISTS" in str(result["sql_planned"])
 
 
 def test_main_requires_mode_flag():
-    with pytest.raises(SystemExit) as ei:
+    with pytest.raises(SystemExit) as error:
         mod.main([])
-    assert ei.value.code == 2  # argparse exits 2 on missing required arg
+    assert error.value.code == 2
 
 
 def test_main_dry_run_no_mysql_uri_returns_2(monkeypatch):
@@ -150,65 +108,44 @@ def test_main_dry_run_no_mysql_uri_returns_2(monkeypatch):
 
 
 def test_main_dry_run_with_engine_factory(monkeypatch):
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    engine = _make_engine(existing)
-
+    engine = _make_engine({"extraction_metadata": 0})
     monkeypatch.setattr(mod, "_make_engine_from_env", lambda: engine)
-    with _patch_table_exists(set(existing)):
-        rc = mod.main(["--dry-run"])
-    assert rc == 0
+    with _patch_table_exists({"extraction_metadata"}):
+        assert mod.main(["--dry-run"]) == 0
 
 
-def test_main_apply_returns_3_when_any_table_has_rows(monkeypatch):
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    existing["funding_rates"] = 1
-    engine = _make_engine(existing)
-
+def test_main_apply_returns_3_when_guard_trips(monkeypatch):
+    engine = _make_engine({"extraction_metadata": 1})
     monkeypatch.setattr(mod, "_make_engine_from_env", lambda: engine)
-    with _patch_table_exists(set(existing)):
-        rc = mod.main(["--apply"])
-    assert rc == 3
+    with _patch_table_exists({"extraction_metadata"}):
+        assert mod.main(["--apply"]) == 3
 
 
-def test_main_apply_all_clean_returns_0(monkeypatch):
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    engine = _make_engine(existing)
-
+def test_main_apply_clean_returns_0(monkeypatch):
+    engine = _make_engine({"extraction_metadata": 0})
     monkeypatch.setattr(mod, "_make_engine_from_env", lambda: engine)
-    with _patch_table_exists(set(existing)):
-        rc = mod.main(["--apply"])
-    assert rc == 0
+    with _patch_table_exists({"extraction_metadata"}):
+        assert mod.main(["--apply"]) == 0
 
 
 def test_main_table_filter_cli_flag(monkeypatch):
-    # main() disposes its engine on exit, which drops SQLite in-memory state —
-    # so this test only verifies the CLI wiring (rc + which tables were
-    # targeted), not post-hoc table existence. Table-level drop behavior for
-    # a --table subset is covered by test_restrict_to_single_table above
-    # (calling execute_migration directly, without main()'s dispose()).
-    existing = {t: 0 for t in mod.TARGET_TABLES}
-    engine = _make_engine(existing)
+    engine = _make_engine({"extraction_metadata": 0})
     captured: dict[str, object] = {}
+    real_execute = mod.execute_migration
 
-    def _factory():
-        return engine
-
-    _real_execute_migration = mod.execute_migration
-
-    def _capture_execute_migration(engine_arg, *, dry_run, tables=mod.TARGET_TABLES):
+    def capture(engine_arg, *, dry_run, tables=mod.TARGET_TABLES):
         captured["tables"] = tables
-        return _real_execute_migration(engine_arg, dry_run=dry_run, tables=tables)
+        return real_execute(engine_arg, dry_run=dry_run, tables=tables)
 
-    monkeypatch.setattr(mod, "_make_engine_from_env", _factory)
-    monkeypatch.setattr(mod, "execute_migration", _capture_execute_migration)
-    with _patch_table_exists(set(existing)):
-        rc = mod.main(["--apply", "--table", "trades", "--table", "funding_rates"])
-    assert rc == 0
-    assert captured["tables"] == ("trades", "funding_rates")
+    monkeypatch.setattr(mod, "_make_engine_from_env", lambda: engine)
+    monkeypatch.setattr(mod, "execute_migration", capture)
+    with _patch_table_exists({"extraction_metadata"}):
+        assert mod.main(["--apply", "--table", "extraction_metadata"]) == 0
+    assert captured["tables"] == ("extraction_metadata",)
 
 
-def test_main_rejects_unknown_table(monkeypatch):
+def test_main_rejects_removed_table(monkeypatch):
     monkeypatch.setenv("MYSQL_URI", "sqlite+pysqlite:///:memory:")
-    with pytest.raises(SystemExit) as ei:
-        mod.main(["--dry-run", "--table", "not_a_real_table"])
-    assert ei.value.code == 2
+    with pytest.raises(SystemExit) as error:
+        mod.main(["--dry-run", "--table", "funding_rates"])
+    assert error.value.code == 2
