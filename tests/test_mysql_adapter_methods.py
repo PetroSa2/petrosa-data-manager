@@ -239,9 +239,7 @@ class TestGetTable:
             return_value=_fake_write_engine(captured),
         ):
             sqlite_adapter.write([event], "pnl_events")
-        assert captured["records"][0]["event_key"].startswith(
-            "decision-1:closed:"
-        )
+        assert captured["records"][0]["event_key"].startswith("decision-1:closed:")
 
     def test_creates_klines_table_from_binance_interval(self, sqlite_adapter):
         # klines_15m → physical klines_m15

@@ -45,7 +45,9 @@ def test_backfill_accepts_explicit_dry_run():
 async def test_backfill_skips_invalid_documents_and_handles_both_collections():
     collection = MagicMock()
     collection.find.return_value = FakeCursor([{"not": "an event"}])
-    mongo = SimpleNamespace(db={"execution_events": collection, "pnl_events": collection})
+    mongo = SimpleNamespace(
+        db={"execution_events": collection, "pnl_events": collection}
+    )
 
     counts = await run_backfill(mongo, MagicMock(), dry_run=True)
 
