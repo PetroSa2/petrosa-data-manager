@@ -83,7 +83,13 @@ async def run_backfill(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="write rows to MySQL")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="write rows to MySQL")
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report counts without writing (the default)",
+    )
     parser.add_argument("--batch-size", type=int, default=500)
     return parser.parse_args(argv)
 

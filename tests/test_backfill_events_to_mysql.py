@@ -3,7 +3,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from data_manager.maintenance.backfill_events_to_mysql import backfill_collection
+from data_manager.maintenance.backfill_events_to_mysql import (
+    _parse_args,
+    backfill_collection,
+)
 from data_manager.models.pnl_event import PnlEvent
 
 
@@ -30,6 +33,10 @@ def _doc(index):
         "payload": {"source": "fixture"},
         "received_at": timestamp,
     }
+
+
+def test_backfill_accepts_explicit_dry_run():
+    assert _parse_args(["--dry-run"]).apply is False
 
 
 @pytest.mark.asyncio
