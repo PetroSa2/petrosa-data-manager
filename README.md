@@ -52,6 +52,7 @@ API Layer (FastAPI) → Downstream consumers (dashboards, strategies, tradeengin
 
 Core documentation (kept up-to-date):
 - `README.md` - Project overview and quick start
+- `docs/persistence-architecture.md` - MongoDB registry and durable MySQL rule
 - `QUICK_REFERENCE.md` - Common commands and workflows
 - `DEPLOYMENT_GUIDE.md` - Production deployment
 - `docs/MANUAL_DEPLOYMENT_GUIDE.md` - **Manual deployments without code changes**
