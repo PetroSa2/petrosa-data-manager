@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -28,6 +29,7 @@ except ImportError:
 
 
 import constants
+from data_manager.api.middleware import metrics
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.execution_event import ExecutionEvent
 from data_manager.utils.nats_trace_propagator import NATSTracePropagator
@@ -154,6 +156,7 @@ class ExecutionEventsConsumer:
         # (False on DuplicateKeyError replay). Gates the #256 business
         # metrics so redelivery does not double-count PnL/fees.
         self._last_persist_was_insert = False
+        self._mysql_persist_tasks: set[asyncio.Task[Any]] = set()
 
     async def start(self) -> bool:
         try:
@@ -202,6 +205,13 @@ class ExecutionEventsConsumer:
             for task in self._processing_tasks:
                 task.cancel()
             await asyncio.gather(*self._processing_tasks, return_exceptions=True)
+
+        if self._mysql_persist_tasks:
+            tasks = tuple(self._mysql_persist_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._mysql_persist_tasks.clear()
 
         if self.subscription:
             try:
@@ -367,8 +377,6 @@ class ExecutionEventsConsumer:
             return False
         try:
             doc = event.model_dump(exclude_none=True)
-            # Unique key combines order_id + event_type — the same order produces
-            # multiple events (placed, then filled, etc.) and each must persist.
             doc["_id"] = f"{event.order_id}:{event.event_type}"
             doc = adapter._prepare_for_bson(doc)
             try:
@@ -378,19 +386,15 @@ class ExecutionEventsConsumer:
             try:
                 await adapter.db[EXECUTION_EVENTS_COLLECTION].insert_one(doc)
                 self._last_persist_was_insert = True
+                self._schedule_mysql_persist(event)
                 return True
             except DuplicateKeyError:
-                # Idempotent replay: the event is already stored, so report
-                # success but flag it as a non-insert so business metrics
-                # (#256) are not double-counted on redelivery.
                 self._last_persist_was_insert = False
                 logger.debug(
                     "execution_event_already_persisted",
-                    extra={
-                        "order_id": event.order_id,
-                        "event_type": event.event_type,
-                    },
+                    extra={"order_id": event.order_id, "event_type": event.event_type},
                 )
+                self._schedule_mysql_persist(event)
                 return True
         except Exception as e:
             logger.error(
@@ -398,3 +402,35 @@ class ExecutionEventsConsumer:
                 f"{event.order_id}:{event.event_type}: {e}"
             )
             return False
+
+    def _schedule_mysql_persist(self, event: ExecutionEvent) -> None:
+        if (
+            os.environ.get(
+                "PETROSA_EXECUTION_EVENTS_MYSQL_PERSIST_ENABLED", "true"
+            ).lower()
+            == "true"
+        ):
+            task = asyncio.create_task(self._dual_write_mysql(event))
+            self._mysql_persist_tasks.add(task)
+            task.add_done_callback(self._mysql_persist_tasks.discard)
+
+    async def _dual_write_mysql(self, event: ExecutionEvent) -> None:
+        mysql_adapter = (
+            getattr(self.db_manager, "mysql_adapter", None) if self.db_manager else None
+        )
+        if mysql_adapter is None:
+            return
+        try:
+            await asyncio.to_thread(
+                mysql_adapter.write, [event], EXECUTION_EVENTS_COLLECTION
+            )
+        except Exception:
+            metrics.MYSQL_PERSIST_FAILURES.labels(
+                collection=EXECUTION_EVENTS_COLLECTION
+            ).inc()
+            logger.error(
+                "MySQL execution_events dual-write failed for %s:%s",
+                event.order_id,
+                event.event_type,
+                exc_info=True,
+            )

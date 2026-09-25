@@ -72,6 +72,12 @@ MYSQL_READ_FAILURES = Counter(
     ["database", "collection", "reason"],
 )
 
+MYSQL_PERSIST_FAILURES = Counter(
+    "data_manager_mysql_persist_failures_total",
+    "Failures writing durable consumer event copies to MySQL",
+    ["collection"],
+)
+
 DATABASE_OPERATION_DURATION = Histogram(
     "data_manager_database_operation_duration_seconds",
     "Database operation duration in seconds",

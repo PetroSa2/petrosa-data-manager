@@ -7,6 +7,7 @@ wire, but its parsing, model validation, persistence path, and OTel
 context propagation are fully exercised here.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -42,6 +43,7 @@ def mock_db_manager():
     collection.insert_one = AsyncMock()
     mongo.db.__getitem__.return_value = collection
     db_manager.mongodb_adapter = mongo
+    db_manager.mysql_adapter = MagicMock()
     return db_manager
 
 
@@ -148,10 +150,17 @@ def _build_msg(payload, subject="pnl.events.strat_momentum_v1"):
     return msg
 
 
+async def _drain_mysql_tasks(consumer):
+    tasks = tuple(consumer._mysql_persist_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_process_message_persists_pnl(pnl_consumer, mock_db_manager):
     msg = _build_msg(_pnl_payload())
     await pnl_consumer._process_message(msg)
+    await _drain_mysql_tasks(pnl_consumer)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_awaited_once()
     inserted = collection.insert_one.await_args.args[0]
@@ -209,6 +218,50 @@ async def test_persist_returns_false_without_adapter(pnl_consumer):
     event = PnlEvent.from_nats_message(_pnl_payload())
     assert event is not None
     assert await pnl_consumer._persist(event) is False
+
+
+@pytest.mark.asyncio
+async def test_persist_returns_false_when_mongo_fails(pnl_consumer, mock_db_manager):
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.side_effect = RuntimeError("mongo down")
+    event = PnlEvent.from_nats_message(_pnl_payload())
+    assert event is not None
+    assert await pnl_consumer._persist(event) is False
+    await _drain_mysql_tasks(pnl_consumer)
+    mock_db_manager.mysql_adapter.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_persist_dual_writes_to_mysql(pnl_consumer, mock_db_manager):
+    event = PnlEvent.from_nats_message(_pnl_payload())
+    assert event is not None
+    assert await pnl_consumer._persist(event) is True
+    await _drain_mysql_tasks(pnl_consumer)
+    mock_db_manager.mysql_adapter.write.assert_called_once_with(
+        [event], PNL_EVENTS_COLLECTION
+    )
+
+
+@pytest.mark.asyncio
+async def test_mysql_kill_switch_preserves_mongo(
+    pnl_consumer, mock_db_manager, monkeypatch
+):
+    monkeypatch.setenv("PETROSA_PNL_EVENTS_MYSQL_PERSIST_ENABLED", "false")
+    event = PnlEvent.from_nats_message(_pnl_payload())
+    assert event is not None
+    assert await pnl_consumer._persist(event) is True
+    mock_db_manager.mysql_adapter.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mysql_failure_does_not_fail_mongo(pnl_consumer, mock_db_manager):
+    mock_db_manager.mysql_adapter.write.side_effect = RuntimeError("mysql down")
+    event = PnlEvent.from_nats_message(_pnl_payload())
+    assert event is not None
+    assert await pnl_consumer._persist(event) is True
+    await _drain_mysql_tasks(pnl_consumer)
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_awaited_once()
 
 
 @pytest.mark.asyncio
