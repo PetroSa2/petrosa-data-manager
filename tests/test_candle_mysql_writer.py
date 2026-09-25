@@ -147,8 +147,9 @@ def test_mysql_row_derives_optional_values_and_preserves_native_types():
 
 
 def test_mysql_row_rejects_invalid_timeframe():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc_info:
         candle_to_mysql_kline(make_candle("xyz"))
+    assert "Invalid timeframe" in str(exc_info.value)
 
 
 def test_candle_dump_shape_excludes_taker_buy_fields():
