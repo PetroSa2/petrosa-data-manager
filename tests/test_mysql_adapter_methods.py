@@ -140,6 +140,8 @@ class TestCreateTablesViaConnect:
             "schemas",
             "daily_pnl",
             "cio_decisions",
+            "execution_events",
+            "pnl_events",
         ):
             assert table_name in a.tables
 
@@ -164,6 +166,52 @@ class TestGetTable:
         assert table.name == "cio_decisions"
         assert "decision_id" in table.c
         assert "id" not in table.c  # decision_id IS the PK; no synthetic id
+
+    def test_event_tables_have_natural_keys_and_indexes(self, sqlite_adapter):
+        execution = sqlite_adapter._get_table("execution_events")
+        pnl = sqlite_adapter._get_table("pnl_events")
+        assert execution.primary_key.columns.keys() == ["event_key"]
+        assert pnl.primary_key.columns.keys() == ["event_key"]
+        assert execution.c.timestamp.type.fsp == 6
+        assert pnl.c.timestamp.type.fsp == 6
+        assert "payload" in execution.c
+        assert "payload" in pnl.c
+        assert any(
+            index.name == "idx_execution_events_decision_timestamp"
+            for index in execution.indexes
+        )
+        assert any(
+            index.name == "idx_pnl_events_decision_timestamp" for index in pnl.indexes
+        )
+
+    def test_event_write_derives_idempotency_key(self, sqlite_adapter):
+        from pydantic import BaseModel
+
+        class EventRecord(BaseModel):
+            decision_id: str
+            strategy_id: str
+            order_id: str
+            event_type: str
+            timestamp: datetime
+            payload: dict = {}
+            received_at: datetime
+
+        captured: dict = {}
+        event = EventRecord(
+            decision_id="decision-1",
+            strategy_id="strategy-1",
+            order_id="order-1",
+            event_type="filled",
+            timestamp=datetime(2026, 9, 25, tzinfo=UTC),
+            received_at=datetime(2026, 9, 25, tzinfo=UTC),
+        )
+        with patch.object(
+            sqlite_adapter,
+            "_ensure_connected",
+            return_value=_fake_write_engine(captured),
+        ):
+            sqlite_adapter.write([event], "execution_events")
+        assert captured["records"][0]["event_key"] == "order-1:filled"
 
     def test_creates_klines_table_from_binance_interval(self, sqlite_adapter):
         # klines_15m → physical klines_m15

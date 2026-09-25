@@ -15,6 +15,7 @@ disrupting the other three subscribers.
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -40,6 +41,7 @@ except ImportError:
 
 
 import constants
+from data_manager.api.middleware import metrics
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.pnl_event import PnlEvent
 from data_manager.utils.nats_trace_propagator import NATSTracePropagator
@@ -97,6 +99,7 @@ class PnlConsumer:
         )
         self._processing_tasks: list[asyncio.Task] = []
         self._owns_nats_client = nats_client is None
+        self._mysql_persist_tasks: set[asyncio.Task[Any]] = set()
 
     async def start(self) -> bool:
         try:
@@ -141,6 +144,13 @@ class PnlConsumer:
             for task in self._processing_tasks:
                 task.cancel()
             await asyncio.gather(*self._processing_tasks, return_exceptions=True)
+
+        if self._mysql_persist_tasks:
+            tasks = tuple(self._mysql_persist_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._mysql_persist_tasks.clear()
 
         if self.subscription:
             try:
@@ -261,6 +271,13 @@ class PnlConsumer:
             pnl_processing_time.record(time.monotonic() - start_time, _METRIC_ATTRS)
 
     async def _persist(self, event: PnlEvent) -> bool:
+        if (
+            os.environ.get("PETROSA_PNL_EVENTS_MYSQL_PERSIST_ENABLED", "true").lower()
+            == "true"
+        ):
+            task = asyncio.create_task(self._dual_write_mysql(event))
+            self._mysql_persist_tasks.add(task)
+            task.add_done_callback(self._mysql_persist_tasks.discard)
         adapter = (
             getattr(self.db_manager, "mongodb_adapter", None)
             if self.db_manager
@@ -268,6 +285,7 @@ class PnlConsumer:
         )
         if adapter is None or getattr(adapter, "db", None) is None:
             return False
+
         try:
             doc = event.model_dump(exclude_none=True)
             # `_id` composes decision_id + pnl_kind + timestamp microseconds so
@@ -297,3 +315,22 @@ class PnlConsumer:
                 f"Failed to persist pnl event {event.decision_id}:{event.pnl_kind}: {e}"
             )
             return False
+
+    async def _dual_write_mysql(self, event: PnlEvent) -> None:
+        mysql_adapter = (
+            getattr(self.db_manager, "mysql_adapter", None) if self.db_manager else None
+        )
+        if mysql_adapter is None:
+            return
+        try:
+            await asyncio.to_thread(mysql_adapter.write, [event], PNL_EVENTS_COLLECTION)
+        except Exception:
+            metrics.MYSQL_PERSIST_FAILURES.labels(
+                collection=PNL_EVENTS_COLLECTION
+            ).inc()
+            logger.error(
+                "MySQL pnl_events dual-write failed for %s:%s",
+                event.decision_id,
+                event.pnl_kind,
+                exc_info=True,
+            )
