@@ -60,6 +60,12 @@ MYSQL_WRITE_FAILURES = Counter(
     ["database", "collection", "reason"],
 )
 
+MYSQL_WRITE_IGNORED = Counter(
+    "data_manager_mysql_write_ignored_total",
+    "MySQL writes ignored because of duplicate rows or unknown fields",
+    ["collection", "reason"],
+)
+
 MYSQL_READ_FAILURES = Counter(
     "data_manager_mysql_read_failures_total",
     "MySQL read failures that did not return rows",

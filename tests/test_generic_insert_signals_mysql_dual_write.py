@@ -231,3 +231,25 @@ class TestDualWriteIntegration:
 
         assert response.status_code == 200
         api_module.db_manager.mysql_adapter.write.assert_called_once()
+
+    def test_direct_mysql_insert_reports_ignored_count(self, client):
+        api_module.db_manager.mysql_adapter.write = Mock(
+            return_value=WriteResult(
+                inserted=2, duplicates=1, failed=0, ignored_count=1
+            )
+        )
+
+        response = client.post(
+            "/api/v1/mysql/signals",
+            json={
+                "data": [
+                    {"symbol": "BTCUSDT", "action": "buy"},
+                    {"symbol": "ETHUSDT", "action": "sell"},
+                    {"symbol": "SOLUSDT", "action": "hold"},
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["inserted_count"] == 2
+        assert response.json()["ignored_count"] == 1

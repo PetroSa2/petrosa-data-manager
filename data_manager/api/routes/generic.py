@@ -41,6 +41,31 @@ def _serialize_write_result(result: Any) -> dict[str, Any]:
     return {"inserted": inserted, "duplicates": duplicates, "failed": failed}
 
 
+def _validate_mysql_update_data(
+    adapter: Any, collection: str, data: dict[str, Any]
+) -> list[str]:
+    """Reject unsafe MySQL updates and return fields that may be ignored."""
+    column_names = adapter.get_column_names(collection)
+    if not isinstance(column_names, set | frozenset | list | tuple):
+        raise DatabaseError(
+            f"MySQL adapter returned invalid column metadata for {collection}"
+        )
+
+    ignored_fields = [key for key in data if key not in column_names]
+    operator_fields = [key for key in data if key.startswith("$")]
+    applicable_fields = [key for key in data if key in column_names]
+    if operator_fields or not applicable_fields:
+        unknown = ", ".join(ignored_fields) if ignored_fields else "<none>"
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"MySQL update rejected for {collection}: no applicable columns; "
+                f"unknown fields: {unknown}"
+            ),
+        )
+    return ignored_fields
+
+
 def _signals_persist_enabled() -> bool:
     """AC kill-switch (data-manager#302): ``PETROSA_SIGNALS_PERSIST_ENABLED``.
 
@@ -562,10 +587,12 @@ async def insert_records(
             inserted_count = write_result.inserted
             duplicates = write_result.duplicates
             failed = write_result.failed
+            ignored_count = write_result.ignored_count
         else:  # MongoDB
             inserted_count = await adapter.write(model_instances, collection)
             duplicates = 0
             failed = 0
+            ignored_count = 0
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
@@ -575,6 +602,7 @@ async def insert_records(
         response: dict[str, Any] = {
             "message": f"Successfully inserted {inserted_count} records",
             "inserted_count": inserted_count,
+            **({"ignored_count": ignored_count} if database == "mysql" else {}),
             "duplicates": duplicates,
             "failed": failed,
             "metadata": {
@@ -618,6 +646,12 @@ async def update_records(
     try:
         adapter = _get_adapter(database)
 
+        ignored_fields: list[str] = []
+        if database == "mysql":
+            ignored_fields = _validate_mysql_update_data(
+                adapter, collection, request.data
+            )
+
         # Schema validation (if enabled)
         if validate and schema:
             # For updates, validate the updated data
@@ -641,7 +675,7 @@ async def update_records(
         matching_records = _apply_filter(existing_records, request.filter)
 
         if not matching_records and not request.upsert:
-            return {
+            response: dict[str, Any] = {
                 "message": "No records found matching filter",
                 "updated_count": 0,
                 "metadata": {
@@ -650,6 +684,9 @@ async def update_records(
                     "timestamp": datetime.now(UTC).isoformat(),
                 },
             }
+            if ignored_fields:
+                response["ignored_fields"] = ignored_fields
+            return response
 
         # Update records: persist via a real UPDATE (mysql) / update_many
         # (MongoDB) so changes actually land in the database instead of only
@@ -678,7 +715,13 @@ async def update_records(
 
         # If upsert and no matches, create new record
         elif request.upsert:
-            new_record = request.data.copy()
+            new_record = {
+                key: value
+                for key, value in request.data.items()
+                if key not in ignored_fields
+            }
+            if ignored_fields and database == "mysql":
+                adapter.record_ignored_fields(collection, ignored_fields)
             new_record["created_at"] = datetime.now(UTC)
             new_record["updated_at"] = datetime.now(UTC)
 
@@ -701,7 +744,7 @@ async def update_records(
         # Track metrics
         api_module.db_manager.increment_query_count(database)
 
-        return {
+        response: dict[str, Any] = {
             "message": f"Successfully updated {updated_count} records",
             "updated_count": updated_count,
             "metadata": {
@@ -710,6 +753,9 @@ async def update_records(
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         }
+        if ignored_fields:
+            response["ignored_fields"] = ignored_fields
+        return response
 
     except HTTPException:
         raise

@@ -196,6 +196,7 @@ def test_write_result_is_int_compatible_for_legacy_callers():
     assert r == 0  # int comparison still works (matches existing tests)
     assert r.inserted == 0
     assert r.duplicates == 5
+    assert r.ignored_count == 5
     assert r.failed == 0
     assert r.as_dict() == {"inserted": 0, "duplicates": 5, "failed": 0}
 
@@ -268,6 +269,7 @@ def test_write_computes_duplicates_from_rowcount_gap():
         assert isinstance(result, WriteResult)
         assert result.inserted == 3
         assert result.duplicates == 2  # 5 records - 3 rowcount
+        assert result.ignored_count == 2
         assert result.failed == 0
 
     finally:
@@ -296,10 +298,68 @@ def test_write_all_duplicates_yields_explicit_count_not_ambiguous_zero():
 
         assert result.inserted == 0
         assert result.duplicates == 4
+        assert result.ignored_count == 4
         assert result.failed == 0
         # Int-compat still holds — but the structured data is the truth.
         assert int(result) == 0
         assert result.as_dict() == {"inserted": 0, "duplicates": 4, "failed": 0}
+    finally:
+        adapter.disconnect()
+
+
+def test_write_increments_ignored_insert_counter():
+    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter.engine_options = {}
+    adapter.connect()
+    try:
+        records = [_audit_rec(f"metric-{i}") for i in range(3)]
+        fake_result = MagicMock(rowcount=2)
+        fake_conn = MagicMock()
+        fake_conn.execute.return_value = fake_result
+        fake_conn.begin.return_value = MagicMock()
+        fake_engine = MagicMock()
+        fake_engine.connect.return_value.__enter__.return_value = fake_conn
+
+        with (
+            patch.object(adapter, "_ensure_connected", return_value=fake_engine),
+            patch("data_manager.api.middleware.metrics.MYSQL_WRITE_IGNORED") as counter,
+        ):
+            result = adapter.write(records, "audit_logs")
+
+        assert result.inserted == 2
+        assert result.ignored_count == 1
+        counter.labels.assert_called_once_with(
+            collection="audit_logs", reason="duplicate"
+        )
+        counter.labels.return_value.inc.assert_called_once_with(1)
+    finally:
+        adapter.disconnect()
+
+
+def test_update_records_ignored_field_metric_and_warning_once(caplog):
+    adapter = _build_sqlite_adapter()
+    try:
+        with (
+            patch("data_manager.api.middleware.metrics.MYSQL_WRITE_IGNORED") as counter,
+            caplog.at_level("WARNING"),
+        ):
+            adapter.update(
+                "audit_logs",
+                {"audit_id": "a-1"},
+                {"severity": "warning", "not_a_column": 1},
+            )
+            adapter.update(
+                "audit_logs",
+                {"audit_id": "a-1"},
+                {"severity": "error", "not_a_column": 2},
+            )
+
+        assert counter.labels.call_count == 2
+        counter.labels.assert_any_call(collection="audit_logs", reason="unknown_field")
+        warnings = [
+            record for record in caplog.records if "not_a_column" in record.getMessage()
+        ]
+        assert len(warnings) == 1
     finally:
         adapter.disconnect()
 
