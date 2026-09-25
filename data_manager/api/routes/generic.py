@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 import constants
 import data_manager.api.app as api_module
+from data_manager.api.gateway_policy import authorize_generic
 from data_manager.db.base_adapter import DatabaseError
 from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
@@ -253,7 +254,9 @@ async def _execute_query_internal(
 
 
 @router.post("/api/v1/data/query")
-async def legacy_query(request: dict[str, Any]) -> dict[str, Any]:
+async def legacy_query(
+    request: dict[str, Any], http_request: Request
+) -> dict[str, Any]:
     """
     Legacy query endpoint used by older versions of data-extractor.
     Forwards to generic CRUD logic.
@@ -262,6 +265,7 @@ async def legacy_query(request: dict[str, Any]) -> dict[str, Any]:
     collection = request.get("collection")
     if not collection:
         raise HTTPException(status_code=400, detail="Collection name required")
+    authorize_generic(http_request, database, collection, "read")
 
     try:
         # Extract parameters from POST body
@@ -291,7 +295,9 @@ async def legacy_query(request: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/api/v1/data/insert")
-async def legacy_insert(request: dict[str, Any]) -> dict[str, Any]:
+async def legacy_insert(
+    request: dict[str, Any], http_request: Request
+) -> dict[str, Any]:
     """
     Legacy insert endpoint used by older versions of data-extractor.
     Forwards to generic insert_records logic.
@@ -302,7 +308,6 @@ async def legacy_insert(request: dict[str, Any]) -> dict[str, Any]:
 
     if not collection:
         raise HTTPException(status_code=400, detail="Collection name required")
-
     # Create InsertRequest object
     insert_request = InsertRequest(data=records)
 
@@ -311,6 +316,7 @@ async def legacy_insert(request: dict[str, Any]) -> dict[str, Any]:
         database=database,
         collection=collection,
         request=insert_request,
+        http_request=http_request,
         schema=None,
         validate=False,
     )
@@ -443,6 +449,7 @@ async def get_records(
 
     Supports filtering, sorting, pagination, and field selection.
     """
+    authorize_generic(request, database, collection, "read")
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
 
@@ -480,6 +487,7 @@ async def insert_records(
     database: str,
     collection: str,
     request: InsertRequest,
+    http_request: Request,
     schema: str | None = Query(None, description="Schema name for validation"),
     validate: bool = Query(False, description="Enable schema validation"),
 ) -> dict[str, Any]:
@@ -488,6 +496,7 @@ async def insert_records(
 
     Supports single record or batch insertion.
     """
+    authorize_generic(http_request, database, collection, "insert")
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
 
@@ -632,6 +641,7 @@ async def update_records(
     database: str,
     collection: str,
     request: UpdateRequest,
+    http_request: Request,
     schema: str | None = Query(None, description="Schema name for validation"),
     validate: bool = Query(False, description="Enable schema validation"),
 ) -> dict[str, Any]:
@@ -640,6 +650,9 @@ async def update_records(
 
     Supports filtering and upsert operations.
     """
+    authorize_generic(
+        http_request, database, collection, "upsert" if request.upsert else "update"
+    )
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
 
@@ -770,12 +783,14 @@ async def delete_records(
     database: str,
     collection: str,
     request: DeleteRequest,
+    http_request: Request,
 ) -> dict[str, Any]:
     """
     Delete records from a database collection.
 
     Supports filtering to identify records to delete.
     """
+    authorize_generic(http_request, database, collection, "delete")
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
 
@@ -823,12 +838,14 @@ async def batch_operations(
     database: str,
     collection: str,
     request: BatchRequest,
+    http_request: Request,
 ) -> dict[str, Any]:
     """
     Perform batch operations on a database collection.
 
     Supports bulk insert, update, and delete operations.
     """
+    authorize_generic(http_request, database, collection, "batch")
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
 
