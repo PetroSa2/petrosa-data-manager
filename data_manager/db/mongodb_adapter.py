@@ -552,6 +552,26 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("strategy_id", ASCENDING)]),
                     IndexModel([("timestamp", ASCENDING)]),
                     IndexModel([("action", ASCENDING)]),
+                    # TTL self-heal (2026-09-20). Same pattern + rationale as
+                    # `intents` above: a dedicated index name on the
+                    # subscriber-set `received_at` datetime (always a real
+                    # BSON Date — `DecisionEvent.received_at`
+                    # default_factory=datetime.now(UTC)), recreated on every
+                    # startup so the collection self-heals even if an
+                    # operator drops the index. Unlike `signals`, this
+                    # self-heal is baked in from day one — the `signals` TTL
+                    # was maintenance-job-only, which is exactly why it went
+                    # unapplied in prod for weeks undetected. `cio_decisions`
+                    # has confirmed readers (see constants.CIO_DECISIONS_TTL_SECONDS),
+                    # so this window is bounded by the `intents` join, not
+                    # "no reader" like `signals`/`alerts`. MySQL
+                    # `cio_decisions` (see mysql_adapter.py) is the unbounded
+                    # permanent copy.
+                    IndexModel(
+                        [("received_at", ASCENDING)],
+                        expireAfterSeconds=constants.CIO_DECISIONS_TTL_SECONDS,
+                        name="received_at_ttl_1d",
+                    ),
                 ]
             elif collection == "execution_events":
                 # Cross-service identifier contract (P0.2c): `execution_events` collection
