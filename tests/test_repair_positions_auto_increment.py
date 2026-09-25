@@ -113,7 +113,11 @@ def test_mysql_metadata_and_ddl_queries(monkeypatch: pytest.MonkeyPatch) -> None
     connection = _FakeConnection(
         [
             {"auto_increment": 8},
-            {"TABLE_NAME": "fills", "CONSTRAINT_NAME": "fk_fill_position", "COLUMN_NAME": "position_id"},
+            {
+                "TABLE_NAME": "fills",
+                "CONSTRAINT_NAME": "fk_fill_position",
+                "COLUMN_NAME": "position_id",
+            },
         ]
     )
     engine = SimpleNamespace(dialect=SimpleNamespace(name="mysql"))
@@ -126,7 +130,11 @@ def test_mysql_metadata_and_ddl_queries(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert mod.read_auto_increment(engine) == 8
     assert mod.foreign_key_references(engine) == [
-        {"TABLE_NAME": "fills", "CONSTRAINT_NAME": "fk_fill_position", "COLUMN_NAME": "position_id"}
+        {
+            "TABLE_NAME": "fills",
+            "CONSTRAINT_NAME": "fk_fill_position",
+            "COLUMN_NAME": "position_id",
+        }
     ]
     mod.set_auto_increment(engine, 8)
     assert "ALTER TABLE positions AUTO_INCREMENT = 8" in connection.statements[-1]
@@ -151,7 +159,9 @@ class _FakeConnection:
         self.rows = rows
         self.statements: list[str] = []
 
-    def execute(self, statement: object, *_args: object, **_kwargs: object) -> _FakeResult:
+    def execute(
+        self, statement: object, *_args: object, **_kwargs: object
+    ) -> _FakeResult:
         self.statements.append(str(statement))
         if "AUTO_INCREMENT" in str(statement):
             return _FakeResult(self.rows[:1])
