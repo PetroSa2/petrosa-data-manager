@@ -17,7 +17,12 @@ async def test_acquire_uses_expiry_cas_and_upsert():
     now = datetime.now(UTC)
     collection = SimpleNamespace(
         find_one_and_update=AsyncMock(
-            return_value={"name": "leader:dm", "owner": "pod-a", "expires_at": now, "fencing_token": 1}
+            return_value={
+                "name": "leader:dm",
+                "owner": "pod-a",
+                "expires_at": now,
+                "fencing_token": 1,
+            }
         ),
         find_one=AsyncMock(),
     )
@@ -37,7 +42,12 @@ async def test_duplicate_acquire_returns_current_holder():
         find_one=AsyncMock(return_value=holder),
     )
     result = await _repo(collection).acquire("x", "pod-b", 10)
-    assert result == {"acquired": False, **holder, "acquired_at": None, "renewed_at": None}
+    assert result == {
+        "acquired": False,
+        **holder,
+        "acquired_at": None,
+        "renewed_at": None,
+    }
 
 
 @pytest.mark.asyncio

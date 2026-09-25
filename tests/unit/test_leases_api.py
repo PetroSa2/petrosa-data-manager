@@ -34,7 +34,9 @@ def fake_repo(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_acquire_returns_fencing_token():
-    result = await leases.acquire("leader:data-manager", leases.LeaseRequest(owner="pod-a", ttl_seconds=30))
+    result = await leases.acquire(
+        "leader:data-manager", leases.LeaseRequest(owner="pod-a", ttl_seconds=30)
+    )
     assert result["acquired"] is True
     assert result["fencing_token"] == 1
 
@@ -42,16 +44,22 @@ async def test_acquire_returns_fencing_token():
 @pytest.mark.asyncio
 async def test_bad_name_and_renew_loss_are_rejected():
     with pytest.raises(HTTPException) as bad_name:
-        await leases.acquire("bad/name", leases.LeaseRequest(owner="pod-a", ttl_seconds=30))
+        await leases.acquire(
+            "bad/name", leases.LeaseRequest(owner="pod-a", ttl_seconds=30)
+        )
     assert bad_name.value.status_code == 422
     with pytest.raises(HTTPException) as lost:
-        await leases.renew("leader:data-manager", leases.LeaseRequest(owner="pod-b", ttl_seconds=30))
+        await leases.renew(
+            "leader:data-manager", leases.LeaseRequest(owner="pod-b", ttl_seconds=30)
+        )
     assert lost.value.status_code == 409
 
 
 @pytest.mark.asyncio
 async def test_release_and_unknown_get():
-    assert await leases.release("leader:data-manager", leases.ReleaseRequest(owner="pod-a")) == {"released": True}
+    assert await leases.release(
+        "leader:data-manager", leases.ReleaseRequest(owner="pod-a")
+    ) == {"released": True}
     with pytest.raises(HTTPException) as missing:
         await leases.get("leader:data-manager")
     assert missing.value.status_code == 404
