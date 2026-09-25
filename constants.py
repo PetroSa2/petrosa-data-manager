@@ -271,6 +271,9 @@ CANDLE_DATABASE_TYPE = os.getenv(
     os.getenv("DB_ADAPTER", os.getenv("EXTRACTOR_DB_ADAPTER", "mongodb")),
 ).lower()
 
+KLINE_WRITER_VERSION = "data-manager"
+KLINE_WRITER_SOURCE = "data-manager-backfill"
+
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 

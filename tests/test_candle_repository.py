@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from data_manager.db.repositories.candle_repository import CandleRepository
-from data_manager.models.market_data import Candle
+from data_manager.models.market_data import Candle, MySQLKlineRow
 
 
 def make_candle(symbol: str = "BTCUSDT", timeframe: str = "1h") -> Candle:
@@ -264,6 +264,9 @@ class TestMysqlPath:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=None)
             assert await repo.insert(make_candle("BTCUSDT", "1h")) is True
             assert mysql.write.call_args[0][1] == "klines_h1"
+            assert isinstance(mysql.write.call_args[0][0][0], MySQLKlineRow)
+            assert mysql.write.call_args[0][0][0].open_time == datetime(2026, 1, 1)
+            assert mysql.write.call_args[0][0][0].open_price == Decimal("100")
 
     @pytest.mark.asyncio
     async def test_batch_groups_by_table(self):
@@ -283,6 +286,8 @@ class TestMysqlPath:
             )
             assert total == 3
             assert mysql.write_batch.call_count == 2
+            for call in mysql.write_batch.call_args_list:
+                assert all(isinstance(row, MySQLKlineRow) for row in call.args[0])
 
     @pytest.mark.asyncio
     async def test_get_range_maps_mysql_columns(self):

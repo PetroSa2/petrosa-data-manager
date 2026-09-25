@@ -4,14 +4,16 @@ Repository for candle/kline data operations.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from prometheus_client import Counter
 
 import constants
 from data_manager.db.repositories.base_repository import BaseRepository
-from data_manager.models.market_data import Candle
+from data_manager.models.market_data import Candle, MySQLKlineRow
+from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,59 @@ def mysql_table_name(timeframe: str) -> str:
 def map_mysql_row(row: dict[str, Any]) -> dict[str, Any]:
     """Rename MySQL klines columns onto the canonical candle keys."""
     return {key: row.get(column) for key, column in _MYSQL_COLUMN_MAP.items()}
+
+
+def candle_to_mysql_kline(
+    candle: Candle, *, extracted_at: datetime | None = None
+) -> MySQLKlineRow:
+    """Convert a canonical candle into a complete MySQL klines row."""
+    open_time_aware = as_aware_utc(candle.timestamp)
+    open_time = open_time_aware.replace(tzinfo=None)
+    close_time = open_time + timedelta(
+        minutes=parse_timeframe_to_minutes(candle.timeframe)
+    )
+    extracted_at_aware = as_aware_utc(extracted_at or datetime.now(UTC))
+    price_change = candle.close - candle.open
+    price_change_percent = (
+        (price_change / candle.open * 100).quantize(Decimal("0.0001"))
+        if candle.open != 0
+        else Decimal("0")
+    )
+
+    return MySQLKlineRow(
+        id=f"{candle.symbol}_{int(open_time_aware.timestamp() * 1000)}",
+        symbol=candle.symbol,
+        timestamp=open_time,
+        open_time=open_time,
+        close_time=close_time,
+        interval=candle.timeframe,
+        open_price=candle.open,
+        high_price=candle.high,
+        low_price=candle.low,
+        close_price=candle.close,
+        volume=candle.volume,
+        quote_asset_volume=(
+            candle.quote_volume if candle.quote_volume is not None else Decimal("0")
+        ),
+        number_of_trades=(
+            candle.trades_count if candle.trades_count is not None else 0
+        ),
+        taker_buy_base_asset_volume=(
+            candle.taker_buy_base_volume
+            if candle.taker_buy_base_volume is not None
+            else Decimal("0")
+        ),
+        taker_buy_quote_asset_volume=(
+            candle.taker_buy_quote_volume
+            if candle.taker_buy_quote_volume is not None
+            else Decimal("0")
+        ),
+        price_change=price_change,
+        price_change_percent=price_change_percent,
+        extracted_at=extracted_at_aware.replace(tzinfo=None),
+        extractor_version=constants.KLINE_WRITER_VERSION,
+        source=constants.KLINE_WRITER_SOURCE,
+    )
 
 
 class CandleRepository(BaseRepository):
@@ -222,7 +277,9 @@ class CandleRepository(BaseRepository):
                     key = self._get_mysql_table_name(candle.timeframe)
                     by_table.setdefault(key, []).append(candle)
                 for table, batch in by_table.items():
-                    adapter.write_batch(batch, table)
+                    adapter.write_batch(
+                        [candle_to_mysql_kline(candle) for candle in batch], table
+                    )
             CANDLE_DUAL_WRITES.labels(mirror=mirror, outcome="success").inc()
         except Exception as e:
             CANDLE_DUAL_WRITES.labels(mirror=mirror, outcome="error").inc()
@@ -245,7 +302,7 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(candle.timeframe)
-                count = self.mysql.write([candle], table)
+                count = self.mysql.write([candle_to_mysql_kline(candle)], table)
             else:
                 collection = self._get_collection_name(candle.symbol, candle.timeframe)
                 count = await self.mongodb.write([candle], collection)
@@ -288,7 +345,9 @@ class CandleRepository(BaseRepository):
                     # handlers -- for the duration of the DB round-trip.
                     # Offload to a worker thread so the loop stays responsive.
                     count = await asyncio.to_thread(
-                        self.mysql.write_batch, table_candles, table
+                        self.mysql.write_batch,
+                        [candle_to_mysql_kline(candle) for candle in table_candles],
+                        table,
                     )
                     total_inserted += count
                     logger.debug(f"Inserted {count} candles to {table}")
