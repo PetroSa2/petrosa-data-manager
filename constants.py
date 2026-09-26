@@ -270,7 +270,9 @@ SUPPORTED_PAIRS = os.getenv(
 # Candle Database Configuration
 CANDLE_DATABASE_TYPE = os.getenv("CANDLE_DATABASE_TYPE", "mongodb").lower()
 if CANDLE_DATABASE_TYPE not in {"mongodb", "mysql"}:
-    logging.error("Unsupported CANDLE_DATABASE_TYPE=%r; using mongodb", CANDLE_DATABASE_TYPE)
+    logging.error(
+        "Unsupported CANDLE_DATABASE_TYPE=%r; using mongodb", CANDLE_DATABASE_TYPE
+    )
     CANDLE_DATABASE_TYPE = "mongodb"
 
 KLINE_WRITER_VERSION = "data-manager"
