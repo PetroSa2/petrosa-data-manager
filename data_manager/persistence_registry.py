@@ -117,6 +117,9 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "envelope_authorship_audit": transient_only(reason="configuration audit view"),
     "leverage_bounds_audit": transient_only(reason="configuration audit view"),
     "restore_exercises": transient_only(reason="operator recovery exercise state"),
+    "mysql_index_usage_snapshots": transient_only(
+        reason="bounded MySQL userstat trend snapshots with a 90-day TTL"
+    ),
 }
 
 PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
