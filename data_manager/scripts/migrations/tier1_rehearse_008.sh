@@ -16,6 +16,7 @@ docker run --rm -d --name "$container" \
 for _ in $(seq 1 60); do
   docker exec "$container" mysqladmin ping -uroot -proot --silent >/dev/null 2>&1 && break
   sleep 2
+done
 
 docker exec -i "$container" mysql -uroot -proot petrosa_crypto <<'SQL'
 CREATE TABLE klines_m1 (
@@ -45,6 +46,9 @@ docker exec -i "$container" mysql -uroot -proot petrosa_crypto \
   < "$(dirname "$0")/008_klines_m1_m15_dedupe.sql"
 test "$(docker exec "$container" mysql -N -uroot -proot petrosa_crypto -e \
   'SELECT COUNT(*) - COUNT(DISTINCT symbol,timestamp) FROM klines_m1')" = 0
+test "$(docker exec "$container" mysql -N -uroot -proot petrosa_crypto -e \
+  "SELECT id FROM klines_m1 WHERE symbol='XLMUSDT' AND timestamp='2026-01-01 00:00:00'")" = x2
+echo 'step 3: second de-duplication run deletes 0 rows'
 docker exec -i "$container" mysql -uroot -proot petrosa_crypto \
   < "$(dirname "$0")/008_klines_m1_m15_dedupe.sql"
 echo 'step 4: unique migration succeeds with ALGORITHM=INPLACE, LOCK=NONE'
@@ -54,7 +58,17 @@ echo 'step 5: duplicate insert is rejected'
 if docker exec "$container" mysql -uroot -proot petrosa_crypto -e \
   "INSERT INTO klines_m1 VALUES ('x5','XLMUSDT','2026-01-01 00:00:00','2026-01-01 00:00:03')"; then exit 1; fi
 echo 'step 6: strict session rejects zero date; empty mode accepts it'
+if docker exec "$container" mysql -uroot -proot petrosa_crypto \
+  --init-command="SET SESSION sql_mode='STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE'" \
+  -e "INSERT INTO klines_m5 VALUES ('strict-zero','STRICT','0000-00-00 00:00:00','2026-01-01 00:00:01')"; then
+  echo 'strict session unexpectedly accepted zero date' >&2; exit 1
+fi
+docker exec "$container" mysql -uroot -proot petrosa_crypto \
+  --init-command="SET SESSION sql_mode=''" \
+  -e "INSERT INTO klines_m5 VALUES ('empty-zero','EMPTY','0000-00-00 00:00:00','2026-01-01 00:00:01')"
 echo 'step 7: rollback drops both unique indexes and duplicate insert is accepted'
 docker exec -i "$container" mysql -uroot -proot petrosa_crypto \
   < "$(dirname "$0")/008_rollback_klines_m1_m15_unique.sql"
+docker exec "$container" mysql -uroot -proot petrosa_crypto \
+  -e "INSERT INTO klines_m1 VALUES ('x5','XLMUSDT','2026-01-01 00:00:00','2026-01-01 00:00:03')"
 echo 'tier1 rehearsal: PASS'
