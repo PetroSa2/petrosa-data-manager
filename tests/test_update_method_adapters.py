@@ -130,24 +130,38 @@ class TestMySQLAdapterUpdate:
         )
         assert rowcount == 1
         eth = next(
-            row for row in positions_adapter.query_range("positions", datetime.min, datetime.max)
+            row
+            for row in positions_adapter.query_range(
+                "positions", datetime.min, datetime.max
+            )
             if row["symbol"] == "ETHUSDT"
         )
         assert eth["updated_at"] == datetime(2026, 8, 25, 6, 0)
 
     def test_update_z_and_naive_values_are_supported(self, positions_adapter):
-        assert positions_adapter.update(
-            "positions", {"symbol": "ETHUSDT"}, {"updated_at": "2026-08-25T06:00:00Z"}
-        ) == 1
-        assert positions_adapter.update(
-            "positions", {"symbol": "ETHUSDT"}, {"updated_at": "2026-08-25T07:00:00"}
-        ) == 1
+        assert (
+            positions_adapter.update(
+                "positions",
+                {"symbol": "ETHUSDT"},
+                {"updated_at": "2026-08-25T06:00:00Z"},
+            )
+            == 1
+        )
+        assert (
+            positions_adapter.update(
+                "positions",
+                {"symbol": "ETHUSDT"},
+                {"updated_at": "2026-08-25T07:00:00"},
+            )
+            == 1
+        )
 
     def test_update_invalid_temporal_value_is_rejected(self, positions_adapter):
-        with pytest.raises(TemporalValueError, match="updated_at"):
+        with pytest.raises(TemporalValueError) as exc_info:
             positions_adapter.update(
                 "positions", {"symbol": "ETHUSDT"}, {"updated_at": "not-a-date"}
             )
+        assert "updated_at" in str(exc_info.value)
 
 
 class TestMongoDBAdapterUpdate:
