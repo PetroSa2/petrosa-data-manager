@@ -88,6 +88,7 @@ class DataManagerApp:
         self.execution_events_consumer: ExecutionEventsConsumer | None = None
         self.pnl_consumer: PnlConsumer | None = None
         self.api_server_task: asyncio.Task | None = None
+        self.loop_lag_monitor_task: asyncio.Task | None = None
         self.leader_election: LeaderElectionManager | None = None
         self.backfill_orchestrator: BackfillOrchestrator | None = None
         self.ingest_evaluator = None  # P2.2 (#593) — set in start()
@@ -143,6 +144,23 @@ class DataManagerApp:
         except Exception as e:
             logger.warning(f"Failed to unwire route publishers: {e}")
 
+    def _start_loop_lag_monitor(self) -> None:
+        """Start optional event-loop diagnostics (``DM_LOOP_LAG_MONITOR``, #370).
+
+        Called first in ``start()`` so that stalls during startup, such as the
+        MySQL connect and table creation in database initialization, are
+        measured too, not just steady-state traffic.
+        """
+        if not constants.DM_LOOP_LAG_MONITOR:
+            return
+
+        from data_manager.utils.event_loop_monitor import monitor_event_loop_lag
+
+        self.loop_lag_monitor_task = asyncio.create_task(
+            monitor_event_loop_lag(stop_event=self._shutdown_event)
+        )
+        logger.info("Event-loop lag monitor enabled")
+
     async def start(self) -> None:
         """Start all application components."""
         logger.info(
@@ -152,6 +170,8 @@ class DataManagerApp:
                 "environment": constants.ENVIRONMENT,
             },
         )
+
+        self._start_loop_lag_monitor()
 
         # Start Prometheus metrics server
         try:
@@ -503,6 +523,13 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
+        if self.loop_lag_monitor_task:
+            self.loop_lag_monitor_task.cancel()
+            try:
+                await self.loop_lag_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self.loop_lag_monitor_task = None
 
         # Flush telemetry first
         try:

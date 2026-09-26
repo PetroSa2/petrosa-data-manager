@@ -14,7 +14,7 @@ except ImportError:
     from datetime import timezone
 
     UTC = timezone.utc  # noqa: UP017
-from typing import Any
+from typing import Any, cast
 
 import constants
 from data_manager.db import get_adapter
@@ -90,8 +90,7 @@ class DatabaseManager:
 
             logger.info("Connecting to MySQL...")
             try:
-                self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-                self.mysql_adapter.connect()
+                self.mysql_adapter = await self._connect_mysql_adapter()
                 self._stats["mysql"]["connection_count"] += 1
                 self._stats["mysql"]["last_connected"] = datetime.now(UTC)
                 logger.info("MySQL connection established")
@@ -136,7 +135,7 @@ class DatabaseManager:
 
         if self.mysql_adapter:
             try:
-                self.mysql_adapter.disconnect()
+                await asyncio.to_thread(self.mysql_adapter.disconnect)
                 self._stats["mysql"]["last_disconnected"] = datetime.now(UTC)
                 logger.info("MySQL disconnected")
             except Exception as e:
@@ -248,6 +247,20 @@ class DatabaseManager:
             except Exception as e:
                 logger.error(f"Error in health monitoring: {e}")
 
+    async def _connect_mysql_adapter(self) -> MySQLAdapter:
+        """Create and connect a MySQL adapter without blocking the event loop.
+
+        ``connect()`` opens a pooled engine, runs ``SELECT 1`` and creates the
+        tables, all synchronously, so it runs in a worker thread (#370). The
+        adapter is returned only once it is connected. The caller then
+        publishes it, so while the thread runs, other coroutines keep seeing
+        the previous ``mysql_adapter`` (or None) instead of a half-initialized
+        one whose tables are still being defined.
+        """
+        adapter = cast(MySQLAdapter, get_adapter("mysql", constants.MYSQL_URI))
+        await asyncio.to_thread(adapter.connect)
+        return adapter
+
     async def _reconnect_mysql(self) -> None:
         """Reconnect to MySQL with exponential backoff."""
         if self._mysql_reconnect_attempts >= constants.DB_RECONNECT_MAX_ATTEMPTS:
@@ -265,8 +278,7 @@ class DatabaseManager:
             await asyncio.sleep(backoff_delay)
 
             # Attempt reconnection
-            self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-            self.mysql_adapter.connect()
+            self.mysql_adapter = await self._connect_mysql_adapter()
 
             self._stats["mysql"]["connection_count"] += 1
             self._stats["mysql"]["last_connected"] = datetime.now(UTC)
