@@ -252,6 +252,9 @@ DEFAULT_TREND_WINDOW = int(os.getenv("DEFAULT_TREND_WINDOW", "20"))
 # Health Check Configuration
 HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "9090"))
+READINESS_MONGO_TIMEOUT_SECONDS = float(
+    os.getenv("READINESS_MONGO_TIMEOUT_SECONDS", "1.0")
+)
 
 # OpenTelemetry Configuration
 OTEL_ENABLED = os.getenv("OTEL_ENABLED", "true").lower() == "true"

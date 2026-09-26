@@ -66,9 +66,12 @@ class RecordingMySQLAdapter:
         if self.delay_s:
             time.sleep(self.delay_s)
 
-    def query_range(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        self._blocking_call("query_range")
-        return [dict(row) for row in self.rows]
+    def _matching(self, filter_: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self.rows
+            if all(row.get(key) == value for key, value in filter_.items())
+        ]
 
     def write(self, model_instances: list[Any], collection: str) -> WriteResult:
         self._blocking_call("write")
@@ -76,13 +79,16 @@ class RecordingMySQLAdapter:
 
     def update(self, collection: str, filter_: dict, data: dict) -> int:
         self._blocking_call("update")
-        return 1
+        return len(self._matching(filter_))
+
+    def delete(self, collection: str, filter_: dict) -> int:
+        self._blocking_call("delete")
+        return len(self._matching(filter_))
 
     def get_column_names(self, collection: str) -> set[str]:
+        # May reflect the table on first use, so it is blocking I/O too.
+        self._blocking_call("get_column_names")
         return POSITION_COLUMNS
-
-    def record_ignored_fields(self, collection: str, fields: list[str]) -> None:
-        pass
 
     def called_on_loop(self) -> list[str]:
         return [name for name, on_loop in self.calls if on_loop]
@@ -138,9 +144,7 @@ class TestGenericMySQLRoutesRunOffLoop:
         assert mysql_adapter.call_names() == ["write"]
         assert mysql_adapter.called_on_loop() == []
 
-    def test_update_existing_record_queries_and_updates_off_loop(
-        self, client, mysql_adapter
-    ):
+    def test_update_existing_record_runs_off_loop(self, client, mysql_adapter):
         response = client.put(
             "/api/v1/mysql/positions",
             json={"filter": {"symbol": "BTCUSDT"}, "data": {"quantity": 3.0}},
@@ -148,10 +152,11 @@ class TestGenericMySQLRoutesRunOffLoop:
 
         assert response.status_code == 200, response.text
         assert response.json()["updated_count"] == 1
-        assert mysql_adapter.call_names() == ["query_range", "update"]
+        assert response.json()["upserted"] is False
+        assert mysql_adapter.call_names() == ["get_column_names", "update"]
         assert mysql_adapter.called_on_loop() == []
 
-    def test_upsert_without_match_queries_and_writes_off_loop(
+    def test_upsert_without_match_updates_then_writes_off_loop(
         self, client, mysql_adapter
     ):
         response = client.put(
@@ -165,17 +170,18 @@ class TestGenericMySQLRoutesRunOffLoop:
 
         assert response.status_code == 200, response.text
         assert response.json()["updated_count"] == 1
-        assert mysql_adapter.call_names() == ["query_range", "write"]
+        assert response.json()["upserted"] is True
+        assert mysql_adapter.call_names() == ["get_column_names", "update", "write"]
         assert mysql_adapter.called_on_loop() == []
 
-    def test_delete_queries_off_loop(self, client, mysql_adapter):
+    def test_delete_runs_off_loop(self, client, mysql_adapter):
         response = client.request(
             "DELETE", "/api/v1/mysql/positions", json={"filter": {"side": "SHORT"}}
         )
 
         assert response.status_code == 200, response.text
         assert response.json()["deleted_count"] == 1
-        assert mysql_adapter.call_names() == ["query_range"]
+        assert mysql_adapter.call_names() == ["delete"]
         assert mysql_adapter.called_on_loop() == []
 
     def test_batch_insert_update_delete_run_off_loop(self, client, mysql_adapter):
@@ -200,7 +206,13 @@ class TestGenericMySQLRoutesRunOffLoop:
             {"type": "update", "count": 1},
             {"type": "delete", "count": 1},
         ]
-        assert mysql_adapter.call_names() == ["write", "query_range", "query_range"]
+        # get_column_names is the up-front validation of the update operation.
+        assert mysql_adapter.call_names() == [
+            "get_column_names",
+            "write",
+            "update",
+            "delete",
+        ]
         assert mysql_adapter.called_on_loop() == []
 
     def test_signals_dual_write_runs_off_loop(self, client, mysql_adapter):

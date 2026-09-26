@@ -23,21 +23,23 @@ Line numbers point at the fixed call sites.
 |---|---|---|---|
 | 1 | `data_manager/db/database_manager.py:261` (`_connect_mysql_adapter`, used by `initialize()` at `:93` and `_reconnect_mysql()` at `:281`) | `MySQLAdapter.connect()`: engine creation, `SELECT 1`, `metadata.create_all` | Startup (the API is already serving while databases initialize). Since #400, also every `DB_HEALTH_CHECK_INTERVAL` (30 s) while MySQL is unavailable, until `DB_RECONNECT_MAX_ATTEMPTS` |
 | 2 | `data_manager/db/database_manager.py:138` (`shutdown()`) | `MySQLAdapter.disconnect()` | Shutdown |
-| 3 | `data_manager/api/routes/generic.py:201` (`_dual_write_signals_to_mysql`) | `write(records, "signals")` | Every `POST /api/v1/mongodb/signals` |
-| 4 | `data_manager/api/routes/generic.py:623` (`insert_records`) | `write()` | `POST /api/v1/mysql/{collection}` |
-| 5 | `data_manager/api/routes/generic.py:714`, `:757`, `:788` (`update_records`) | `query_range()` over the whole table, then `update()` or `write()` | `PUT /api/v1/mysql/{collection}` (positions, daily_pnl) |
-| 6 | `data_manager/api/routes/generic.py:843` (`delete_records`) | `query_range()` over the whole table | `DELETE /api/v1/mysql/{collection}` |
-| 7 | `data_manager/api/routes/generic.py:929`, `:944`, `:968` (`batch_operations`) | `write()`, `query_range()` | `POST /api/v1/mysql/{collection}/batch` |
+| 3 | `data_manager/api/routes/generic.py:289` (`_dual_write_signals_to_mysql`) | `write(records, "signals")` | Every `POST /api/v1/mongodb/signals` |
+| 4 | `data_manager/api/routes/generic.py:722` (`insert_records`) | `write()` | `POST /api/v1/mysql/{collection}` |
+| 5 | `data_manager/api/routes/generic.py` update, delete and batch handlers | Formerly `query_range()` over the whole table, then `update()` or `write()` | `PUT`, `DELETE` and `POST .../batch` on `/api/v1/mysql/{collection}` (positions, daily_pnl) |
+
+#5 was fixed separately by #396 (data-manager#378), which replaced those
+handlers. Their MySQL calls now run through `asyncio.to_thread` in
+`_apply_update` (`generic.py:123`, `:135`, `:141`), `_apply_delete` (`:155`),
+the column validation (`:800`, `:1053`) and `_batch_insert` (`:1084`). This
+change covers #1–#4.
 
 On 2026-09-26 the live pod was still serving `/api/v1/mysql/positions` and
-`/api/v1/mongodb/signals` (seen in `gateway_auth_unverified` log lines), so #3
-and #5 were still on the request path after #399 and #400. `update_records`
-reads the whole table with `query_range(datetime.min, datetime.max)` and
-filters in Python, so its cost grows with the table.
+`/api/v1/mongodb/signals` (seen in `gateway_auth_unverified` log lines), so
+these paths were still hit after #399 and #400.
 
 ## Fix
 
-Every call above now runs in a worker thread through `asyncio.to_thread`.
+Every call in #1–#4 now runs in a worker thread through `asyncio.to_thread`.
 
 - MySQL connects go through `DatabaseManager._connect_mysql_adapter()`. It
   returns the new adapter only after `connect()` has finished, and only then

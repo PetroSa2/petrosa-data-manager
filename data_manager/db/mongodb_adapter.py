@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 try:
     from motor import motor_asyncio
-    from pymongo import ASCENDING, DESCENDING, IndexModel
+    from pymongo import ASCENDING, DESCENDING, IndexModel, ReturnDocument
     from pymongo.errors import DuplicateKeyError, PyMongoError
 
     MOTOR_AVAILABLE = True
@@ -253,6 +253,100 @@ class MongoDBAdapter(BaseAdapter):
             return int(result.modified_count)
         except PyMongoError as e:
             raise DatabaseError(f"Failed to update {collection}: {e}") from e
+
+    async def upsert_one(
+        self, collection: str, filter_dict: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Atomically update the one document matching ``filter_dict``, or insert it.
+
+        One ``update_one(..., upsert=True)``, so there is no read-then-write
+        window (data-manager#378). ``created_at`` is stamped with
+        ``$setOnInsert`` only when ``data`` has none: naming a path in both
+        ``$set`` and ``$setOnInsert`` is a MongoDB conflict error.
+
+        Concurrent upserts are race-free only when the filter fields have a
+        unique index. The losing insert then fails with a duplicate-key error
+        and is retried once, which updates the winner's document.
+
+        Returns ``{"matched", "modified", "upserted_id"}``.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+        query = self._build_equality_query(filter_dict)
+        if not query:
+            raise DatabaseError("upsert_one() refused: empty filter")
+        set_data = self._prepare_for_bson(dict(data))
+        update: dict[str, Any] = {"$set": set_data}
+        if "created_at" not in set_data:
+            update["$setOnInsert"] = {"created_at": datetime.now(UTC)}
+        coll = self.db[collection]
+        try:
+            try:
+                result = await coll.update_one(query, update, upsert=True)
+            except DuplicateKeyError:
+                result = await coll.update_one(query, update, upsert=True)
+        except PyMongoError as e:
+            raise DatabaseError(f"Failed to upsert {collection}: {e}") from e
+        return {
+            "matched": int(result.matched_count),
+            "modified": int(result.modified_count),
+            "upserted_id": (
+                str(result.upserted_id) if result.upserted_id is not None else None
+            ),
+        }
+
+    async def find_one_and_update(
+        self,
+        collection: str,
+        filter_dict: dict[str, Any],
+        set_data: dict[str, Any],
+        *,
+        upsert: bool = False,
+    ) -> dict[str, Any] | None:
+        """Equality compare-and-set: ``$set`` ``set_data`` if a document matches.
+
+        One ``findOneAndUpdate`` returning the document after the update
+        (``_id`` removed), or ``None`` when nothing matched. With ``upsert``, a
+        duplicate-key error means a document with the same unique key exists
+        but does not hold the expected values: that is a CAS conflict, so it
+        also returns ``None`` (the lease API treats it the same way).
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+        query = self._build_equality_query(filter_dict)
+        if not query:
+            raise DatabaseError("find_one_and_update() refused: empty filter")
+        try:
+            document = await self.db[collection].find_one_and_update(
+                query,
+                {"$set": self._prepare_for_bson(dict(set_data))},
+                upsert=upsert,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError as e:
+            if upsert:
+                return None
+            raise DatabaseError(f"Failed to compare-and-set {collection}: {e}") from e
+        except PyMongoError as e:
+            raise DatabaseError(f"Failed to compare-and-set {collection}: {e}") from e
+        if document:
+            document.pop("_id", None)
+        return document
+
+    async def delete_many(self, collection: str, filter_dict: dict[str, Any]) -> int:
+        """Delete every document matching a flat equality filter; return the count.
+
+        An empty filter is refused: this never deletes a whole collection.
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+        query = self._build_equality_query(filter_dict)
+        if not query:
+            raise DatabaseError("delete_many() refused: empty filter")
+        try:
+            return int((await self.db[collection].delete_many(query)).deleted_count)
+        except PyMongoError as e:
+            raise DatabaseError(f"Failed to delete from {collection}: {e}") from e
 
     async def query_range(
         self,
