@@ -50,7 +50,7 @@ Location: `petrosa_k8s/k8s/shared/`
 The following secrets are already configured in `petrosa-sensitive-credentials`:
 
 ```yaml
-# MySQL (External Database)
+# MySQL historic reference copy (External Database)
 MYSQL_URI: mysql+pymysql://user:pass@petrosa_crypto.mysql.dbaas.com.br:3306/petrosa_crypto
 
 # MongoDB (External/Atlas)
@@ -68,16 +68,16 @@ BINANCE_API_SECRET: <secret>
 
 ## 🌐 External Services
 
-### MySQL Database
+### MySQL Database (historic reference copy)
 - **Type**: External (dbaas.com.br)
 - **Connection**: Via `MYSQL_URI` from secrets
-- **Usage**: Metadata, audit logs, health metrics, backfill jobs, catalog
+- **Usage**: Historic/research data and metadata copies; never the live path
 - **Tables**: Auto-created by adapter on first connection
 
-### MongoDB Database
+### MongoDB Database (operational store)
 - **Type**: External (MongoDB Atlas or internal service)
 - **Connection**: Via `mongodb-url` from secrets
-- **Usage**: Time series data (candles, trades, depth, analytics)
+- **Usage**: All live-path time series data (candles, trades, depth, analytics)
 - **Collections**: Auto-created dynamically per symbol
 
 ### NATS Server
@@ -141,7 +141,7 @@ kubectl rollout status deployment/petrosa-data-manager -n petrosa-apps --insecur
 
 ## ✅ Pre-Deployment Checklist
 
-- [x] MySQL database accessible (external: dbaas.com.br)
+- [x] MySQL historic copy accessible (external: dbaas.com.br)
 - [x] MongoDB database accessible (external or Atlas)
 - [x] NATS server running in `nats` namespace
 - [x] `petrosa-sensitive-credentials` secret exists in `petrosa-apps` namespace
@@ -181,7 +181,7 @@ kubectl get svc petrosa-data-manager -n petrosa-apps --insecure-skip-tls-verify
 kubectl logs -l app=data-manager -n petrosa-apps --tail=100 --insecure-skip-tls-verify
 
 # Expected log messages:
-# ✅ "Connected to MySQL database"
+# ✅ "Connected to MySQL historic copy"
 # ✅ "Connected to MongoDB database"
 # ✅ "Successfully connected to NATS"
 # ✅ "Repositories initialized successfully"
@@ -201,7 +201,7 @@ curl http://localhost:8000/health/liveness
 # Expected: {"status":"ok","timestamp":"...","version":"1.0.0"}
 
 curl http://localhost:8000/health/readiness
-# Expected: {"ready":true,"components":{"mysql":"healthy","mongodb":"healthy",...}}
+# Expected: {"ready":true,"components":{"mysql":"historic","mongodb":"healthy",...}}
 ```
 
 ### 5. Verify Database Connections
@@ -584,7 +584,7 @@ http://petrosa-data-manager:80
 ✅ **Application**: petrosa-data-manager (petrosa-apps namespace)
 ✅ **Configuration**: ConfigMap + Shared ConfigMap
 ✅ **Secrets**: Uses existing petrosa-sensitive-credentials
-✅ **Database**: External MySQL + MongoDB (already configured)
+✅ **Database**: External MongoDB operational store + MySQL historic copy (already configured)
 ✅ **Message Bus**: NATS (already deployed)
 ✅ **Scaling**: HPA 3-10 replicas
 ✅ **Monitoring**: Prometheus metrics exposed

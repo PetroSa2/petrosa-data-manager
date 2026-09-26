@@ -3,14 +3,16 @@ FastAPI application factory.
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
 
 import constants
+from data_manager.api.gateway_auth import require_service
 from data_manager.api.middleware import MetricsMiddleware, RequestLoggerMiddleware
 from data_manager.api.routes import (
     analysis,
@@ -29,6 +31,7 @@ from data_manager.api.routes import (
     fidelity,
     generic,
     health,
+    leases,
     leverage_bounds,
     lifecycle,
     pnl,
@@ -38,6 +41,7 @@ from data_manager.api.routes import (
     strategies,
     strategy_timeline,
     system_trades,
+    trading_state,
 )
 
 try:
@@ -69,6 +73,7 @@ def create_app() -> FastAPI:
         description="Data integrity, intelligence, and distribution hub",
         version=constants.SERVICE_VERSION,
         lifespan=lifespan,
+        dependencies=[Depends(require_service)],
     )
 
     # Add custom middleware (order matters - first added is outermost)
@@ -83,8 +88,12 @@ def create_app() -> FastAPI:
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=[
+            origin.strip()
+            for origin in os.environ.get("DM_CORS_ORIGINS", "").split(",")
+            if origin.strip()
+        ],
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -182,6 +191,8 @@ def create_app() -> FastAPI:
     app.include_router(strategies.router, tags=["Strategies"])
 
     # New API routes
+    app.include_router(leases.router, tags=["Leases"])
+    app.include_router(trading_state.router, tags=["Trading State"])
     app.include_router(generic.router, tags=["Generic CRUD"])
 
     # Root endpoint

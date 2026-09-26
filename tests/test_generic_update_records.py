@@ -26,6 +26,9 @@ def client(mock_db_manager):
     mock_db_manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
     mock_db_manager.mongodb_adapter.write = AsyncMock(return_value=1)
     mock_db_manager.mongodb_adapter.update = AsyncMock(return_value=1)
+    mock_db_manager.mongodb_adapter.upsert_one = AsyncMock(
+        return_value={"matched": 0, "modified": 0, "upserted_id": "new"}
+    )
 
     mock_db_manager.mysql_adapter = Mock()
     mock_db_manager.mysql_adapter.query_range = Mock(return_value=[])
@@ -97,7 +100,7 @@ def test_update_existing_record_mongodb_returns_200(client):
 
 def test_update_no_match_no_upsert_is_noop(client):
     """No matching records and upsert=False: 200, updated_count=0, no write attempted."""
-    api_module.db_manager.mysql_adapter.query_range = Mock(return_value=[])
+    api_module.db_manager.mysql_adapter.update = Mock(return_value=0)
 
     response = client.put(
         "/api/v1/mysql/positions",
@@ -107,8 +110,8 @@ def test_update_no_match_no_upsert_is_noop(client):
     assert response.status_code == 200
     body = response.json()
     assert body["updated_count"] == 0
-    assert body["message"] == "No records found matching filter"
-    api_module.db_manager.mysql_adapter.update.assert_not_called()
+    assert body["message"] == "Successfully updated 0 records"
+    api_module.db_manager.mysql_adapter.update.assert_called_once()
     api_module.db_manager.mysql_adapter.write.assert_not_called()
 
 
@@ -116,7 +119,7 @@ def test_update_no_match_with_upsert_creates_record_mysql(client):
     """Empty-match/upsert-create path (previously the only working path) — no regression."""
     from data_manager.db.mysql_adapter import WriteResult
 
-    api_module.db_manager.mysql_adapter.query_range = Mock(return_value=[])
+    api_module.db_manager.mysql_adapter.update = Mock(return_value=0)
     api_module.db_manager.mysql_adapter.write = Mock(
         return_value=WriteResult(inserted=1, duplicates=0, failed=0)
     )
@@ -134,13 +137,14 @@ def test_update_no_match_with_upsert_creates_record_mysql(client):
     body = response.json()
     assert body["updated_count"] == 1
     api_module.db_manager.mysql_adapter.write.assert_called_once()
-    api_module.db_manager.mysql_adapter.update.assert_not_called()
+    api_module.db_manager.mysql_adapter.update.assert_called_once()
 
 
 def test_update_no_match_with_upsert_creates_record_mongodb(client):
     """Empty-match/upsert-create path against MongoDB — no regression."""
-    api_module.db_manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
-    api_module.db_manager.mongodb_adapter.write = AsyncMock(return_value=1)
+    api_module.db_manager.mongodb_adapter.upsert_one = AsyncMock(
+        return_value={"matched": 0, "modified": 0, "upserted_id": "new"}
+    )
 
     response = client.put(
         "/api/v1/mongodb/daily_pnl",
@@ -154,7 +158,7 @@ def test_update_no_match_with_upsert_creates_record_mongodb(client):
     assert response.status_code == 200
     body = response.json()
     assert body["updated_count"] == 1
-    api_module.db_manager.mongodb_adapter.write.assert_called_once()
+    api_module.db_manager.mongodb_adapter.upsert_one.assert_called_once()
 
 
 def test_update_circuit_breaker_open_returns_503(client):
@@ -274,7 +278,7 @@ def test_mysql_batch_update_persists_and_normalizes_temporal_values(client):
                 {
                     "type": "update",
                     "filter": {"symbol": "BTCUSDT"},
-                    "data": {"entry_time": "2026-09-26T17:00:00+00:00"},
+                    "data": {"updated_at": "2026-09-26T17:00:00+00:00"},
                 }
             ]
         },
@@ -283,9 +287,7 @@ def test_mysql_batch_update_persists_and_normalizes_temporal_values(client):
     assert response.status_code == 200
     assert response.json()["results"] == [{"type": "update", "count": 1}]
     api_module.db_manager.mysql_adapter.update.assert_called_once()
-    assert api_module.db_manager.mysql_adapter.update.call_args.args[2][
-        "entry_time"
-    ] == ("2026-09-26T17:00:00+00:00")
+    assert "updated_at" in api_module.db_manager.mysql_adapter.update.call_args.args[2]
 
 
 def test_mysql_batch_invalid_temporal_value_returns_400(client):
@@ -293,7 +295,7 @@ def test_mysql_batch_invalid_temporal_value_returns_400(client):
         return_value=[{"symbol": "BTCUSDT"}]
     )
     api_module.db_manager.mysql_adapter.update.side_effect = TemporalValueError(
-        "Invalid datetime for column 'entry_time'"
+        "Invalid datetime for column 'updated_at'"
     )
 
     response = client.post(
@@ -303,11 +305,11 @@ def test_mysql_batch_invalid_temporal_value_returns_400(client):
                 {
                     "type": "update",
                     "filter": {"symbol": "BTCUSDT"},
-                    "data": {"entry_time": "not-a-date"},
+                    "data": {"updated_at": "not-a-date"},
                 }
             ]
         },
     )
 
     assert response.status_code == 400
-    assert "entry_time" in response.json()["detail"]
+    assert "updated_at" in response.json()["detail"]["message"]

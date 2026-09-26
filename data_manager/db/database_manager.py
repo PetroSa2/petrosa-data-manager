@@ -3,6 +3,7 @@ Database manager to coordinate MySQL and MongoDB adapters.
 """
 
 import asyncio
+import inspect
 import logging
 import time
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ except ImportError:
     from datetime import timezone
 
     UTC = timezone.utc  # noqa: UP017
-from typing import Any
+from typing import Any, cast
 
 import constants
 from data_manager.db import get_adapter
@@ -75,26 +76,37 @@ class DatabaseManager:
             logger.info("Initializing database connections...")
             self._connection_start_time = time.time()
 
-            # Initialize MySQL adapter (synchronous)
-            logger.info("Connecting to MySQL...")
-            self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-            self.mysql_adapter.connect()
-            self._stats["mysql"]["connection_count"] += 1
-            self._stats["mysql"]["last_connected"] = datetime.now(UTC)
-            logger.info("MySQL connection established")
-
             # Initialize MongoDB adapter (async)
             logger.info("Connecting to MongoDB...")
-            self.mongodb_adapter = get_adapter("mongodb", constants.MONGODB_URL)
+            self.mongodb_adapter = get_adapter(
+                "mongodb",
+                constants.MONGODB_URL,
+                database_name=constants.CANDLE_MONGO_DATABASE,
+            )
             self.mongodb_adapter.connect()
             self._stats["mongodb"]["connection_count"] += 1
             self._stats["mongodb"]["last_connected"] = datetime.now(UTC)
             logger.info("MongoDB connection established")
 
+            logger.info("Connecting to MySQL...")
+            try:
+                self.mysql_adapter = await self._connect_mysql_adapter()
+                self._stats["mysql"]["connection_count"] += 1
+                self._stats["mysql"]["last_connected"] = datetime.now(UTC)
+                logger.info("MySQL connection established")
+            except Exception as e:
+                self.mysql_adapter = None
+                self._stats["mysql"]["error_count"] += 1
+                logger.warning("mysql_unavailable_at_start", extra={"error": str(e)})
+
             # Initialize repositories
             self.configuration = ConfigurationRepository(
                 mysql_adapter=self.mysql_adapter, mongodb_adapter=self.mongodb_adapter
             )
+            for collection in ("positions", "daily_pnl"):
+                result = self.mongodb_adapter.ensure_indexes(collection)
+                if inspect.isawaitable(result):
+                    await result
 
             self._initialized = True
             logger.info("All database connections initialized successfully")
@@ -123,7 +135,7 @@ class DatabaseManager:
 
         if self.mysql_adapter:
             try:
-                self.mysql_adapter.disconnect()
+                await asyncio.to_thread(self.mysql_adapter.disconnect)
                 self._stats["mysql"]["last_disconnected"] = datetime.now(UTC)
                 logger.info("MySQL disconnected")
             except Exception as e:
@@ -181,9 +193,17 @@ class DatabaseManager:
         }
 
     def is_healthy(self) -> bool:
-        """Check if all databases are connected."""
+        """Check if the operational store is healthy."""
+        return self.mongo_healthy()
+
+    def mongo_healthy(self) -> bool:
+        """Check whether MongoDB, the operational store, is connected."""
         health = self.health_check()
-        return health["mysql"]["connected"] and health["mongodb"]["connected"]
+        return health["mongodb"]["connected"]
+
+    def mysql_healthy(self) -> bool:
+        """Check whether the optional MySQL store is connected."""
+        return self.health_check()["mysql"]["connected"]
 
     def __enter__(self):
         """Context manager entry."""
@@ -211,8 +231,7 @@ class DatabaseManager:
                 await asyncio.sleep(constants.DB_HEALTH_CHECK_INTERVAL)
                 self._last_health_check = datetime.now(UTC)
 
-                # Check MySQL connection
-                if self.mysql_adapter and not self.mysql_adapter.is_connected():
+                if self.mysql_adapter is None or not self.mysql_adapter.is_connected():
                     logger.warning("MySQL connection lost, attempting reconnection...")
                     await self._reconnect_mysql()
 
@@ -227,6 +246,20 @@ class DatabaseManager:
                 break
             except Exception as e:
                 logger.error(f"Error in health monitoring: {e}")
+
+    async def _connect_mysql_adapter(self) -> MySQLAdapter:
+        """Create and connect a MySQL adapter without blocking the event loop.
+
+        ``connect()`` opens a pooled engine, runs ``SELECT 1`` and creates the
+        tables, all synchronously, so it runs in a worker thread (#370). The
+        adapter is returned only once it is connected. The caller then
+        publishes it, so while the thread runs, other coroutines keep seeing
+        the previous ``mysql_adapter`` (or None) instead of a half-initialized
+        one whose tables are still being defined.
+        """
+        adapter = cast(MySQLAdapter, get_adapter("mysql", constants.MYSQL_URI))
+        await asyncio.to_thread(adapter.connect)
+        return adapter
 
     async def _reconnect_mysql(self) -> None:
         """Reconnect to MySQL with exponential backoff."""
@@ -245,8 +278,7 @@ class DatabaseManager:
             await asyncio.sleep(backoff_delay)
 
             # Attempt reconnection
-            self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-            self.mysql_adapter.connect()
+            self.mysql_adapter = await self._connect_mysql_adapter()
 
             self._stats["mysql"]["connection_count"] += 1
             self._stats["mysql"]["last_connected"] = datetime.now(UTC)
@@ -277,7 +309,11 @@ class DatabaseManager:
             await asyncio.sleep(backoff_delay)
 
             # Attempt reconnection
-            self.mongodb_adapter = get_adapter("mongodb", constants.MONGODB_URL)
+            self.mongodb_adapter = get_adapter(
+                "mongodb",
+                constants.MONGODB_URL,
+                database_name=constants.CANDLE_MONGO_DATABASE,
+            )
             self.mongodb_adapter.connect()
 
             self._stats["mongodb"]["connection_count"] += 1

@@ -41,7 +41,7 @@ The unified pipeline has four layers:
 │  │ BackfillOrchestrator                              │    │
 │  │ 1. Fetch candles from Binance API                 │    │
 │  │ 2. Chunk into 1000-candle batches                 │    │
-│  │ 3. Insert via CandleRepository (dual MySQL+Mongo) │    │
+│  │ 3. Insert via CandleRepository (Mongo + historic copy) │    │
 │  └──────────────────────────────────────────────────┘    │
 ├──────────────────────────────────────────────────────────┤
 │  Layer 4: Readiness Gate & Observability                │
@@ -113,7 +113,7 @@ Both detectors use dedup to avoid excessive backfill requests:
 
 The candle read path has a kill-switch (`CANDLE_READ_FALLBACK_ENABLED`):
 
-- When `CANDLE_READ_FALLBACK_ENABLED=true` and the primary (MongoDB) read fails, the system falls back to MySQL
+- When `CANDLE_READ_FALLBACK_ENABLED=true` and the operational MongoDB read fails, the system falls back to the historic MySQL copy
 - The fallback is tracked via `data_manager_candle_read_fallbacks_total{primary,operation}` counter
 - This is a **safety net**, not a substitute for gap filling
 

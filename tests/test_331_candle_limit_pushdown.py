@@ -39,13 +39,15 @@ def client(mock_db_manager):
 def _candle_row(hour: int) -> dict:
     return {
         "timestamp": datetime(2026, 1, 1, hour, tzinfo=UTC),
-        "open": "1",
-        "high": "2",
-        "low": "0.5",
-        "close": "1.5",
+        "open_price": "1",
+        "high_price": "2",
+        "low_price": "0.5",
+        "close_price": "1.5",
         "volume": "10",
-        "quote_volume": None,
-        "trades_count": None,
+        "quote_asset_volume": "20",
+        "number_of_trades": 1,
+        "symbol": "BTCUSDT",
+        "interval": "1h",
     }
 
 

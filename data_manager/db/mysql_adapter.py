@@ -29,6 +29,7 @@ try:
         Text,
         create_engine,
     )
+    from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
     from sqlalchemy.engine import Engine
     from sqlalchemy.exc import IntegrityError, SQLAlchemyError
     from sqlalchemy.sql import and_, delete, func, select
@@ -159,6 +160,9 @@ class MySQLAdapter(BaseAdapter):
                     "connect_timeout": constants.DB_CONNECTION_TIMEOUT,
                     "read_timeout": constants.DB_CONNECTION_TIMEOUT,
                     "write_timeout": constants.DB_CONNECTION_TIMEOUT,
+                    "init_command": (
+                        f"SET SESSION sql_mode='{constants.MYSQL_SESSION_SQL_MODE}'"
+                    ),
                 }
             )
 
@@ -355,6 +359,61 @@ class MySQLAdapter(BaseAdapter):
             Column("received_at", DateTime, nullable=False),
             Index("idx_cio_decisions_strategy_timestamp", "strategy_id", "timestamp"),
             Index("idx_cio_decisions_timestamp", "timestamp"),
+        )
+
+        # Durable audit copies for event streams. MongoDB remains the primary
+        # consumer store; these tables are self-managed permanent archives.
+        event_table_args = {
+            "mysql_charset": "utf8mb4",
+            "mysql_collate": "utf8mb4_unicode_ci",
+        }
+        self.tables["execution_events"] = Table(
+            "execution_events",
+            self.metadata,
+            Column("event_key", String(191), primary_key=True),
+            Column("decision_id", String(128), nullable=False),
+            Column("strategy_id", String(128), nullable=False),
+            Column("order_id", String(128), nullable=False),
+            Column("event_type", String(32), nullable=False),
+            Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
+            Column("reason", Text),
+            Column("symbol", String(32)),
+            Column("side", String(16)),
+            Column("qty", Numeric(20, 8)),
+            Column("fill_qty", Numeric(20, 8)),
+            Column("fill_quantity", Numeric(20, 8)),
+            Column("price", Numeric(20, 8)),
+            Column("fill_price", Numeric(20, 8)),
+            Column("fill_time", MySQLDateTime(fsp=6)),
+            Column("fee", Numeric(20, 8)),
+            Column("fee_asset", String(16)),
+            Column("pnl", Numeric(20, 8)),
+            Column("subject", String(255)),
+            Column("payload", JSON, nullable=False),
+            Column("received_at", MySQLDateTime(fsp=6), nullable=False),
+            Index(
+                "idx_execution_events_decision_timestamp", "decision_id", "timestamp"
+            ),
+            **event_table_args,
+        )
+        self.tables["pnl_events"] = Table(
+            "pnl_events",
+            self.metadata,
+            Column("event_key", String(191), primary_key=True),
+            Column("decision_id", String(128), nullable=False),
+            Column("strategy_id", String(128), nullable=False),
+            Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
+            Column("pnl_kind", String(32), nullable=False),
+            Column("realized_pnl_usd", Numeric(20, 8)),
+            Column("unrealized_pnl_usd", Numeric(20, 8)),
+            Column("currency", String(16)),
+            Column("order_id", String(128)),
+            Column("position_id", String(128)),
+            Column("subject", String(255)),
+            Column("payload", JSON, nullable=False),
+            Column("received_at", MySQLDateTime(fsp=6), nullable=False),
+            Index("idx_pnl_events_decision_timestamp", "decision_id", "timestamp"),
+            **event_table_args,
         )
 
         # Create all tables
@@ -594,6 +653,19 @@ class MySQLAdapter(BaseAdapter):
         records: list[dict[str, Any]] = []
         for instance in model_instances:
             record = instance.model_dump()
+            if collection == "execution_events" and "event_key" not in record:
+                record["event_key"] = f"{record['order_id']}:{record['event_type']}"
+            elif collection == "pnl_events" and "event_key" not in record:
+                timestamp = record["timestamp"]
+                if isinstance(timestamp, datetime):
+                    timestamp_micro = int(timestamp.timestamp() * 1_000_000)
+                else:
+                    timestamp_micro = int(
+                        datetime.fromisoformat(str(timestamp)).timestamp() * 1_000_000
+                    )
+                record["event_key"] = (
+                    f"{record['decision_id']}:{record['pnl_kind']}:{timestamp_micro}"
+                )
             if "id" in table.c and not record.get("id"):
                 if isinstance(table.c["id"].type, sa.Integer):
                     # Auto-increment integer PK (e.g. the reflected `signals`
@@ -612,7 +684,10 @@ class MySQLAdapter(BaseAdapter):
         # klines tables carry `extracted_at`; use ON DUPLICATE KEY UPDATE to
         # avoid MySQL 5.x gap-lock contention that INSERT IGNORE causes on
         # unique-index conflicts (petrosa-data-manager#231).
-        uses_on_dup_key = "extracted_at" in table.c
+        uses_on_dup_key = "extracted_at" in table.c or collection in {
+            "execution_events",
+            "pnl_events",
+        }
 
         def _write_attempt() -> int:
             """Single write attempt — returns rowcount or raises."""
@@ -624,9 +699,17 @@ class MySQLAdapter(BaseAdapter):
                 try:
                     if uses_on_dup_key:
                         ins = mysql_insert(table)
-                        stmt = ins.on_duplicate_key_update(
-                            extracted_at=ins.inserted.extracted_at
-                        )
+                        if collection in {"execution_events", "pnl_events"}:
+                            updates = {
+                                column.name: getattr(ins.inserted, column.name)
+                                for column in table.columns
+                                if not column.primary_key
+                            }
+                            stmt = ins.on_duplicate_key_update(**updates)
+                        else:
+                            stmt = ins.on_duplicate_key_update(
+                                extracted_at=ins.inserted.extracted_at
+                            )
                     else:
                         stmt = table.insert().prefix_with("IGNORE")
                     result = conn.execute(stmt, records)
@@ -952,6 +1035,7 @@ class MySQLAdapter(BaseAdapter):
         start: datetime | None = None,
         end: datetime | None = None,
         symbol: str | None = None,
+        max_count: int | None = None,
     ) -> int:
         """Get count of records matching criteria."""
         if not self._connected:
@@ -986,6 +1070,44 @@ class MySQLAdapter(BaseAdapter):
         except Exception as e:
             self._record_read_failure(collection, "database_error")
             raise DatabaseError(f"Failed to count records in {collection}: {e}") from e
+
+    def delete(self, collection: str, filter_dict: dict[str, Any]) -> int:
+        """Delete the rows matching a flat equality ``filter_dict``; return the count.
+
+        Refuses an empty filter and operator-like entries. A filter key that
+        is not a column matches no rows, so this returns 0 without deleting,
+        as :meth:`find_paginated` does. Dropping that key from the WHERE
+        clause, as :meth:`update` does, would delete more rows than asked
+        (data-manager#378).
+        """
+        if not self._connected:
+            raise DatabaseError("Not connected to database")
+        if not filter_dict:
+            raise DatabaseError("delete() refused: empty filter")
+        table = self._get_table(collection)
+        conditions = []
+        for key, value in filter_dict.items():
+            if key.startswith("$") or isinstance(value, dict):
+                raise DatabaseError(
+                    "delete() refused: filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}: {value!r}"
+                )
+            if key not in table.c:
+                logger.warning(
+                    "delete() filter column %s does not exist on %s; 0 rows match",
+                    key,
+                    collection,
+                )
+                return 0
+            conditions.append(table.c[key] == value)
+        try:
+            engine = self._ensure_connected()
+            with engine.begin() as conn:
+                result = conn.execute(delete(table).where(and_(*conditions)))
+                return int(result.rowcount or 0)
+        except SQLAlchemyError as e:
+            self._record_write_failure(collection, "database_error")
+            raise DatabaseError(f"Failed to delete from {collection}: {e}") from e
 
     def find_paginated(
         self,

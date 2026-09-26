@@ -2,6 +2,7 @@
 Constants and configuration for the Petrosa Data Manager service.
 """
 
+import logging
 import os
 
 # Service information
@@ -46,6 +47,10 @@ MYSQL_PORT = int(os.getenv("MYSQL_PORT", os.getenv("POSTGRES_PORT", "3306")))
 MYSQL_USER = os.getenv("MYSQL_USER", os.getenv("POSTGRES_USER", "root"))
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", os.getenv("POSTGRES_PASSWORD", ""))
 MYSQL_DB = os.getenv("MYSQL_DB", os.getenv("POSTGRES_DB", "petrosa_data_manager"))
+MYSQL_SESSION_SQL_MODE = os.getenv(
+    "MYSQL_SESSION_SQL_MODE",
+    "STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE",
+)
 MYSQL_URI = os.getenv(
     "MYSQL_URI",
     f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}",
@@ -56,6 +61,7 @@ MONGODB_PORT = int(os.getenv("MONGODB_PORT", "27017"))
 MONGODB_USER = os.getenv("MONGODB_USER", "")
 MONGODB_PASSWORD = os.getenv("MONGODB_PASSWORD", "")
 MONGODB_DB = os.getenv("MONGODB_DB", "petrosa_data_manager")
+CANDLE_MONGO_DATABASE = os.getenv("CANDLE_MONGO_DATABASE", "petrosa_data_manager")
 MONGODB_URL = os.getenv(
     "MONGODB_URL",
     f"mongodb://{MONGODB_USER}:{MONGODB_PASSWORD}@{MONGODB_HOST}:{MONGODB_PORT}/{MONGODB_DB}"
@@ -120,6 +126,7 @@ ENABLE_AUDITOR = os.getenv("ENABLE_AUDITOR", "true").lower() == "true"
 ENABLE_BACKFILLER = os.getenv("ENABLE_BACKFILLER", "true").lower() == "true"
 ENABLE_ANALYTICS = os.getenv("ENABLE_ANALYTICS", "true").lower() == "true"
 ENABLE_API = os.getenv("ENABLE_API", "true").lower() == "true"
+DM_LOOP_LAG_MONITOR = os.getenv("DM_LOOP_LAG_MONITOR", "false").lower() == "true"
 ENABLE_INTENT_CONSUMER = os.getenv("ENABLE_INTENT_CONSUMER", "true").lower() == "true"
 ENABLE_DECISION_CONSUMER = (
     os.getenv("ENABLE_DECISION_CONSUMER", "true").lower() == "true"
@@ -249,6 +256,9 @@ DEFAULT_TREND_WINDOW = int(os.getenv("DEFAULT_TREND_WINDOW", "20"))
 # Health Check Configuration
 HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "9090"))
+READINESS_MONGO_TIMEOUT_SECONDS = float(
+    os.getenv("READINESS_MONGO_TIMEOUT_SECONDS", "1.0")
+)
 
 # OpenTelemetry Configuration
 OTEL_ENABLED = os.getenv("OTEL_ENABLED", "true").lower() == "true"
@@ -266,10 +276,15 @@ SUPPORTED_PAIRS = os.getenv(
 ).split(",")
 
 # Candle Database Configuration
-CANDLE_DATABASE_TYPE = os.getenv(
-    "CANDLE_DATABASE_TYPE",
-    os.getenv("DB_ADAPTER", os.getenv("EXTRACTOR_DB_ADAPTER", "mongodb")),
-).lower()
+CANDLE_DATABASE_TYPE = os.getenv("CANDLE_DATABASE_TYPE", "mongodb").lower()
+if CANDLE_DATABASE_TYPE not in {"mongodb", "mysql"}:
+    logging.error(
+        "Unsupported CANDLE_DATABASE_TYPE=%r; using mongodb", CANDLE_DATABASE_TYPE
+    )
+    CANDLE_DATABASE_TYPE = "mongodb"
+
+KLINE_WRITER_VERSION = "data-manager"
+KLINE_WRITER_SOURCE = "data-manager-backfill"
 
 # Supported timeframes for candles
 SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -360,6 +375,9 @@ CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF = int(
 # CANDLE_READ_FALLBACK_ENABLED=false restores single-backend reads.
 CANDLE_READ_FALLBACK_ENABLED = (
     os.getenv("CANDLE_READ_FALLBACK_ENABLED", "true").lower() == "true"
+)
+CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS = float(
+    os.getenv("CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS", "5")
 )
 
 # AC4 — rollback path. With dual-write enabled, candle writes land in BOTH

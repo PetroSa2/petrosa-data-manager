@@ -37,6 +37,10 @@ class HealthRepository(BaseRepository):
         Returns:
             True if successful
         """
+        if self.mysql is None:
+            logger.warning("health_metrics_mysql_unavailable")
+            return False
+
         try:
             health_record = {
                 "metric_id": str(uuid.uuid4()),
@@ -79,6 +83,10 @@ class HealthRepository(BaseRepository):
         Returns:
             Health metrics dictionary or None
         """
+        if self.mysql is None:
+            logger.warning("health_metrics_mysql_unavailable")
+            return None
+
         try:
             # Query latest by dataset_id (using symbol field as filter).
             # petrosa-data-manager#312: see insert() comment above.

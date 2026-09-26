@@ -104,7 +104,7 @@ A collection is **ready** when both hold:
 
 Receives `BackfillRequest` objects and fetches missing candles from the
 Binance API. The binance-data-extractor's `extract_klines_gap_filler.py`
-(extended in PR #301) writes to both MySQL and MongoDB.
+(extended in PR #301) writes operational candle data to MongoDB and keeps the optional MySQL historic copy.
 
 
 ### 6. Backfill Request Queue (petrosa-data-manager#320)

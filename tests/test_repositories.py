@@ -296,6 +296,16 @@ class TestTradeRepositoryQueries:
 
 class TestHealthRepository:
     @pytest.mark.asyncio
+    async def test_mysql_unavailable_returns_false(self):
+        repo = HealthRepository(mysql_adapter=None, mongodb_adapter=None)
+        assert await repo.insert("ds-1", "BTCUSDT", make_health_metrics()) is False
+
+    @pytest.mark.asyncio
+    async def test_mysql_unavailable_returns_none_for_reads(self):
+        repo = HealthRepository(mysql_adapter=None, mongodb_adapter=None)
+        assert await repo.get_latest_health("ds-1", "BTCUSDT") is None
+
+    @pytest.mark.asyncio
     async def test_insert_writes_health_record(self):
         mysql = Mock()
         mysql.write = Mock()

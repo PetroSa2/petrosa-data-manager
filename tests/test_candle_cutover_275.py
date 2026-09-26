@@ -8,6 +8,7 @@ Coverage for the candle-store cutover safety net (petrosa-data-manager#275).
 - AC4 rollback: dual-write mirror
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
@@ -18,6 +19,7 @@ from data_manager.api.routes.data import _completeness_pct, _default_candle_star
 from data_manager.db.repositories.candle_repository import (
     MYSQL_CANDLE_COLUMNS,
     CandleRepository,
+    map_mongo_kline_doc,
     map_mysql_row,
     mongo_collection_name,
     mysql_table_name,
@@ -28,7 +30,7 @@ from data_manager.maintenance.candle_readiness import (
     evaluate_collection,
     evaluate_readiness,
 )
-from data_manager.models.market_data import Candle
+from data_manager.models.market_data import Candle, MySQLKlineRow
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
@@ -80,7 +82,7 @@ class TestReadinessGate:
         )
         assert verdict.ready is True
         assert verdict.reasons == []
-        assert verdict.collection == "candles_BTCUSDT_1h"
+        assert verdict.collection == "klines_1h"
 
     @pytest.mark.asyncio
     async def test_shallow_collection_is_not_ready(self):
@@ -247,7 +249,7 @@ class TestRowMapping:
         assert mysql_table_name("") == "klines_unknown"
 
     def test_mongo_collection_name_mapping(self):
-        assert mongo_collection_name("BTCUSDT", "5m") == "candles_BTCUSDT_5m"
+        assert mongo_collection_name("BTCUSDT", "5m") == "klines_5m"
 
 
 class TestWarmupBackfill:
@@ -287,7 +289,7 @@ class TestWarmupBackfill:
             columns=MYSQL_CANDLE_COLUMNS
             + ("open_time", "quote_asset_volume", "number_of_trades"),
         )
-        mongo.ensure_indexes.assert_awaited_once_with("candles_BTCUSDT_1h")
+        mongo.ensure_indexes.assert_awaited_once_with("klines_1h")
 
     @pytest.mark.asyncio
     async def test_already_warm_collection_is_skipped(self):
@@ -394,7 +396,7 @@ class TestWarmupBackfill:
 
         assert result.trimmed == 7
         args = mongo.delete_range.await_args[0]
-        assert args[0] == "candles_BTCUSDT_1h"
+        assert args[0] == "klines_1h"
         assert args[2] == cutoff
         assert args[3] == "BTCUSDT"
 
@@ -425,12 +427,7 @@ class TestWarmupBackfill:
         results = await warmup.run_backfill(mysql, mongo, config, now=NOW)
 
         assert len(results) == 4
-        assert {r.collection for r in results} == {
-            "candles_BTCUSDT_5m",
-            "candles_BTCUSDT_1h",
-            "candles_ETHUSDT_5m",
-            "candles_ETHUSDT_1h",
-        }
+        assert {r.collection for r in results} == {"klines_5m", "klines_1h"}
 
     def test_config_from_env_defaults_to_the_276_contract(self):
         config = warmup.load_config_from_env({})
@@ -473,7 +470,7 @@ def _patch_dual_write(enabled: bool):
 
 class TestReadFallback:
     @pytest.mark.asyncio
-    async def test_empty_mongo_range_falls_back_to_mysql(self):
+    async def test_empty_mongo_range_does_not_fall_back_to_mysql(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
             mongodb.query_range = AsyncMock(return_value=[])
@@ -485,10 +482,9 @@ class TestReadFallback:
                 "BTCUSDT", "1h", NOW - timedelta(hours=2), NOW
             )
 
-            assert len(result) == 1
-            assert result[0]["close"] == Decimal("105")
-            assert repo.last_read_source == "mysql"
-            mysql.query_range.assert_called_once()
+            assert result == []
+            assert repo.last_read_source == "mongodb"
+            mysql.query_range.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_kill_switch_disables_the_fallback(self):
@@ -512,7 +508,7 @@ class TestReadFallback:
             assert await repo.get_range("BTCUSDT", "1h", NOW, NOW) == []
 
     @pytest.mark.asyncio
-    async def test_primary_exception_still_falls_back(self):
+    async def test_primary_exception_does_not_fall_back(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
             mongodb.query_range = AsyncMock(side_effect=RuntimeError("atlas down"))
@@ -522,29 +518,29 @@ class TestReadFallback:
 
             result = await repo.get_range("BTCUSDT", "1h", NOW, NOW)
 
-            assert len(result) == 1
-            assert repo.last_read_source == "mysql"
+            assert result == []
+            assert repo.last_read_source == "mongodb"
 
     @pytest.mark.asyncio
-    async def test_short_latest_window_falls_back(self):
-        # A partially warm Mongo collection is as dangerous as an empty one.
+    async def test_short_latest_window_does_not_fall_back(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
-            mongodb.query_latest = AsyncMock(return_value=[{"close": "1"}])
+            mongodb.query_latest = AsyncMock(return_value=[klines_row(NOW)])
             mysql = Mock()
             mysql.query_latest = Mock(return_value=[klines_row(NOW)] * 5)
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             result = await repo.get_latest("BTCUSDT", "1h", limit=5)
 
-            assert len(result) == 5
-            assert repo.last_read_source == "mysql"
+            assert len(result) == 1
+            assert repo.last_read_source == "mongodb"
+            mysql.query_latest.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_full_primary_window_does_not_fall_back(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
-            mongodb.query_latest = AsyncMock(return_value=[{"close": "1"}] * 5)
+            mongodb.query_latest = AsyncMock(return_value=[klines_row(NOW)] * 5)
             mysql = Mock()
             mysql.query_latest = Mock(return_value=[klines_row(NOW)] * 5)
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
@@ -559,7 +555,7 @@ class TestReadFallback:
     async def test_shorter_fallback_does_not_replace_primary_window(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
-            mongodb.query_latest = AsyncMock(return_value=[{"close": "1"}] * 3)
+            mongodb.query_latest = AsyncMock(return_value=[klines_row(NOW)] * 3)
             mysql = Mock()
             mysql.query_latest = Mock(return_value=[klines_row(NOW)])
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
@@ -577,12 +573,12 @@ class TestReadFallback:
             mysql = Mock()
             mysql.query_range = Mock(return_value=[])
             mongodb = Mock()
-            mongodb.query_range = AsyncMock(return_value=[{"close": "105"}])
+            mongodb.query_range = AsyncMock(return_value=[klines_row(NOW)])
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             result = await repo.get_range("BTCUSDT", "1h", NOW, NOW)
 
-            assert result == [{"close": "105"}]
+            assert result == [map_mongo_kline_doc(klines_row(NOW))]
             assert repo.last_read_source == "mongodb"
 
     @pytest.mark.asyncio
@@ -619,8 +615,13 @@ class TestDualWrite:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             assert await repo.insert(_candle()) is True
+            await asyncio.gather(*repo._mirror_tasks)
             mysql.write_batch.assert_called_once()
             assert mysql.write_batch.call_args[0][1] == "klines_h1"
+            assert isinstance(mysql.write_batch.call_args[0][0][0], MySQLKlineRow)
+            written, collection = mongodb.write.await_args.args
+            assert collection == "klines_1h"
+            assert written[0].open_price == "100"
 
     @pytest.mark.asyncio
     async def test_enabled_mirrors_mysql_writes_into_mongo(self):
@@ -632,9 +633,10 @@ class TestDualWrite:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             total = await repo.insert_batch([_candle(), _candle("ETHUSDT")])
+            await asyncio.gather(*repo._mirror_tasks)
 
             assert total == 2
-            assert mongodb.write.await_count == 2  # one per symbol collection
+            assert mongodb.write.await_count == 1
 
     @pytest.mark.asyncio
     async def test_mirror_failure_does_not_fail_the_primary_write(self):

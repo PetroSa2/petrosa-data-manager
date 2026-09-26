@@ -113,7 +113,7 @@ async def test_mysql_candle_reads_use_derived_projection_at_all_paths():
 
 
 @pytest.mark.asyncio
-async def test_mysql_fallback_reads_use_projection():
+async def test_mongo_primary_does_not_query_mysql_fallback():
     mysql = Mock()
     mysql.query_range = Mock(return_value=[])
     mysql.query_latest = Mock(return_value=[])
@@ -134,8 +134,8 @@ async def test_mysql_fallback_reads_use_projection():
         )
         await repo._read_fallback_latest("BTCUSDT", "1h", 2)
 
-    assert mysql.query_range.call_args.kwargs["columns"] == MYSQL_CANDLE_COLUMNS
-    assert mysql.query_latest.call_args.kwargs["columns"] == MYSQL_CANDLE_COLUMNS
+    mysql.query_range.assert_not_called()
+    mysql.query_latest.assert_not_called()
 
 
 def test_map_mysql_row_and_warmup_projection_contract():

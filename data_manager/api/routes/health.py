@@ -2,7 +2,9 @@
 Health check endpoints for Kubernetes probes and monitoring.
 """
 
+import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 try:
@@ -13,12 +15,19 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import constants
 import data_manager.api.app as api_module
 from data_manager.db.repositories import HealthRepository
 
 logger = logging.getLogger(__name__)
+
+# (monotonic time, ready, components) of the last readiness evaluation. Probes
+# within _READINESS_CACHE_SECONDS reuse it, so they never pile up pings.
+_READINESS_CACHE_SECONDS = 5.0
+_readiness_cache: tuple[float, bool, dict] | None = None
 
 router = APIRouter()
 
@@ -72,26 +81,50 @@ async def liveness() -> HealthStatus:
     )
 
 
-@router.get("/readiness")
-async def readiness() -> ReadinessStatus:
+@router.get("/readiness", response_model=None)
+async def readiness() -> ReadinessStatus | JSONResponse:
     """
     Kubernetes readiness probe endpoint.
-    Returns ready status based on dependencies.
-    """
-    components = {
-        "nats": "healthy",
-        "mysql": "healthy",
-        "mongodb": "healthy",
-        "auditor": "healthy",
-        "analytics": "healthy",
-    }
 
-    # Service is ready (temporarily hardcoded to avoid probe timeouts)
-    return ReadinessStatus(
-        ready=True,
-        components=components,
-        timestamp=datetime.now(UTC),
+    Ready iff the database manager exists and a MongoDB ``ping`` answers
+    within ``READINESS_MONGO_TIMEOUT_SECONDS``; otherwise 503 with the same
+    body. MySQL is historic-only: its status is reported but never gates
+    readiness (data-manager#378).
+    """
+    global _readiness_cache
+    now = time.monotonic()
+    if _readiness_cache and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
+        ready, components = _readiness_cache[1], _readiness_cache[2]
+    else:
+        components = {
+            "nats": "healthy",
+            "auditor": "healthy",
+            "analytics": "healthy",
+        }
+        manager = api_module.db_manager
+        mongo = getattr(manager, "mongodb_adapter", None) if manager else None
+        mysql = getattr(manager, "mysql_adapter", None) if manager else None
+        components["mysql"] = (
+            "healthy" if mysql is not None and mysql.is_connected() else "unavailable"
+        )
+        components["mongodb"] = "unavailable"
+        ready = False
+        if mongo and getattr(mongo, "db", None) is not None:
+            try:
+                await asyncio.wait_for(
+                    mongo.db.command("ping"), constants.READINESS_MONGO_TIMEOUT_SECONDS
+                )
+                components["mongodb"] = "healthy"
+                ready = True
+            except Exception:
+                logger.warning("MongoDB readiness ping failed", exc_info=True)
+        _readiness_cache = (now, ready, components)
+    payload = ReadinessStatus(
+        ready=ready, components=components, timestamp=datetime.now(UTC)
     )
+    if not ready:
+        return JSONResponse(status_code=503, content=payload.model_dump(mode="json"))
+    return payload
 
 
 @router.get("/databases")

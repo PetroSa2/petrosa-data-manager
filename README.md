@@ -39,7 +39,7 @@ NATS: binance.futures.websocket.data
   ↓ (subscribe)
 Data Manager Consumer
   ↓
-Data Validation & Storage (PostgreSQL/MongoDB)
+Data Validation & Storage (MongoDB operational store; MySQL historic copy)
   ↓
 Auditor (continuous) → Backfiller (on gaps) → Analytics (scheduled)
   ↓
@@ -52,7 +52,7 @@ API Layer (FastAPI) → Downstream consumers (dashboards, strategies, tradeengin
 
 Core documentation (kept up-to-date):
 - `README.md` - Project overview and quick start
-- `docs/persistence-architecture.md` - MongoDB registry and durable MySQL rule
+- `docs/persistence-architecture.md` - MongoDB operational store and MySQL historic-copy rule
 - `QUICK_REFERENCE.md` - Common commands and workflows
 - `DEPLOYMENT_GUIDE.md` - Production deployment
 - `docs/MANUAL_DEPLOYMENT_GUIDE.md` - **Manual deployments without code changes**
@@ -169,7 +169,7 @@ Distinct from `/data/trades`, which serves raw market-data trades.
 
 ### Raw Query API
 
-* `POST /api/v1/raw/mysql` - Execute raw SQL queries (with safety validation)
+* `POST /api/v1/raw/mysql` - Execute historic/research-only raw SQL queries (with safety validation)
 * `POST /api/v1/raw/mongodb` - Execute raw MongoDB queries/aggregations
 
 ### Schema Registry API
@@ -280,7 +280,7 @@ curl -X POST "http://localhost:8000/schemas/mongodb/candle_v1" \
     "description": "OHLCV candle data schema"
   }'
 
-# Register MySQL schema for orders
+# Register historic/research-only MySQL schema for orders
 curl -X POST "http://localhost:8000/schemas/mysql/order_v1" \
   -H "Content-Type: application/json" \
   -d '{
@@ -428,6 +428,7 @@ curl -X POST "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m?schema=can
 #### Update with Validation
 ```bash
 # Update with schema validation
+# Historic/research-only MySQL copy; never a live-path caller.
 curl -X PUT "http://localhost:8000/api/v1/mysql/orders?schema=order_v1&validate=true" \
   -H "Content-Type: application/json" \
   -d '{
@@ -441,7 +442,7 @@ curl -X PUT "http://localhost:8000/api/v1/mysql/orders?schema=order_v1&validate=
 
 ### Raw Query Operations
 
-#### MySQL Raw Queries
+#### MySQL Raw Queries (historic/research only; not for live-path callers)
 ```bash
 # Execute SQL query
 curl -X POST "http://localhost:8000/api/v1/raw/mysql" \
@@ -576,7 +577,7 @@ The Schema Registry provides centralized schema management for all Petrosa servi
 
 ### Key Features
 
-* **Database-Specific Storage**: Schemas stored in their respective databases (MySQL for structured data, MongoDB for time-series)
+* **Database-Specific Storage**: MongoDB is operational; MySQL schemas are historic/research-only copies.
 * **Version Management**: Full schema versioning with compatibility checking
 * **Automatic Validation**: CRUD operations can validate data against registered schemas
 * **Schema Discovery**: Easy schema exploration and documentation
@@ -633,7 +634,7 @@ All CRUD operations support optional schema validation:
 # Insert with validation
 POST /api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true
 
-# Update with validation
+# Update historic/research-only MySQL data with validation
 PUT /api/v1/mysql/orders?schema=order_v1&validate=true
 
 # Batch operations with validation

@@ -43,6 +43,10 @@ class AuditRepository(BaseRepository):
         Returns:
             True if successful
         """
+        if self.mysql is None:
+            logger.warning("audit_logs_mysql_unavailable")
+            return False
+
         try:
             audit_log = {
                 "audit_id": str(uuid.uuid4()),
@@ -83,6 +87,10 @@ class AuditRepository(BaseRepository):
         Returns:
             True if successful
         """
+        if self.mysql is None:
+            logger.warning("audit_logs_mysql_unavailable")
+            return False
+
         try:
             audit_log = {
                 "audit_id": str(uuid.uuid4()),
@@ -118,6 +126,10 @@ class AuditRepository(BaseRepository):
         Returns:
             List of audit log dictionaries
         """
+        if self.mysql is None:
+            logger.warning("audit_logs_mysql_unavailable")
+            return []
+
         try:
             logs = await asyncio.to_thread(
                 self.mysql.query_latest, "audit_logs", symbol=dataset_id, limit=limit
