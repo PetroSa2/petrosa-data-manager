@@ -23,9 +23,7 @@ async def seed(*, apply: bool) -> dict[str, int]:
             "positions", filter_dict={"status": status}, limit=10000
         )
         positions.extend(rows)
-    pnl, _ = mysql.find_paginated(
-        "daily_pnl", sort_list=[("date", -1)], limit=7
-    )
+    pnl, _ = mysql.find_paginated("daily_pnl", sort_list=[("date", -1)], limit=7)
     if apply:
         for collection, rows, key in (
             ("positions", positions, "position_id"),
