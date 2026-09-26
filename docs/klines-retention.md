@@ -1,14 +1,15 @@
 # Klines retention
 
-Periodic deletion of old klines from MongoDB and MySQL to prevent the shared
-databases from re-filling their storage quotas. Implements **W2** of the umbrella
+Periodic deletion of old operational MongoDB klines and their optional MySQL
+historic copy prevents the shared databases from re-filling their storage quotas.
+Implements **W2** of the umbrella
 incident
 [`PetroSa2/petrosa_k8s#783`](https://github.com/PetroSa2/petrosa_k8s/issues/783)
 and is tracked under [`PetroSa2/petrosa-data-manager#210`](https://github.com/PetroSa2/petrosa-data-manager/issues/210).
 
 ## What it does
 
-Walks every `klines_*` collection or MySQL base table, computes a per-timeframe
+Walks every operational `klines_*` collection or MySQL historic base table, computes a per-timeframe
 cutoff (`now - retention_window`), and deletes all klines older than the cutoff
 in day-sized chunks. MongoDB retains its existing behaviour; MySQL tables are
 discovered from `information_schema.TABLES`, views are excluded, and MySQL
@@ -94,8 +95,8 @@ to `365` days. The fallback is conservative on purpose.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `KLINES_RETENTION_BACKENDS` | `mongodb` | Comma-separated backends to run sequentially: `mongodb`, `mysql`. |
-| `KLINES_RETENTION_MYSQL_DRY_RUN` | `true` | Count MySQL rows without deleting them until explicitly set to `false`. |
+| `KLINES_RETENTION_BACKENDS` | `mongodb` | Comma-separated backends to run sequentially: `mongodb`, `mysql` historic copy. |
+| `KLINES_RETENTION_MYSQL_DRY_RUN` | `true` | Count historic-copy rows without deleting them until explicitly set to `false`. |
 | `KLINES_RETENTION_MYSQL_CHUNK_SLEEP_MS` | `250` | Delay between MySQL chunks to yield the shared connection. |
 | `KLINES_RETENTION_MYSQL_MAX_ROWS_PER_CHUNK` | `50000` | Halve an oversized MySQL time chunk before deleting, down to one hour. |
 

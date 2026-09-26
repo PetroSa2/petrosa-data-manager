@@ -11,7 +11,7 @@ candle-backend audit [`petrosa_k8s#794`](https://github.com/PetroSa2/petrosa_k8s
 
 ## AC1 — Consumer inventory
 
-Only **one** service consumes Mongo/MySQL OHLC candle data on the execution path:
+Only **one** service consumes MongoDB OHLC candle data on the execution path:
 **`petrosa-bot-ta-analysis`**. The other two candidate consumers were checked and ruled out:
 
 | Repo | Consumes candles? | Evidence |
@@ -39,7 +39,7 @@ shared across every enabled strategy:
 - Backtest CLI path (`backtest/data_source.py:94,115-117`,
   `DataManagerHistoricalSource(max_candles=1000)`) is a **separate, offline** consumer — it reads
   historical data for analysis, not the live execution hot path, so it is intentionally excluded
-  from the Mongo warm-path sizing below (a MySQL/historical-tier read, consistent with #274 AC2's
+from the Mongo warm-path sizing below (a historic-tier read, consistent with #274 AC2's
   hot/cold split).
 
 ### Per-strategy max lookback (live path only, `ta_bot/strategies/*`)
