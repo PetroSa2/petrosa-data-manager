@@ -1,0 +1,8 @@
+step 1: unique migration fails before de-duplication
+step 2: de-duplication removes duplicates and retains x2
+step 3: second de-duplication run deletes 0 rows
+step 4: unique migration succeeds with ALGORITHM=INPLACE, LOCK=NONE
+step 5: duplicate insert is rejected
+step 6: strict session rejects zero date; empty mode accepts it
+step 7: rollback drops both unique indexes and duplicate insert is accepted
+tier1 rehearsal: PASS
