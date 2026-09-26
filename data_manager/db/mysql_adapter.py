@@ -160,6 +160,9 @@ class MySQLAdapter(BaseAdapter):
                     "connect_timeout": constants.DB_CONNECTION_TIMEOUT,
                     "read_timeout": constants.DB_CONNECTION_TIMEOUT,
                     "write_timeout": constants.DB_CONNECTION_TIMEOUT,
+                    "init_command": (
+                        f"SET SESSION sql_mode='{constants.MYSQL_SESSION_SQL_MODE}'"
+                    ),
                 }
             )
 
