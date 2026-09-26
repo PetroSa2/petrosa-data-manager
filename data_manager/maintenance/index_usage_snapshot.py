@@ -99,9 +99,10 @@ def _table_documents(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def counter_delta(previous_snapshot: dict, current_snapshot: dict) -> dict | None:
     """Return comparable index deltas, or ``None`` when counters reset."""
-    if current_snapshot["server_uptime_seconds"] < previous_snapshot[
-        "server_uptime_seconds"
-    ]:
+    if (
+        current_snapshot["server_uptime_seconds"]
+        < previous_snapshot["server_uptime_seconds"]
+    ):
         return None
     previous = {
         (row["table"], row["index"]): row["rows_read"]
@@ -129,7 +130,9 @@ def counter_delta(previous_snapshot: dict, current_snapshot: dict) -> dict | Non
 
 def _emit_metrics(indexes: list[dict], tables: list[dict]) -> None:
     for row in indexes:
-        _index_rows_read.set(row["rows_read"], {"table": row["table"], "index": row["index"]})
+        _index_rows_read.set(
+            row["rows_read"], {"table": row["table"], "index": row["index"]}
+        )
     for row in tables:
         attrs = {"table": row["table"]}
         _table_rows_read.set(row["rows_read"], attrs)
@@ -166,7 +169,12 @@ async def run_snapshot(
         "tables": _table_documents(tables),
     }
     _emit_metrics(document["indexes"], document["tables"])
-    logger.info("index_usage_snapshot: indexes=%d tables=%d captured_at=%s", len(indexes), len(tables), captured.isoformat())
+    logger.info(
+        "index_usage_snapshot: indexes=%d tables=%d captured_at=%s",
+        len(indexes),
+        len(tables),
+        captured.isoformat(),
+    )
     if not dry_run:
         collection = mongo.db[COLLECTION]
         await collection.create_index(
@@ -180,14 +188,18 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> tuple[str, in
     env = environ if environ is not None else os.environ
     schema = env.get("MYSQL_SCHEMA", DEFAULT_SCHEMA)
     try:
-        ttl = max(60, int(env.get("INDEX_USAGE_SNAPSHOT_TTL_SECONDS", DEFAULT_TTL_SECONDS)))
+        ttl = max(
+            60, int(env.get("INDEX_USAGE_SNAPSHOT_TTL_SECONDS", DEFAULT_TTL_SECONDS))
+        )
     except ValueError:
         ttl = DEFAULT_TTL_SECONDS
     return schema, ttl
 
 
 def _build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m data_manager.maintenance.index_usage_snapshot")
+    parser = argparse.ArgumentParser(
+        prog="python -m data_manager.maintenance.index_usage_snapshot"
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
@@ -215,7 +227,11 @@ def main(argv: list[str] | None = None) -> int:
         engine = create_read_only_engine(mysql_url)
         mongo = MongoDBAdapter(connection_string=mongo_url)
         mongo.connect()
-        document = asyncio.run(run_snapshot(engine, mongo, schema=schema, ttl_seconds=ttl, dry_run=args.dry_run))
+        document = asyncio.run(
+            run_snapshot(
+                engine, mongo, schema=schema, ttl_seconds=ttl, dry_run=args.dry_run
+            )
+        )
         if args.json:
             import json
 

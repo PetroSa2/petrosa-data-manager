@@ -46,7 +46,9 @@ def test_run_snapshot_embeds_rows_and_uses_named_ttl_index():
         ),
         MagicMock(
             mappings=MagicMock(
-                return_value=MagicMock(fetchall=MagicMock(return_value=[{"Value": "8"}]))
+                return_value=MagicMock(
+                    fetchall=MagicMock(return_value=[{"Value": "8"}])
+                )
             )
         ),
     ]
