@@ -12,11 +12,12 @@ from typing import Literal
 class PersistenceSpec:
     """Persistence classification for one exact collection or prefix."""
 
-    classification: Literal["durable", "transient_only"]
+    classification: Literal["durable", "operational", "transient_only"]
     mysql_table: str | None = None
     key: str | None = None
     reason: str | None = None
     pending: bool = False
+    min_retention: str | None = None
 
 
 def durable(*, mysql_table: str, key: str, pending: bool = False) -> PersistenceSpec:
@@ -36,6 +37,19 @@ def transient_only(*, reason: str) -> PersistenceSpec:
     return PersistenceSpec(classification="transient_only", reason=reason)
 
 
+def operational(
+    *, reason: str, mysql_table: str | None = None, min_retention: str | None = None
+) -> PersistenceSpec:
+    """Declare a Mongo collection that is live operational storage."""
+
+    return PersistenceSpec(
+        classification="operational",
+        mysql_table=mysql_table,
+        reason=reason,
+        min_retention=min_retention,
+    )
+
+
 REGISTRY: dict[str, PersistenceSpec] = {
     "signals": durable(mysql_table="signals", key="symbol+timestamp"),
     "cio_decisions": durable(mysql_table="cio_decisions", key="decision_id"),
@@ -52,8 +66,11 @@ REGISTRY: dict[str, PersistenceSpec] = {
         mysql_table="alerts", key="category+dedupe_key+timestamp", pending=True
     ),
     "trades": durable(mysql_table="trades", key="symbol+timestamp", pending=True),
+    "positions": durable(mysql_table="positions", key="position_id"),
+    "daily_pnl": durable(mysql_table="daily_pnl", key="date"),
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
+    "service_leases": transient_only(reason="coordination lease API; safe to recreate"),
     "config_rate_limits": transient_only(
         reason="bounded sliding-window rate-limit cache"
     ),
@@ -108,7 +125,14 @@ PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
         durable(mysql_table="funding_rates", key="symbol+timestamp", pending=True),
     ),
     ("candles_", transient_only(reason="recomputable from durable MySQL klines")),
-    ("klines_", transient_only(reason="durable market data is held in MySQL klines")),
+    (
+        "klines_",
+        operational(
+            reason="operational candle store (storage pillar); MySQL klines_* hold the historic copy",
+            mysql_table="klines_*",
+            min_retention=">=400 candles per interval",
+        ),
+    ),
     ("analytics_", transient_only(reason="recomputable from klines")),
     ("trades_", transient_only(reason="raw market data is owned by the extractor")),
     (
@@ -232,5 +256,6 @@ __all__ = [
     "entry_for_collection",
     "scan_mongo_collection_names",
     "transient_only",
+    "operational",
     "unregistered_collections",
 ]

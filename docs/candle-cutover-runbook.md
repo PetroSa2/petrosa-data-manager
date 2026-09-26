@@ -15,11 +15,9 @@ the configured file-backed token or environment.
 
 ## Why this is not a config flip
 
-Candle **writes** currently land in MySQL `klines_*` (`CANDLE_DATABASE_TYPE=mysql`)
-while the Mongo `candles_{pair}_{timeframe}` collections are effectively empty.
-Flipping `CANDLE_DATABASE_TYPE` to `mongodb` without warming Mongo first points
-the execution read path at empty collections — strategy evaluation starves and
-trading stops. This runbook closes that gap.
+Candle **writes** land in MongoDB `klines_*`, the operational candle store.
+MySQL `klines_*` is a historic reference copy only. The readiness and warm-up
+steps below protect the operational Mongo collections from being empty or stale.
 
 ### Two corrections to the ticket's premise, found during implementation
 
@@ -48,7 +46,7 @@ trading stops. This runbook closes that gap.
 | `CANDLE_READ_FALLBACK_ENABLED` | `true` | AC3 safety net: serve reads from the non-primary backend when the primary returns an empty/short window. **Kill-switch — set `false` to restore single-backend reads.** |
 | `CANDLE_DUAL_WRITE_ENABLED` | `false` | AC4: mirror candle writes into the non-primary backend so a rollback cannot find a hole. Enable for the cutover window only. |
 | `SUPPORTED_INTERVALS` | `5m,15m,30m,1h,1d` | Timeframes the warm-up/readiness grid covers (shared configmap key). |
-| `CANDLE_DATABASE_TYPE` | `mongodb` | **The flip itself (#274).** `mysql` = MySQL primary. |
+| `CANDLE_DATABASE_TYPE` | `mongodb` | MongoDB operational store; MySQL is historic-only. |
 
 > **Standing rule:** never leave anything writing to MongoDB without a bound
 > and an off-flag. Atlas M0 (512 MB) has produced four quota P0s
@@ -74,7 +72,7 @@ Scope it down while testing with `--pairs BTCUSDT --timeframes 1h`, or force a
 re-copy of already-warm collections with `--force`.
 
 The job reads the newest `CANDLE_WARMUP_MIN_CANDLES` rows per
-`(pair, timeframe)` out of the MySQL `klines_*` tables and writes them into
+`(pair, timeframe)` from the historic MySQL `klines_*` tables and writes them into
 `candles_{pair}_{timeframe}`. Deduplication is structural:
 `MongoDBAdapter.write` derives `_id` from `symbol`+`timestamp` and inserts with
 `ordered=False`, so duplicates are no-ops rather than errors.
@@ -158,16 +156,16 @@ flat; a rising error rate means a rollback would land on incomplete MySQL data.
 Reversible at any point, in this order:
 
 ```bash
-# 1. Revert the primary store. Reads return to MySQL immediately.
-kubectl set env deploy/petrosa-data-manager CANDLE_DATABASE_TYPE=mysql
-# 2. Verify reads are served by MySQL and complete.
+# 1. Obtain operator approval and merge a reviewed revert PR before changing the store.
+#    Do not use kubectl set env for a production rollback.
+# 2. Verify reads are served by the historic copy and complete.
 curl -s "$DM/data/candles?pair=BTCUSDT&period=1h&limit=250" | jq '.metadata.source'
 # 3. Only once verified, stop mirroring.
 kubectl set env deploy/petrosa-data-manager CANDLE_DUAL_WRITE_ENABLED=false
 ```
 
-No data is lost: dual-write kept MySQL current for the whole time Mongo was
-primary, and the Mongo collections are left in place (bounded by the warm-up
+No data is lost: the optional historic copy can support an approved rollback,
+and the Mongo collections are left in place (bounded by the warm-up
 trim / #274 retention) so a second attempt does not have to re-warm from
 scratch. There is no empty-read window on the way back either — the fallback is
 symmetric, so a MySQL miss during the rollback is served from Mongo.

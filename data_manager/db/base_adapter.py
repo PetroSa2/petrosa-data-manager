@@ -120,6 +120,7 @@ class BaseAdapter(ABC):
         start: datetime | None = None,
         end: datetime | None = None,
         symbol: str | None = None,
+        max_count: int | None = None,
     ) -> int:
         """
         Get count of records matching the criteria.

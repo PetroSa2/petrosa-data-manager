@@ -43,6 +43,12 @@ CANDLE_INVALID_DOCS = Counter(
     ["reason"],
 )
 
+CANDLE_SHORT_WINDOWS = Counter(
+    "data_manager_candle_short_window_total",
+    "Mongo candle reads shorter than requested",
+    ["timeframe"],
+)
+
 # MySQL klines columns -> canonical candle keys returned to API consumers.
 _MYSQL_COLUMN_MAP = {
     "open": "open_price",
@@ -238,7 +244,17 @@ class CandleRepository(BaseRepository):
         """
         if not constants.CANDLE_READ_FALLBACK_ENABLED:
             return None
-        return self.mysql if self._primary_is_mysql() is False else self.mongodb
+        return self.mongodb if self._primary_is_mysql() else None
+
+    def _schedule_mirror_write(self, candles: list[Candle]) -> None:
+        if not constants.CANDLE_DUAL_WRITE_ENABLED or not candles:
+            return
+        tasks = getattr(self, "_mirror_tasks", None)
+        if tasks is None:
+            tasks = self._mirror_tasks = set()
+        task = asyncio.create_task(self._mirror_write(candles))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     async def _read_fallback_range(
         self,
@@ -357,8 +373,10 @@ class CandleRepository(BaseRepository):
                     key = self._get_mysql_table_name(candle.timeframe)
                     by_table.setdefault(key, []).append(candle)
                 for table, batch in by_table.items():
-                    adapter.write_batch(
-                        [candle_to_mysql_kline(candle) for candle in batch], table
+                    await asyncio.to_thread(
+                        adapter.write_batch,
+                        [candle_to_mysql_kline(candle) for candle in batch],
+                        table,
                     )
             CANDLE_DUAL_WRITES.labels(mirror=mirror, outcome="success").inc()
         except Exception as e:
@@ -388,7 +406,7 @@ class CandleRepository(BaseRepository):
                 count = await self.mongodb.write(
                     [candle_to_mongo_kline(candle)], collection
                 )
-            await self._mirror_write([candle])
+            self._schedule_mirror_write([candle])
             return count > 0
         except Exception as e:
             logger.error(
@@ -453,7 +471,7 @@ class CandleRepository(BaseRepository):
                     total_inserted += count
                     logger.debug(f"Inserted {count} candles to {collection}")
 
-            await self._mirror_write(candles)
+            self._schedule_mirror_write(candles)
             return total_inserted
 
         except Exception as e:
@@ -609,6 +627,9 @@ class CandleRepository(BaseRepository):
         if len(candles) >= limit:
             return candles
 
+        if not self._primary_is_mysql():
+            CANDLE_SHORT_WINDOWS.labels(timeframe=timeframe).inc()
+
         fallback = await self._read_fallback_latest(symbol, timeframe, limit)
         if len(fallback) > len(candles):
             self._record_fallback("get_latest", symbol, timeframe)
@@ -622,6 +643,7 @@ class CandleRepository(BaseRepository):
         timeframe: str,
         start: datetime | None = None,
         end: datetime | None = None,
+        max_count: int | None = None,
     ) -> int:
         """
         Count candles matching criteria.
@@ -639,14 +661,16 @@ class CandleRepository(BaseRepository):
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(timeframe)
                 # petrosa-data-manager#312: see write_batch comment above.
-                return await asyncio.to_thread(
-                    self.mysql.get_record_count, table, start, end, symbol
-                )
+                args = (table, start, end, symbol)
+                if max_count is not None:
+                    args += (max_count,)
+                return await asyncio.to_thread(self.mysql.get_record_count, *args)
             else:
                 collection = self._get_collection_name(symbol, timeframe)
-                return await self.mongodb.get_record_count(
-                    collection, start, end, symbol
-                )
+                args = (collection, start, end, symbol)
+                if max_count is not None:
+                    args += (max_count,)
+                return await self.mongodb.get_record_count(*args)
         except Exception as e:
             logger.error(f"Failed to count candles for {symbol} {timeframe}: {e}")
             return 0
