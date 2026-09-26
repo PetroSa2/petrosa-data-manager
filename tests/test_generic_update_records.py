@@ -25,6 +25,9 @@ def client(mock_db_manager):
     mock_db_manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
     mock_db_manager.mongodb_adapter.write = AsyncMock(return_value=1)
     mock_db_manager.mongodb_adapter.update = AsyncMock(return_value=1)
+    mock_db_manager.mongodb_adapter.upsert_one = AsyncMock(
+        return_value={"matched": 0, "modified": 0, "upserted_id": "new"}
+    )
 
     mock_db_manager.mysql_adapter = Mock()
     mock_db_manager.mysql_adapter.query_range = Mock(return_value=[])
@@ -96,7 +99,7 @@ def test_update_existing_record_mongodb_returns_200(client):
 
 def test_update_no_match_no_upsert_is_noop(client):
     """No matching records and upsert=False: 200, updated_count=0, no write attempted."""
-    api_module.db_manager.mysql_adapter.query_range = Mock(return_value=[])
+    api_module.db_manager.mysql_adapter.update = Mock(return_value=0)
 
     response = client.put(
         "/api/v1/mysql/positions",
@@ -106,8 +109,8 @@ def test_update_no_match_no_upsert_is_noop(client):
     assert response.status_code == 200
     body = response.json()
     assert body["updated_count"] == 0
-    assert body["message"] == "No records found matching filter"
-    api_module.db_manager.mysql_adapter.update.assert_not_called()
+    assert body["message"] == "Successfully updated 0 records"
+    api_module.db_manager.mysql_adapter.update.assert_called_once()
     api_module.db_manager.mysql_adapter.write.assert_not_called()
 
 
@@ -115,7 +118,7 @@ def test_update_no_match_with_upsert_creates_record_mysql(client):
     """Empty-match/upsert-create path (previously the only working path) — no regression."""
     from data_manager.db.mysql_adapter import WriteResult
 
-    api_module.db_manager.mysql_adapter.query_range = Mock(return_value=[])
+    api_module.db_manager.mysql_adapter.update = Mock(return_value=0)
     api_module.db_manager.mysql_adapter.write = Mock(
         return_value=WriteResult(inserted=1, duplicates=0, failed=0)
     )
@@ -133,13 +136,14 @@ def test_update_no_match_with_upsert_creates_record_mysql(client):
     body = response.json()
     assert body["updated_count"] == 1
     api_module.db_manager.mysql_adapter.write.assert_called_once()
-    api_module.db_manager.mysql_adapter.update.assert_not_called()
+    api_module.db_manager.mysql_adapter.update.assert_called_once()
 
 
 def test_update_no_match_with_upsert_creates_record_mongodb(client):
     """Empty-match/upsert-create path against MongoDB — no regression."""
-    api_module.db_manager.mongodb_adapter.query_range = AsyncMock(return_value=[])
-    api_module.db_manager.mongodb_adapter.write = AsyncMock(return_value=1)
+    api_module.db_manager.mongodb_adapter.upsert_one = AsyncMock(
+        return_value={"matched": 0, "modified": 0, "upserted_id": "new"}
+    )
 
     response = client.put(
         "/api/v1/mongodb/daily_pnl",
@@ -153,7 +157,7 @@ def test_update_no_match_with_upsert_creates_record_mongodb(client):
     assert response.status_code == 200
     body = response.json()
     assert body["updated_count"] == 1
-    api_module.db_manager.mongodb_adapter.write.assert_called_once()
+    api_module.db_manager.mongodb_adapter.upsert_one.assert_called_once()
 
 
 def test_update_circuit_breaker_open_returns_503(client):
