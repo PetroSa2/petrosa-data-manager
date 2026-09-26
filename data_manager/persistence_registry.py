@@ -52,6 +52,8 @@ REGISTRY: dict[str, PersistenceSpec] = {
         mysql_table="alerts", key="category+dedupe_key+timestamp", pending=True
     ),
     "trades": durable(mysql_table="trades", key="symbol+timestamp", pending=True),
+    "positions": durable(mysql_table="positions", key="position_id"),
+    "daily_pnl": durable(mysql_table="daily_pnl", key="date"),
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
     "service_leases": transient_only(reason="coordination lease API; safe to recreate"),

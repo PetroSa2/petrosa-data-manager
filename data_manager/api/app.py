@@ -41,6 +41,7 @@ from data_manager.api.routes import (
     strategies,
     strategy_timeline,
     system_trades,
+    trading_state,
 )
 
 try:
@@ -191,6 +192,7 @@ def create_app() -> FastAPI:
 
     # New API routes
     app.include_router(leases.router, tags=["Leases"])
+    app.include_router(trading_state.router, tags=["Trading State"])
     app.include_router(generic.router, tags=["Generic CRUD"])
 
     # Root endpoint
