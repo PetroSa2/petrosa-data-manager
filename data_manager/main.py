@@ -172,6 +172,12 @@ class DataManagerApp:
             self.db_manager = DatabaseManager()
             await self.db_manager.initialize()
             logger.info("Database connections initialized successfully")
+            if self.db_manager.mongodb_adapter:
+                await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
+                for timeframe in constants.SUPPORTED_INTERVALS:
+                    await self.db_manager.mongodb_adapter.ensure_indexes(
+                        f"klines_{timeframe}"
+                    )
 
             # Update API server with initialized db_manager
             if self.api_server_task:
@@ -661,7 +667,7 @@ class DataManagerApp:
             return
 
         # Check database health before starting
-        if not self.db_manager.is_healthy():
+        if not self.db_manager.mongo_healthy():
             logger.warning(
                 "Auditor not started: Database connections not healthy. "
                 "This is expected if databases are not yet configured."
@@ -915,7 +921,7 @@ class DataManagerApp:
             return
 
         # Check database health before starting
-        if not self.db_manager.is_healthy():
+        if not self.db_manager.mongo_healthy():
             logger.warning(
                 "Analytics not started: Database connections not healthy. "
                 "This is expected if databases are not yet configured."
@@ -953,7 +959,7 @@ class DataManagerApp:
             logger.warning("DrawdownScheduler not started: no mongodb_adapter")
             return
 
-        if not self.db_manager.is_healthy():
+        if not self.db_manager.mongo_healthy():
             logger.warning("DrawdownScheduler not started: databases not healthy")
             return
 
@@ -1015,7 +1021,7 @@ class DataManagerApp:
             )
             return
 
-        if not self.db_manager.is_healthy():
+        if not self.db_manager.mongo_healthy():
             logger.warning(
                 "Candle warm-up scheduler not started: database connections not healthy"
             )

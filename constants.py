@@ -2,6 +2,7 @@
 Constants and configuration for the Petrosa Data Manager service.
 """
 
+import logging
 import os
 
 # Service information
@@ -270,10 +271,12 @@ SUPPORTED_PAIRS = os.getenv(
 ).split(",")
 
 # Candle Database Configuration
-CANDLE_DATABASE_TYPE = os.getenv(
-    "CANDLE_DATABASE_TYPE",
-    os.getenv("DB_ADAPTER", os.getenv("EXTRACTOR_DB_ADAPTER", "mongodb")),
-).lower()
+CANDLE_DATABASE_TYPE = os.getenv("CANDLE_DATABASE_TYPE", "mongodb").lower()
+if CANDLE_DATABASE_TYPE not in {"mongodb", "mysql"}:
+    logging.error(
+        "Unsupported CANDLE_DATABASE_TYPE=%r; using mongodb", CANDLE_DATABASE_TYPE
+    )
+    CANDLE_DATABASE_TYPE = "mongodb"
 
 KLINE_WRITER_VERSION = "data-manager"
 KLINE_WRITER_SOURCE = "data-manager-backfill"
@@ -367,6 +370,9 @@ CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF = int(
 # CANDLE_READ_FALLBACK_ENABLED=false restores single-backend reads.
 CANDLE_READ_FALLBACK_ENABLED = (
     os.getenv("CANDLE_READ_FALLBACK_ENABLED", "true").lower() == "true"
+)
+CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS = float(
+    os.getenv("CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS", "5")
 )
 
 # AC4 — rollback path. With dual-write enabled, candle writes land in BOTH

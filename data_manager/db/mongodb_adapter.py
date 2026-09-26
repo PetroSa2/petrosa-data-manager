@@ -545,6 +545,7 @@ class MongoDBAdapter(BaseAdapter):
         start: datetime | None = None,
         end: datetime | None = None,
         symbol: str | None = None,
+        max_count: int | None = None,
     ) -> int:
         """Get count of records matching criteria."""
         if not self._connected:
@@ -563,7 +564,7 @@ class MongoDBAdapter(BaseAdapter):
             if symbol:
                 query["symbol"] = symbol
 
-            count = await coll.count_documents(query)
+            count = await coll.count_documents(query, limit=max_count)
             return count
 
         except PyMongoError as e:
@@ -611,6 +612,15 @@ class MongoDBAdapter(BaseAdapter):
                         name="received_at_ttl_1d",
                     ),
                 ]
+            elif collection == "positions":
+                indexes = [
+                    IndexModel([("position_id", ASCENDING)], unique=True),
+                    IndexModel([("status", ASCENDING), ("symbol", ASCENDING)]),
+                    IndexModel([("strategy_id", ASCENDING), ("status", ASCENDING)]),
+                    IndexModel([("entry_time", DESCENDING)]),
+                ]
+            elif collection == "daily_pnl":
+                indexes = [IndexModel([("date", ASCENDING)], unique=True)]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection
                 # CIO has assigned decision_id by the time it publishes onto
@@ -688,6 +698,15 @@ class MongoDBAdapter(BaseAdapter):
                         [("_ttl_inserted_at", ASCENDING)],
                         expireAfterSeconds=constants.ALERTS_TTL_SECONDS,
                         name="_ttl_inserted_at_ttl",
+                    ),
+                ]
+            elif collection == "service_leases":
+                indexes = [
+                    IndexModel([("name", ASCENDING)], unique=True, name="name_unique"),
+                    IndexModel(
+                        [("expires_at", ASCENDING)],
+                        expireAfterSeconds=3600,
+                        name="expires_at_ttl",
                     ),
                 ]
             elif collection.startswith("klines_"):

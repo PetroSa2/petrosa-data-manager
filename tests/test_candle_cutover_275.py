@@ -8,6 +8,7 @@ Coverage for the candle-store cutover safety net (petrosa-data-manager#275).
 - AC4 rollback: dual-write mirror
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
@@ -469,7 +470,7 @@ def _patch_dual_write(enabled: bool):
 
 class TestReadFallback:
     @pytest.mark.asyncio
-    async def test_empty_mongo_range_falls_back_to_mysql(self):
+    async def test_empty_mongo_range_does_not_fall_back_to_mysql(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
             mongodb.query_range = AsyncMock(return_value=[])
@@ -481,10 +482,9 @@ class TestReadFallback:
                 "BTCUSDT", "1h", NOW - timedelta(hours=2), NOW
             )
 
-            assert len(result) == 1
-            assert result[0]["close"] == Decimal("105")
-            assert repo.last_read_source == "mysql"
-            mysql.query_range.assert_called_once()
+            assert result == []
+            assert repo.last_read_source == "mongodb"
+            mysql.query_range.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_kill_switch_disables_the_fallback(self):
@@ -508,7 +508,7 @@ class TestReadFallback:
             assert await repo.get_range("BTCUSDT", "1h", NOW, NOW) == []
 
     @pytest.mark.asyncio
-    async def test_primary_exception_still_falls_back(self):
+    async def test_primary_exception_does_not_fall_back(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
             mongodb.query_range = AsyncMock(side_effect=RuntimeError("atlas down"))
@@ -518,12 +518,11 @@ class TestReadFallback:
 
             result = await repo.get_range("BTCUSDT", "1h", NOW, NOW)
 
-            assert len(result) == 1
-            assert repo.last_read_source == "mysql"
+            assert result == []
+            assert repo.last_read_source == "mongodb"
 
     @pytest.mark.asyncio
-    async def test_short_latest_window_falls_back(self):
-        # A partially warm Mongo collection is as dangerous as an empty one.
+    async def test_short_latest_window_does_not_fall_back(self):
         with _patch_primary("mongodb"), _patch_fallback(True):
             mongodb = Mock()
             mongodb.query_latest = AsyncMock(return_value=[klines_row(NOW)])
@@ -533,8 +532,9 @@ class TestReadFallback:
 
             result = await repo.get_latest("BTCUSDT", "1h", limit=5)
 
-            assert len(result) == 5
-            assert repo.last_read_source == "mysql"
+            assert len(result) == 1
+            assert repo.last_read_source == "mongodb"
+            mysql.query_latest.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_full_primary_window_does_not_fall_back(self):
@@ -615,6 +615,7 @@ class TestDualWrite:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             assert await repo.insert(_candle()) is True
+            await asyncio.gather(*repo._mirror_tasks)
             mysql.write_batch.assert_called_once()
             assert mysql.write_batch.call_args[0][1] == "klines_h1"
             assert isinstance(mysql.write_batch.call_args[0][0][0], MySQLKlineRow)
@@ -632,6 +633,7 @@ class TestDualWrite:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             total = await repo.insert_batch([_candle(), _candle("ETHUSDT")])
+            await asyncio.gather(*repo._mirror_tasks)
 
             assert total == 2
             assert mongodb.write.await_count == 1

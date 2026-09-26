@@ -7,9 +7,8 @@
 ## The problem this solves
 
 `data_manager/maintenance/candle_warmup_backfill.py` was built for exactly one
-moment: the #274 cutover. An operator ran it once, the #275 readiness gate went
-green, MongoDB was promoted to the primary execution candle store — and then
-nobody ran it again.
+moment: the #274 cutover. MongoDB is the operational execution candle store,
+and the continuous loop keeps it warm after the readiness gate passes.
 
 Anything that removed candles *after* that moment stayed removed:
 
