@@ -76,14 +76,6 @@ class DatabaseManager:
             logger.info("Initializing database connections...")
             self._connection_start_time = time.time()
 
-            # Initialize MySQL adapter (synchronous)
-            logger.info("Connecting to MySQL...")
-            self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
-            self.mysql_adapter.connect()
-            self._stats["mysql"]["connection_count"] += 1
-            self._stats["mysql"]["last_connected"] = datetime.now(UTC)
-            logger.info("MySQL connection established")
-
             # Initialize MongoDB adapter (async)
             logger.info("Connecting to MongoDB...")
             self.mongodb_adapter = get_adapter(
@@ -95,6 +87,18 @@ class DatabaseManager:
             self._stats["mongodb"]["connection_count"] += 1
             self._stats["mongodb"]["last_connected"] = datetime.now(UTC)
             logger.info("MongoDB connection established")
+
+            logger.info("Connecting to MySQL...")
+            try:
+                self.mysql_adapter = get_adapter("mysql", constants.MYSQL_URI)
+                self.mysql_adapter.connect()
+                self._stats["mysql"]["connection_count"] += 1
+                self._stats["mysql"]["last_connected"] = datetime.now(UTC)
+                logger.info("MySQL connection established")
+            except Exception as e:
+                self.mysql_adapter = None
+                self._stats["mysql"]["error_count"] += 1
+                logger.warning("mysql_unavailable_at_start", extra={"error": str(e)})
 
             # Initialize repositories
             self.configuration = ConfigurationRepository(
@@ -190,9 +194,17 @@ class DatabaseManager:
         }
 
     def is_healthy(self) -> bool:
-        """Check if all databases are connected."""
+        """Check if the operational store is healthy."""
+        return self.mongo_healthy()
+
+    def mongo_healthy(self) -> bool:
+        """Check whether MongoDB, the operational store, is connected."""
         health = self.health_check()
-        return health["mysql"]["connected"] and health["mongodb"]["connected"]
+        return health["mongodb"]["connected"]
+
+    def mysql_healthy(self) -> bool:
+        """Check whether the optional MySQL store is connected."""
+        return self.health_check()["mysql"]["connected"]
 
     def __enter__(self):
         """Context manager entry."""
@@ -220,8 +232,7 @@ class DatabaseManager:
                 await asyncio.sleep(constants.DB_HEALTH_CHECK_INTERVAL)
                 self._last_health_check = datetime.now(UTC)
 
-                # Check MySQL connection
-                if self.mysql_adapter and not self.mysql_adapter.is_connected():
+                if self.mysql_adapter is None or not self.mysql_adapter.is_connected():
                     logger.warning("MySQL connection lost, attempting reconnection...")
                     await self._reconnect_mysql()
 

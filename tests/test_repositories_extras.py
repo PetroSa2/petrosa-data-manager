@@ -49,6 +49,14 @@ def make_depth(symbol: str = "BTCUSDT") -> OrderBookDepth:
 
 class TestAuditRepository:
     @pytest.mark.asyncio
+    async def test_mysql_unavailable_degrades_writes_and_reads(self):
+        repo = AuditRepository(mysql_adapter=None, mongodb_adapter=None)
+        now = datetime.now(UTC)
+        assert await repo.log_gap("ds-1", "BTCUSDT", now, now) is False
+        assert await repo.log_health_check("ds-1", "BTCUSDT", "ok") is False
+        assert await repo.get_recent_logs("ds-1") == []
+
+    @pytest.mark.asyncio
     async def test_log_gap_writes_to_audit_logs_table(self):
         mysql = Mock()
         mysql.write = Mock()

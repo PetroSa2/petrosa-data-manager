@@ -131,6 +131,7 @@ def mock_db_manager(mock_mongodb_client, mock_mysql_connection):
     manager.initialize = AsyncMock()
     manager.shutdown = AsyncMock()
     manager.is_healthy = Mock(return_value=True)
+    manager.mongo_healthy = Mock(return_value=True)
     manager.health_check = Mock(
         return_value={
             "mysql": {"connected": True, "latency_ms": 1.5},
