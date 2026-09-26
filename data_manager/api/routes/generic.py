@@ -68,6 +68,94 @@ def _validate_mysql_update_data(
     return ignored_fields
 
 
+def _require_equality_filter(
+    filter_dict: dict[str, Any] | None, operation: str
+) -> dict[str, Any]:
+    """Return ``filter_dict``, or raise 400 unless it is a non-empty equality match.
+
+    The same rule as ``MongoDBAdapter._build_equality_query``, applied at the
+    HTTP boundary so a bad filter is a 400 on both backends. Without it, an
+    empty filter was a 500, and on MySQL an operator key such as ``$or`` was
+    silently dropped by ``update()``, widening the match (data-manager#378).
+    """
+    if not filter_dict:
+        raise HTTPException(
+            status_code=400, detail=f"{operation} filter cannot be empty"
+        )
+    for key, value in filter_dict.items():
+        if key.startswith("$") or isinstance(value, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{operation} filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}"
+                ),
+            )
+    return filter_dict
+
+
+async def _apply_update(
+    adapter: Any,
+    database: str,
+    collection: str,
+    filter_dict: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    upsert: bool,
+) -> tuple[int, bool]:
+    """Persist one generic update and return ``(updated_count, upserted)``.
+
+    Shared by ``PUT`` and batch ``update`` (data-manager#378 items 5 and 8).
+    A MongoDB upsert is one atomic ``update_one(upsert=True)``. MySQL runs
+    its blocking calls in a worker thread: UPDATE first, then INSERT when
+    nothing matched and ``upsert`` is set. The UPDATE already records any
+    unknown columns in the ignored-field metric, and the INSERT skips them.
+    """
+    now = datetime.now(UTC)
+    update_data = {**data, "updated_at": now}
+    if database != "mysql":
+        if upsert:
+            result = await adapter.upsert_one(collection, filter_dict, update_data)
+            upserted = result["upserted_id"] is not None
+            return result["modified"] + int(upserted), upserted
+        return await adapter.update(collection, filter_dict, update_data), False
+
+    updated_count = await asyncio.to_thread(
+        adapter.update, collection, filter_dict, update_data
+    )
+    if updated_count or not upsert:
+        return updated_count, False
+
+    from pydantic import BaseModel, ConfigDict
+
+    class GenericModel(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    record = GenericModel(**{"created_at": now, **filter_dict, **update_data})
+    result = await asyncio.to_thread(adapter.write, [record], collection)
+    if result.inserted:
+        return int(result.inserted), True
+    if result.duplicates:
+        # Another writer inserted the row between our UPDATE and INSERT, and
+        # INSERT IGNORE dropped ours: update that row instead of losing it.
+        updated_count = await asyncio.to_thread(
+            adapter.update, collection, filter_dict, update_data
+        )
+        return updated_count, False
+    raise DatabaseError(
+        f"MySQL upsert insert into {collection} failed ({result.failed} failed)"
+    )
+
+
+async def _apply_delete(
+    adapter: Any, database: str, collection: str, filter_dict: dict[str, Any]
+) -> int:
+    """Delete the records matching ``filter_dict`` and return the real count."""
+    if database == "mysql":
+        return await asyncio.to_thread(adapter.delete, collection, filter_dict)
+    return await adapter.delete_many(collection, filter_dict)
+
+
 def _signals_persist_enabled() -> bool:
     """AC kill-switch (data-manager#302): ``PETROSA_SIGNALS_PERSIST_ENABLED``.
 
@@ -416,9 +504,13 @@ class UpdateRequest(BaseModel):
 
 
 class FindOneAndUpdateRequest(BaseModel):
-    filter: dict[str, Any]
-    set: dict[str, Any]
-    upsert: bool = False
+    """Equality compare-and-set request (MongoDB only)."""
+
+    filter: dict[str, Any] = Field(
+        ..., description="Expected current values; the document must match all"
+    )
+    set: dict[str, Any] = Field(..., description="Fields to $set when it matches")
+    upsert: bool = Field(False, description="Insert filter+set when nothing matches")
 
 
 class DeleteRequest(BaseModel):
@@ -666,11 +758,13 @@ async def update_records(
 
     try:
         adapter = _get_adapter(database)
+        _require_equality_filter(request.filter, "Update")
 
         ignored_fields: list[str] = []
         if database == "mysql":
-            ignored_fields = _validate_mysql_update_data(
-                adapter, collection, request.data
+            # get_column_names() may reflect the table: blocking MySQL I/O.
+            ignored_fields = await asyncio.to_thread(
+                _validate_mysql_update_data, adapter, collection, request.data
             )
 
         # Schema validation (if enabled)
@@ -678,39 +772,14 @@ async def update_records(
             # For updates, validate the updated data
             await _validate_data_against_schema(database, schema, [request.data])
 
-        update_data = {**request.data, "updated_at": datetime.now(UTC)}
-        upserted = False
-        if database == "mysql":
-            try:
-                updated_count = await asyncio.to_thread(
-                    adapter.update, collection, request.filter, update_data
-                )
-            except CircuitBreakerOpenError as exc:
-                api_module.db_manager.increment_error_count(database)
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
-            if updated_count == 0 and request.upsert:
-                from pydantic import BaseModel, ConfigDict
-
-                class GenericModel(BaseModel):
-                    model_config = ConfigDict(extra="allow")
-
-                if ignored_fields:
-                    adapter.record_ignored_fields(collection, ignored_fields)
-                result = await asyncio.to_thread(
-                    adapter.write,
-                    [GenericModel(**{**request.filter, **update_data})],
-                    collection,
-                )
-                updated_count = result.inserted
-                upserted = bool(updated_count)
-        elif request.upsert:
-            result = await adapter.upsert_one(collection, request.filter, update_data)
-            upserted = bool(result["upserted_id"])
-            updated_count = result["modified"] + int(upserted)
-        else:
-            updated_count = await adapter.update(
-                collection, request.filter, update_data
-            )
+        updated_count, upserted = await _apply_update(
+            adapter,
+            database,
+            collection,
+            request.filter,
+            request.data,
+            upsert=request.upsert,
+        )
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
@@ -731,6 +800,10 @@ async def update_records(
 
     except HTTPException:
         raise
+    except CircuitBreakerOpenError as exc:
+        # Per #213 AC2.4: an open MySQL circuit is transient, so 503, not 500.
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as e:
         logger.error(f"Error updating {database}.{collection}: {e}", exc_info=True)
         api_module.db_manager.increment_error_count(database)
@@ -739,21 +812,47 @@ async def update_records(
 
 @router.post("/api/v1/{database}/{collection}/find-one-and-update")
 async def find_one_and_update(
-    database: str, collection: str, request: FindOneAndUpdateRequest
+    database: str,
+    collection: str,
+    request: FindOneAndUpdateRequest,
+    http_request: Request,
 ) -> dict[str, Any]:
+    """Atomic equality compare-and-set on one MongoDB document.
+
+    Put the expected current values in ``filter``. ``set`` is applied only if
+    a document still matches them, in one ``findOneAndUpdate``. ``matched`` is
+    false when nothing matched, or, with ``upsert``, when a document with the
+    same unique key exists but did not match (a CAS conflict).
+    """
+    authorize_generic(
+        http_request, database, collection, "upsert" if request.upsert else "update"
+    )
     if database != "mongodb":
         raise HTTPException(
             status_code=400, detail="find-one-and-update is MongoDB-only"
         )
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
+    _require_equality_filter(request.filter, "find-one-and-update")
+    if not request.set:
+        raise HTTPException(
+            status_code=400, detail="find-one-and-update set cannot be empty"
+        )
     try:
         document = await _get_adapter(database).find_one_and_update(
             collection, request.filter, request.set, upsert=request.upsert
         )
-        return {"matched": document is not None, "document": document}
-    except DatabaseError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error in find-one-and-update on {database}.{collection}: {e}",
+            exc_info=True,
+        )
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    api_module.db_manager.increment_query_count(database)
+    return {"matched": document is not None, "document": document}
 
 
 @router.delete("/api/v1/{database}/{collection}")
@@ -774,13 +873,9 @@ async def delete_records(
 
     try:
         adapter = _get_adapter(database)
-
-        if not request.filter:
-            raise HTTPException(status_code=400, detail="Delete filter cannot be empty")
-        deleted_count = (
-            await asyncio.to_thread(adapter.delete, collection, request.filter)
-            if database == "mysql"
-            else await adapter.delete_many(collection, request.filter)
+        _require_equality_filter(request.filter, "Delete")
+        deleted_count = await _apply_delete(
+            adapter, database, collection, request.filter
         )
 
         # Track metrics
@@ -796,6 +891,8 @@ async def delete_records(
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting from {database}.{collection}: {e}", exc_info=True)
         api_module.db_manager.increment_error_count(database)
@@ -826,94 +923,132 @@ async def batch_operations(
 
     try:
         adapter = _get_adapter(database)
-        results = []
-
-        for operation in request.operations:
-            op_type = operation.get("type", "insert")
-
-            if op_type == "insert":
-                # Handle insert operation
-                data = operation.get("data", [])
-                if not isinstance(data, list):
-                    data = [data]
-
-                # Convert to model instances
-                from pydantic import BaseModel
-
-                class GenericModel(BaseModel):
-                    pass
-
-                model_instances = []
-                for item in data:
-                    if "timestamp" not in item:
-                        item["timestamp"] = datetime.now(UTC)
-                    model_instances.append(GenericModel(**item))
-
-                if database == "mysql":
-                    count = await asyncio.to_thread(
-                        adapter.write, model_instances, collection
-                    )
-                else:  # MongoDB
-                    count = await adapter.write(model_instances, collection)
-
-                results.append({"type": "insert", "count": count})
-
-            elif op_type == "update":
-                # Handle update operation
-                filter_dict = operation.get("filter", {})
-                data = operation.get("data", {})
-
-                updated = (
-                    await asyncio.to_thread(
-                        adapter.update,
-                        collection,
-                        filter_dict,
-                        {**data, "updated_at": datetime.now(UTC)},
-                    )
-                    if database == "mysql"
-                    else await adapter.update(
-                        collection,
-                        filter_dict,
-                        {**data, "updated_at": datetime.now(UTC)},
-                    )
-                )
-                results.append({"type": "update", "count": updated})
-
-            elif op_type == "delete":
-                # Handle delete operation
-                filter_dict = operation.get("filter", {})
-
-                if not filter_dict:
-                    raise HTTPException(
-                        status_code=400, detail="Delete filter cannot be empty"
-                    )
-                deleted = (
-                    await asyncio.to_thread(adapter.delete, collection, filter_dict)
-                    if database == "mysql"
-                    else await adapter.delete_many(collection, filter_dict)
-                )
-                results.append({"type": "delete", "count": deleted})
-
-        # Track metrics
-        api_module.db_manager.increment_query_count(database)
-
-        return {
-            "message": f"Batch operation completed with {len(results)} sub-operations",
-            "results": results,
-            "metadata": {
-                "database": database,
-                "collection": collection,
-                "operations_count": len(results),
-                "timestamp": datetime.now(UTC).isoformat(),
-            },
-        }
-
+        planned = await _plan_batch(adapter, database, collection, request.operations)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
-            f"Error in batch operation on {database}.{collection}: {e}", exc_info=True
+            f"Error validating batch on {database}.{collection}: {e}", exc_info=True
         )
         api_module.db_manager.increment_error_count(database)
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Sub-operations are not transactional: a failure part-way leaves the
+    # earlier ones applied, so the error reports exactly what completed.
+    results: list[dict[str, Any]] = []
+    for index, (op_type, operation) in enumerate(planned):
+        try:
+            if op_type == "insert":
+                count = await _batch_insert(adapter, database, collection, operation)
+            elif op_type == "update":
+                count, _ = await _apply_update(
+                    adapter,
+                    database,
+                    collection,
+                    operation["filter"],
+                    operation["data"],
+                    upsert=False,
+                )
+            else:
+                count = await _apply_delete(
+                    adapter, database, collection, operation["filter"]
+                )
+        except Exception as e:
+            logger.error(
+                f"Batch operation {index} ({op_type}) failed on "
+                f"{database}.{collection}: {e}",
+                exc_info=True,
+            )
+            api_module.db_manager.increment_error_count(database)
+            raise HTTPException(
+                # Per #213 AC2.4: an open MySQL circuit is transient, so 503.
+                status_code=503 if isinstance(e, CircuitBreakerOpenError) else 500,
+                detail={
+                    "message": f"Batch operation {index} ({op_type}) failed: {e}",
+                    "failed_operation_index": index,
+                    "completed_results": results,
+                },
+            ) from e
+        results.append({"type": op_type, "count": count})
+
+    # Track metrics
+    api_module.db_manager.increment_query_count(database)
+
+    return {
+        "message": f"Batch operation completed with {len(results)} sub-operations",
+        "results": results,
+        "metadata": {
+            "database": database,
+            "collection": collection,
+            "operations_count": len(results),
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    }
+
+
+async def _plan_batch(
+    adapter: Any, database: str, collection: str, operations: list[dict[str, Any]]
+) -> list[tuple[str, dict[str, Any]]]:
+    """Validate every batch operation before any runs; return ``(type, operation)``.
+
+    Raises 400 (422 for a MySQL update with no usable columns) on the first
+    bad operation, so a malformed batch has no side effects. An unknown
+    ``type`` used to be skipped silently while the batch reported success.
+    """
+    planned: list[tuple[str, dict[str, Any]]] = []
+    for index, operation in enumerate(operations):
+        op_type = operation.get("type", "insert")
+        label = f"Batch operation {index} ({op_type})"
+        if op_type == "insert":
+            data = operation.get("data", [])
+            items = data if isinstance(data, list) else [data]
+            if not all(isinstance(item, dict) for item in items):
+                raise HTTPException(
+                    status_code=400, detail=f"{label}: data must be objects"
+                )
+        elif op_type in {"update", "delete"}:
+            _require_equality_filter(operation.get("filter"), label)
+            if op_type == "update":
+                data = operation.get("data")
+                if not isinstance(data, dict) or not data:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{label}: data must be a non-empty object",
+                    )
+                if database == "mysql":
+                    await asyncio.to_thread(
+                        _validate_mysql_update_data, adapter, collection, data
+                    )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label}: unsupported type; use insert, update or delete",
+            )
+        planned.append((op_type, operation))
+    return planned
+
+
+async def _batch_insert(
+    adapter: Any, database: str, collection: str, operation: dict[str, Any]
+) -> int:
+    """Insert one batch ``insert`` operation's records and return the count."""
+    from pydantic import BaseModel, ConfigDict
+
+    class GenericModel(BaseModel):
+        # Without extra="allow", pydantic v2 drops every field and the batch
+        # inserted empty documents.
+        model_config = ConfigDict(extra="allow")
+
+    data = operation.get("data", [])
+    model_instances = []
+    for item in data if isinstance(data, list) else [data]:
+        if "timestamp" not in item:
+            item["timestamp"] = datetime.now(UTC)
+        model_instances.append(GenericModel(**item))
+
+    if database == "mysql":
+        return await asyncio.to_thread(adapter.write, model_instances, collection)
+    return await adapter.write(model_instances, collection)
 
 
 def _get_adapter(database: str):

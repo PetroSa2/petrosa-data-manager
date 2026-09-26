@@ -24,6 +24,9 @@ from data_manager.db.repositories import HealthRepository
 
 logger = logging.getLogger(__name__)
 
+# (monotonic time, ready, components) of the last readiness evaluation. Probes
+# within _READINESS_CACHE_SECONDS reuse it, so they never pile up pings.
+_READINESS_CACHE_SECONDS = 5.0
 _readiness_cache: tuple[float, bool, dict] | None = None
 
 router = APIRouter()
@@ -82,11 +85,15 @@ async def liveness() -> HealthStatus:
 async def readiness() -> ReadinessStatus | JSONResponse:
     """
     Kubernetes readiness probe endpoint.
-    Returns ready status based on dependencies.
+
+    Ready iff the database manager exists and a MongoDB ``ping`` answers
+    within ``READINESS_MONGO_TIMEOUT_SECONDS``; otherwise 503 with the same
+    body. MySQL is historic-only: its status is reported but never gates
+    readiness (data-manager#378).
     """
     global _readiness_cache
     now = time.monotonic()
-    if _readiness_cache and now - _readiness_cache[0] < 5:
+    if _readiness_cache and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
         ready, components = _readiness_cache[1], _readiness_cache[2]
     else:
         components = {
@@ -97,7 +104,9 @@ async def readiness() -> ReadinessStatus | JSONResponse:
         manager = api_module.db_manager
         mongo = getattr(manager, "mongodb_adapter", None) if manager else None
         mysql = getattr(manager, "mysql_adapter", None) if manager else None
-        components["mysql"] = "healthy" if mysql else "unavailable"
+        components["mysql"] = (
+            "healthy" if mysql is not None and mysql.is_connected() else "unavailable"
+        )
         components["mongodb"] = "unavailable"
         ready = False
         if mongo and getattr(mongo, "db", None) is not None:

@@ -1054,25 +1054,42 @@ class MySQLAdapter(BaseAdapter):
             raise DatabaseError(f"Failed to count records in {collection}: {e}") from e
 
     def delete(self, collection: str, filter_dict: dict[str, Any]) -> int:
+        """Delete the rows matching a flat equality ``filter_dict``; return the count.
+
+        Refuses an empty filter and operator-like entries. A filter key that
+        is not a column matches no rows, so this returns 0 without deleting,
+        as :meth:`find_paginated` does. Dropping that key from the WHERE
+        clause, as :meth:`update` does, would delete more rows than asked
+        (data-manager#378).
+        """
         if not self._connected:
             raise DatabaseError("Not connected to database")
         if not filter_dict:
             raise DatabaseError("delete() refused: empty filter")
         table = self._get_table(collection)
-        conditions = [
-            table.c[key] == value
-            for key, value in filter_dict.items()
-            if key in table.c
-        ]
-        if not conditions:
-            raise DatabaseError(
-                f"delete() refused: filter matches no columns on {collection}"
-            )
-        engine = self._ensure_connected()
-        with engine.begin() as conn:
-            return int(
-                conn.execute(delete(table).where(and_(*conditions))).rowcount or 0
-            )
+        conditions = []
+        for key, value in filter_dict.items():
+            if key.startswith("$") or isinstance(value, dict):
+                raise DatabaseError(
+                    "delete() refused: filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}: {value!r}"
+                )
+            if key not in table.c:
+                logger.warning(
+                    "delete() filter column %s does not exist on %s; 0 rows match",
+                    key,
+                    collection,
+                )
+                return 0
+            conditions.append(table.c[key] == value)
+        try:
+            engine = self._ensure_connected()
+            with engine.begin() as conn:
+                result = conn.execute(delete(table).where(and_(*conditions)))
+                return int(result.rowcount or 0)
+        except SQLAlchemyError as e:
+            self._record_write_failure(collection, "database_error")
+            raise DatabaseError(f"Failed to delete from {collection}: {e}") from e
 
     def find_paginated(
         self,
