@@ -180,3 +180,7 @@ class BaseAdapter(ABC):
 
 class DatabaseError(Exception):
     """Custom exception for database operations."""
+
+
+class TemporalValueError(ValueError):
+    """A temporal value cannot be parsed for a database column."""

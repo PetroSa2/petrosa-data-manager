@@ -8,7 +8,7 @@ import logging
 import threading
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -38,7 +38,7 @@ except ImportError:
     SQLALCHEMY_AVAILABLE = False
 
 import constants
-from data_manager.db.base_adapter import BaseAdapter, DatabaseError
+from data_manager.db.base_adapter import BaseAdapter, DatabaseError, TemporalValueError
 from data_manager.utils.circuit_breaker import DatabaseCircuitBreaker
 from data_manager.utils.retry import retry_transient
 
@@ -525,6 +525,28 @@ class MySQLAdapter(BaseAdapter):
         for field in fields:
             self._record_ignored_field(collection, field)
 
+    @staticmethod
+    def _normalize_temporal_value(value: Any, column: Any) -> Any:
+        """Convert temporal values to the naive UTC representation MySQL expects."""
+        if not isinstance(column.type, DateTime):
+            return value
+
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except (TypeError, ValueError) as exc:
+                raise TemporalValueError(
+                    f"Invalid datetime for column {column.name!r}: {value!r}"
+                ) from exc
+        else:
+            return value
+
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+        return parsed
+
     def _record_ignored_insert(self, collection: str, count: int) -> None:
         """Record rows skipped by INSERT IGNORE without affecting the write."""
         if count <= 0:
@@ -582,11 +604,8 @@ class MySQLAdapter(BaseAdapter):
                 else:
                     record["id"] = str(uuid.uuid4())
             for key, value in record.items():
-                if isinstance(value, str) and key.endswith(("_at", "timestamp")):
-                    try:
-                        record[key] = datetime.fromisoformat(value)
-                    except (ValueError, TypeError):
-                        pass
+                if key in table.c:
+                    record[key] = self._normalize_temporal_value(value, table.c[key])
             records.append(record)
         total = len(records)
 
@@ -799,11 +818,7 @@ class MySQLAdapter(BaseAdapter):
             if key not in table.c:
                 self._record_ignored_field(collection, key)
                 continue
-            if isinstance(value, str) and key.endswith(("_at", "timestamp")):
-                try:
-                    value = datetime.fromisoformat(value)
-                except (ValueError, TypeError):
-                    pass
+            value = self._normalize_temporal_value(value, table.c[key])
             values[key] = value
 
         if not values:

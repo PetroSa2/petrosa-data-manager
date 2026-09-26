@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 import constants
 import data_manager.api.app as api_module
-from data_manager.db.base_adapter import DatabaseError
+from data_manager.db.base_adapter import DatabaseError, TemporalValueError
 from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
@@ -617,6 +617,9 @@ async def insert_records(
             )
         return response
 
+    except TemporalValueError as e:
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -757,6 +760,9 @@ async def update_records(
             response["ignored_fields"] = ignored_fields
         return response
 
+    except TemporalValueError as e:
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -886,11 +892,21 @@ async def batch_operations(
                     )
 
                 matching = _apply_filter(records, filter_dict)
-                for record in matching:
-                    record.update(data)
-                    record["updated_at"] = datetime.now(UTC)
+                if matching:
+                    update_data = dict(data)
+                    update_data["updated_at"] = datetime.now(UTC)
+                    if database == "mysql":
+                        updated_count = adapter.update(
+                            collection, filter_dict, update_data
+                        )
+                    else:
+                        updated_count = await adapter.update(
+                            collection, filter_dict, update_data
+                        )
+                else:
+                    updated_count = 0
 
-                results.append({"type": "update", "count": len(matching)})
+                results.append({"type": "update", "count": updated_count})
 
             elif op_type == "delete":
                 # Handle delete operation
@@ -922,6 +938,9 @@ async def batch_operations(
             },
         }
 
+    except TemporalValueError as e:
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(
             f"Error in batch operation on {database}.{collection}: {e}", exc_info=True
