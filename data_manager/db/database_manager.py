@@ -3,6 +3,7 @@ Database manager to coordinate MySQL and MongoDB adapters.
 """
 
 import asyncio
+import inspect
 import logging
 import time
 from datetime import datetime, timezone
@@ -99,6 +100,10 @@ class DatabaseManager:
             self.configuration = ConfigurationRepository(
                 mysql_adapter=self.mysql_adapter, mongodb_adapter=self.mongodb_adapter
             )
+            for collection in ("positions", "daily_pnl"):
+                result = self.mongodb_adapter.ensure_indexes(collection)
+                if inspect.isawaitable(result):
+                    await result
 
             self._initialized = True
             logger.info("All database connections initialized successfully")

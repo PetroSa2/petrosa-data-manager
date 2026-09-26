@@ -549,6 +549,15 @@ class MongoDBAdapter(BaseAdapter):
                         name="received_at_ttl_1d",
                     ),
                 ]
+            elif collection == "positions":
+                indexes = [
+                    IndexModel([("position_id", ASCENDING)], unique=True),
+                    IndexModel([("status", ASCENDING), ("symbol", ASCENDING)]),
+                    IndexModel([("strategy_id", ASCENDING), ("status", ASCENDING)]),
+                    IndexModel([("entry_time", DESCENDING)]),
+                ]
+            elif collection == "daily_pnl":
+                indexes = [IndexModel([("date", ASCENDING)], unique=True)]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection
                 # CIO has assigned decision_id by the time it publishes onto
