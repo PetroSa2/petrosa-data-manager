@@ -1,0 +1,7 @@
+-- Rollback for PetroSa2/petrosa_k8s#1164 (EPIC-1158 W7).
+-- OPTIMIZE TABLE health_metrics is a physical rebuild and has no logical inverse.
+-- Do not issue destructive DDL as a "rollback". If recovery is required:
+--   1. Stop writes to petrosa_crypto and preserve the incident timeline.
+--   2. Restore the DBaaS snapshot taken immediately before the OPTIMIZE run.
+--   3. Validate row counts, indexes, and application connectivity before reopening writes.
+-- The snapshot restore is the only supported recovery path for this operator action.
