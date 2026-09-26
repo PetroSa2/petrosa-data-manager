@@ -596,7 +596,12 @@ class MongoDBAdapter(BaseAdapter):
             if symbol:
                 query["symbol"] = symbol
 
-            count = await coll.count_documents(query, limit=max_count)
+            # count_documents(limit=None) becomes {"$limit": null}, which Mongo
+            # rejects -- only cap the count when a positive max_count is given.
+            count_kwargs = {}
+            if max_count is not None and max_count > 0:
+                count_kwargs["limit"] = max_count
+            count = await coll.count_documents(query, **count_kwargs)
             return count
 
         except PyMongoError as e:
