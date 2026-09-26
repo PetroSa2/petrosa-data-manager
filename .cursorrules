@@ -13,9 +13,9 @@ When working on this service, read the master cursorrules first to understand th
 
 The **Petrosa Data Manager** is the data integrity, quality, and distribution hub for the entire trading ecosystem. It ensures all trading-related datasets remain accurate, consistent, complete, and analyzable through continuous auditing, gap detection, schema validation, and analytics computation. It operates with **3 replicas** using **MongoDB leader election**, where only the leader runs background schedulers (auditor, analytics).
 
-This service provides a **dual database architecture** (PostgreSQL for metadata + MongoDB for time-series), a **Schema Registry** for cross-service data validation, a **Generic CRUD API** for both databases, **Market Analytics** (volatility, volume, correlation), and **Health Scoring** for data quality monitoring.
+This service provides the MongoDB operational store and optional MySQL historic copy, a **Schema Registry** for cross-service data validation, a **Generic CRUD API** for both databases, **Market Analytics** (volatility, volume, correlation), and **Health Scoring** for data quality monitoring.
 
-The Data Manager is the **central data governance layer**, ensuring data quality, providing analytics, and serving as the API gateway for all data access across the Petrosa ecosystem.
+The Data Manager is the **central data governance layer**, ensuring data quality, providing analytics, and serving as the API gateway for all data access across the Petrosa ecosystem. MongoDB is the operational store; MySQL is a historic reference copy; this service is the only database client in the platform (S1, S2).
 
 ### Cross-References to Master
 
@@ -79,7 +79,13 @@ petrosa-data-manager/
     └── configmap.yaml
 ```
 
-### Dual Database Architecture
+### Storage Pillars (S1/S2)
+
+MongoDB is the operational store: every live-path read and write goes to MongoDB. MySQL holds a historic reference copy only (statistical analysis, backtesting, research) and is never read on the live path.
+
+`petrosa-data-manager` is the only service that connects to any database; every other service reads and writes data exclusively through the data-manager API.
+
+### Database Architecture
 
 **Why Two Databases**:
 

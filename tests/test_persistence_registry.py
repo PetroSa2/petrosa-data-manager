@@ -21,11 +21,21 @@ def test_ticket_collections_are_classified():
     funding = entry_for_collection("funding_rates_BTCUSDT")
     candles = entry_for_collection("candles_BTCUSDT_5m")
     analytics = entry_for_collection("analytics_BTCUSDT")
+    klines = entry_for_collection("klines_15m")
     assert signals is not None and signals.classification == "durable"
     assert decisions is not None and decisions.mysql_table == "cio_decisions"
     assert funding is not None and funding.classification == "durable"
     assert candles is not None and candles.classification == "transient_only"
     assert analytics is not None and analytics.classification == "transient_only"
+    assert klines is not None and klines.classification == "operational"
+    assert klines.mysql_table == "klines_*"
+    assert klines.min_retention == ">=400 candles per interval"
+
+
+def test_operational_collections_are_protected():
+    klines = entry_for_collection("klines_15m")
+    assert klines is not None
+    assert klines.classification in {"durable", "operational"}
 
 
 def test_durable_tables_are_available_to_maintenance_guards():

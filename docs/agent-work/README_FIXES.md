@@ -47,10 +47,10 @@ Plus health checks. **That's it!** No spam. ✨
 
 **Data-Manager does NOT persist raw data. It:**
 - Tracks message stats (counts, rates)
-- Reads FROM: binance-data-extractor's MySQL (OHLC, trades)
-- Writes TO: MongoDB Atlas (analytics, audits, health metrics)
+- Reads operational candles FROM: MongoDB via the data-manager API
+- Writes operational and historic copies TO: data-manager-owned MongoDB/MySQL paths
 
-**Raw data persistence is handled by binance-data-extractor.**
+**Raw data persistence is handled by data-manager and its API clients.**
 
 ---
 
