@@ -133,12 +133,34 @@ def _build_mysql_signal_record(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Strong references to in-flight MySQL signal copies. The event loop keeps
+# only weak references to tasks, so an unreferenced fire-and-forget task can
+# be garbage-collected before it finishes (same pattern as
+# trading_state._copy_tasks).
+_signal_dual_write_tasks: set[asyncio.Task[None]] = set()
+
+
+def _write_signals_to_mysql(mysql_adapter: Any, records: list[Any]) -> None:
+    """Blocking MySQL write for the signals dual-write; runs in a worker thread.
+
+    Errors are logged here: nobody awaits the task's result, so an exception
+    left to propagate would only surface later as "Task exception was never
+    retrieved".
+    """
+    try:
+        mysql_adapter.write(records, "signals")
+    except Exception:
+        logger.error("MySQL signals dual-write failed", exc_info=True)
+
+
 def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
     """Best-effort dual-write of `signals` payloads into the durable MySQL
-    historic store. Never raises — a MySQL hiccup must not block or fail
-    the live Mongo signal-persist path, which remains the primary,
-    synchronous write. Caller is responsible for checking
-    `_signals_mysql_persist_enabled()` first.
+    historic store. Never raises, and never waits for MySQL: the write runs
+    in a worker thread as a tracked background task (#370), so a slow or
+    failing MySQL cannot block the event loop or delay or fail the live Mongo
+    signal-persist path, which remains the primary write. Caller is
+    responsible for checking `_signals_mysql_persist_enabled()` first and
+    must call this from the event loop.
     """
     mysql_adapter = getattr(api_module.db_manager, "mysql_adapter", None)
     if mysql_adapter is None:
@@ -167,12 +189,19 @@ def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
         return
 
     try:
-        awaitable = asyncio.to_thread(mysql_adapter.write, records, "signals")
-        # The caller schedules this best-effort operation without blocking the
-        # request path; keep the helper synchronous for existing callers.
-        asyncio.create_task(awaitable)
-    except Exception:
-        logger.error("MySQL signals dual-write failed", exc_info=True)
+        # Resolve the loop before building the coroutine so a missing loop
+        # cannot leave a never-awaited coroutine behind.
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.error(
+            "MySQL signals dual-write skipped: no running event loop", exc_info=True
+        )
+        return
+    task = loop.create_task(
+        asyncio.to_thread(_write_signals_to_mysql, mysql_adapter, records)
+    )
+    _signal_dual_write_tasks.add(task)
+    task.add_done_callback(_signal_dual_write_tasks.discard)
 
 
 # ---------------------------------------------------------------------------
@@ -682,8 +711,12 @@ async def update_records(
 
         # Query existing records
         if database == "mysql":
-            existing_records = adapter.query_range(
-                collection=collection, start=datetime.min, end=datetime.max, symbol=None
+            existing_records = await asyncio.to_thread(
+                adapter.query_range,
+                collection=collection,
+                start=datetime.min,
+                end=datetime.max,
+                symbol=None,
             )
         else:  # MongoDB
             existing_records = await adapter.query_range(

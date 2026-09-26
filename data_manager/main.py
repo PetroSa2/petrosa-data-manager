@@ -145,7 +145,12 @@ class DataManagerApp:
             logger.warning(f"Failed to unwire route publishers: {e}")
 
     def _start_loop_lag_monitor(self) -> None:
-        """Start optional event-loop diagnostics after application startup."""
+        """Start optional event-loop diagnostics (``DM_LOOP_LAG_MONITOR``, #370).
+
+        Called first in ``start()`` so that stalls during startup, such as the
+        MySQL connect and table creation in database initialization, are
+        measured too, not just steady-state traffic.
+        """
         if not constants.DM_LOOP_LAG_MONITOR:
             return
 
@@ -165,6 +170,8 @@ class DataManagerApp:
                 "environment": constants.ENVIRONMENT,
             },
         )
+
+        self._start_loop_lag_monitor()
 
         # Start Prometheus metrics server
         try:
@@ -502,8 +509,6 @@ class DataManagerApp:
 
         self.running = True
         logger.info("All components started successfully")
-
-        self._start_loop_lag_monitor()
 
         # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
         # AFTER self.running=True so the `while self.running` loop runs its
