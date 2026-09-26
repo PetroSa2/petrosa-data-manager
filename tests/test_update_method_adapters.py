@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import sqlalchemy as sa
 
-from data_manager.db.base_adapter import DatabaseError
+from data_manager.db.base_adapter import DatabaseError, TemporalValueError
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
 
@@ -121,6 +121,31 @@ class TestMySQLAdapterUpdate:
         rows = positions_adapter.query_range("positions", datetime.min, datetime.max)
         eth = next(r for r in rows if r["symbol"] == "ETHUSDT")
         assert eth["updated_at"] is not None
+
+    def test_update_aware_datetime_is_normalized_to_naive_utc(self, positions_adapter):
+        assert (
+            positions_adapter.update(
+                "positions",
+                {"symbol": "ETHUSDT"},
+                {"updated_at": "2026-08-25T03:00:00-03:00"},
+            )
+            == 1
+        )
+        eth = next(
+            row
+            for row in positions_adapter.query_range(
+                "positions", datetime.min, datetime.max
+            )
+            if row["symbol"] == "ETHUSDT"
+        )
+        assert eth["updated_at"] == datetime(2026, 8, 25, 6, 0)
+
+    def test_update_invalid_temporal_value_is_rejected(self, positions_adapter):
+        with pytest.raises(TemporalValueError) as exc_info:
+            positions_adapter.update(
+                "positions", {"symbol": "ETHUSDT"}, {"updated_at": "not-a-date"}
+            )
+        assert "updated_at" in str(exc_info.value)
 
 
 class TestMongoDBAdapterUpdate:

@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 import constants
 import data_manager.api.app as api_module
 from data_manager.api.gateway_policy import authorize_generic
-from data_manager.db.base_adapter import DatabaseError
+from data_manager.db.base_adapter import DatabaseError, TemporalValueError
 from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
@@ -760,6 +760,9 @@ async def insert_records(
             )
         return response
 
+    except TemporalValueError as e:
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -832,6 +835,9 @@ async def update_records(
             response["ignored_fields"] = ignored_fields
         return response
 
+    except TemporalValueError as e:
+        api_module.db_manager.increment_error_count(database)
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
     except CircuitBreakerOpenError as exc:
@@ -987,6 +993,16 @@ async def batch_operations(
                 count = await _apply_delete(
                     adapter, database, collection, operation["filter"]
                 )
+        except TemporalValueError as e:
+            api_module.db_manager.increment_error_count(database)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Batch operation {index} ({op_type}) failed: {e}",
+                    "failed_operation_index": index,
+                    "completed_results": results,
+                },
+            ) from e
         except Exception as e:
             logger.error(
                 f"Batch operation {index} ({op_type}) failed on "

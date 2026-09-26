@@ -21,6 +21,7 @@ semantics are exercised deterministically.
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -236,6 +237,26 @@ def test_write_empty_batch_returns_empty_writeresult():
         r = adapter.write([], "audit_logs")
         assert isinstance(r, WriteResult)
         assert r.inserted == r.duplicates == r.failed == 0
+    finally:
+        adapter.disconnect()
+
+
+def test_write_normalizes_aware_temporal_values_before_insert():
+    adapter = _build_sqlite_adapter()
+    try:
+        record = _audit_rec("aware")
+        record.timestamp = "2026-06-04T03:00:00-03:00"
+        fake_result = MagicMock(rowcount=1)
+        fake_conn = MagicMock()
+        fake_conn.execute.return_value = fake_result
+        fake_conn.begin.return_value = MagicMock()
+        fake_engine = MagicMock()
+        fake_engine.connect.return_value.__enter__.return_value = fake_conn
+        with patch.object(adapter, "_ensure_connected", return_value=fake_engine):
+            result = adapter.write([record], "audit_logs")
+        assert result.inserted == 1
+        written = fake_conn.execute.call_args.args[1][0]
+        assert written["timestamp"] == datetime(2026, 6, 4, 6, 0)
     finally:
         adapter.disconnect()
 

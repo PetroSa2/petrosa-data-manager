@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import data_manager.api.app as api_module
+from data_manager.db.base_adapter import TemporalValueError
 from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 
 
@@ -229,3 +230,55 @@ def test_mysql_update_reports_partially_ignored_fields(client):
     assert response.status_code == 200
     assert response.json()["ignored_fields"] == ["nonexistent"]
     api_module.db_manager.mysql_adapter.update.assert_called_once()
+
+
+def test_mysql_insert_invalid_temporal_value_returns_400(client):
+    api_module.db_manager.mysql_adapter.write.side_effect = TemporalValueError(
+        "Invalid datetime for column 'entry_time'"
+    )
+    response = client.post(
+        "/api/v1/mysql/positions", json={"data": {"entry_time": "not-a-date"}}
+    )
+    assert response.status_code == 400
+    assert "entry_time" in response.json()["detail"]
+
+
+def test_mysql_update_invalid_temporal_value_returns_400(client):
+    api_module.db_manager.mysql_adapter.query_range = Mock(
+        return_value=[{"symbol": "BTCUSDT"}]
+    )
+    api_module.db_manager.mysql_adapter.update.side_effect = TemporalValueError(
+        "Invalid datetime for column 'updated_at'"
+    )
+    response = client.put(
+        "/api/v1/mysql/positions",
+        json={
+            "filter": {"symbol": "BTCUSDT"},
+            "data": {"updated_at": "not-a-date"},
+        },
+    )
+    assert response.status_code == 400
+    assert "updated_at" in response.json()["detail"]
+
+
+def test_mysql_batch_invalid_temporal_value_returns_400(client):
+    api_module.db_manager.mysql_adapter.query_range = Mock(
+        return_value=[{"symbol": "BTCUSDT"}]
+    )
+    api_module.db_manager.mysql_adapter.update.side_effect = TemporalValueError(
+        "Invalid datetime for column 'updated_at'"
+    )
+    response = client.post(
+        "/api/v1/mysql/positions/batch",
+        json={
+            "operations": [
+                {
+                    "type": "update",
+                    "filter": {"symbol": "BTCUSDT"},
+                    "data": {"updated_at": "not-a-date"},
+                }
+            ]
+        },
+    )
+    assert response.status_code == 400
+    assert "updated_at" in response.json()["detail"]["message"]
