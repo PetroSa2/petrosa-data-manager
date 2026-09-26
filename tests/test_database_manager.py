@@ -39,7 +39,7 @@ class TestInitialize:
         with patch("data_manager.db.database_manager.get_adapter") as get_adp:
             mysql_a = make_adapter()
             mongo_a = make_adapter()
-            get_adp.side_effect = [mysql_a, mongo_a]
+            get_adp.side_effect = [mongo_a, mysql_a]
             dm = DatabaseManager()
             await dm.initialize()
             assert dm._initialized is True
@@ -53,16 +53,30 @@ class TestInitialize:
             await dm.shutdown()
 
     @pytest.mark.asyncio
-    async def test_initialize_propagates_mysql_error(self):
+    async def test_initialize_mysql_failure_keeps_mongo(self):
         with patch("data_manager.db.database_manager.get_adapter") as get_adp:
             mysql_a = MagicMock()
             mysql_a.connect.side_effect = RuntimeError("mysql down")
-            get_adp.return_value = mysql_a
+            mongo_a = make_adapter()
+            get_adp.side_effect = [mongo_a, mysql_a]
             dm = DatabaseManager()
-            with pytest.raises(RuntimeError, match="mysql down") as exc_info:
+            await dm.initialize()
+            assert dm._initialized is True
+            assert dm.mongodb_adapter is mongo_a
+            assert dm.mysql_adapter is None
+            assert dm.mongo_healthy() is True
+            assert dm.mysql_healthy() is False
+            await dm.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_initialize_mongo_failure_raises(self):
+        with patch("data_manager.db.database_manager.get_adapter") as get_adp:
+            mongo_a = make_adapter()
+            mongo_a.connect.side_effect = RuntimeError("mongo down")
+            get_adp.return_value = mongo_a
+            dm = DatabaseManager()
+            with pytest.raises(RuntimeError, match="mongo down"):
                 await dm.initialize()
-            assert "mysql down" in str(exc_info.value)
-            # Shutdown was called on failure → not initialized.
             assert dm._initialized is False
 
 
@@ -110,15 +124,16 @@ class TestHealthCheck:
         assert result["mysql"]["connected"] is True
         assert result["mongodb"]["connected"] is True
 
-    def test_is_healthy_requires_both_connected(self):
+    def test_is_healthy_only_requires_mongo_connected(self):
         dm = DatabaseManager()
         # Both connected
         dm.mysql_adapter = make_adapter()
         dm.mongodb_adapter = make_adapter()
         assert dm.is_healthy() is True
-        # MySQL down
+        # MySQL down does not make the operational store unhealthy.
         dm.mysql_adapter.is_connected = MagicMock(return_value=False)
-        assert dm.is_healthy() is False
+        assert dm.is_healthy() is True
+        assert dm.mysql_healthy() is False
 
 
 class TestSyncContextManager:
