@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 MIGRATIONS = Path(__file__).parents[1] / "data_manager/scripts/migrations"
 FORWARD = MIGRATIONS / "010_health_metrics_reclaim.sql"
 ROLLBACK = MIGRATIONS / "010_health_metrics_reclaim_rollback.sql"
