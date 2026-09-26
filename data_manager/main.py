@@ -174,6 +174,10 @@ class DataManagerApp:
             logger.info("Database connections initialized successfully")
             if self.db_manager.mongodb_adapter:
                 await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
+                for timeframe in constants.SUPPORTED_INTERVALS:
+                    await self.db_manager.mongodb_adapter.ensure_indexes(
+                        f"klines_{timeframe}"
+                    )
 
             # Update API server with initialized db_manager
             if self.api_server_task:

@@ -137,7 +137,9 @@ async def evaluate_collection(
         return verdict
 
     try:
-        verdict.count = await adapter.get_record_count(coll, symbol=pair)
+        verdict.count = await adapter.get_record_count(
+            coll, symbol=pair, max_count=required_count
+        )
         latest = await adapter.query_latest(coll, pair, 1)
     except Exception as exc:  # fail closed on any backend error
         verdict.reasons.append(f"query failed: {exc}")
@@ -194,19 +196,45 @@ async def evaluate_readiness(
         else constants.CANDLE_WARMUP_FRESHNESS_INTERVALS
     )
 
-    results: list[CollectionReadiness] = []
-    for pair in effective_pairs:
-        for timeframe in effective_timeframes:
-            results.append(
-                await evaluate_collection(
-                    adapter,
-                    pair,
-                    timeframe,
-                    required_count=required,
-                    freshness_intervals=freshness,
-                    now=effective_now,
+    semaphore = asyncio.Semaphore(8)
+
+    async def evaluate_bounded(pair: str, timeframe: str) -> CollectionReadiness:
+        async with semaphore:
+            try:
+                return await asyncio.wait_for(
+                    evaluate_collection(
+                        adapter,
+                        pair,
+                        timeframe,
+                        required_count=required,
+                        freshness_intervals=freshness,
+                        now=effective_now,
+                    ),
+                    constants.CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS,
                 )
+            except TimeoutError:
+                return CollectionReadiness(
+                    pair=pair,
+                    timeframe=timeframe,
+                    collection=collection_name(pair, timeframe),
+                    count=0,
+                    required_count=required,
+                    newest_timestamp=None,
+                    age_seconds=None,
+                    max_age_seconds=_max_age_seconds(timeframe, freshness),
+                    ready=False,
+                    reasons=["timeout"],
+                )
+
+    results = list(
+        await asyncio.gather(
+            *(
+                evaluate_bounded(pair, timeframe)
+                for pair in effective_pairs
+                for timeframe in effective_timeframes
             )
+        )
+    )
 
     # Fail closed: an empty grid is NOT a pass. "Nothing checked" must never
     # be mistaken for "everything verified".

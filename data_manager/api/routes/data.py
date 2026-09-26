@@ -84,6 +84,15 @@ def _completeness_pct(
     return round(min(100.0, (returned / expected) * 100), 2)
 
 
+def _expected_candle_count(start: datetime, end: datetime, period: str) -> int | None:
+    """Return the bounded count needed to calculate completeness."""
+    try:
+        interval_seconds = parse_timeframe_to_seconds(period)
+    except (ValueError, TypeError):
+        return None
+    return max(0, int((end - start).total_seconds() // interval_seconds))
+
+
 class CandleResponse(BaseModel):
     """Candle data response."""
 
@@ -175,7 +184,13 @@ async def get_candles(
             descending=descending,
         )
 
-        total_count = await candle_repo.count(pair, period, start, end)
+        total_count = await candle_repo.count(
+            pair,
+            period,
+            start,
+            end,
+            max_count=_expected_candle_count(start, end, period),
+        )
 
         # Format response
         values = [

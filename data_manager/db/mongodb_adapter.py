@@ -483,6 +483,7 @@ class MongoDBAdapter(BaseAdapter):
         start: datetime | None = None,
         end: datetime | None = None,
         symbol: str | None = None,
+        max_count: int | None = None,
     ) -> int:
         """Get count of records matching criteria."""
         if not self._connected:
@@ -501,7 +502,7 @@ class MongoDBAdapter(BaseAdapter):
             if symbol:
                 query["symbol"] = symbol
 
-            count = await coll.count_documents(query)
+            count = await coll.count_documents(query, limit=max_count)
             return count
 
         except PyMongoError as e:

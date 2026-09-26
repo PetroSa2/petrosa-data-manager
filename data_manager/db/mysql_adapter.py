@@ -1017,6 +1017,7 @@ class MySQLAdapter(BaseAdapter):
         start: datetime | None = None,
         end: datetime | None = None,
         symbol: str | None = None,
+        max_count: int | None = None,
     ) -> int:
         """Get count of records matching criteria."""
         if not self._connected:
