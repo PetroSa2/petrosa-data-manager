@@ -47,6 +47,10 @@ MYSQL_PORT = int(os.getenv("MYSQL_PORT", os.getenv("POSTGRES_PORT", "3306")))
 MYSQL_USER = os.getenv("MYSQL_USER", os.getenv("POSTGRES_USER", "root"))
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", os.getenv("POSTGRES_PASSWORD", ""))
 MYSQL_DB = os.getenv("MYSQL_DB", os.getenv("POSTGRES_DB", "petrosa_data_manager"))
+MYSQL_SESSION_SQL_MODE = os.getenv(
+    "MYSQL_SESSION_SQL_MODE",
+    "STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE",
+)
 MYSQL_URI = os.getenv(
     "MYSQL_URI",
     f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}",
