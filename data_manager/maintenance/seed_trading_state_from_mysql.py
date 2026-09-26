@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import UTC, datetime, timedelta, timezone
 
 import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
@@ -18,11 +17,15 @@ async def seed(*, apply: bool) -> dict[str, int]:
         constants.MONGODB_URL, database_name=constants.CANDLE_MONGO_DATABASE
     )
     mongo.connect()
-    positions = mysql.read(
-        "positions", filters={"status": {"$in": ["open", "partially_closed"]}}
+    positions = []
+    for status in ("open", "partially_closed"):
+        rows, _ = mysql.find_paginated(
+            "positions", filter_dict={"status": status}, limit=10000
+        )
+        positions.extend(rows)
+    pnl, _ = mysql.find_paginated(
+        "daily_pnl", sort_list=[("date", -1)], limit=7
     )
-    since = datetime.now(UTC).date() - timedelta(days=7)
-    pnl = mysql.read("daily_pnl", filters={"date": {"$gte": since}})
     if apply:
         for collection, rows, key in (
             ("positions", positions, "position_id"),
