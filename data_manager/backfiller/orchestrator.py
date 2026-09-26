@@ -179,7 +179,7 @@ class BackfillOrchestrator:
                 for kline in klines:
                     candle = Candle(
                         symbol=symbol,
-                        timestamp=datetime.fromtimestamp(kline[0] / 1000.0, tz=UTC),
+                        timestamp=datetime.fromtimestamp(kline[0] / 1000.0),
                         open=Decimal(str(kline[1])),
                         high=Decimal(str(kline[2])),
                         low=Decimal(str(kline[3])),
@@ -188,8 +188,6 @@ class BackfillOrchestrator:
                         quote_volume=Decimal(str(kline[7])),
                         trades_count=int(kline[8]),
                         timeframe=timeframe,
-                        taker_buy_base_volume=Decimal(str(kline[9])),
-                        taker_buy_quote_volume=Decimal(str(kline[10])),
                     )
                     candles.append(candle)
 

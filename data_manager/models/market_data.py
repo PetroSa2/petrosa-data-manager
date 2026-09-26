@@ -21,40 +21,9 @@ class Candle(BaseModel):
     quote_volume: Decimal | None = Field(None, description="Quote asset volume")
     trades_count: int | None = Field(None, description="Number of trades")
     timeframe: str = Field(..., description="Timeframe (e.g., '1m', '1h')")
-    taker_buy_base_volume: Decimal | None = Field(
-        None, exclude=True, description="Taker buy base asset volume"
-    )
-    taker_buy_quote_volume: Decimal | None = Field(
-        None, exclude=True, description="Taker buy quote asset volume"
-    )
 
     class Config:
         json_encoders = {Decimal: str, datetime: lambda v: v.isoformat()}
-
-
-class MySQLKlineRow(BaseModel):
-    """Complete row matching the MySQL ``klines_*`` table schema."""
-
-    id: str
-    symbol: str
-    timestamp: datetime
-    open_time: datetime
-    close_time: datetime
-    interval: str
-    open_price: Decimal
-    high_price: Decimal
-    low_price: Decimal
-    close_price: Decimal
-    volume: Decimal
-    quote_asset_volume: Decimal
-    number_of_trades: int
-    taker_buy_base_asset_volume: Decimal
-    taker_buy_quote_asset_volume: Decimal
-    price_change: Decimal | None
-    price_change_percent: Decimal | None
-    extracted_at: datetime
-    extractor_version: str
-    source: str
 
 
 class Trade(BaseModel):
