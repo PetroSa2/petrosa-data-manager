@@ -163,6 +163,7 @@ def mock_db_manager():
     collection.replace_one = AsyncMock()
     mongo.db.__getitem__.return_value = collection
     db_manager.mongodb_adapter = mongo
+    db_manager.mysql_adapter = MagicMock()
     return db_manager
 
 
@@ -251,6 +252,20 @@ async def test_dispatch_persists_with_deterministic_id(dispatcher, mock_db_manag
     assert doc["_id"] == event.make_id()
     assert doc["category"] == "position.reconciliation.mismatch"
     assert doc["dedupe_key"] == "pos-42"
+    assert mock_db_manager.mysql_adapter.write.call_args_list[-1].args == (
+        [event],
+        ALERTS_COLLECTION,
+    )
+
+
+@pytest.mark.asyncio
+async def test_alert_mysql_failure_does_not_block_mongo(dispatcher, mock_db_manager):
+    mock_db_manager.mysql_adapter.write.side_effect = RuntimeError("offline")
+    event = await dispatcher.dispatch(
+        subject="alerts.position.reconciliation.mismatch.pos-42", body=_body()
+    )
+    assert event is not None
+    mock_db_manager.mongodb_adapter.db[ALERTS_COLLECTION].replace_one.assert_called()
 
 
 @pytest.mark.asyncio
