@@ -78,6 +78,15 @@ MONGODB_URL = os.getenv(
 # self-heal (MongoDBAdapter.ensure_indexes) and the standalone maintenance job
 # (data_manager.maintenance.intents_ttl_index) so they never disagree.
 INTENTS_TTL_SECONDS = int(os.getenv("MONGODB_INTENTS_TTL_SECONDS", "86400"))
+INTENTS_MYSQL_PERSIST_ENABLED = (
+    os.getenv("PETROSA_INTENTS_MYSQL_PERSIST_ENABLED", "true").lower() == "true"
+)
+ALERTS_MYSQL_PERSIST_ENABLED = (
+    os.getenv("PETROSA_ALERTS_MYSQL_PERSIST_ENABLED", "true").lower() == "true"
+)
+FUNDING_RATES_MYSQL_PERSIST_ENABLED = (
+    os.getenv("PETROSA_FUNDING_RATES_MYSQL_PERSIST_ENABLED", "true").lower() == "true"
+)
 
 # Alerts TTL retention (data-manager#271). The `alerts` audit-trail collection is
 # a write-only sink (alert_dispatcher._persist) with NO confirmed reader; on the

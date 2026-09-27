@@ -3,12 +3,33 @@ Repository for funding rate data operations.
 """
 
 import logging
-from datetime import datetime
+import os
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from pydantic import BaseModel
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import FundingRate
 
 logger = logging.getLogger(__name__)
+
+
+class FundingRateMySQLRow(BaseModel):
+    """Shape of the existing extractor-owned ``funding_rates`` table."""
+
+    id: str
+    symbol: str
+    timestamp: datetime
+    funding_rate: Decimal
+    funding_time: datetime
+    mark_price: Decimal | None = None
+    index_price: Decimal | None = None
+    last_funding_rate: Decimal | None = None
+    funding_interval_hours: int = 8
+    extracted_at: datetime
+    extractor_version: str = "data-manager"
+    source: str = "data-manager"
 
 
 class FundingRepository(BaseRepository):
@@ -27,6 +48,7 @@ class FundingRepository(BaseRepository):
         try:
             collection = f"funding_rates_{funding.symbol}"
             count = await self.mongodb.write([funding], collection)
+            self._persist_mysql([funding])
             return count > 0
         except Exception as e:
             logger.error(f"Failed to insert funding rate for {funding.symbol}: {e}")
@@ -59,6 +81,7 @@ class FundingRepository(BaseRepository):
                 collection = f"funding_rates_{symbol}"
                 count = await self.mongodb.write(symbol_rates, collection)
                 total_inserted += count
+                self._persist_mysql(symbol_rates)
                 logger.debug(f"Inserted {count} funding rates for {symbol}")
 
             return total_inserted
@@ -66,6 +89,37 @@ class FundingRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to insert funding rate batch: {e}")
             return 0
+
+    def _persist_mysql(self, rates: list[FundingRate]) -> None:
+        """Best-effort durable copy; MongoDB remains the operational path."""
+        if (
+            os.getenv("PETROSA_FUNDING_RATES_MYSQL_PERSIST_ENABLED", "true").lower()
+            != "true"
+            or self.mysql is None
+        ):
+            return
+        try:
+            rows = [
+                FundingRateMySQLRow(
+                    id=f"{rate.symbol}:{rate.timestamp.isoformat()}",
+                    symbol=rate.symbol,
+                    timestamp=rate.timestamp,
+                    funding_rate=rate.funding_rate,
+                    funding_time=rate.next_funding_time or rate.timestamp,
+                    mark_price=rate.mark_price,
+                    extracted_at=datetime.now(UTC),
+                )
+                for rate in rates
+            ]
+            self.mysql.write(rows, "funding_rates")
+        except Exception:
+            try:
+                from data_manager.api.middleware.metrics import MYSQL_PERSIST_FAILURES
+
+                MYSQL_PERSIST_FAILURES.labels(collection="funding_rates").inc()
+            except Exception:
+                logger.debug("Unable to record funding MySQL failure", exc_info=True)
+            logger.warning("funding_rates_mysql_persist_failed", exc_info=True)
 
     async def get_range(
         self, symbol: str, start: datetime, end: datetime

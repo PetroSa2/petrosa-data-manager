@@ -35,6 +35,7 @@ def mock_db_manager():
     collection.insert_one = AsyncMock()
     mongo.db.__getitem__.return_value = collection
     db_manager.mongodb_adapter = mongo
+    db_manager.mysql_adapter = MagicMock()
     return db_manager
 
 
@@ -74,6 +75,27 @@ def test_intent_event_parses_valid_payload():
     assert event.confidence == 0.72
     assert event.subject == "cio.intent.trading"
     assert event.payload == {"extra_field": "preserved"}
+
+
+@pytest.mark.asyncio
+async def test_persist_dual_writes_to_mysql(intent_consumer, mock_db_manager):
+    event = IntentEvent.from_nats_message(_intent_payload())
+    assert event is not None
+    assert await intent_consumer._persist(event) is True
+    mock_db_manager.mysql_adapter.write.assert_called_once_with(
+        [event], INTENTS_COLLECTION
+    )
+
+
+@pytest.mark.asyncio
+async def test_persist_mysql_failure_does_not_block_mongo(
+    intent_consumer, mock_db_manager
+):
+    mock_db_manager.mysql_adapter.write.side_effect = RuntimeError("offline")
+    event = IntentEvent.from_nats_message(_intent_payload())
+    assert event is not None
+    assert await intent_consumer._persist(event) is True
+    mock_db_manager.mongodb_adapter.db.__getitem__.return_value.insert_one.assert_awaited_once()
 
 
 def test_intent_event_rejects_missing_required_fields():
