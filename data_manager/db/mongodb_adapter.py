@@ -746,6 +746,11 @@ class MongoDBAdapter(BaseAdapter):
                         name="expires_at_ttl",
                     ),
                 ]
+            elif collection == "config_rate_limits":
+                indexes = [
+                    IndexModel([("changed_by", ASCENDING), ("timestamp", DESCENDING)]),
+                    IndexModel([("timestamp", ASCENDING)]),
+                ]
             elif collection.startswith("klines_"):
                 indexes = [
                     IndexModel(
