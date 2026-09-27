@@ -83,6 +83,12 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "schemas": transient_only(reason="schema metadata can be recreated from source"),
     "app_config": transient_only(reason="runtime configuration; managed by deployment"),
     "app_config_audit": transient_only(reason="configuration audit view"),
+    "service_configs": transient_only(
+        reason="runtime configuration; managed via /api/v1/config/services"
+    ),
+    "service_config_audit": transient_only(
+        reason="configuration audit view; managed via /api/v1/config/services"
+    ),
     "strategy_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"
     ),

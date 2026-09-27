@@ -39,6 +39,7 @@ from data_manager.api.routes import (
     portfolio_state,
     raw,
     schemas,
+    service_config,
     strategies,
     strategy_lifecycle,
     strategy_timeline,
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(health.router, prefix="/health", tags=["Health"])
     app.include_router(config_rate_limits.router)
+    app.include_router(service_config.router)
     app.include_router(config.router, tags=["Configuration"])
     app.include_router(raw.router, prefix="/api/v1/raw", tags=["Raw Queries"])
     app.include_router(
