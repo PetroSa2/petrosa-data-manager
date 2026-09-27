@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -264,6 +265,7 @@ class IntentConsumer:
             doc = event.model_dump(exclude_none=True)
             doc["_id"] = event.intent_id
             doc = adapter._prepare_for_bson(doc)
+            mongo_persisted = False
             try:
                 from pymongo.errors import DuplicateKeyError
             except (
@@ -272,13 +274,33 @@ class IntentConsumer:
                 DuplicateKeyError = Exception  # type: ignore[assignment, misc]
             try:
                 await adapter.db[INTENTS_COLLECTION].insert_one(doc)
-                return True
+                mongo_persisted = True
             except DuplicateKeyError:
                 logger.debug(
                     "intent_already_persisted",
                     extra={"intent_id": event.intent_id},
                 )
-                return True
+                mongo_persisted = True
+            if mongo_persisted and os.getenv(
+                "PETROSA_INTENTS_MYSQL_PERSIST_ENABLED", "true"
+            ).lower() == "true":
+                mysql = getattr(self.db_manager, "mysql_adapter", None)
+                if mysql is not None:
+                    try:
+                        mysql.write([event], INTENTS_COLLECTION)
+                    except Exception:
+                        _record_mysql_persist_failure(INTENTS_COLLECTION)
+                        logger.warning("intent_mysql_persist_failed", exc_info=True)
+            return mongo_persisted
         except Exception as e:
             logger.error(f"Failed to persist intent {event.intent_id}: {e}")
             return False
+
+
+def _record_mysql_persist_failure(collection: str) -> None:
+    try:
+        from data_manager.api.middleware.metrics import MYSQL_PERSIST_FAILURES
+
+        MYSQL_PERSIST_FAILURES.labels(collection=collection).inc()
+    except Exception:
+        logger.debug("Unable to record MySQL persistence failure", exc_info=True)

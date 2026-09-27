@@ -3,6 +3,7 @@ Repository for funding rate data operations.
 """
 
 import logging
+import os
 from datetime import datetime
 
 from data_manager.db.repositories.base_repository import BaseRepository
@@ -27,6 +28,7 @@ class FundingRepository(BaseRepository):
         try:
             collection = f"funding_rates_{funding.symbol}"
             count = await self.mongodb.write([funding], collection)
+            self._persist_mysql([funding])
             return count > 0
         except Exception as e:
             logger.error(f"Failed to insert funding rate for {funding.symbol}: {e}")
@@ -59,6 +61,7 @@ class FundingRepository(BaseRepository):
                 collection = f"funding_rates_{symbol}"
                 count = await self.mongodb.write(symbol_rates, collection)
                 total_inserted += count
+                self._persist_mysql(symbol_rates)
                 logger.debug(f"Inserted {count} funding rates for {symbol}")
 
             return total_inserted
@@ -66,6 +69,25 @@ class FundingRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to insert funding rate batch: {e}")
             return 0
+
+    def _persist_mysql(self, rates: list[FundingRate]) -> None:
+        """Best-effort durable copy; MongoDB remains the operational path."""
+        if (
+            os.getenv("PETROSA_FUNDING_RATES_MYSQL_PERSIST_ENABLED", "true").lower()
+            != "true"
+            or self.mysql is None
+        ):
+            return
+        try:
+            self.mysql.write(rates, "funding_rates")
+        except Exception:
+            try:
+                from data_manager.api.middleware.metrics import MYSQL_PERSIST_FAILURES
+
+                MYSQL_PERSIST_FAILURES.labels(collection="funding_rates").inc()
+            except Exception:
+                logger.debug("Unable to record funding MySQL failure", exc_info=True)
+            logger.warning("funding_rates_mysql_persist_failed", exc_info=True)
 
     async def get_range(
         self, symbol: str, start: datetime, end: datetime

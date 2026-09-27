@@ -416,6 +416,43 @@ class MySQLAdapter(BaseAdapter):
             **event_table_args,
         )
 
+        self.tables["intents"] = Table(
+            "intents",
+            self.metadata,
+            Column("intent_id", String(191), primary_key=True),
+            Column("strategy_id", String(128), nullable=False),
+            Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
+            Column("decision_id", String(128)),
+            Column("symbol", String(32)),
+            Column("action", String(32)),
+            Column("confidence", Numeric(8, 6)),
+            Column("subject", String(255)),
+            Column("payload", JSON, nullable=False),
+            Column("received_at", MySQLDateTime(fsp=6), nullable=False),
+            Index("idx_intents_decision_timestamp", "decision_id", "timestamp"),
+            **event_table_args,
+        )
+        self.tables["alerts"] = Table(
+            "alerts",
+            self.metadata,
+            Column("alert_key", String(191), primary_key=True),
+            Column("category", String(128), nullable=False),
+            Column("severity", String(32), nullable=False),
+            Column("subsystem", String(64)),
+            Column("strategy_id", String(128)),
+            Column("message", Text),
+            Column("decision_id", String(128)),
+            Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
+            Column("delivery_state", String(32), nullable=False),
+            Column("payload", JSON, nullable=False),
+            Column("delivery_attempts", JSON, nullable=False),
+            Column("dedupe_key", String(191), nullable=False),
+            Column("summarized_ids", JSON, nullable=False),
+            Column("created_at", MySQLDateTime(fsp=6), nullable=False),
+            Index("idx_alerts_timestamp", "timestamp"),
+            **event_table_args,
+        )
+
         # Create all tables
         if self.engine is not None:
             self.metadata.create_all(self.engine)
@@ -651,6 +688,8 @@ class MySQLAdapter(BaseAdapter):
         records: list[dict[str, Any]] = []
         for instance in model_instances:
             record = instance.model_dump()
+            if collection == "alerts" and hasattr(instance, "make_id"):
+                record["alert_key"] = instance.make_id()
             if collection == "execution_events" and "event_key" not in record:
                 record["event_key"] = f"{record['order_id']}:{record['event_type']}"
             elif collection == "pnl_events" and "event_key" not in record:

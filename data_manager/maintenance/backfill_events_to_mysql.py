@@ -15,7 +15,10 @@ from typing import Any
 import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
+from data_manager.models.alert import AlertEvent
 from data_manager.models.execution_event import ExecutionEvent
+from data_manager.models.intent import IntentEvent
+from data_manager.models.market_data import FundingRate
 from data_manager.models.pnl_event import PnlEvent
 
 logger = logging.getLogger(__name__)
@@ -23,6 +26,9 @@ logger = logging.getLogger(__name__)
 EVENT_SPECS: tuple[tuple[str, type[Any]], ...] = (
     ("execution_events", ExecutionEvent),
     ("pnl_events", PnlEvent),
+    ("intents", IntentEvent),
+    ("alerts", AlertEvent),
+    ("funding_rates", FundingRate),
 )
 
 
@@ -66,18 +72,31 @@ async def run_backfill(
     *,
     batch_size: int = 500,
     dry_run: bool = True,
+    collections: list[str] | None = None,
 ) -> dict[str, int]:
-    """Backfill both event streams and return per-collection counts."""
+    """Backfill selected durable streams and return per-collection counts."""
     counts: dict[str, int] = {}
+    selected = collections or ["execution_events", "pnl_events"]
     for collection, model_factory in EVENT_SPECS:
-        counts[collection] = await backfill_collection(
-            mongo_adapter.db[collection],
-            mysql_adapter,
-            collection,
-            model_factory,
-            batch_size=batch_size,
-            dry_run=dry_run,
-        )
+        if collection not in selected:
+            continue
+        mongo_collections = [collection]
+        if collection == "funding_rates":
+            names = mongo_adapter.db.list_collection_names()
+            if hasattr(names, "__await__"):
+                names = await names
+            mongo_collections = [name for name in names if name.startswith("funding_rates_")]
+        count = 0
+        for mongo_name in mongo_collections:
+            count += await backfill_collection(
+                mongo_adapter.db[mongo_name],
+                mysql_adapter,
+                collection,
+                model_factory,
+                batch_size=batch_size,
+                dry_run=dry_run,
+            )
+        counts[collection] = count
     return counts
 
 
@@ -91,6 +110,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="report counts without writing (the default)",
     )
     parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument(
+        "--collections",
+        default=None,
+        help="comma-separated collections (default: all durable collections)",
+    )
     return parser.parse_args(argv)
 
 
@@ -107,10 +131,15 @@ async def _amain(args: argparse.Namespace) -> int:
             mysql,
             batch_size=args.batch_size,
             dry_run=not args.apply,
+            collections=(
+                [item.strip() for item in args.collections.split(",") if item.strip()]
+                if getattr(args, "collections", None)
+                else None
+            ),
         )
         mode = "apply" if args.apply else "dry-run"
         print(
-            f"mode={mode} execution_events={counts['execution_events']} pnl_events={counts['pnl_events']}"
+            "mode=" + mode + " " + " ".join(f"{key}={value}" for key, value in counts.items())
         )
         return 0
     finally:
