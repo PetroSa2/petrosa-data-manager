@@ -682,6 +682,8 @@ class MongoDBAdapter(BaseAdapter):
                         name="strategy_id_transitioned_at",
                     )
                 ]
+            elif collection == "cio_auto_resume_registry":
+                indexes = [IndexModel([("strategy_id", ASCENDING)], unique=True)]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection
                 # CIO has assigned decision_id by the time it publishes onto

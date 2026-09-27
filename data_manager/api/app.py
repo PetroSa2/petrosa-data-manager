@@ -22,6 +22,7 @@ from data_manager.api.routes import (
     breaches,
     catalog,
     characterizations,
+    cio_state,
     config,
     config_rate_limits,
     dashboard,
@@ -162,6 +163,7 @@ def create_app() -> FastAPI:
         prefix="/api/v1",
         tags=["Strategy Lifecycle"],
     )
+    app.include_router(cio_state.router, tags=["CIO Auto Resume"])
     app.include_router(pnl.router, prefix="/api/v1", tags=["P&L"])
     # System trade audit trail from execution_events (#529).
     app.include_router(system_trades.router, prefix="/api/v1", tags=["System Trades"])
