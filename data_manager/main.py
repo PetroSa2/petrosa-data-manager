@@ -201,6 +201,7 @@ class DataManagerApp:
                     self.db_manager.mongodb_adapter
                 ).ensure_indexes()
                 await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
+                await self.db_manager.mongodb_adapter.ensure_indexes("funding_rates")
                 for collection in (
                     "health_metrics",
                     "audit_logs",
