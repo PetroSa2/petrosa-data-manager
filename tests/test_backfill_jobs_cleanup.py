@@ -1,10 +1,10 @@
-from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import Column, DateTime, MetaData, String, Table, create_engine, select
 from sqlalchemy.pool import StaticPool
 
+import data_manager.maintenance.backfill_jobs_cleanup as cleanup_module
 from data_manager.maintenance.backfill_jobs_cleanup import (
     LEGACY_ERROR,
     cleanup_legacy_jobs,
@@ -65,3 +65,33 @@ def test_cleanup_apply_updates_only_empty_data_type_rows():
     assert rows[0].completed_at is not None
     assert rows[1].status == "pending"
     assert rows[1].error_message is None
+
+
+@pytest.mark.unit
+def test_main_defaults_to_dry_run(monkeypatch):
+    mysql, _table, _engine = _fixture()
+    calls = []
+    monkeypatch.setattr(cleanup_module, "MySQLAdapter", lambda **_: mysql)
+    monkeypatch.setattr(
+        cleanup_module,
+        "cleanup_legacy_jobs",
+        lambda adapter, *, dry_run: calls.append(dry_run) or 1,
+    )
+
+    assert cleanup_module.main([]) == 0
+    assert calls == [True]
+
+
+@pytest.mark.unit
+def test_main_apply_updates_rows(monkeypatch):
+    mysql, _table, _engine = _fixture()
+    calls = []
+    monkeypatch.setattr(cleanup_module, "MySQLAdapter", lambda **_: mysql)
+    monkeypatch.setattr(
+        cleanup_module,
+        "cleanup_legacy_jobs",
+        lambda adapter, *, dry_run: calls.append(dry_run) or 1,
+    )
+
+    assert cleanup_module.main(["--apply"]) == 0
+    assert calls == [False]
