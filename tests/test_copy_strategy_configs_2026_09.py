@@ -5,6 +5,7 @@ import pytest
 
 from data_manager.maintenance.copy_strategy_configs_2026_09 import (
     copy_strategy_configs,
+    preferred_document,
 )
 
 
@@ -86,3 +87,41 @@ async def test_apply_keeps_higher_version():
     await copy_strategy_configs(client, dry_run=False)
 
     target_global.replace_one.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_symbol_document_targets_symbol_collection_and_audits_deduplicate():
+    client = MagicMock()
+    source = _Db()
+    target = _Db()
+    source["strategy_configs_global"] = _collection([])
+    source["strategy_configs_symbol"] = _collection([])
+    source["strategy_config_audit"] = _collection([{"_id": "audit-1"}])
+    legacy = _collection(
+        [{"strategy_id": "s1", "symbol": "BTCUSDT", "side": "LONG", "version": 1}]
+    )
+    target["strategy_configs"] = legacy
+    target["strategy_configs_global"] = _collection([])
+    target["strategy_configs_symbol"] = _collection([])
+    target["strategy_config_audit"] = _collection([])
+    target["strategy_config_audit"].find_one = AsyncMock(
+        return_value={"_id": "audit-1"}
+    )
+    client.__getitem__.side_effect = [source, target]
+
+    results = await copy_strategy_configs(client, dry_run=False)
+
+    assert results["strategy_configs_legacy"]["copied"] == 1
+    target["strategy_configs_symbol"].replace_one.assert_called_once()
+    target["strategy_config_audit"].insert_one.assert_not_called()
+
+
+def test_preferred_document_skips_older_candidate():
+    existing = {"version": 2}
+    candidate = {"version": 1}
+
+    winner, should_copy, conflict = preferred_document(existing, candidate)
+
+    assert winner is existing
+    assert should_copy is False
+    assert conflict is True
