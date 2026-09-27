@@ -8,6 +8,7 @@ from data_manager.api.routes import service_config
 from data_manager.api.routes.service_config import ServiceConfigRequest
 from data_manager.db.repositories.service_config_repository import (
     ServiceConfigRepository,
+    ServiceConfigVersionConflict,
 )
 
 
@@ -103,6 +104,17 @@ async def test_repository_list_get_and_audit(repository):
 
 
 @pytest.mark.asyncio
+async def test_repository_versioned_update_and_indexes(repository):
+    await repository.ensure_indexes()
+    await repository.put("service", "key", 1, "ops", None, 0)
+    updated = await repository.put("service", "key", 2, "ops", "change", 1)
+    assert updated["version"] == 2
+    with pytest.raises(ServiceConfigVersionConflict) as conflict:
+        await repository.put("service", "key", 3, "ops", None, 1)
+    assert conflict.value.current_version == 2
+
+
+@pytest.mark.asyncio
 async def test_routes_validate_and_return_values(monkeypatch):
     fake = SimpleNamespace(
         list=AsyncMock(
@@ -133,6 +145,27 @@ async def test_routes_validate_and_return_values(monkeypatch):
     )
     assert response["version"] == 1
     assert (await service_config.get_service_config_audit("svc")) == {"entries": []}
+
+
+@pytest.mark.asyncio
+async def test_routes_map_repository_errors(monkeypatch):
+    fake = SimpleNamespace(
+        get=AsyncMock(side_effect=RuntimeError("mongo down")),
+        put=AsyncMock(side_effect=RuntimeError("mongo down")),
+        audit_entries=AsyncMock(side_effect=RuntimeError("mongo down")),
+    )
+    monkeypatch.setattr(service_config, "_repository", lambda: fake)
+    with pytest.raises(HTTPException) as get_error:
+        await service_config.get_service_config_key("svc", "key")
+    assert get_error.value.status_code == 503
+    with pytest.raises(HTTPException) as put_error:
+        await service_config.put_service_config(
+            "svc", "key", ServiceConfigRequest(value=1, changed_by="ops")
+        )
+    assert put_error.value.status_code == 503
+    with pytest.raises(HTTPException) as audit_error:
+        await service_config.get_service_config_audit("svc", key="key", limit=1)
+    assert audit_error.value.status_code == 503
 
 
 @pytest.mark.asyncio
