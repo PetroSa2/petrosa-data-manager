@@ -193,6 +193,13 @@ class DataManagerApp:
             await self.db_manager.initialize()
             logger.info("Database connections initialized successfully")
             if self.db_manager.mongodb_adapter:
+                from data_manager.db.repositories.service_config_repository import (
+                    ServiceConfigRepository,
+                )
+
+                await ServiceConfigRepository(
+                    self.db_manager.mongodb_adapter
+                ).ensure_indexes()
                 await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
                 for timeframe in constants.SUPPORTED_INTERVALS:
                     await self.db_manager.mongodb_adapter.ensure_indexes(
@@ -205,9 +212,10 @@ class DataManagerApp:
 
                 api.app.db_manager = self.db_manager
                 # Also update repositories in routers
-                from data_manager.api.routes import config, ingest
+                from data_manager.api.routes import config, ingest, service_config
 
                 config.set_database_manager(self.db_manager)
+                service_config.set_database_manager(self.db_manager)
                 ingest.set_database_manager(self.db_manager)
 
         except Exception as e:
@@ -615,11 +623,12 @@ class DataManagerApp:
         # Create app and set database manager reference
         app = create_app()
         from data_manager import api
-        from data_manager.api.routes import backfill, config, ingest
+        from data_manager.api.routes import backfill, config, ingest, service_config
 
         api.app.db_manager = self.db_manager
         backfill.backfill_orchestrator = getattr(self, "backfill_orchestrator", None)
         config.set_database_manager(self.db_manager)
+        service_config.set_database_manager(self.db_manager)
         ingest.set_database_manager(self.db_manager)
 
         # Initialize and set configuration rate limiter
