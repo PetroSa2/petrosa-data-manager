@@ -95,3 +95,40 @@ def test_ingest_funding_builds_models(monkeypatch):
     assert result == {"symbol": "BTCUSDT", "received": 2, "inserted": 2}
     assert inserted.await_count == 1
     assert len(inserted.await_args.args[0]) == 2
+
+
+def test_ingest_reports_unavailable_mysql_and_invalid_funding():
+    collection = Mock()
+    collection.bulk_write = AsyncMock(return_value=SimpleNamespace())
+    ingest.set_database_manager(_manager(collection, None))
+    result = asyncio.run(
+        ingest.ingest_klines(
+            ingest.KlinesRequest(symbol="BTCUSDT", interval="15m", klines=[])
+        )
+    )
+    assert result["mysql_copy"] == "unavailable"
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as invalid:
+        asyncio.run(
+            ingest.ingest_funding(
+                ingest.FundingRequest(symbol="BTCUSDT", rates=[{"funding_rate": 1}])
+            )
+        )
+    assert invalid.value.status_code == 422
+
+
+def test_ingest_requires_mongo():
+    from fastapi import HTTPException
+
+    ingest.set_database_manager(
+        SimpleNamespace(mongodb_adapter=None, mysql_adapter=None)
+    )
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(
+            ingest.ingest_klines(
+                ingest.KlinesRequest(symbol="BTCUSDT", interval="15m", klines=[])
+            )
+        )
+    assert failure.value.status_code == 503

@@ -3,7 +3,10 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from data_manager.maintenance.copy_mongo_klines_to_mysql import copy_interval
+from data_manager.maintenance.copy_mongo_klines_to_mysql import (
+    copy_interval,
+    map_documents,
+)
 
 
 def _doc(timestamp):
@@ -61,3 +64,24 @@ def test_apply_batches_rows():
     )
     assert count == 2
     assert mysql.write_batch.call_count == 2
+
+
+def test_map_documents_skips_invalid_rows():
+    assert map_documents([_doc(datetime(2026, 1, 1, tzinfo=UTC))], "15m")
+    assert map_documents([{"symbol": "BTCUSDT", "timestamp": "bad"}], "15m") == []
+    assert (
+        map_documents(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "open_price": "0",
+                    "high_price": "1",
+                    "low_price": "1",
+                    "close_price": "1",
+                }
+            ],
+            "15m",
+        )
+        == []
+    )
