@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 import data_manager.api.routes.strategy_lifecycle as routes
 from data_manager.db.repositories.strategy_lifecycle_repository import (
@@ -120,3 +121,42 @@ async def test_routes_empty_state_and_events(monkeypatch):
         "events": [],
         "count": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_routes_serialize_events_and_report_repository_errors(monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    repo = MagicMock()
+    repo.get_events = AsyncMock(
+        return_value=[{"_id": "event-1", "to_state": "running", "transitioned_at": now}]
+    )
+    monkeypatch.setattr(routes, "_repo", lambda: repo)
+    result = await routes.get_events("s1", 2, "desc")
+    assert result["events"][0]["event_id"] == "event-1"
+    assert result["events"][0]["transitioned_at"].endswith("+00:00")
+
+    repo.insert_event = AsyncMock(side_effect=RuntimeError("write failed"))
+    with pytest.raises(HTTPException) as create_error:
+        await routes.create_event(
+            routes.LifecycleEventRequest(to_state="running", transitioned_by="test"),
+            "s1",
+        )
+    assert create_error.value.status_code == 503
+
+    repo.get_state = AsyncMock(side_effect=RuntimeError("read failed"))
+    with pytest.raises(HTTPException) as state_error:
+        await routes.get_state("s1")
+    assert state_error.value.status_code == 503
+
+    repo.get_events = AsyncMock(side_effect=RuntimeError("read failed"))
+    with pytest.raises(HTTPException) as events_error:
+        await routes.get_events("s1", 2, "asc")
+    assert events_error.value.status_code == 503
+
+
+def test_repository_factory_requires_database(monkeypatch):
+    monkeypatch.setattr(routes.api_module, "db_manager", None)
+    with pytest.raises(HTTPException) as error:
+        routes._repo()
+    assert error.value.status_code == 503
+    assert routes._iso(None) is None
