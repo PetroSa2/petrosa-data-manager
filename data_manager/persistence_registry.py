@@ -94,7 +94,7 @@ REGISTRY: dict[str, PersistenceSpec] = {
         reason="retired legacy strategy configuration; retained for migration fallback"
     ),
     "strategy_lifecycle_events": transient_only(
-        reason="rebuildable lifecycle projection"
+        reason="operational strategy lifecycle state (served via /api/v1/strategies/{id}/lifecycle)"
     ),
     "trading_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"

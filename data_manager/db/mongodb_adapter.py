@@ -675,6 +675,13 @@ class MongoDBAdapter(BaseAdapter):
                 indexes = [
                     IndexModel([("strategy_id", ASCENDING), ("changed_at", DESCENDING)])
                 ]
+            elif collection == "strategy_lifecycle_events":
+                indexes = [
+                    IndexModel(
+                        [("strategy_id", ASCENDING), ("transitioned_at", DESCENDING)],
+                        name="strategy_id_transitioned_at",
+                    )
+                ]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection
                 # CIO has assigned decision_id by the time it publishes onto
