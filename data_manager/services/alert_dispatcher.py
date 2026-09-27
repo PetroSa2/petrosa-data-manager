@@ -485,6 +485,21 @@ class AlertDispatcher:
                 exc_info=True,
             )
             return False
+        if os.getenv("PETROSA_ALERTS_MYSQL_PERSIST_ENABLED", "true").lower() == "true":
+            mysql = getattr(self.db_manager, "mysql_adapter", None)
+            if mysql is not None:
+                try:
+                    mysql.write([event], ALERTS_COLLECTION)
+                except Exception:
+                    try:
+                        from data_manager.api.middleware.metrics import (
+                            MYSQL_PERSIST_FAILURES,
+                        )
+
+                        MYSQL_PERSIST_FAILURES.labels(collection=ALERTS_COLLECTION).inc()
+                    except Exception:
+                        logger.debug("Unable to record alert MySQL failure", exc_info=True)
+                    logger.warning("alert_mysql_persist_failed", exc_info=True)
         return True
 
 
