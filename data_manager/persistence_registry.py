@@ -20,13 +20,16 @@ class PersistenceSpec:
     min_retention: str | None = None
 
 
-def durable(*, mysql_table: str, key: str, pending: bool = False) -> PersistenceSpec:
+def durable(
+    *, mysql_table: str, key: str, pending: bool = False, reason: str | None = None
+) -> PersistenceSpec:
     """Declare a Mongo collection whose long-lived copy is in MySQL."""
 
     return PersistenceSpec(
         classification="durable",
         mysql_table=mysql_table,
         key=key,
+        reason=reason,
         pending=pending,
     )
 
@@ -140,8 +143,17 @@ REGISTRY: dict[str, PersistenceSpec] = {
 
 PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
     (
-        "funding_rates_",
+        "funding_rates",
         durable(mysql_table="funding_rates", key="symbol+timestamp", pending=True),
+    ),
+    (
+        "funding_rates_",
+        durable(
+            mysql_table="funding_rates",
+            key="symbol+timestamp",
+            pending=True,
+            reason="legacy per-symbol funding collections",
+        ),
     ),
     ("candles_", transient_only(reason="recomputable from durable MySQL klines")),
     (
