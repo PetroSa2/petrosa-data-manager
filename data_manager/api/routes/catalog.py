@@ -2,6 +2,7 @@
 Data catalog endpoints for dataset metadata and schemas.
 """
 
+import inspect
 import logging
 from datetime import datetime, timezone
 
@@ -112,6 +113,8 @@ async def list_datasets(
     catalog_repo = _get_catalog_repo()
     if catalog_repo:
         datasets_data = catalog_repo.get_all_datasets()
+        if inspect.isawaitable(datasets_data):
+            datasets_data = await datasets_data
 
         datasets = [
             DatasetInfo(
@@ -214,6 +217,8 @@ async def get_dataset_metadata(
         raise HTTPException(status_code=503, detail="Database not available")
 
     dataset = catalog_repo.get_dataset(dataset_id)
+    if inspect.isawaitable(dataset):
+        dataset = await dataset
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 
@@ -244,6 +249,8 @@ async def get_schema(
         raise HTTPException(status_code=503, detail="Database not available")
 
     dataset = catalog_repo.get_dataset(dataset_id)
+    if inspect.isawaitable(dataset):
+        dataset = await dataset
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 
@@ -270,6 +277,8 @@ async def get_lineage(
         raise HTTPException(status_code=503, detail="Database not available")
 
     dataset = catalog_repo.get_dataset(dataset_id)
+    if inspect.isawaitable(dataset):
+        dataset = await dataset
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 

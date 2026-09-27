@@ -763,6 +763,31 @@ class MongoDBAdapter(BaseAdapter):
                         name="_ttl_inserted_at_ttl",
                     ),
                 ]
+            elif collection == "health_metrics":
+                indexes = [
+                    IndexModel([("symbol", ASCENDING), ("timestamp", DESCENDING)]),
+                    IndexModel(
+                        [("timestamp", ASCENDING)],
+                        expireAfterSeconds=constants.HEALTH_METRICS_TTL_SECONDS,
+                        name="timestamp_ttl",
+                    ),
+                ]
+            elif collection == "audit_logs":
+                indexes = [
+                    IndexModel([("dataset_id", ASCENDING), ("timestamp", DESCENDING)]),
+                    IndexModel([("timestamp", DESCENDING)]),
+                    IndexModel(
+                        [("timestamp", ASCENDING)],
+                        expireAfterSeconds=constants.AUDIT_LOGS_TTL_SECONDS,
+                        name="timestamp_ttl",
+                    ),
+                ]
+            elif collection == "datasets":
+                indexes = [IndexModel([("dataset_id", ASCENDING)], unique=True)]
+            elif collection == "lineage_records":
+                indexes = [
+                    IndexModel([("dataset_id", ASCENDING), ("created_at", DESCENDING)])
+                ]
             elif collection == "service_leases":
                 indexes = [
                     IndexModel([("name", ASCENDING)], unique=True, name="name_unique"),

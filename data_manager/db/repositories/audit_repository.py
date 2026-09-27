@@ -14,13 +14,14 @@ except ImportError:
 
     UTC = timezone.utc  # noqa: UP017
 
+import constants
 from data_manager.db.repositories.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 
 
 class AuditRepository(BaseRepository):
-    """Repository for managing audit logs in MySQL."""
+    """Repository for operational audit logs in MongoDB."""
 
     async def log_gap(
         self,
@@ -43,9 +44,16 @@ class AuditRepository(BaseRepository):
         Returns:
             True if successful
         """
-        if self.mysql is None:
-            logger.warning("audit_logs_mysql_unavailable")
-            return False
+        if self.mongodb is None:
+            return await self._legacy_write(
+                audit_log=None,
+                kind="gap",
+                dataset_id=dataset_id,
+                symbol=symbol,
+                gap_start=gap_start,
+                gap_end=gap_end,
+                severity=severity,
+            )
 
         try:
             audit_log = {
@@ -63,9 +71,8 @@ class AuditRepository(BaseRepository):
                 def model_dump(self):
                     return audit_log
 
-            # petrosa-data-manager#312: offload the blocking SQLAlchemy call
-            # (see CandleRepository.write_batch comment for full rationale).
-            await asyncio.to_thread(self.mysql.write, [AuditLog()], "audit_logs")
+            await self.mongodb.write([AuditLog()], "audit_logs")
+            self._schedule_mysql_copy(audit_log)
             return True
 
         except Exception as e:
@@ -87,9 +94,15 @@ class AuditRepository(BaseRepository):
         Returns:
             True if successful
         """
-        if self.mysql is None:
-            logger.warning("audit_logs_mysql_unavailable")
-            return False
+        if self.mongodb is None:
+            return await self._legacy_write(
+                audit_log=None,
+                kind="health_check",
+                dataset_id=dataset_id,
+                symbol=symbol,
+                details=details,
+                severity=severity,
+            )
 
         try:
             audit_log = {
@@ -106,7 +119,8 @@ class AuditRepository(BaseRepository):
                 def model_dump(self):
                     return audit_log
 
-            await asyncio.to_thread(self.mysql.write, [AuditLog()], "audit_logs")
+            await self.mongodb.write([AuditLog()], "audit_logs")
+            self._schedule_mysql_copy(audit_log)
             return True
 
         except Exception as e:
@@ -126,18 +140,81 @@ class AuditRepository(BaseRepository):
         Returns:
             List of audit log dictionaries
         """
-        if self.mysql is None:
-            logger.warning("audit_logs_mysql_unavailable")
-            return []
+        if self.mongodb is None:
+            return await self._legacy_recent(dataset_id, limit)
 
         try:
-            logs = await asyncio.to_thread(
-                self.mysql.query_latest, "audit_logs", symbol=dataset_id, limit=limit
+            logs = await self.mongodb.find_filtered(
+                "audit_logs",
+                filters={"dataset_id": dataset_id},
+                limit=limit,
+                sort_field="timestamp",
+                sort_order=-1,
             )
             return logs
         except Exception as e:
             logger.error(f"Failed to get recent logs: {e}")
             return []
+
+    async def _legacy_write(
+        self, audit_log, kind, dataset_id, symbol, severity, **kwargs
+    ):
+        if self.mysql is None:
+            logger.warning("audit_logs_mongodb_unavailable")
+            return False
+        try:
+            record = audit_log or {
+                "audit_id": str(uuid.uuid4()),
+                "dataset_id": dataset_id,
+                "symbol": symbol,
+                "audit_type": kind,
+                "severity": severity,
+                "details": (
+                    f"Gap from {kwargs['gap_start']} to {kwargs['gap_end']}"
+                    if kind == "gap"
+                    else kwargs["details"]
+                ),
+                "timestamp": datetime.now(UTC),
+            }
+
+            class AuditLog:
+                def model_dump(self):
+                    return record
+
+            await asyncio.to_thread(self.mysql.write, [AuditLog()], "audit_logs")
+            return True
+        except Exception as exc:
+            logger.error("Failed to write legacy audit log: %s", exc)
+            return False
+
+    async def _legacy_recent(self, dataset_id: str | None, limit: int) -> list[dict]:
+        if self.mysql is None:
+            logger.warning("audit_logs_mongodb_unavailable")
+            return []
+        try:
+            return await asyncio.to_thread(
+                self.mysql.query_latest, "audit_logs", symbol=dataset_id, limit=limit
+            )
+        except Exception as exc:
+            logger.error("Failed to read legacy audit logs: %s", exc)
+            return []
+
+    def _schedule_mysql_copy(self, record: dict) -> None:
+        if not constants.MONITORING_MYSQL_COPY_ENABLED or self.mysql is None:
+            return
+
+        async def copy() -> None:
+            try:
+
+                class AuditLog:
+                    def model_dump(self):
+                        return record
+
+                await asyncio.to_thread(self.mysql.write, [AuditLog()], "audit_logs")
+            except Exception as exc:
+                logger.warning("audit_logs_mysql_copy_failed: %s", exc)
+
+        asyncio.create_task(copy())
 
     async def query_decisions(
         self,

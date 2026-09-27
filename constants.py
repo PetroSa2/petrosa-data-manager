@@ -120,6 +120,14 @@ ALERTS_TTL_SECONDS = int(os.getenv("MONGODB_ALERTS_TTL_SECONDS", "604800"))
 # grow silently for 4 days.
 CIO_DECISIONS_TTL_SECONDS = int(os.getenv("MONGODB_CIO_DECISIONS_TTL_SECONDS", "86400"))
 
+# Monitoring history is operational data. MongoDB is the serving store; the
+# optional MySQL copy is for historic analysis only and is disabled by default.
+HEALTH_METRICS_TTL_SECONDS = int(os.getenv("HEALTH_METRICS_TTL_SECONDS", "2592000"))
+AUDIT_LOGS_TTL_SECONDS = int(os.getenv("AUDIT_LOGS_TTL_SECONDS", "2592000"))
+MONITORING_MYSQL_COPY_ENABLED = (
+    os.getenv("PETROSA_MONITORING_MYSQL_COPY_ENABLED", "false").lower() == "true"
+)
+
 # Trades retention (data-manager#246). The `trades` collection (raw public-trade
 # ticks written directly by the binance-futures extractor) grows unbounded at
 # ~22 MB/day and drove the 4th Atlas M0 quota P0 (2026-07-01: 870k docs / ~349 MB,

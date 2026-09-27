@@ -201,6 +201,13 @@ class DataManagerApp:
                     self.db_manager.mongodb_adapter
                 ).ensure_indexes()
                 await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
+                for collection in (
+                    "health_metrics",
+                    "audit_logs",
+                    "datasets",
+                    "lineage_records",
+                ):
+                    await self.db_manager.mongodb_adapter.ensure_indexes(collection)
                 for timeframe in constants.SUPPORTED_INTERVALS:
                     await self.db_manager.mongodb_adapter.ensure_indexes(
                         f"klines_{timeframe}"

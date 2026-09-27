@@ -130,6 +130,12 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "mysql_index_usage_snapshots": transient_only(
         reason="bounded MySQL userstat trend snapshots with a 90-day TTL"
     ),
+    "health_metrics": transient_only(reason="monitoring history; MongoDB TTL 30 days"),
+    "audit_logs": transient_only(reason="monitoring history; MongoDB TTL 30 days"),
+    "datasets": transient_only(reason="catalog metadata; rebuilt by catalog registry"),
+    "lineage_records": transient_only(
+        reason="catalog metadata; rebuilt by catalog registry"
+    ),
 }
 
 PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
