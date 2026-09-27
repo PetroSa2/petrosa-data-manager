@@ -518,6 +518,8 @@ class MongoDBAdapter(BaseAdapter):
         sort_list: list[tuple[str, int]] | None = None,
         limit: int = 100,
         offset: int = 0,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Query a collection with filter/sort/limit/offset pushed to the driver.
 
@@ -549,6 +551,13 @@ class MongoDBAdapter(BaseAdapter):
             raise DatabaseError("Not connected to database")
 
         query = self._build_equality_query(filter_dict)
+        if start is not None or end is not None:
+            timestamp_filter: dict[str, datetime] = {}
+            if start is not None:
+                timestamp_filter["$gte"] = start
+            if end is not None:
+                timestamp_filter["$lt"] = end
+            query["timestamp"] = timestamp_filter
 
         try:
             coll = self.db[collection]
@@ -801,6 +810,10 @@ class MongoDBAdapter(BaseAdapter):
                 indexes = [
                     IndexModel([("changed_by", ASCENDING), ("timestamp", DESCENDING)]),
                     IndexModel([("timestamp", ASCENDING)]),
+                ]
+            elif collection == "funding_rates":
+                indexes = [
+                    IndexModel([("symbol", ASCENDING), ("timestamp", DESCENDING)])
                 ]
             elif collection.startswith("klines_"):
                 indexes = [

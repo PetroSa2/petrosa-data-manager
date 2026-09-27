@@ -291,7 +291,7 @@ class TestCatalogRepository:
 
 class TestDepthRepository:
     @pytest.mark.asyncio
-    async def test_insert_writes_to_per_symbol_collection(self):
+    async def test_insert_writes_to_canonical_collection(self):
         mongodb = Mock()
         mongodb.write = AsyncMock(return_value=1)
         repo = DepthRepository(mysql_adapter=None, mongodb_adapter=mongodb)
@@ -366,7 +366,7 @@ class TestFundingRepository:
         mongodb.write = AsyncMock(return_value=1)
         repo = FundingRepository(mysql_adapter=None, mongodb_adapter=mongodb)
         assert await repo.insert(make_funding("BTCUSDT")) is True
-        assert mongodb.write.call_args[0][1] == "funding_rates_BTCUSDT"
+        assert mongodb.write.call_args[0][1] == "funding_rates"
 
     @pytest.mark.asyncio
     async def test_insert_returns_false_when_no_records(self):
@@ -390,12 +390,14 @@ class TestFundingRepository:
     @pytest.mark.asyncio
     async def test_batch_groups_by_symbol(self):
         mongodb = Mock()
-        mongodb.write = AsyncMock(side_effect=[2, 1])
+        mongodb.write = AsyncMock(return_value=3)
         repo = FundingRepository(mysql_adapter=None, mongodb_adapter=mongodb)
         total = await repo.insert_batch(
             [make_funding("BTCUSDT"), make_funding("BTCUSDT"), make_funding("ETHUSDT")]
         )
         assert total == 3
+        mongodb.write.assert_awaited_once()
+        assert mongodb.write.call_args.args[1] == "funding_rates"
 
     @pytest.mark.asyncio
     async def test_batch_returns_zero_on_exception(self):
@@ -414,7 +416,7 @@ class TestFundingRepository:
         result = await repo.get_range("BTCUSDT", start, end)
         assert result == [{"funding_rate": "0.0001"}]
         mongodb.query_range.assert_called_once_with(
-            "funding_rates_BTCUSDT", start, end, "BTCUSDT"
+            "funding_rates", start, end, "BTCUSDT"
         )
 
     @pytest.mark.asyncio
