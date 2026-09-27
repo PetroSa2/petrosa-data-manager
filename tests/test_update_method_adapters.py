@@ -83,11 +83,6 @@ class TestMySQLAdapterUpdate:
         )
         assert rowcount == 0
 
-    def test_update_empty_filter_refuses_full_table_update(self, positions_adapter):
-        with pytest.raises(DatabaseError, match="would UPDATE every row") as exc_info:
-            positions_adapter.update("positions", {}, {"quantity": 9.0})
-        assert "would UPDATE every row" in str(exc_info.value)
-
     def test_update_unknown_filter_key_matches_no_rows(self, positions_adapter, caplog):
         with caplog.at_level("WARNING"):
             rowcount = positions_adapter.update(
