@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 try:
@@ -232,6 +233,17 @@ SIGNALS_MYSQL_COPY = Counter(
     "Outcomes of signal MySQL copies",
     ["outcome"],
 )
+SIGNAL_DUAL_WRITE_DROPPED = Counter(
+    "data_manager_signal_dual_write_dropped",
+    "Signals whose historic MySQL copy was dropped because the worker bound was full",
+)
+try:
+    _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT = max(
+        1, int(os.environ.get("PETROSA_SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT", "8"))
+    )
+except ValueError:
+    _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT = 8
+_signal_dual_write_slots = threading.BoundedSemaphore(_SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT)
 
 
 def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
@@ -267,11 +279,24 @@ def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
         logger.error("MySQL signals dual-write failed", exc_info=True)
 
 
+def _run_bounded_dual_write(data_list: list[dict[str, Any]]) -> None:
+    """Run one admitted copy and return its slot when the worker exits."""
+    try:
+        _dual_write_signals_to_mysql(data_list)
+    finally:
+        _signal_dual_write_slots.release()
+
+
 def _schedule_signals_mysql_copy(data_list: list[dict[str, Any]]) -> None:
     """Schedule the historic MySQL copy without blocking the ingest request."""
-    task = asyncio.create_task(
-        asyncio.to_thread(_dual_write_signals_to_mysql, data_list)
-    )
+    if not _signal_dual_write_slots.acquire(blocking=False):
+        SIGNAL_DUAL_WRITE_DROPPED.inc()
+        logger.warning(
+            "Dropping signals MySQL dual-write: %d worker slots are in flight",
+            _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT,
+        )
+        return
+    task = asyncio.create_task(asyncio.to_thread(_run_bounded_dual_write, data_list))
     _signal_dual_write_tasks.add(task)
     task.add_done_callback(_signal_dual_write_tasks.discard)
 
