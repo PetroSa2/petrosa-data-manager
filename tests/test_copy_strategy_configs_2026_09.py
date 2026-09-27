@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from data_manager.maintenance.copy_strategy_configs_2026_09 import (
+    _main,
+    _parser,
     copy_strategy_configs,
     preferred_document,
 )
@@ -125,3 +127,56 @@ def test_preferred_document_skips_older_candidate():
     assert winner is existing
     assert should_copy is False
     assert conflict is True
+
+
+@pytest.mark.asyncio
+async def test_copy_reports_older_conflict_and_copies_new_audit():
+    client = MagicMock()
+    source = _Db()
+    target = _Db()
+    source_global = _collection([{"strategy_id": "s1", "version": 1}])
+    source["strategy_configs_global"] = source_global
+    source["strategy_configs_symbol"] = _collection([])
+    source["strategy_config_audit"] = _collection([{"_id": "audit-2"}])
+    target_global = _collection([])
+    target_global.find_one = AsyncMock(return_value={"strategy_id": "s1", "version": 2})
+    target["strategy_configs"] = _collection([])
+    target["strategy_configs_global"] = target_global
+    target["strategy_configs_symbol"] = _collection([])
+    target["strategy_config_audit"] = _collection([])
+    client.__getitem__.side_effect = [source, target]
+
+    results = await copy_strategy_configs(client, dry_run=False)
+
+    assert results["strategy_configs_global"]["skipped_older"] == 1
+    target["strategy_config_audit"].insert_one.assert_awaited_once_with(
+        {"_id": "audit-2"}
+    )
+
+
+def test_parser_defaults_to_dry_run():
+    args = _parser().parse_args([])
+
+    assert args.apply is False
+    assert args.source_db == "petrosa"
+
+
+@pytest.mark.asyncio
+async def test_main_closes_client(monkeypatch, capsys):
+    client = MagicMock()
+
+    class ClientFactory:
+        def __new__(cls, _url):
+            return client
+
+    async def fake_copy(*_args, **_kwargs):
+        return {"global": {"copied": 1, "skipped_older": 0, "conflicts": 0}}
+
+    import data_manager.maintenance.copy_strategy_configs_2026_09 as module
+
+    monkeypatch.setattr(module, "AsyncIOMotorClient", ClientFactory)
+    monkeypatch.setattr(module, "copy_strategy_configs", fake_copy)
+    await _main(_parser().parse_args(["--apply"]))
+
+    client.close.assert_called_once()
+    assert "global: copied=1" in capsys.readouterr().out
