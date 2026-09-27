@@ -205,9 +205,10 @@ class DataManagerApp:
 
                 api.app.db_manager = self.db_manager
                 # Also update repositories in routers
-                from data_manager.api.routes import config
+                from data_manager.api.routes import config, ingest
 
                 config.set_database_manager(self.db_manager)
+                ingest.set_database_manager(self.db_manager)
 
         except Exception as e:
             logger.warning(
@@ -614,11 +615,12 @@ class DataManagerApp:
         # Create app and set database manager reference
         app = create_app()
         from data_manager import api
-        from data_manager.api.routes import backfill, config
+        from data_manager.api.routes import backfill, config, ingest
 
         api.app.db_manager = self.db_manager
         backfill.backfill_orchestrator = getattr(self, "backfill_orchestrator", None)
         config.set_database_manager(self.db_manager)
+        ingest.set_database_manager(self.db_manager)
 
         # Initialize and set configuration rate limiter
         try:
