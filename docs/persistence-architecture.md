@@ -6,6 +6,10 @@ MongoDB is the operational store: every live-path read and write goes to MongoDB
 
 `petrosa-data-manager` is the only service that connects to any database; every other service reads and writes data exclusively through the data-manager API.
 
+All MySQL sessions created by the adapter, read-only inventory helper, and maintenance
+tools set `time_zone = '+00:00'` on connect. MySQL timestamps therefore use UTC even
+when the server host or server-level default is configured for another timezone.
+
 A MongoDB collection must be registered in `data_manager/persistence_registry.py`
 before application code writes it.
 
