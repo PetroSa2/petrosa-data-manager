@@ -227,7 +227,7 @@ class TestGenericMySQLRoutesRunOffLoop:
 
 
 class TestSignalsDualWriteTask:
-    """_dual_write_signals_to_mysql schedules a tracked background task."""
+    """The scheduler tracks the worker task and the copy never raises."""
 
     @pytest.fixture
     def db_manager(self, mysql_adapter, monkeypatch):
@@ -241,7 +241,9 @@ class TestSignalsDualWriteTask:
         self, db_manager, mysql_adapter
     ):
         before = set(generic._signal_dual_write_tasks)
-        generic._dual_write_signals_to_mysql([{"symbol": "BTCUSDT", "action": "buy"}])
+        generic._schedule_signals_mysql_copy(
+            [{"symbol": "BTCUSDT", "action": "buy"}]
+        )
 
         pending = _dual_write_tasks_since(before)
         assert len(pending) == 1  # strongly referenced while in flight
@@ -259,7 +261,9 @@ class TestSignalsDualWriteTask:
         db_manager.mysql_adapter.write.side_effect = RuntimeError("mysql down")
 
         before = set(generic._signal_dual_write_tasks)
-        generic._dual_write_signals_to_mysql([{"symbol": "BTCUSDT", "action": "buy"}])
+        generic._schedule_signals_mysql_copy(
+            [{"symbol": "BTCUSDT", "action": "buy"}]
+        )
         (task,) = _dual_write_tasks_since(before)
         await task
 
@@ -267,14 +271,12 @@ class TestSignalsDualWriteTask:
         assert "MySQL signals dual-write failed" in caplog.text
         assert "mysql down" in caplog.text
 
-    def test_without_running_loop_logs_and_skips(self, db_manager, caplog):
-        caplog.set_level(logging.ERROR, logger=generic.logger.name)
+    def test_copy_without_running_loop_is_still_safe(self, db_manager):
         db_manager.mysql_adapter = Mock()
 
         generic._dual_write_signals_to_mysql([{"symbol": "BTCUSDT", "action": "buy"}])
 
-        db_manager.mysql_adapter.write.assert_not_called()
-        assert "no running event loop" in caplog.text
+        db_manager.mysql_adapter.write.assert_called_once()
 
 
 def _mysql_adapter_double(connect=None) -> MagicMock:
