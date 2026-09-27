@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -181,3 +182,11 @@ async def test_routes_reject_bad_service_and_large_values(monkeypatch):
             ServiceConfigRequest(value="x" * (64 * 1024), changed_by="ops"),
         )
     assert large.value.status_code == 413
+
+
+def test_jsonable_serializes_mongo_timestamps():
+    value = service_config._jsonable(
+        {"_id": "internal", "updated_at": datetime.now(UTC), "value": 1}
+    )
+    assert "_id" not in value
+    assert value["updated_at"].endswith("+00:00")
