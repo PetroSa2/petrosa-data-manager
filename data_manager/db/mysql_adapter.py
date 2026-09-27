@@ -687,7 +687,9 @@ class MySQLAdapter(BaseAdapter):
         table = self._get_table(collection)
         records: list[dict[str, Any]] = []
         for instance in model_instances:
-            record = instance.model_dump()
+            record = instance.model_dump(
+                mode="json" if collection in {"intents", "alerts"} else "python"
+            )
             if collection == "alerts" and hasattr(instance, "make_id"):
                 record["alert_key"] = instance.make_id()
             if collection == "execution_events" and "event_key" not in record:

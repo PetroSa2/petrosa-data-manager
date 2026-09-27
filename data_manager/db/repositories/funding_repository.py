@@ -4,12 +4,32 @@ Repository for funding rate data operations.
 
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from pydantic import BaseModel
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import FundingRate
 
 logger = logging.getLogger(__name__)
+
+
+class FundingRateMySQLRow(BaseModel):
+    """Shape of the existing extractor-owned ``funding_rates`` table."""
+
+    id: str
+    symbol: str
+    timestamp: datetime
+    funding_rate: Decimal
+    funding_time: datetime
+    mark_price: Decimal | None = None
+    index_price: Decimal | None = None
+    last_funding_rate: Decimal | None = None
+    funding_interval_hours: int = 8
+    extracted_at: datetime
+    extractor_version: str = "data-manager"
+    source: str = "data-manager"
 
 
 class FundingRepository(BaseRepository):
@@ -79,7 +99,19 @@ class FundingRepository(BaseRepository):
         ):
             return
         try:
-            self.mysql.write(rates, "funding_rates")
+            rows = [
+                FundingRateMySQLRow(
+                    id=f"{rate.symbol}:{rate.timestamp.isoformat()}",
+                    symbol=rate.symbol,
+                    timestamp=rate.timestamp,
+                    funding_rate=rate.funding_rate,
+                    funding_time=rate.next_funding_time or rate.timestamp,
+                    mark_price=rate.mark_price,
+                    extracted_at=datetime.now(UTC),
+                )
+                for rate in rates
+            ]
+            self.mysql.write(rows, "funding_rates")
         except Exception:
             try:
                 from data_manager.api.middleware.metrics import MYSQL_PERSIST_FAILURES

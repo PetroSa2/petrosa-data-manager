@@ -24,7 +24,9 @@ async def test_funding_insert_writes_mongo_and_mysql():
     repo = FundingRepository(mysql, mongo)
     assert await repo.insert(_rate()) is True
     mongo.write.assert_awaited_once()
-    mysql.write.assert_called_once_with([_rate()], "funding_rates")
+    mysql.write.assert_called_once()
+    assert mysql.write.call_args.args[1] == "funding_rates"
+    assert mysql.write.call_args.args[0][0].id.startswith("BTCUSDT:")
 
 
 @pytest.mark.asyncio
