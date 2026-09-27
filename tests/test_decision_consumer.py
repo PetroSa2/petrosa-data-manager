@@ -286,6 +286,7 @@ async def test_persist_dual_writes_to_mysql(decision_consumer, mock_db_manager):
     records, collection = mock_db_manager.mysql_adapter.write.call_args[0]
     assert collection == CIO_DECISIONS_COLLECTION
     assert records == [event]
+    assert records[0].decision_id == "dec_20260518T120000000_xyz789"
 
 
 @pytest.mark.asyncio
@@ -305,9 +306,14 @@ async def test_persist_skips_mysql_when_kill_switch_disabled(
 
 @pytest.mark.asyncio
 async def test_persist_mysql_failure_does_not_block_mongo_write(
-    decision_consumer, mock_db_manager
+    decision_consumer, mock_db_manager, monkeypatch
 ):
     mock_db_manager.mysql_adapter.write.side_effect = RuntimeError("mysql down")
+    failure_metric = MagicMock()
+    monkeypatch.setattr(
+        "data_manager.consumer.decision_consumer.metrics.MYSQL_PERSIST_FAILURES",
+        failure_metric,
+    )
     event = DecisionEvent.from_nats_message(_decision_payload())
     assert event is not None
 
@@ -315,6 +321,8 @@ async def test_persist_mysql_failure_does_not_block_mongo_write(
     await _drain_mysql_persist_tasks(decision_consumer)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_awaited_once()
+    failure_metric.labels.assert_called_once_with(collection=CIO_DECISIONS_COLLECTION)
+    failure_metric.labels.return_value.inc.assert_called_once_with()
 
 
 @pytest.mark.asyncio

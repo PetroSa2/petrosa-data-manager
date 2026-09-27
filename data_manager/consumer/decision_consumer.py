@@ -29,6 +29,7 @@ except ImportError:
 
 
 import constants
+from data_manager.api.middleware import metrics
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.decision import DecisionEvent
 from data_manager.utils.nats_trace_propagator import NATSTracePropagator
@@ -343,6 +344,9 @@ class DecisionConsumer:
                 mysql_adapter.write, [event], CIO_DECISIONS_COLLECTION
             )
         except Exception:
+            metrics.MYSQL_PERSIST_FAILURES.labels(
+                collection=CIO_DECISIONS_COLLECTION
+            ).inc()
             logger.error(
                 "MySQL cio_decisions dual-write failed for decision %s",
                 event.decision_id,
