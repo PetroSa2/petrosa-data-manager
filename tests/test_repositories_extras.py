@@ -455,7 +455,9 @@ class TestFundingRepository:
         )
         repo = FundingRepository(mysql_adapter=None, mongodb_adapter=mongodb)
         result = await repo.get_range(
-            "BTCUSDT", datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC)
+            "BTCUSDT",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 2, tzinfo=UTC),
         )
         assert len(result) == 1
         assert mongodb.query_range.call_args_list[1].args[0] == "funding_rates_BTCUSDT"
@@ -488,7 +490,9 @@ class TestFundingRepository:
     @pytest.mark.asyncio
     async def test_find_paginated_falls_back_to_legacy_collection(self):
         mongodb = Mock()
-        mongodb.find_paginated = AsyncMock(side_effect=[([], 0), ([{"symbol": "BTCUSDT"}], 1)])
+        mongodb.find_paginated = AsyncMock(
+            side_effect=[([], 0), ([{"symbol": "BTCUSDT"}], 1)]
+        )
         repo = FundingRepository(mysql_adapter=None, mongodb_adapter=mongodb)
         result = await repo.find_paginated(
             "BTCUSDT",
@@ -499,7 +503,10 @@ class TestFundingRepository:
             False,
         )
         assert result[1] == 1
-        assert mongodb.find_paginated.call_args_list[1].kwargs["collection"] == "funding_rates_BTCUSDT"
+        assert (
+            mongodb.find_paginated.call_args_list[1].kwargs["collection"]
+            == "funding_rates_BTCUSDT"
+        )
 
     @pytest.mark.asyncio
     async def test_ensure_indexes_targets_canonical_collection(self):
