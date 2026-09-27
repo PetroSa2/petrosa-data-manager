@@ -13,13 +13,14 @@ async def test_database_retry_wires_manager_and_starts_consumers_once():
     manager = MagicMock()
     manager.initialize = AsyncMock()
 
-    with patch("data_manager.main.DatabaseManager", return_value=manager), patch(
-        "data_manager.main.IntentConsumer"
-    ) as intent, patch("data_manager.main.DecisionConsumer") as decision, patch(
-        "data_manager.main.AlertDispatcher"
-    ) as alerts, patch("data_manager.main.ExecutionEventsConsumer") as execution, patch(
-        "data_manager.main.PnlConsumer"
-    ) as pnl:
+    with (
+        patch("data_manager.main.DatabaseManager", return_value=manager),
+        patch("data_manager.main.IntentConsumer") as intent,
+        patch("data_manager.main.DecisionConsumer") as decision,
+        patch("data_manager.main.AlertDispatcher") as alerts,
+        patch("data_manager.main.ExecutionEventsConsumer") as execution,
+        patch("data_manager.main.PnlConsumer") as pnl,
+    ):
         for consumer in (intent, decision, alerts, execution, pnl):
             consumer.return_value.start = AsyncMock(return_value=True)
         with patch("data_manager.main.asyncio.sleep", new=AsyncMock()):
@@ -49,8 +50,9 @@ async def test_retry_backoff_is_capped_and_shutdown_cancels_task():
         if len(delays) == 5:
             app._shutdown_event.set()
 
-    with patch("data_manager.main.DatabaseManager", return_value=manager), patch(
-        "data_manager.main.asyncio.sleep", new=sleep
+    with (
+        patch("data_manager.main.DatabaseManager", return_value=manager),
+        patch("data_manager.main.asyncio.sleep", new=sleep),
     ):
         await app._retry_database_initialization()
 
