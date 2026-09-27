@@ -658,6 +658,23 @@ class MongoDBAdapter(BaseAdapter):
                 ]
             elif collection == "daily_pnl":
                 indexes = [IndexModel([("date", ASCENDING)], unique=True)]
+            elif collection == "strategy_configs_global":
+                indexes = [IndexModel([("strategy_id", ASCENDING)], unique=True)]
+            elif collection == "strategy_configs_symbol":
+                indexes = [
+                    IndexModel(
+                        [
+                            ("strategy_id", ASCENDING),
+                            ("symbol", ASCENDING),
+                            ("side", ASCENDING),
+                        ],
+                        unique=True,
+                    )
+                ]
+            elif collection == "strategy_config_audit":
+                indexes = [
+                    IndexModel([("strategy_id", ASCENDING), ("changed_at", DESCENDING)])
+                ]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection
                 # CIO has assigned decision_id by the time it publishes onto

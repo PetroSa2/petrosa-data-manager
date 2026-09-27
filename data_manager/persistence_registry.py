@@ -90,6 +90,9 @@ REGISTRY: dict[str, PersistenceSpec] = {
         reason="runtime configuration; managed by deployment"
     ),
     "strategy_config_audit": transient_only(reason="configuration audit view"),
+    "strategy_configs": transient_only(
+        reason="retired legacy strategy configuration; retained for migration fallback"
+    ),
     "strategy_lifecycle_events": transient_only(
         reason="rebuildable lifecycle projection"
     ),

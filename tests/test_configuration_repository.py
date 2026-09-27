@@ -22,9 +22,59 @@ def mock_mongodb():
     mongodb.db.app_config = MagicMock()
     mongodb.db.app_config_audit = MagicMock()
     mongodb.db.strategy_configs = MagicMock()
+    mongodb.db.strategy_configs_global = MagicMock()
+    mongodb.db.strategy_configs_symbol = MagicMock()
     mongodb.db.strategy_config_audit = MagicMock()
 
     return mongodb
+
+
+@pytest.mark.asyncio
+async def test_upsert_global_writes_split_collection(mock_mongodb):
+    mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(return_value=None)
+    mock_mongodb.db.strategy_configs_global.replace_one = AsyncMock()
+    mock_mongodb.db.strategy_config_audit.insert_one = AsyncMock()
+
+    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb, mysql_adapter=None)
+    result = await repo.upsert_strategy_config("s1", {"a": 1}, "tester")
+
+    assert result["parameters"] == {"a": 1}
+    mock_mongodb.db.strategy_configs_global.replace_one.assert_called_once()
+    assert mock_mongodb.db.strategy_configs_global.replace_one.call_args.args[0] == {
+        "strategy_id": "s1"
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_symbol_side_writes_symbol_collection(mock_mongodb):
+    mock_mongodb.db.strategy_configs_symbol.find_one = AsyncMock(return_value=None)
+    mock_mongodb.db.strategy_configs_symbol.replace_one = AsyncMock()
+    mock_mongodb.db.strategy_config_audit.insert_one = AsyncMock()
+
+    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb, mysql_adapter=None)
+    await repo.upsert_strategy_config(
+        "s1", {"a": 1}, "tester", symbol="BTCUSDT", side="LONG"
+    )
+
+    mock_mongodb.db.strategy_configs_symbol.replace_one.assert_called_once()
+    assert mock_mongodb.db.strategy_configs_symbol.replace_one.call_args.args[0] == {
+        "strategy_id": "s1",
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_falls_back_to_legacy_single_collection(mock_mongodb):
+    mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(return_value=None)
+    mock_mongodb.db.strategy_configs.find_one = AsyncMock(
+        return_value={"_id": "legacy", "strategy_id": "s1", "parameters": {"a": 1}}
+    )
+
+    repo = ConfigurationRepository(mongodb_adapter=mock_mongodb, mysql_adapter=None)
+    result = await repo.get_strategy_config("s1")
+
+    assert result == {"strategy_id": "s1", "parameters": {"a": 1}}
 
 
 @pytest.mark.asyncio
