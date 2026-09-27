@@ -40,6 +40,7 @@ from data_manager.api.routes import (
     raw,
     schemas,
     strategies,
+    strategy_lifecycle,
     strategy_timeline,
     system_trades,
     trading_state,
@@ -152,6 +153,11 @@ def create_app() -> FastAPI:
         strategy_timeline.router,
         prefix="/api/v1",
         tags=["Strategy Timeline"],
+    )
+    app.include_router(
+        strategy_lifecycle.router,
+        prefix="/api/v1",
+        tags=["Strategy Lifecycle"],
     )
     app.include_router(pnl.router, prefix="/api/v1", tags=["P&L"])
     # System trade audit trail from execution_events (#529).
