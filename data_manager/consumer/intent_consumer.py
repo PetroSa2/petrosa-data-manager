@@ -281,9 +281,11 @@ class IntentConsumer:
                     extra={"intent_id": event.intent_id},
                 )
                 mongo_persisted = True
-            if mongo_persisted and os.getenv(
-                "PETROSA_INTENTS_MYSQL_PERSIST_ENABLED", "true"
-            ).lower() == "true":
+            if (
+                mongo_persisted
+                and os.getenv("PETROSA_INTENTS_MYSQL_PERSIST_ENABLED", "true").lower()
+                == "true"
+            ):
                 mysql = getattr(self.db_manager, "mysql_adapter", None)
                 if mysql is not None:
                     try:

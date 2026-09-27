@@ -496,9 +496,13 @@ class AlertDispatcher:
                             MYSQL_PERSIST_FAILURES,
                         )
 
-                        MYSQL_PERSIST_FAILURES.labels(collection=ALERTS_COLLECTION).inc()
+                        MYSQL_PERSIST_FAILURES.labels(
+                            collection=ALERTS_COLLECTION
+                        ).inc()
                     except Exception:
-                        logger.debug("Unable to record alert MySQL failure", exc_info=True)
+                        logger.debug(
+                            "Unable to record alert MySQL failure", exc_info=True
+                        )
                     logger.warning("alert_mysql_persist_failed", exc_info=True)
         return True
 

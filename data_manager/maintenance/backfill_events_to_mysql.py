@@ -85,7 +85,9 @@ async def run_backfill(
             names = mongo_adapter.db.list_collection_names()
             if hasattr(names, "__await__"):
                 names = await names
-            mongo_collections = [name for name in names if name.startswith("funding_rates_")]
+            mongo_collections = [
+                name for name in names if name.startswith("funding_rates_")
+            ]
         count = 0
         for mongo_name in mongo_collections:
             count += await backfill_collection(
@@ -139,7 +141,10 @@ async def _amain(args: argparse.Namespace) -> int:
         )
         mode = "apply" if args.apply else "dry-run"
         print(
-            "mode=" + mode + " " + " ".join(f"{key}={value}" for key, value in counts.items())
+            "mode="
+            + mode
+            + " "
+            + " ".join(f"{key}={value}" for key, value in counts.items())
         )
         return 0
     finally:
