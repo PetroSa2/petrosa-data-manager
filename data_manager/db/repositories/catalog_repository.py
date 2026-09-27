@@ -69,6 +69,25 @@ class CatalogRepository(BaseRepository):
             logger.error("Failed to get all datasets: %s", exc)
             return []
 
+    async def get_all_datasets_async(self) -> list[dict]:
+        """Read catalog data without running the legacy MySQL call on the loop."""
+        if self.mongodb is not None and inspect.iscoroutinefunction(
+            self.mongodb.find_filtered
+        ):
+            return await self.mongodb.find_filtered(
+                "datasets", limit=10000, sort_field="updated_at", sort_order=-1
+            )
+        return await asyncio.to_thread(self._get_all_datasets_sync)
+
+    def _get_all_datasets_sync(self) -> list[dict]:
+        try:
+            return (
+                self.mysql.query_latest("datasets", limit=10000) if self.mysql else []
+            )
+        except Exception as exc:
+            logger.error("Failed to get all datasets: %s", exc)
+            return []
+
     def get_dataset(self, dataset_id: str):
         """
         Get dataset by ID.
@@ -95,6 +114,17 @@ class CatalogRepository(BaseRepository):
 
             return read_mongo()
         return self._legacy_get(dataset_id)
+
+    async def get_dataset_async(self, dataset_id: str) -> dict | None:
+        """Read one catalog entry without blocking the event loop."""
+        if self.mongodb is not None and inspect.iscoroutinefunction(
+            self.mongodb.find_filtered
+        ):
+            datasets = await self.mongodb.find_filtered(
+                "datasets", filters={"dataset_id": dataset_id}, limit=1
+            )
+            return datasets[0] if datasets else None
+        return await asyncio.to_thread(self._legacy_get, dataset_id)
 
     async def _legacy_upsert(self, dataset: dict) -> bool:
         if self.mysql is None:

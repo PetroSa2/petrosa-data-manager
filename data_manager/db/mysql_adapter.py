@@ -119,6 +119,7 @@ class MySQLAdapter(BaseAdapter):
         self.engine: Engine | None = None
         self.metadata = MetaData()
         self.tables: dict[str, Table] = {}
+        self._tables_lock = threading.RLock()
 
         # Circuit breaker for reliability
         self.circuit_breaker = DatabaseCircuitBreaker("mysql")
@@ -462,6 +463,13 @@ class MySQLAdapter(BaseAdapter):
         self, interval: str, collection_name: str | None = None
     ) -> "Table":
         """Create or reflect a klines table for specific interval."""
+        with self._tables_lock:
+            return self._create_klines_table_locked(interval, collection_name)
+
+    def _create_klines_table_locked(
+        self, interval: str, collection_name: str | None = None
+    ) -> "Table":
+        """Create or reflect a klines table while holding the cache lock."""
         # Map binance interval to table suffix (e.g., 1h -> h1)
         suffix = interval
         if interval.endswith("m"):
@@ -537,6 +545,11 @@ class MySQLAdapter(BaseAdapter):
 
     def _get_table(self, collection: str) -> "Table":
         """Get table object for collection. Dynamically create or reflect."""
+        with self._tables_lock:
+            return self._get_table_locked(collection)
+
+    def _get_table_locked(self, collection: str) -> "Table":
+        """Resolve a table while holding the cache lock."""
         if collection in self.tables:
             return self.tables[collection]
 

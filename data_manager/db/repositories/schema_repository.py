@@ -2,6 +2,7 @@
 Schema repository for database-specific schema storage and retrieval.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -250,7 +251,7 @@ class SchemaRepository:
 
             # Create a dynamic model for the record
             record = SchemaRecord(**schema_data)
-            self.mysql_adapter.write([record], "schemas")
+            await asyncio.to_thread(self.mysql_adapter.write, [record], "schemas")
 
         except Exception as e:
             logger.error(f"Failed to register MySQL schema {schema_def.name}: {e}")
@@ -264,8 +265,12 @@ class SchemaRepository:
             # Query MySQL for schema
             if version:
                 # Get specific version
-                schemas = self.mysql_adapter.query_range(
-                    "schemas", datetime.min, datetime.max, None
+                schemas = await asyncio.to_thread(
+                    self.mysql_adapter.query_range,
+                    "schemas",
+                    datetime.min,
+                    datetime.max,
+                    None,
                 )
                 # Filter by name and version
                 matching = [
@@ -275,8 +280,12 @@ class SchemaRepository:
                 ]
             else:
                 # Get latest version
-                schemas = self.mysql_adapter.query_range(
-                    "schemas", datetime.min, datetime.max, None
+                schemas = await asyncio.to_thread(
+                    self.mysql_adapter.query_range,
+                    "schemas",
+                    datetime.min,
+                    datetime.max,
+                    None,
                 )
                 # Filter by name and get latest version
                 matching = [s for s in schemas if s.get("name") == name]
@@ -312,8 +321,12 @@ class SchemaRepository:
     ) -> tuple[list[SchemaDefinition], int]:
         """List schemas from MySQL."""
         try:
-            schemas = self.mysql_adapter.query_range(
-                "schemas", datetime.min, datetime.max, None
+            schemas = await asyncio.to_thread(
+                self.mysql_adapter.query_range,
+                "schemas",
+                datetime.min,
+                datetime.max,
+                None,
             )
 
             # Apply filters
@@ -355,8 +368,12 @@ class SchemaRepository:
     async def _get_mysql_schema_versions(self, name: str) -> list[SchemaVersion]:
         """Get all versions of a MySQL schema."""
         try:
-            schemas = self.mysql_adapter.query_range(
-                "schemas", datetime.min, datetime.max, None
+            schemas = await asyncio.to_thread(
+                self.mysql_adapter.query_range,
+                "schemas",
+                datetime.min,
+                datetime.max,
+                None,
             )
 
             # Filter by name
@@ -404,8 +421,12 @@ class SchemaRepository:
     async def _search_mysql_schemas(self, query: str) -> list[SchemaDefinition]:
         """Search MySQL schemas."""
         try:
-            schemas = self.mysql_adapter.query_range(
-                "schemas", datetime.min, datetime.max, None
+            schemas = await asyncio.to_thread(
+                self.mysql_adapter.query_range,
+                "schemas",
+                datetime.min,
+                datetime.max,
+                None,
             )
 
             results = []

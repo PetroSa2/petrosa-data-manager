@@ -308,7 +308,8 @@ class CandleRepository(BaseRepository):
                     for document in documents
                     if (mapped := map_mongo_kline_doc(document)) is not None
                 ]
-            rows = adapter.query_range(
+            rows = await asyncio.to_thread(
+                adapter.query_range,
                 self._get_mysql_table_name(timeframe),
                 start,
                 end,
@@ -342,7 +343,8 @@ class CandleRepository(BaseRepository):
                     for document in documents
                     if (mapped := map_mongo_kline_doc(document)) is not None
                 ]
-            rows = adapter.query_latest(
+            rows = await asyncio.to_thread(
+                adapter.query_latest,
                 self._get_mysql_table_name(timeframe),
                 symbol,
                 limit,
@@ -421,7 +423,9 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(candle.timeframe)
-                count = self.mysql.write([candle_to_mysql_kline(candle)], table)
+                count = await asyncio.to_thread(
+                    self.mysql.write, [candle_to_mysql_kline(candle)], table
+                )
             else:
                 collection = self._get_collection_name(candle.symbol, candle.timeframe)
                 count = await self.mongodb.write(
