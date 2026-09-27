@@ -10,9 +10,7 @@ import data_manager.api.routes.config as config
 @pytest.fixture
 def manager():
     global_collection = SimpleNamespace(
-        find_one=AsyncMock(
-            return_value={"parameters": {"a": 1, "b": 1}}
-        )
+        find_one=AsyncMock(return_value={"parameters": {"a": 1, "b": 1}})
     )
     symbol_collection = SimpleNamespace(
         distinct=AsyncMock(return_value=["ETHUSDT", "BTCUSDT"]),
