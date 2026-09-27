@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, update
 from sqlalchemy.sql import select
 
 from data_manager.db.repositories.base_repository import BaseRepository
@@ -152,10 +152,32 @@ class BackfillRepository(BaseRepository):
         Returns:
             True if successful
         """
+
+        def _update() -> bool:
+            table = self.mysql._get_table("backfill_jobs")
+            values = {
+                "status": status,
+                "error_message": error,
+            }
+            now = datetime.utcnow()
+            if status == "running" and "started_at" in table.c:
+                values["started_at"] = now
+            if status in {"completed", "failed"} and "completed_at" in table.c:
+                values["completed_at"] = now
+
+            stmt = update(table).where(table.c.job_id == job_id).values(**values)
+            engine = self.mysql._ensure_connected()
+            with engine.begin() as conn:
+                result = conn.execute(stmt)
+            return result.rowcount == 1
+
         try:
-            # TODO: Implement proper update logic
-            logger.info(f"Updating job {job_id} to status {status}")
-            return True
+            updated = await asyncio.to_thread(_update)
+            if not updated:
+                logger.warning(
+                    "Backfill job %s was not found for status update", job_id
+                )
+            return updated
         except Exception as e:
             logger.error(f"Failed to update job status: {e}")
             return False

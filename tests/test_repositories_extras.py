@@ -236,20 +236,6 @@ class TestBackfillRepository:
         repo = BackfillRepository(mysql_adapter=mysql, mongodb_adapter=None)
         assert await repo.get_job("anything") is None
 
-    @pytest.mark.asyncio
-    async def test_update_status_returns_true(self):
-        # Current implementation is a stub but exercises the happy path.
-        repo = BackfillRepository(mysql_adapter=Mock(), mongodb_adapter=None)
-        assert await repo.update_status("j-1", "completed") is True
-
-    @pytest.mark.asyncio
-    async def test_update_status_with_error(self):
-        repo = BackfillRepository(mysql_adapter=Mock(), mongodb_adapter=None)
-        assert (
-            await repo.update_status("j-1", "failed", error="connection refused")
-            is True
-        )
-
 
 class TestCatalogRepository:
     @pytest.mark.asyncio
