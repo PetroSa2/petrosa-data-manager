@@ -616,11 +616,6 @@ class MySQLAdapter(BaseAdapter):
                 collection,
             )
 
-    def record_ignored_fields(self, collection: str, fields: Sequence[str]) -> None:
-        """Record fields discarded before a MySQL upsert is written."""
-        for field in fields:
-            self._record_ignored_field(collection, field)
-
     @staticmethod
     def _normalize_temporal_value(value: Any, column: Any) -> Any:
         """Convert temporal values to the naive UTC representation MySQL expects."""
@@ -924,16 +919,24 @@ class MySQLAdapter(BaseAdapter):
 
         table = self._get_table(collection)
 
-        conditions = [
-            table.c[key] == value
-            for key, value in filter_dict.items()
-            if key in table.c
-        ]
+        conditions = []
+        for key, value in filter_dict.items():
+            if key.startswith("$") or isinstance(value, dict):
+                raise DatabaseError(
+                    "update() refused: filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}: {value!r}"
+                )
+            if key not in table.c:
+                logger.warning(
+                    "update() filter column %s does not exist on %s; 0 rows match",
+                    key,
+                    collection,
+                )
+                return 0
+            conditions.append(table.c[key] == value)
+
         if not conditions:
-            raise DatabaseError(
-                f"update() refused: filter {filter_dict!r} matches no columns "
-                f"on {collection} — would UPDATE every row"
-            )
+            raise DatabaseError("update() refused: empty filter")
 
         values: dict[str, Any] = {}
         for key, value in data.items():
