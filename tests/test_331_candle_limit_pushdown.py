@@ -62,7 +62,9 @@ class TestCandleLimitPushdown:
         assert response.status_code == 200
         mock_db_manager.mongodb_adapter.query_range.assert_called_once()
         _, kwargs = mock_db_manager.mongodb_adapter.query_range.call_args
-        assert kwargs["limit"] == 5
+        # Mongo reads request one extra row so a forming newest candle can be
+        # removed without shortening the requested closed-candle window.
+        assert kwargs["limit"] == 6
         assert kwargs["offset"] == 3
         assert kwargs["descending"] is False
 
@@ -102,6 +104,6 @@ class TestCandleLimitPushdown:
 
         assert response.status_code == 200
         _, kwargs = mock_db_manager.mongodb_adapter.query_range.call_args
-        assert kwargs["limit"] == 100
+        assert kwargs["limit"] == 101
         assert kwargs["offset"] == 0
         assert kwargs["descending"] is False
