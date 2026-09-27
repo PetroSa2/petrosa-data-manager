@@ -241,9 +241,7 @@ class TestSignalsDualWriteTask:
         self, db_manager, mysql_adapter
     ):
         before = set(generic._signal_dual_write_tasks)
-        generic._schedule_signals_mysql_copy(
-            [{"symbol": "BTCUSDT", "action": "buy"}]
-        )
+        generic._schedule_signals_mysql_copy([{"symbol": "BTCUSDT", "action": "buy"}])
 
         pending = _dual_write_tasks_since(before)
         assert len(pending) == 1  # strongly referenced while in flight
@@ -261,9 +259,7 @@ class TestSignalsDualWriteTask:
         db_manager.mysql_adapter.write.side_effect = RuntimeError("mysql down")
 
         before = set(generic._signal_dual_write_tasks)
-        generic._schedule_signals_mysql_copy(
-            [{"symbol": "BTCUSDT", "action": "buy"}]
-        )
+        generic._schedule_signals_mysql_copy([{"symbol": "BTCUSDT", "action": "buy"}])
         (task,) = _dual_write_tasks_since(before)
         await task
 

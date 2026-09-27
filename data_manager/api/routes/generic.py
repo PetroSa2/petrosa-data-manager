@@ -636,9 +636,7 @@ async def insert_records(
             and not _signals_persist_enabled()
         ):
             if signals_mysql_copy_enabled:
-                _schedule_signals_mysql_copy(
-                    [dict(item) for item in data_list_raw]
-                )
+                _schedule_signals_mysql_copy([dict(item) for item in data_list_raw])
             record_count = len(request.data) if isinstance(request.data, list) else 1
             logger.info(
                 "Signals persistence disabled (PETROSA_SIGNALS_PERSIST_ENABLED="
