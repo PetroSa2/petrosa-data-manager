@@ -293,9 +293,7 @@ class TestMongoPath:
                 "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",
                 "mongodb",
             ),
-            patch(
-                "data_manager.db.repositories.candle_repository.datetime"
-            ) as clock,
+            patch("data_manager.db.repositories.candle_repository.datetime") as clock,
         ):
             clock.now.return_value = fixed_now
             mongodb = Mock()
@@ -313,9 +311,7 @@ class TestMongoPath:
 
             result = await repo.get_latest("BTCUSDT", "15m", limit=1)
 
-            assert result[0]["timestamp"] == datetime(
-                2026, 9, 25, 18, 0, tzinfo=UTC
-            )
+            assert result[0]["timestamp"] == datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
 
     @pytest.mark.asyncio
     async def test_get_latest_returns_empty_on_exception(self):
