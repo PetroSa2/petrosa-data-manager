@@ -88,12 +88,27 @@ class TestMySQLAdapterUpdate:
             positions_adapter.update("positions", {}, {"quantity": 9.0})
         assert "would UPDATE every row" in str(exc_info.value)
 
-    def test_update_filter_key_not_a_column_refuses(self, positions_adapter):
-        with pytest.raises(DatabaseError, match="would UPDATE every row") as exc_info:
-            positions_adapter.update(
-                "positions", {"not_a_column": "x"}, {"quantity": 9.0}
+    def test_update_unknown_filter_key_matches_no_rows(self, positions_adapter, caplog):
+        with caplog.at_level("WARNING"):
+            rowcount = positions_adapter.update(
+                "positions",
+                {"no_such_col": 1, "symbol": "BTCUSDT"},
+                {"quantity": 9.0},
             )
-        assert "would UPDATE every row" in str(exc_info.value)
+
+        assert rowcount == 0
+        assert "no_such_col" in caplog.text
+        assert "positions" in caplog.text
+        rows = positions_adapter.query_range("positions", datetime.min, datetime.max)
+        assert {row["quantity"] for row in rows} == {1.0, 5.0}
+
+    def test_update_operator_filter_is_rejected(self, positions_adapter):
+        with pytest.raises(DatabaseError, match="flat equality match"):
+            positions_adapter.update("positions", {"$where": "1=1"}, {"quantity": 9.0})
+
+    def test_update_empty_filter_refuses_full_table_update(self, positions_adapter):
+        with pytest.raises(DatabaseError, match="empty filter"):
+            positions_adapter.update("positions", {}, {"quantity": 9.0})
 
     def test_update_data_with_no_matching_columns_is_noop(self, positions_adapter):
         rowcount = positions_adapter.update(
