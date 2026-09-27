@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+import data_manager.maintenance.import_cio_auto_resume as importer
 from data_manager.api.routes import cio_state
 from data_manager.api.routes.cio_state import CioPauseEntry
 from data_manager.db.repositories.cio_auto_resume_repository import (
@@ -93,9 +94,61 @@ async def test_validation_errors(repository):
         CioPauseEntry.model_validate({**entry().model_dump(), "extra": True})
 
 
+@pytest.mark.asyncio
+async def test_database_errors_are_503(monkeypatch):
+    class Broken:
+        async def list_entries(self, _status):
+            raise RuntimeError("down")
+
+        async def get_entry(self, _strategy_id):
+            raise RuntimeError("down")
+
+        async def upsert_entry(self, _entry):
+            raise RuntimeError("down")
+
+        async def delete_entry(self, _strategy_id):
+            raise RuntimeError("down")
+
+    monkeypatch.setattr(cio_state, "_repo", lambda: Broken())
+    for call in (
+        cio_state.list_entries(),
+        cio_state.get_entry("s-1"),
+        cio_state.put_entry(entry(), "s-1"),
+        cio_state.delete_entry("s-1"),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await call
+        assert error.value.status_code == 503
+
+
 def test_import_reader_and_dry_run(tmp_path: Path):
     source = tmp_path / "entries.json"
     source.write_text(json.dumps({"s-1": json.dumps(entry().model_dump(mode="json"))}))
     entries = read_entries(source)
     assert len(entries) == 1
     assert __import__("asyncio").run(import_entries(entries, apply=False)) == 1
+
+
+def test_import_apply_upserts(monkeypatch):
+    calls = []
+
+    class Adapter:
+        def __init__(self, connection_string):
+            self.connection_string = connection_string
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+    async def upsert(self, value):
+        calls.append(value)
+
+    monkeypatch.setattr(importer, "MongoDBAdapter", Adapter)
+    monkeypatch.setattr(CioAutoResumeRepository, "upsert_entry", upsert)
+    count = __import__("asyncio").run(
+        import_entries([entry().model_dump()], apply=True)
+    )
+    assert count == 1
+    assert len(calls) == 1
