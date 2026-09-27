@@ -94,6 +94,11 @@ async def test_repository_list_get_and_audit(repository):
     await repository.put("service", "key", {"enabled": True}, "ops", None, None)
     assert (await repository.get("service", "key"))["value"] == {"enabled": True}
     assert len(await repository.list("service")) == 1
+    repository.audit.documents[("service", "key")] = {
+        "service": "service",
+        "key": "key",
+        "changed_at": "now",
+    }
     assert len(await repository.audit_entries("service", None, 100)) == 1
 
 

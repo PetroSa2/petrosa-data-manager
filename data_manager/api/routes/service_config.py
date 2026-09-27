@@ -125,6 +125,10 @@ async def get_service_config_audit(
     key: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
 ):
+    if not isinstance(key, str):
+        key = None
+    if not isinstance(limit, int):
+        limit = 100
     _validate(service, key)
     try:
         entries = await _repository().audit_entries(service, key, limit)
