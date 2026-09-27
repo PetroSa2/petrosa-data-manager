@@ -90,7 +90,7 @@ async def test_mongo_latest_reads_extractor_collection_and_filters_invalid_docs(
     result = await repository(mongo).get_latest("BTCUSDT", "1h", 5)
 
     assert len(result) == 1
-    mongo.query_latest.assert_awaited_once_with("klines_1h", "BTCUSDT", 5)
+    mongo.query_latest.assert_awaited_once_with("klines_1h", "BTCUSDT", 6)
 
 
 @pytest.mark.asyncio
@@ -109,7 +109,7 @@ async def test_mongo_range_reads_extractor_collection_and_maps_docs():
         start,
         NOW,
         "BTCUSDT",
-        limit=5,
+        limit=6,
         offset=0,
         descending=True,
     )
