@@ -98,12 +98,14 @@ class TestMySQLAdapterUpdate:
         assert {row["quantity"] for row in rows} == {1.0, 5.0}
 
     def test_update_operator_filter_is_rejected(self, positions_adapter):
-        with pytest.raises(DatabaseError, match="flat equality match"):
+        with pytest.raises(DatabaseError, match="flat equality match") as exc_info:
             positions_adapter.update("positions", {"$where": "1=1"}, {"quantity": 9.0})
+        assert "flat equality match" in str(exc_info.value)
 
     def test_update_empty_filter_refuses_full_table_update(self, positions_adapter):
-        with pytest.raises(DatabaseError, match="empty filter"):
+        with pytest.raises(DatabaseError, match="empty filter") as exc_info:
             positions_adapter.update("positions", {}, {"quantity": 9.0})
+        assert "empty filter" in str(exc_info.value)
 
     def test_update_data_with_no_matching_columns_is_noop(self, positions_adapter):
         rowcount = positions_adapter.update(
