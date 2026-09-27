@@ -31,7 +31,9 @@ class Cursor:
 @pytest.mark.asyncio
 async def test_repository_inserts_timezone_aware_event():
     collection = MagicMock()
-    collection.insert_one = AsyncMock(return_value=SimpleNamespace(inserted_id="event-1"))
+    collection.insert_one = AsyncMock(
+        return_value=SimpleNamespace(inserted_id="event-1")
+    )
     adapter = SimpleNamespace(db={"strategy_lifecycle_events": collection})
     repo = StrategyLifecycleRepository(None, adapter)
 
@@ -43,7 +45,9 @@ async def test_repository_inserts_timezone_aware_event():
     saved = await repo.insert_event(event)
 
     assert saved["event_id"] == "event-1"
-    assert collection.insert_one.await_args.args[0]["transitioned_at"].tzinfo is not None
+    assert (
+        collection.insert_one.await_args.args[0]["transitioned_at"].tzinfo is not None
+    )
 
 
 @pytest.mark.asyncio
