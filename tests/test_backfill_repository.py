@@ -126,6 +126,35 @@ async def test_get_job_does_not_call_query_latest():
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_update_status_sets_status_and_timestamps():
+    repo, table, engine = _make_repo()
+    with engine.connect() as conn:
+        conn.execute(
+            table.insert(),
+            {**_ROW, "status": "pending", "started_at": None, "completed_at": None},
+        )
+        conn.commit()
+
+    assert await repo.update_status("job-abc-123", "running") is True
+    assert await repo.update_status("job-abc-123", "completed") is True
+
+    with engine.connect() as conn:
+        row = conn.execute(select(table).where(table.c.job_id == "job-abc-123")).one()
+    assert row.status == "completed"
+    assert row.started_at is not None
+    assert row.completed_at is not None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_update_status_returns_false_for_unknown_job():
+    repo, _table, _engine = _make_repo()
+
+    assert await repo.update_status("missing", "running") is False
+
+
+@pytest.mark.unit
 def test_get_job_sql_has_no_order_by_timestamp():
     """The SELECT emitted by get_job must use WHERE job_id=? and omit ORDER BY timestamp."""
     metadata = MetaData()
