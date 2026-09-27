@@ -27,6 +27,8 @@ def mock_mongodb():
         "app_config",
         "app_config_audit",
         "strategy_configs",
+        "strategy_configs_global",
+        "strategy_configs_symbol",
         "strategy_config_audit",
     ):
         coll = MagicMock()
@@ -126,7 +128,7 @@ class TestGetStrategyConfig:
 
     @pytest.mark.asyncio
     async def test_returns_config_and_strips_id(self, mock_mongodb):
-        mock_mongodb.db.strategy_configs.find_one = AsyncMock(
+        mock_mongodb.db.strategy_configs_symbol.find_one = AsyncMock(
             return_value={"_id": "x", "strategy_id": "s1", "parameters": {"a": 1}}
         )
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)
@@ -134,14 +136,14 @@ class TestGetStrategyConfig:
         assert result["strategy_id"] == "s1"
         assert "_id" not in result
         # Query passes all three filters.
-        called_with = mock_mongodb.db.strategy_configs.find_one.call_args[0][0]
+        called_with = mock_mongodb.db.strategy_configs_symbol.find_one.call_args[0][0]
         assert called_with["strategy_id"] == "s1"
         assert called_with["symbol"] == "BTCUSDT"
         assert called_with["side"] == "long"
 
     @pytest.mark.asyncio
     async def test_returns_none_on_exception(self, mock_mongodb):
-        mock_mongodb.db.strategy_configs.find_one = AsyncMock(
+        mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(
             side_effect=RuntimeError("x")
         )
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)
@@ -157,7 +159,7 @@ class TestUpsertStrategyConfig:
     @pytest.mark.asyncio
     async def test_create_when_no_existing(self, mock_mongodb):
         mock_mongodb.db.strategy_configs.find_one = AsyncMock(return_value=None)
-        mock_mongodb.db.strategy_configs.replace_one = AsyncMock()
+        mock_mongodb.db.strategy_configs_global.replace_one = AsyncMock()
         mock_mongodb.db.strategy_config_audit.insert_one = AsyncMock()
 
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)
@@ -169,10 +171,10 @@ class TestUpsertStrategyConfig:
 
     @pytest.mark.asyncio
     async def test_update_increments_version(self, mock_mongodb):
-        mock_mongodb.db.strategy_configs.find_one = AsyncMock(
+        mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(
             return_value={"strategy_id": "s1", "parameters": {}, "version": 2}
         )
-        mock_mongodb.db.strategy_configs.replace_one = AsyncMock()
+        mock_mongodb.db.strategy_configs_global.replace_one = AsyncMock()
         mock_mongodb.db.strategy_config_audit.insert_one = AsyncMock()
 
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)
@@ -183,10 +185,10 @@ class TestUpsertStrategyConfig:
 
     @pytest.mark.asyncio
     async def test_rollback_action_label(self, mock_mongodb):
-        mock_mongodb.db.strategy_configs.find_one = AsyncMock(
+        mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(
             return_value={"strategy_id": "s1", "parameters": {}, "version": 1}
         )
-        mock_mongodb.db.strategy_configs.replace_one = AsyncMock()
+        mock_mongodb.db.strategy_configs_global.replace_one = AsyncMock()
         mock_mongodb.db.strategy_config_audit.insert_one = AsyncMock()
 
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)
@@ -196,7 +198,7 @@ class TestUpsertStrategyConfig:
 
     @pytest.mark.asyncio
     async def test_returns_none_on_exception(self, mock_mongodb):
-        mock_mongodb.db.strategy_configs.find_one = AsyncMock(
+        mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(
             side_effect=RuntimeError("x")
         )
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)
@@ -346,9 +348,9 @@ class TestRollback:
         mock_mongodb.db.strategy_config_audit.find_one = AsyncMock(
             return_value={"version": 2, "new_parameters": {"k": "v"}}
         )
-        # And upsert_strategy_config queries strategy_configs / inserts into strategy_config_audit.
-        mock_mongodb.db.strategy_configs.find_one = AsyncMock(return_value=None)
-        mock_mongodb.db.strategy_configs.replace_one = AsyncMock()
+        # And upsert_strategy_config queries the split global collection.
+        mock_mongodb.db.strategy_configs_global.find_one = AsyncMock(return_value=None)
+        mock_mongodb.db.strategy_configs_global.replace_one = AsyncMock()
         mock_mongodb.db.strategy_config_audit.insert_one = AsyncMock()
 
         repo = ConfigurationRepository(mysql_adapter=None, mongodb_adapter=mock_mongodb)

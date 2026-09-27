@@ -13,10 +13,16 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 from typing import Any
 
+from prometheus_client import Counter
+
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.config import ConfigAudit, ConfigurationDocument
 
 logger = logging.getLogger(__name__)
+LEGACY_STRATEGY_CONFIG_READS = Counter(
+    "legacy_strategy_configs_reads_total",
+    "Reads served from the retired strategy_configs collection",
+)
 
 
 class ConfigurationRepository(BaseRepository):
@@ -101,10 +107,31 @@ class ConfigurationRepository(BaseRepository):
             return None
 
         try:
-            query = {"strategy_id": strategy_id, "symbol": symbol, "side": side}
-            collection = self.mongodb.db.strategy_configs
+            if side is not None and symbol is None:
+                raise ValueError("side requires symbol")
+            if symbol is None:
+                collection = self.mongodb.db.strategy_configs_global
+                query = {"strategy_id": strategy_id}
+            else:
+                collection = self.mongodb.db.strategy_configs_symbol
+                query = {"strategy_id": strategy_id, "symbol": symbol, "side": side}
 
             config = await collection.find_one(query)
+            if config is None:
+                legacy = await self.mongodb.db.strategy_configs.find_one(
+                    {"strategy_id": strategy_id, "symbol": symbol, "side": side}
+                )
+                if legacy is not None:
+                    logger.warning(
+                        "legacy_strategy_configs_read",
+                        extra={
+                            "strategy_id": strategy_id,
+                            "symbol": symbol,
+                            "side": side,
+                        },
+                    )
+                    LEGACY_STRATEGY_CONFIG_READS.inc()
+                    config = legacy
             if config:
                 config.pop("_id", None)
             return config
@@ -127,6 +154,8 @@ class ConfigurationRepository(BaseRepository):
             return None
 
         try:
+            if side is not None and symbol is None:
+                raise ValueError("side requires symbol")
             now = datetime.now(UTC)
             existing = await self.get_strategy_config(strategy_id, symbol, side)
 
@@ -147,9 +176,16 @@ class ConfigurationRepository(BaseRepository):
                 "reason": reason,
             }
 
-            # Update current config
-            await self.mongodb.db.strategy_configs.replace_one(
-                {"strategy_id": strategy_id, "symbol": symbol, "side": side},
+            collection = (
+                self.mongodb.db.strategy_configs_global
+                if symbol is None
+                else self.mongodb.db.strategy_configs_symbol
+            )
+            key = {"strategy_id": strategy_id}
+            if symbol is not None:
+                key.update({"symbol": symbol, "side": side})
+            await collection.replace_one(
+                key,
                 config_doc,
                 upsert=True,
             )
