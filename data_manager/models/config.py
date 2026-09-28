@@ -11,6 +11,7 @@ except ImportError:
 
     UTC = timezone.utc  # noqa: UP017
 from typing import Any, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field
 class ConfigAudit(BaseModel):
     """Configuration audit record."""
 
-    id: str | None = Field(None, alias="_id")
+    id: str = Field(default_factory=lambda: str(uuid4()), alias="_id")
     config_type: str = Field(
         ..., description="Type of config: 'application' or 'strategy'"
     )
