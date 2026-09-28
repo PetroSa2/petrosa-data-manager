@@ -60,6 +60,6 @@ async def test_backfill_create_job_supports_adapter_model_dump_mode():
         assert models[0].model_dump(mode="python")["job_id"] == "job-1"
 
     mysql.write.side_effect = write
-    repo = BackfillRepository(None, mysql)
+    repo = BackfillRepository(mysql, None)
 
     assert await repo.create_job({"job_id": "job-1", "status": "pending"}) is True
