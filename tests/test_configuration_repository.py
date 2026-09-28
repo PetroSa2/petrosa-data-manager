@@ -43,6 +43,8 @@ async def test_upsert_global_writes_split_collection(mock_mongodb):
     assert mock_mongodb.db.strategy_configs_global.replace_one.call_args.args[0] == {
         "strategy_id": "s1"
     }
+    audit_record = mock_mongodb.db.strategy_config_audit.insert_one.call_args.args[0]
+    assert audit_record["_id"]
 
 
 @pytest.mark.asyncio
