@@ -50,7 +50,7 @@ class LifecycleRepository(BaseRepository):
         as empty lists / None and the caller surfaces that state
         verbatim — empty legs are signal, not error.
         """
-        if self.mongodb is None or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             logger.warning(
                 "lifecycle_reconstruct_no_mongo",
                 extra={"decision_id": decision_id},
@@ -101,7 +101,7 @@ class LifecycleRepository(BaseRepository):
         applies to the decision's timestamp — not to individual leg
         events — so a long-running decision's late P&L still surfaces.
         """
-        if self.mongodb is None or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             return []
 
         try:
