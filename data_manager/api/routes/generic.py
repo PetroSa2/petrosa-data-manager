@@ -17,7 +17,7 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from prometheus_client import Counter
 from pydantic import BaseModel, Field
 
@@ -386,7 +386,7 @@ async def _execute_query_internal(
 
 @router.post("/api/v1/data/query")
 async def legacy_query(
-    request: dict[str, Any], http_request: Request
+    request: dict[str, Any], http_request: Request, response: Response
 ) -> dict[str, Any]:
     """
     Legacy query endpoint used by older versions of data-extractor.
@@ -407,7 +407,7 @@ async def legacy_query(
         fields = request.get("fields")
 
         # Reuse shared query logic
-        return await _execute_query_internal(
+        result = await _execute_query_internal(
             database=database,
             collection=collection,
             filter_dict=filter_dict,
@@ -416,6 +416,9 @@ async def legacy_query(
             offset=offset,
             field_list=fields,
         )
+        if database == "mysql":
+            response.headers["X-Petrosa-Store"] = "mysql-historic"
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -575,6 +578,7 @@ async def get_records(
     database: str,
     collection: str,
     request: Request,
+    response: Response,
     filter: str | None = Query(None, description="JSON filter conditions"),
     sort: str | None = Query(None, description="JSON sort specification"),
     limit: int = Query(
@@ -601,7 +605,7 @@ async def get_records(
         field_list = fields.split(",") if fields else None
 
         # Use shared query logic
-        return await _execute_query_internal(
+        result = await _execute_query_internal(
             database=database,
             collection=collection,
             filter_dict=filter_dict,
@@ -610,6 +614,9 @@ async def get_records(
             offset=offset,
             field_list=field_list,
         )
+        if database == "mysql":
+            response.headers["X-Petrosa-Store"] = "mysql-historic"
+        return result
 
     except json.JSONDecodeError as e:
         raise HTTPException(
