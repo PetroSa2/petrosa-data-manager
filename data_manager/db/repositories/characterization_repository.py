@@ -48,7 +48,7 @@ class CharacterizationRepository(BaseRepository):
         bloat the collection. The caller is responsible for verifying
         that ``inputs_hash`` and ``metrics`` match across runs.
         """
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             logger.warning("characterizations: mongodb not available; skipping write")
             return False
 
@@ -74,7 +74,7 @@ class CharacterizationRepository(BaseRepository):
         self, strategy_id: str, strategy_version: str
     ) -> Characterization | None:
         """Look up a characterization by exact (strategy_id, strategy_version)."""
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             return None
         doc = await self.mongodb.db[CHARACTERIZATIONS_COLLECTION].find_one(
             {"strategy_id": strategy_id, "strategy_version": strategy_version}
@@ -83,7 +83,7 @@ class CharacterizationRepository(BaseRepository):
 
     async def get_latest(self, strategy_id: str) -> Characterization | None:
         """Return the most recent characterization for a strategy."""
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             return None
         cursor = (
             self.mongodb.db[CHARACTERIZATIONS_COLLECTION]
@@ -103,7 +103,7 @@ class CharacterizationRepository(BaseRepository):
         binding) use this to confirm a characterization exists for the exact
         revision the live intent carries — None ⇒ stale, refuse.
         """
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             return None
         cursor = (
             self.mongodb.db[CHARACTERIZATIONS_COLLECTION]
