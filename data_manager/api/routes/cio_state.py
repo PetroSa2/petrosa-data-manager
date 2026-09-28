@@ -40,7 +40,7 @@ class CioPauseEntry(BaseModel):
 
 def _repo() -> CioAutoResumeRepository:
     manager = api_module.db_manager
-    if not manager or not getattr(manager, "mongodb_adapter", None):
+    if manager is None or getattr(manager, "mongodb_adapter", None) is None:
         raise HTTPException(status_code=503, detail="Database not available")
     return CioAutoResumeRepository(manager.mysql_adapter, manager.mongodb_adapter)
 
