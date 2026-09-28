@@ -20,13 +20,16 @@ class PersistenceSpec:
     min_retention: str | None = None
 
 
-def durable(*, mysql_table: str, key: str, pending: bool = False) -> PersistenceSpec:
+def durable(
+    *, mysql_table: str, key: str, pending: bool = False, reason: str | None = None
+) -> PersistenceSpec:
     """Declare a Mongo collection whose long-lived copy is in MySQL."""
 
     return PersistenceSpec(
         classification="durable",
         mysql_table=mysql_table,
         key=key,
+        reason=reason,
         pending=pending,
     )
 
@@ -83,6 +86,12 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "schemas": transient_only(reason="schema metadata can be recreated from source"),
     "app_config": transient_only(reason="runtime configuration; managed by deployment"),
     "app_config_audit": transient_only(reason="configuration audit view"),
+    "service_configs": transient_only(
+        reason="runtime configuration; managed via /api/v1/config/services"
+    ),
+    "service_config_audit": transient_only(
+        reason="configuration audit view; managed via /api/v1/config/services"
+    ),
     "strategy_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"
     ),
@@ -90,9 +99,13 @@ REGISTRY: dict[str, PersistenceSpec] = {
         reason="runtime configuration; managed by deployment"
     ),
     "strategy_config_audit": transient_only(reason="configuration audit view"),
-    "strategy_lifecycle_events": transient_only(
-        reason="rebuildable lifecycle projection"
+    "strategy_configs": transient_only(
+        reason="retired legacy strategy configuration; retained for migration fallback"
     ),
+    "strategy_lifecycle_events": transient_only(
+        reason="operational strategy lifecycle state (served via /api/v1/strategies/{id}/lifecycle)"
+    ),
+    "cio_auto_resume_registry": operational(reason="cio auto-resume durable state"),
     "trading_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"
     ),
@@ -120,12 +133,27 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "mysql_index_usage_snapshots": transient_only(
         reason="bounded MySQL userstat trend snapshots with a 90-day TTL"
     ),
+    "health_metrics": transient_only(reason="monitoring history; MongoDB TTL 30 days"),
+    "audit_logs": transient_only(reason="monitoring history; MongoDB TTL 30 days"),
+    "datasets": transient_only(reason="catalog metadata; rebuilt by catalog registry"),
+    "lineage_records": transient_only(
+        reason="catalog metadata; rebuilt by catalog registry"
+    ),
 }
 
 PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
     (
-        "funding_rates_",
+        "funding_rates",
         durable(mysql_table="funding_rates", key="symbol+timestamp", pending=True),
+    ),
+    (
+        "funding_rates_",
+        durable(
+            mysql_table="funding_rates",
+            key="symbol+timestamp",
+            pending=True,
+            reason="legacy per-symbol funding collections",
+        ),
     ),
     ("candles_", transient_only(reason="recomputable from durable MySQL klines")),
     (

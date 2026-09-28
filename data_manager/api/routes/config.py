@@ -245,6 +245,8 @@ async def get_strategy_config(
     """Get strategy configuration."""
     if not db_manager or not db_manager.configuration:
         raise HTTPException(status_code=503, detail="Database manager not available")
+    if side is not None and symbol is None:
+        raise HTTPException(status_code=422, detail="side requires symbol")
 
     try:
         config = await db_manager.configuration.get_strategy_config(
@@ -291,6 +293,8 @@ async def update_strategy_config(
     """Update strategy configuration with auditing."""
     if not db_manager or not db_manager.configuration:
         raise HTTPException(status_code=503, detail="Database manager not available")
+    if side is not None and symbol is None:
+        raise HTTPException(status_code=422, detail="side requires symbol")
 
     if not request.parameters:
         raise HTTPException(status_code=400, detail="parameters cannot be empty")
@@ -344,19 +348,21 @@ async def delete_strategy_config(
     """
     if not db_manager or not db_manager.configuration:
         raise HTTPException(status_code=503, detail="Database manager not available")
+    if side is not None and symbol is None:
+        raise HTTPException(status_code=422, detail="side requires symbol")
 
     try:
         if side:
-            await db_manager.mongodb.db.strategy_configs.delete_one(
+            await db_manager.mongodb.db.strategy_configs_symbol.delete_one(
                 {"strategy_id": strategy_id, "symbol": symbol, "side": side}
             )
         elif symbol:
-            await db_manager.mongodb.db.strategy_configs.delete_one(
+            await db_manager.mongodb.db.strategy_configs_symbol.delete_one(
                 {"strategy_id": strategy_id, "symbol": symbol, "side": None}
             )
         else:
-            await db_manager.mongodb.db.strategy_configs.delete_one(
-                {"strategy_id": strategy_id, "symbol": None, "side": None}
+            await db_manager.mongodb.db.strategy_configs_global.delete_one(
+                {"strategy_id": strategy_id}
             )
 
         return {"message": "Configuration deleted successfully"}
@@ -373,6 +379,52 @@ async def list_strategy_configs():
         raise HTTPException(status_code=503, detail="Database manager not available")
     strategy_ids = await db_manager.mongodb.list_all_strategy_ids()
     return {"strategy_ids": strategy_ids}
+
+
+@router.get("/strategies/{strategy_id}/symbols")
+async def list_strategy_symbols(strategy_id: str):
+    """List symbols with an override for a strategy."""
+    if not db_manager or not db_manager.mongodb:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+    symbols = await db_manager.mongodb.db.strategy_configs_symbol.distinct(
+        "symbol", {"strategy_id": strategy_id}
+    )
+    return {"strategy_id": strategy_id, "symbols": sorted(s for s in symbols if s)}
+
+
+@router.get("/strategies/{strategy_id}/effective")
+async def get_effective_strategy_config(
+    strategy_id: str,
+    symbol: str = Query(..., description="Trading symbol"),
+    side: str | None = Query(None, description="Optional position side"),
+):
+    """Return global, symbol, and symbol-side parameters merged in precedence order."""
+    if not db_manager or not db_manager.mongodb:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+    if side is not None and not symbol:
+        raise HTTPException(status_code=422, detail="side requires symbol")
+    parameters: dict[str, Any] = {}
+    global_config = await db_manager.mongodb.db.strategy_configs_global.find_one(
+        {"strategy_id": strategy_id}
+    )
+    symbol_config = await db_manager.mongodb.db.strategy_configs_symbol.find_one(
+        {"strategy_id": strategy_id, "symbol": symbol, "side": None}
+    )
+    side_config = None
+    if side is not None:
+        side_config = await db_manager.mongodb.db.strategy_configs_symbol.find_one(
+            {"strategy_id": strategy_id, "symbol": symbol, "side": side}
+        )
+    sources: list[str] = []
+    for source, config in (
+        ("global", global_config),
+        ("symbol", symbol_config),
+        ("symbol_side", side_config),
+    ):
+        if config:
+            parameters.update(config.get("parameters", {}))
+        sources.append(source)
+    return {"parameters": parameters, "sources": sources}
 
 
 @router.post("/cache/refresh")

@@ -486,16 +486,14 @@ async def get_funding(
         if not start:
             start = end - timedelta(days=7)
 
-        funding_rates = await funding_repo.get_range(pair, start, end)
-
-        # Apply sorting
-        if sort_order.lower() == "desc":
-            funding_rates = list(reversed(funding_rates))
-
-        total_count = len(funding_rates)
-
-        # Apply pagination
-        paginated_funding_rates = funding_rates[offset : offset + limit]
+        paginated_funding_rates, total_count = await funding_repo.find_paginated(
+            pair,
+            start,
+            end,
+            limit,
+            offset,
+            sort_order.lower() == "desc",
+        )
 
         values = [
             {
@@ -530,7 +528,7 @@ async def get_funding(
                 "data_completeness": 100.0,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "source": "mongodb",
-                "collection": f"funding_rates_{pair}",
+                "collection": "funding_rates",
                 "records_returned": len(values),
             },
             "parameters": {

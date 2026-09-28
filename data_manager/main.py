@@ -21,7 +21,7 @@ except ImportError:
 
 import structlog
 import uvicorn
-from prometheus_client import start_http_server
+from prometheus_client import Counter, start_http_server
 
 import constants
 from data_manager.api.app import create_app
@@ -64,6 +64,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+db_init_attempts_total = Counter(
+    "data_manager_db_init_attempts_total",
+    "Database initialization attempts by result",
+    ["result"],
+)
+
 
 def _resolve_auditor_nats_client(consumer) -> Any:
     """Resolve the NATS client to pass to AuditScheduler.
@@ -99,6 +105,14 @@ class DataManagerApp:
         self.candle_warmup_scheduler = None  # #319 — set in start()
         self.running = False
         self._shutdown_event = asyncio.Event()
+        self._db_retry_task: asyncio.Task | None = None
+        self._db_retry_base_seconds = float(
+            os.getenv("DM_DB_INIT_RETRY_BASE_SECONDS", "2")
+        )
+        self._db_retry_cap_seconds = float(
+            os.getenv("DM_DB_INIT_RETRY_CAP_SECONDS", "60")
+        )
+        self._database_consumers_started = False
 
     def _wire_route_publishers(self, deferred_publisher: Any) -> None:
         """Wire NATS publishers used by operator routes (#197).
@@ -187,13 +201,30 @@ class DataManagerApp:
             self.api_server_task = asyncio.create_task(self._run_api_server())
             logger.info("API server task created (health checks available)")
 
-        # Initialize database connections
+        # Initialize database connections. A transient startup outage must not
+        # permanently leave the API's shared manager unset.
         try:
             self.db_manager = DatabaseManager()
             await self.db_manager.initialize()
+            db_init_attempts_total.labels(result="success").inc()
             logger.info("Database connections initialized successfully")
             if self.db_manager.mongodb_adapter:
+                from data_manager.db.repositories.service_config_repository import (
+                    ServiceConfigRepository,
+                )
+
+                await ServiceConfigRepository(
+                    self.db_manager.mongodb_adapter
+                ).ensure_indexes()
                 await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
+                await self.db_manager.mongodb_adapter.ensure_indexes("funding_rates")
+                for collection in (
+                    "health_metrics",
+                    "audit_logs",
+                    "datasets",
+                    "lineage_records",
+                ):
+                    await self.db_manager.mongodb_adapter.ensure_indexes(collection)
                 for timeframe in constants.SUPPORTED_INTERVALS:
                     await self.db_manager.mongodb_adapter.ensure_indexes(
                         f"klines_{timeframe}"
@@ -205,17 +236,22 @@ class DataManagerApp:
 
                 api.app.db_manager = self.db_manager
                 # Also update repositories in routers
-                from data_manager.api.routes import config
+                from data_manager.api.routes import config, ingest, service_config
 
                 config.set_database_manager(self.db_manager)
+                service_config.set_database_manager(self.db_manager)
+                ingest.set_database_manager(self.db_manager)
 
         except Exception as e:
+            db_init_attempts_total.labels(result="failure").inc()
             logger.warning(
                 f"Failed to initialize databases: {e}. "
-                "Service will run in limited mode (NATS consumer only)."
+                "Retrying database initialization in the background."
             )
-            # Continue without database - will be limited functionality
             self.db_manager = None
+            self._db_retry_task = asyncio.create_task(
+                self._retry_database_initialization()
+            )
 
         # Initialize leader election if enabled and database available
         if (
@@ -304,7 +340,7 @@ class DataManagerApp:
             )
 
         # Initialize and start intent consumer (cross-service identifier contract, P0.2a)
-        if constants.ENABLE_INTENT_CONSUMER:
+        if constants.ENABLE_INTENT_CONSUMER and self.db_manager is not None:
             self.intent_consumer = IntentConsumer(db_manager=self.db_manager)
             if await self.intent_consumer.start():
                 logger.info("Intent consumer started successfully")
@@ -312,7 +348,7 @@ class DataManagerApp:
                 logger.error("Failed to start intent consumer")
 
         # Initialize and start CIO decision consumer (P0.2b)
-        if constants.ENABLE_DECISION_CONSUMER:
+        if constants.ENABLE_DECISION_CONSUMER and self.db_manager is not None:
             self.decision_consumer = DecisionConsumer(db_manager=self.db_manager)
             if await self.decision_consumer.start():
                 logger.info("Decision consumer started successfully")
@@ -324,7 +360,7 @@ class DataManagerApp:
         # attempts delivery to the operator webhook (or marks delivered_mock
         # when no webhook is configured), and enforces per-category rate
         # limiting + summary rollup.
-        if constants.ENABLE_ALERT_DISPATCHER:
+        if constants.ENABLE_ALERT_DISPATCHER and self.db_manager is not None:
             self.alert_dispatcher = AlertDispatcher(
                 db_manager=self.db_manager,
                 subject=constants.NATS_ALERTS_SUBJECT,
@@ -335,7 +371,7 @@ class DataManagerApp:
                 logger.error("Failed to start alert dispatcher")
 
         # Initialize and start execution events consumer (P0.2c)
-        if constants.ENABLE_EXECUTION_EVENTS_CONSUMER:
+        if constants.ENABLE_EXECUTION_EVENTS_CONSUMER and self.db_manager is not None:
             # P4.1 follow-up (#652): bind a NATS-backed P&L publisher to the
             # consumer's `on_persisted` hook so every persisted fill emits a
             # `pnl.events.<strategy_id>` message. The publisher owns a long-
@@ -473,7 +509,7 @@ class DataManagerApp:
         # today; the publisher side ships with P4.1 P&L computation. The
         # subscription is harmless until traffic arrives — at which point
         # the collection + indexes already exist.
-        if constants.ENABLE_PNL_CONSUMER:
+        if constants.ENABLE_PNL_CONSUMER and self.db_manager is not None:
             self.pnl_consumer = PnlConsumer(db_manager=self.db_manager)
             if await self.pnl_consumer.start():
                 logger.info("Pnl consumer started successfully")
@@ -519,10 +555,76 @@ class DataManagerApp:
         # Wait for shutdown signal
         await self._shutdown_event.wait()
 
+    async def _start_database_consumers_after_retry(self) -> None:
+        """Start consumers that were intentionally deferred during DB outage."""
+        if self._database_consumers_started or self.db_manager is None:
+            return
+        if constants.ENABLE_INTENT_CONSUMER:
+            self.intent_consumer = IntentConsumer(db_manager=self.db_manager)
+            await self.intent_consumer.start()
+        if constants.ENABLE_DECISION_CONSUMER:
+            self.decision_consumer = DecisionConsumer(db_manager=self.db_manager)
+            await self.decision_consumer.start()
+        if constants.ENABLE_ALERT_DISPATCHER:
+            self.alert_dispatcher = AlertDispatcher(
+                db_manager=self.db_manager, subject=constants.NATS_ALERTS_SUBJECT
+            )
+            await self.alert_dispatcher.start()
+        if constants.ENABLE_EXECUTION_EVENTS_CONSUMER:
+            self.execution_events_consumer = ExecutionEventsConsumer(
+                db_manager=self.db_manager
+            )
+            await self.execution_events_consumer.start()
+        if constants.ENABLE_PNL_CONSUMER:
+            self.pnl_consumer = PnlConsumer(db_manager=self.db_manager)
+            await self.pnl_consumer.start()
+        self._database_consumers_started = True
+
+    async def _retry_database_initialization(self) -> None:
+        """Retry startup database initialization until it succeeds or shuts down."""
+        delay = self._db_retry_base_seconds
+        while not self._shutdown_event.is_set() and self.db_manager is None:
+            try:
+                await asyncio.sleep(delay)
+                if self._shutdown_event.is_set():
+                    return
+                manager = DatabaseManager()
+                await manager.initialize()
+                db_init_attempts_total.labels(result="success").inc()
+                self.db_manager = manager
+                from data_manager import api
+
+                api.app.db_manager = manager
+                from data_manager.api.routes import config, ingest, service_config
+
+                config.set_database_manager(manager)
+                service_config.set_database_manager(manager)
+                ingest.set_database_manager(manager)
+                await self._start_database_consumers_after_retry()
+                logger.info("Database connections initialized successfully after retry")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                db_init_attempts_total.labels(result="failure").inc()
+                logger.warning("Database initialization retry failed: %s", exc)
+                delay = min(delay * 2, self._db_retry_cap_seconds)
+
+    async def _cancel_database_retry(self) -> None:
+        if self._db_retry_task:
+            self._db_retry_task.cancel()
+            try:
+                await self._db_retry_task
+            except asyncio.CancelledError:
+                pass
+            self._db_retry_task = None
+
     async def stop(self) -> None:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
+        self._shutdown_event.set()
+        await self._cancel_database_retry()
         if self.loop_lag_monitor_task:
             self.loop_lag_monitor_task.cancel()
             try:
@@ -614,11 +716,13 @@ class DataManagerApp:
         # Create app and set database manager reference
         app = create_app()
         from data_manager import api
-        from data_manager.api.routes import backfill, config
+        from data_manager.api.routes import backfill, config, ingest, service_config
 
         api.app.db_manager = self.db_manager
         backfill.backfill_orchestrator = getattr(self, "backfill_orchestrator", None)
         config.set_database_manager(self.db_manager)
+        service_config.set_database_manager(self.db_manager)
+        ingest.set_database_manager(self.db_manager)
 
         # Initialize and set configuration rate limiter
         try:

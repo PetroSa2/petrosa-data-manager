@@ -103,7 +103,14 @@ class DatabaseManager:
             self.configuration = ConfigurationRepository(
                 mysql_adapter=self.mysql_adapter, mongodb_adapter=self.mongodb_adapter
             )
-            for collection in ("positions", "daily_pnl"):
+            for collection in (
+                "positions",
+                "daily_pnl",
+                "config_rate_limits",
+                "strategy_configs_global",
+                "strategy_configs_symbol",
+                "strategy_config_audit",
+            ):
                 result = self.mongodb_adapter.ensure_indexes(collection)
                 if inspect.isawaitable(result):
                     await result

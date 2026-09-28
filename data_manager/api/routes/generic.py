@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 try:
@@ -17,6 +18,7 @@ except ImportError:
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from prometheus_client import Counter
 from pydantic import BaseModel, Field
 
 import constants
@@ -226,68 +228,75 @@ def _build_mysql_signal_record(item: dict[str, Any]) -> dict[str, Any]:
 # be garbage-collected before it finishes (same pattern as
 # trading_state._copy_tasks).
 _signal_dual_write_tasks: set[asyncio.Task[None]] = set()
-
-
-def _write_signals_to_mysql(mysql_adapter: Any, records: list[Any]) -> None:
-    """Blocking MySQL write for the signals dual-write; runs in a worker thread.
-
-    Errors are logged here: nobody awaits the task's result, so an exception
-    left to propagate would only surface later as "Task exception was never
-    retrieved".
-    """
-    try:
-        mysql_adapter.write(records, "signals")
-    except Exception:
-        logger.error("MySQL signals dual-write failed", exc_info=True)
+SIGNALS_MYSQL_COPY = Counter(
+    "data_manager_signals_mysql_copy_total",
+    "Outcomes of signal MySQL copies",
+    ["outcome"],
+)
+SIGNAL_DUAL_WRITE_DROPPED = Counter(
+    "data_manager_signal_dual_write_dropped",
+    "Signals whose historic MySQL copy was dropped because the worker bound was full",
+)
+try:
+    _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT = max(
+        1, int(os.environ.get("PETROSA_SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT", "8"))
+    )
+except ValueError:
+    _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT = 8
+_signal_dual_write_slots = threading.BoundedSemaphore(_SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT)
 
 
 def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
-    """Best-effort dual-write of `signals` payloads into the durable MySQL
-    historic store. Never raises, and never waits for MySQL: the write runs
-    in a worker thread as a tracked background task (#370), so a slow or
-    failing MySQL cannot block the event loop or delay or fail the live Mongo
-    signal-persist path, which remains the primary write. Caller is
-    responsible for checking `_signals_mysql_persist_enabled()` first and
-    must call this from the event loop.
-    """
-    mysql_adapter = getattr(api_module.db_manager, "mysql_adapter", None)
-    if mysql_adapter is None:
-        return
-
-    from pydantic import BaseModel, ConfigDict
-
-    class _MySQLSignalModel(BaseModel):
-        model_config = ConfigDict(extra="allow")
-
-    records = []
-    for item in data_list:
-        if not item.get("symbol"):
-            logger.warning(
-                "Skipping MySQL signals dual-write: payload missing 'symbol'"
-            )
-            continue
-        try:
-            records.append(_MySQLSignalModel(**_build_mysql_signal_record(item)))
-        except Exception:
-            logger.warning(
-                "Skipping malformed signal for MySQL dual-write", exc_info=True
-            )
-
-    if not records:
-        return
-
+    """Best-effort blocking MySQL copy, intended to run in a worker thread."""
     try:
-        # Resolve the loop before building the coroutine so a missing loop
-        # cannot leave a never-awaited coroutine behind.
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        logger.error(
-            "MySQL signals dual-write skipped: no running event loop", exc_info=True
+        mysql_adapter = getattr(api_module.db_manager, "mysql_adapter", None)
+        if mysql_adapter is None:
+            SIGNALS_MYSQL_COPY.labels(outcome="skipped").inc()
+            return
+
+        from pydantic import BaseModel, ConfigDict
+
+        class _MySQLSignalModel(BaseModel):
+            model_config = ConfigDict(extra="allow")
+
+        records = []
+        for item in data_list:
+            if not item.get("symbol"):
+                logger.warning(
+                    "Skipping MySQL signals dual-write: payload missing 'symbol'"
+                )
+                continue
+            records.append(_MySQLSignalModel(**_build_mysql_signal_record(item)))
+
+        if not records:
+            SIGNALS_MYSQL_COPY.labels(outcome="skipped").inc()
+            return
+
+        mysql_adapter.write(records, "signals")
+        SIGNALS_MYSQL_COPY.labels(outcome="success").inc()
+    except Exception:
+        SIGNALS_MYSQL_COPY.labels(outcome="error").inc()
+        logger.error("MySQL signals dual-write failed", exc_info=True)
+
+
+def _run_bounded_dual_write(data_list: list[dict[str, Any]]) -> None:
+    """Run one admitted copy and return its slot when the worker exits."""
+    try:
+        _dual_write_signals_to_mysql(data_list)
+    finally:
+        _signal_dual_write_slots.release()
+
+
+def _schedule_signals_mysql_copy(data_list: list[dict[str, Any]]) -> None:
+    """Schedule the historic MySQL copy without blocking the ingest request."""
+    if not _signal_dual_write_slots.acquire(blocking=False):
+        SIGNAL_DUAL_WRITE_DROPPED.inc()
+        logger.warning(
+            "Dropping signals MySQL dual-write: %d worker slots are in flight",
+            _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT,
         )
         return
-    task = loop.create_task(
-        asyncio.to_thread(_write_signals_to_mysql, mysql_adapter, records)
-    )
+    task = asyncio.create_task(asyncio.to_thread(_run_bounded_dual_write, data_list))
     _signal_dual_write_tasks.add(task)
     task.add_done_callback(_signal_dual_write_tasks.discard)
 
@@ -637,16 +646,11 @@ async def insert_records(
             request.data if isinstance(request.data, list) else [request.data]
         )
 
-        # 2026-09-20: independent of the Mongo kill-switch below — MySQL is
-        # the durable historic store now (no TTL there; the Mongo TTL was
-        # cut to 1h) and must keep receiving signals even if the Mongo
-        # short-window write is separately disabled, and vice versa.
-        if (
+        signals_mysql_copy_enabled = (
             database == "mongodb"
             and collection == "signals"
             and _signals_mysql_persist_enabled()
-        ):
-            _dual_write_signals_to_mysql(data_list_raw)
+        )
 
         # data-manager#302 kill-switch — checked BEFORE touching the adapter
         # so a disabled write never opens a connection for a collection with
@@ -656,6 +660,8 @@ async def insert_records(
             and collection == "signals"
             and not _signals_persist_enabled()
         ):
+            if signals_mysql_copy_enabled:
+                _schedule_signals_mysql_copy([dict(item) for item in data_list_raw])
             record_count = len(request.data) if isinstance(request.data, list) else 1
             logger.info(
                 "Signals persistence disabled (PETROSA_SIGNALS_PERSIST_ENABLED="
@@ -736,6 +742,8 @@ async def insert_records(
             duplicates = 0
             failed = 0
             ignored_count = 0
+            if signals_mysql_copy_enabled:
+                _schedule_signals_mysql_copy([dict(item) for item in data_list_raw])
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)

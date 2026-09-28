@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, update
 from sqlalchemy.sql import select
 
 from data_manager.db.repositories.base_repository import BaseRepository
@@ -30,11 +30,12 @@ class BackfillRepository(BaseRepository):
         try:
 
             class Job:
-                def model_dump(self):
+                def model_dump(self, **_kwargs):
                     return job
 
-            # petrosa-data-manager#312: offload the blocking SQLAlchemy call
-            # (see CandleRepository.write_batch comment for full rationale).
+            # MySQLAdapter.write requests model_dump(mode=...) for every model.
+            # Accept that adapter contract so job creation does not fail before
+            # the row reaches the database.
             await asyncio.to_thread(self.mysql.write, [Job()], "backfill_jobs")
             return True
         except Exception as e:
@@ -82,23 +83,7 @@ class BackfillRepository(BaseRepository):
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
-        """
-        List backfill jobs with filtering, sorting, and pagination.
-
-        Args:
-            status: Filter by job status
-            symbol: Filter by trading symbol
-            data_type: Filter by data type
-            from_time: Filter jobs created at/after this time
-            to_time: Filter jobs created before this time
-            sort_by: Column to sort by (falls back to created_at if unknown)
-            sort_order: "asc" or "desc"
-            limit: Maximum number of rows to return
-            offset: Pagination offset
-
-        Returns:
-            Tuple of (jobs, total_count matching filters before pagination)
-        """
+        """List backfill jobs with filtering, sorting, and pagination."""
         try:
             table = self.mysql._get_table("backfill_jobs")
             engine = self.mysql._ensure_connected()
@@ -141,21 +126,33 @@ class BackfillRepository(BaseRepository):
     async def update_status(
         self, job_id: str, status: str, error: str | None = None
     ) -> bool:
-        """
-        Update job status.
+        """Update job status."""
 
-        Args:
-            job_id: Job identifier
-            status: New status
-            error: Optional error message
+        def _update() -> bool:
+            table = self.mysql._get_table("backfill_jobs")
+            values = {
+                "status": status,
+                "error_message": error,
+            }
+            now = datetime.utcnow()
+            if status == "running" and "started_at" in table.c:
+                values["started_at"] = now
+            if status in {"completed", "failed"} and "completed_at" in table.c:
+                values["completed_at"] = now
 
-        Returns:
-            True if successful
-        """
+            stmt = update(table).where(table.c.job_id == job_id).values(**values)
+            engine = self.mysql._ensure_connected()
+            with engine.begin() as conn:
+                result = conn.execute(stmt)
+            return result.rowcount == 1
+
         try:
-            # TODO: Implement proper update logic
-            logger.info(f"Updating job {job_id} to status {status}")
-            return True
+            updated = await asyncio.to_thread(_update)
+            if not updated:
+                logger.warning(
+                    "Backfill job %s was not found for status update", job_id
+                )
+            return updated
         except Exception as e:
-            logger.error(f"Failed to update job status: {e}")
+            logger.error(f"Failed to update backfill job status: {e}")
             return False

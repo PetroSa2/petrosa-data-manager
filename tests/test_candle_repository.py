@@ -29,9 +29,9 @@ def make_candle(symbol: str = "BTCUSDT", timeframe: str = "1h") -> Candle:
     )
 
 
-def mongo_doc(close: str = "105") -> dict:
+def mongo_doc(close: str = "105", timestamp: datetime | None = None) -> dict:
     return {
-        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "timestamp": timestamp or datetime(2026, 1, 1, tzinfo=UTC),
         "open_price": "100",
         "high_price": "110",
         "low_price": "90",
@@ -225,7 +225,93 @@ class TestMongoPath:
                     "trades_count": 1,
                 }
             ]
-            mongodb.query_latest.assert_called_once_with("klines_1h", "BTCUSDT", 5)
+            mongodb.query_latest.assert_called_once_with("klines_1h", "BTCUSDT", 6)
+
+    @pytest.mark.asyncio
+    async def test_get_latest_excludes_forming_candle_and_keeps_requested_count(self):
+        fixed_now = datetime(2026, 9, 25, 18, 17, tzinfo=UTC)
+        timestamps = [
+            datetime(2026, 9, 25, 18, 0, tzinfo=UTC),
+            datetime(2026, 9, 25, 17, 0, tzinfo=UTC),
+            datetime(2026, 9, 25, 16, 0, tzinfo=UTC),
+            datetime(2026, 9, 25, 15, 0, tzinfo=UTC),
+        ]
+        with (
+            patch(
+                "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",
+                "mongodb",
+            ),
+            patch("data_manager.db.repositories.candle_repository.datetime") as clock,
+        ):
+            clock.now.return_value = fixed_now
+            mongodb = Mock()
+            mongodb.query_latest = AsyncMock(
+                return_value=[
+                    mongo_doc(timestamp=timestamp) for timestamp in timestamps
+                ]
+            )
+            repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
+
+            result = await repo.get_latest("BTCUSDT", "1h", limit=3)
+
+            assert [candle["timestamp"] for candle in result] == timestamps[1:]
+            mongodb.query_latest.assert_called_once_with("klines_1h", "BTCUSDT", 4)
+
+    @pytest.mark.asyncio
+    async def test_get_latest_accepts_naive_mongo_utc_timestamps(self):
+        fixed_now = datetime(2026, 9, 25, 18, 17, tzinfo=UTC)
+        with (
+            patch(
+                "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",
+                "mongodb",
+            ),
+            patch("data_manager.db.repositories.candle_repository.datetime") as clock,
+        ):
+            clock.now.return_value = fixed_now
+            mongodb = Mock()
+            mongodb.query_latest = AsyncMock(
+                return_value=[
+                    mongo_doc(
+                        timestamp=datetime(2026, 9, 25, 18, 0),
+                    ),
+                    mongo_doc(
+                        timestamp=datetime(2026, 9, 25, 17, 0),
+                    ),
+                ]
+            )
+            repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
+
+            result = await repo.get_latest("BTCUSDT", "1h", limit=1)
+
+            assert result[0]["timestamp"] == datetime(2026, 9, 25, 17, 0)
+
+    @pytest.mark.asyncio
+    async def test_get_latest_includes_closed_fifteen_minute_candle(self):
+        fixed_now = datetime(2026, 9, 25, 18, 17, tzinfo=UTC)
+        with (
+            patch(
+                "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",
+                "mongodb",
+            ),
+            patch("data_manager.db.repositories.candle_repository.datetime") as clock,
+        ):
+            clock.now.return_value = fixed_now
+            mongodb = Mock()
+            mongodb.query_latest = AsyncMock(
+                return_value=[
+                    mongo_doc(
+                        timestamp=datetime(2026, 9, 25, 18, 15, tzinfo=UTC),
+                    ),
+                    mongo_doc(
+                        timestamp=datetime(2026, 9, 25, 18, 0, tzinfo=UTC),
+                    ),
+                ]
+            )
+            repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
+
+            result = await repo.get_latest("BTCUSDT", "15m", limit=1)
+
+            assert result[0]["timestamp"] == datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
 
     @pytest.mark.asyncio
     async def test_get_latest_returns_empty_on_exception(self):

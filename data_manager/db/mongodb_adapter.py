@@ -518,6 +518,8 @@ class MongoDBAdapter(BaseAdapter):
         sort_list: list[tuple[str, int]] | None = None,
         limit: int = 100,
         offset: int = 0,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Query a collection with filter/sort/limit/offset pushed to the driver.
 
@@ -549,6 +551,13 @@ class MongoDBAdapter(BaseAdapter):
             raise DatabaseError("Not connected to database")
 
         query = self._build_equality_query(filter_dict)
+        if start is not None or end is not None:
+            timestamp_filter: dict[str, datetime] = {}
+            if start is not None:
+                timestamp_filter["$gte"] = start
+            if end is not None:
+                timestamp_filter["$lt"] = end
+            query["timestamp"] = timestamp_filter
 
         try:
             coll = self.db[collection]
@@ -658,6 +667,32 @@ class MongoDBAdapter(BaseAdapter):
                 ]
             elif collection == "daily_pnl":
                 indexes = [IndexModel([("date", ASCENDING)], unique=True)]
+            elif collection == "strategy_configs_global":
+                indexes = [IndexModel([("strategy_id", ASCENDING)], unique=True)]
+            elif collection == "strategy_configs_symbol":
+                indexes = [
+                    IndexModel(
+                        [
+                            ("strategy_id", ASCENDING),
+                            ("symbol", ASCENDING),
+                            ("side", ASCENDING),
+                        ],
+                        unique=True,
+                    )
+                ]
+            elif collection == "strategy_config_audit":
+                indexes = [
+                    IndexModel([("strategy_id", ASCENDING), ("changed_at", DESCENDING)])
+                ]
+            elif collection == "strategy_lifecycle_events":
+                indexes = [
+                    IndexModel(
+                        [("strategy_id", ASCENDING), ("transitioned_at", DESCENDING)],
+                        name="strategy_id_transitioned_at",
+                    )
+                ]
+            elif collection == "cio_auto_resume_registry":
+                indexes = [IndexModel([("strategy_id", ASCENDING)], unique=True)]
             elif collection == "cio_decisions":
                 # Cross-service identifier contract (P0.2b): `cio_decisions` collection
                 # CIO has assigned decision_id by the time it publishes onto
@@ -737,6 +772,31 @@ class MongoDBAdapter(BaseAdapter):
                         name="_ttl_inserted_at_ttl",
                     ),
                 ]
+            elif collection == "health_metrics":
+                indexes = [
+                    IndexModel([("symbol", ASCENDING), ("timestamp", DESCENDING)]),
+                    IndexModel(
+                        [("timestamp", ASCENDING)],
+                        expireAfterSeconds=constants.HEALTH_METRICS_TTL_SECONDS,
+                        name="timestamp_ttl",
+                    ),
+                ]
+            elif collection == "audit_logs":
+                indexes = [
+                    IndexModel([("dataset_id", ASCENDING), ("timestamp", DESCENDING)]),
+                    IndexModel([("timestamp", DESCENDING)]),
+                    IndexModel(
+                        [("timestamp", ASCENDING)],
+                        expireAfterSeconds=constants.AUDIT_LOGS_TTL_SECONDS,
+                        name="timestamp_ttl",
+                    ),
+                ]
+            elif collection == "datasets":
+                indexes = [IndexModel([("dataset_id", ASCENDING)], unique=True)]
+            elif collection == "lineage_records":
+                indexes = [
+                    IndexModel([("dataset_id", ASCENDING), ("created_at", DESCENDING)])
+                ]
             elif collection == "service_leases":
                 indexes = [
                     IndexModel([("name", ASCENDING)], unique=True, name="name_unique"),
@@ -745,6 +805,15 @@ class MongoDBAdapter(BaseAdapter):
                         expireAfterSeconds=3600,
                         name="expires_at_ttl",
                     ),
+                ]
+            elif collection == "config_rate_limits":
+                indexes = [
+                    IndexModel([("changed_by", ASCENDING), ("timestamp", DESCENDING)]),
+                    IndexModel([("timestamp", ASCENDING)]),
+                ]
+            elif collection == "funding_rates":
+                indexes = [
+                    IndexModel([("symbol", ASCENDING), ("timestamp", DESCENDING)])
                 ]
             elif collection.startswith("klines_"):
                 indexes = [

@@ -119,6 +119,27 @@ def map_mongo_kline_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _closed_mongo_documents(
+    documents: list[dict[str, Any]], timeframe: str, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Exclude the currently forming candle from Mongo reads.
+
+    Mongo stores candle timestamps as their opening time.  A candle is usable
+    once its opening timestamp plus the interval has passed; BSON timestamps
+    may be naive even though they represent UTC.
+    """
+    current_time = as_aware_utc(now or datetime.now(UTC))
+    interval = timedelta(minutes=parse_timeframe_to_minutes(timeframe))
+    return [
+        document
+        for document in documents
+        if (
+            (timestamp := document.get("timestamp")) is not None
+            and as_aware_utc(timestamp) + interval <= current_time
+        )
+    ]
+
+
 def candle_to_mysql_kline(
     candle: Candle, *, extracted_at: datetime | None = None
 ) -> MySQLKlineRow:
@@ -287,7 +308,8 @@ class CandleRepository(BaseRepository):
                     for document in documents
                     if (mapped := map_mongo_kline_doc(document)) is not None
                 ]
-            rows = adapter.query_range(
+            rows = await asyncio.to_thread(
+                adapter.query_range,
                 self._get_mysql_table_name(timeframe),
                 start,
                 end,
@@ -321,7 +343,8 @@ class CandleRepository(BaseRepository):
                     for document in documents
                     if (mapped := map_mongo_kline_doc(document)) is not None
                 ]
-            rows = adapter.query_latest(
+            rows = await asyncio.to_thread(
+                adapter.query_latest,
                 self._get_mysql_table_name(timeframe),
                 symbol,
                 limit,
@@ -400,7 +423,9 @@ class CandleRepository(BaseRepository):
         try:
             if self._primary_is_mysql():
                 table = self._get_mysql_table_name(candle.timeframe)
-                count = self.mysql.write([candle_to_mysql_kline(candle)], table)
+                count = await asyncio.to_thread(
+                    self.mysql.write, [candle_to_mysql_kline(candle)], table
+                )
             else:
                 collection = self._get_collection_name(candle.symbol, candle.timeframe)
                 count = await self.mongodb.write(
@@ -539,20 +564,24 @@ class CandleRepository(BaseRepository):
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
+                query_limit = limit + 1 if limit is not None else None
                 documents = await self.mongodb.query_range(
                     collection,
                     start,
                     end,
                     symbol,
-                    limit=limit,
+                    limit=query_limit,
                     offset=offset,
                     descending=descending,
                 )
+                documents = _closed_mongo_documents(documents, timeframe)
                 candles = [
                     mapped
                     for document in documents
                     if (mapped := map_mongo_kline_doc(document)) is not None
                 ]
+                if limit is not None:
+                    candles = candles[:limit]
         except Exception as e:
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             candles = []
@@ -611,12 +640,16 @@ class CandleRepository(BaseRepository):
                 candles = [map_mysql_row(row) for row in rows]
             else:
                 collection = self._get_collection_name(symbol, timeframe)
-                documents = await self.mongodb.query_latest(collection, symbol, limit)
+                documents = await self.mongodb.query_latest(
+                    collection, symbol, limit + 1
+                )
+                documents = _closed_mongo_documents(documents, timeframe)
                 candles = [
                     mapped
                     for document in documents
                     if (mapped := map_mongo_kline_doc(document)) is not None
                 ]
+                candles = candles[:limit]
         except Exception as e:
             logger.error(
                 f"Failed to query latest candles for {symbol} {timeframe}: {e}"

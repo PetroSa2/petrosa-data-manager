@@ -111,7 +111,7 @@ async def list_datasets(
     # Get datasets from catalog repository
     catalog_repo = _get_catalog_repo()
     if catalog_repo:
-        datasets_data = catalog_repo.get_all_datasets()
+        datasets_data = await catalog_repo.get_all_datasets_async()
 
         datasets = [
             DatasetInfo(
@@ -213,7 +213,7 @@ async def get_dataset_metadata(
     if not catalog_repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    dataset = catalog_repo.get_dataset(dataset_id)
+    dataset = await catalog_repo.get_dataset_async(dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 
@@ -243,7 +243,7 @@ async def get_schema(
     if not catalog_repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    dataset = catalog_repo.get_dataset(dataset_id)
+    dataset = await catalog_repo.get_dataset_async(dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 
@@ -269,7 +269,7 @@ async def get_lineage(
     if not catalog_repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    dataset = catalog_repo.get_dataset(dataset_id)
+    dataset = await catalog_repo.get_dataset_async(dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
 

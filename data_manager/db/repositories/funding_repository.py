@@ -7,12 +7,19 @@ import os
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from prometheus_client import Counter
 from pydantic import BaseModel
 
 from data_manager.db.repositories.base_repository import BaseRepository
 from data_manager.models.market_data import FundingRate
 
 logger = logging.getLogger(__name__)
+
+FUNDING_LEGACY_READS = Counter(
+    "data_manager_funding_legacy_read_total",
+    "Funding reads served from legacy per-symbol collections",
+    ["symbol"],
+)
 
 
 class FundingRateMySQLRow(BaseModel):
@@ -46,8 +53,7 @@ class FundingRepository(BaseRepository):
             True if successful, False otherwise
         """
         try:
-            collection = f"funding_rates_{funding.symbol}"
-            count = await self.mongodb.write([funding], collection)
+            count = await self.mongodb.write([funding], "funding_rates")
             self._persist_mysql([funding])
             return count > 0
         except Exception as e:
@@ -68,23 +74,9 @@ class FundingRepository(BaseRepository):
             return 0
 
         try:
-            # Group by symbol
-            rates_by_symbol = {}
-            for rate in funding_rates:
-                if rate.symbol not in rates_by_symbol:
-                    rates_by_symbol[rate.symbol] = []
-                rates_by_symbol[rate.symbol].append(rate)
-
-            # Insert each symbol's rates to its collection
-            total_inserted = 0
-            for symbol, symbol_rates in rates_by_symbol.items():
-                collection = f"funding_rates_{symbol}"
-                count = await self.mongodb.write(symbol_rates, collection)
-                total_inserted += count
-                self._persist_mysql(symbol_rates)
-                logger.debug(f"Inserted {count} funding rates for {symbol}")
-
-            return total_inserted
+            count = await self.mongodb.write(funding_rates, "funding_rates")
+            self._persist_mysql(funding_rates)
+            return count
 
         except Exception as e:
             logger.error(f"Failed to insert funding rate batch: {e}")
@@ -136,8 +128,14 @@ class FundingRepository(BaseRepository):
             List of funding rate dictionaries
         """
         try:
-            collection = f"funding_rates_{symbol}"
-            return await self.mongodb.query_range(collection, start, end, symbol)
+            rates = await self.mongodb.query_range("funding_rates", start, end, symbol)
+            if rates:
+                return rates
+            legacy = f"funding_rates_{symbol}"
+            rates = await self.mongodb.query_range(legacy, start, end, symbol)
+            if rates:
+                FUNDING_LEGACY_READS.labels(symbol=symbol).inc()
+            return rates
         except Exception as e:
             logger.error(f"Failed to query funding rates for {symbol}: {e}")
             return []
@@ -154,8 +152,53 @@ class FundingRepository(BaseRepository):
             List of funding rate dictionaries
         """
         try:
-            collection = f"funding_rates_{symbol}"
-            return await self.mongodb.query_latest(collection, symbol, limit)
+            rates = await self.mongodb.query_latest("funding_rates", symbol, limit)
+            if rates:
+                return rates
+            legacy = f"funding_rates_{symbol}"
+            rates = await self.mongodb.query_latest(legacy, symbol, limit)
+            if rates:
+                FUNDING_LEGACY_READS.labels(symbol=symbol).inc()
+            return rates
         except Exception as e:
             logger.error(f"Failed to query latest funding rates for {symbol}: {e}")
             return []
+
+    async def find_paginated(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+        offset: int,
+        descending: bool,
+    ) -> tuple[list[dict], int]:
+        """Return one canonical page, falling back to the legacy collection."""
+        result = await self.mongodb.find_paginated(
+            collection="funding_rates",
+            filter_dict={"symbol": symbol},
+            start=start,
+            end=end,
+            sort_list=[("timestamp", -1 if descending else 1)],
+            limit=limit,
+            offset=offset,
+        )
+        if result[1] > 0:
+            return result
+        legacy = f"funding_rates_{symbol}"
+        result = await self.mongodb.find_paginated(
+            collection=legacy,
+            filter_dict={"symbol": symbol},
+            start=start,
+            end=end,
+            sort_list=[("timestamp", -1 if descending else 1)],
+            limit=limit,
+            offset=offset,
+        )
+        if result[1] > 0:
+            FUNDING_LEGACY_READS.labels(symbol=symbol).inc()
+        return result
+
+    async def ensure_indexes(self) -> None:
+        """Ensure the canonical funding collection has its serving index."""
+        await self.mongodb.ensure_indexes("funding_rates")
