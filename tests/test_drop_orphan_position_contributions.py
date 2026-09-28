@@ -141,3 +141,17 @@ def test_target_table_is_position_contributions():
     """Lock the target table name — any future rename must update the audit doc."""
     assert mod.TARGET_TABLE == "position_contributions"
     assert mod.TARGET_SCHEMA == "petrosa_crypto"
+
+
+def test_engine_factory_configures_utc_session(monkeypatch):
+    engine = object()
+    monkeypatch.setenv("MYSQL_URI", "mysql+pymysql://user:pass@host/db")
+    with (
+        patch.object(mod.sa, "create_engine", return_value=engine) as create_engine,
+        patch.object(mod, "configure_utc_session") as configure_utc,
+    ):
+        assert mod._make_engine_from_env() is engine
+    create_engine.assert_called_once_with(
+        "mysql+pymysql://user:pass@host/db", future=True
+    )
+    configure_utc.assert_called_once_with(engine)

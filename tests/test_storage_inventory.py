@@ -973,11 +973,15 @@ def test_mysql_create_read_only_engine_does_not_call_create_tables():
     from data_manager.db import mysql_adapter as ma
 
     fake_engine = MagicMock()
-    with patch.object(ma, "create_engine", return_value=fake_engine) as mock_ce:
+    with (
+        patch.object(ma, "create_engine", return_value=fake_engine) as mock_ce,
+        patch.object(ma, "configure_utc_session") as mock_utc,
+    ):
         engine = ma.create_read_only_engine("mysql+pymysql://user:pass@host:3306/db")
 
     assert engine is fake_engine
     mock_ce.assert_called_once()
+    mock_utc.assert_called_once_with(fake_engine)
     # The kwargs explicitly disable connection-time pool warming and avoid DDL
     _, kwargs = mock_ce.call_args
     assert kwargs["pool_pre_ping"] is True

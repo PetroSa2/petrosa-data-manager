@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from data_manager.db.mysql_adapter import MySQLAdapter
+from data_manager.db.mysql_session import configure_utc_session, set_utc_session
 
 
 def test_klines_table_mapping_logic():
@@ -76,8 +77,11 @@ def test_mysql_adapter_pool_size_within_ecosystem_budget():
     assert per_pod * _HPA_MAX_REPLICAS <= _ECOSYSTEM_MYSQL_BUDGET
 
 
+@patch("data_manager.db.mysql_adapter.configure_utc_session")
 @patch("data_manager.db.mysql_adapter.create_engine")
-def test_mysql_adapter_connect_passes_hardened_pool_kwargs(mock_create_engine):
+def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
+    mock_create_engine, mock_configure_utc
+):
     """AC1/AC2 (#299): the kwargs actually reaching SQLAlchemy's create_engine
     carry the hardened pool_recycle/pool_size/max_overflow — not just the
     adapter's own dict (regression guard for #299)."""
@@ -88,4 +92,18 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(mock_create_engine):
     assert kwargs["pool_recycle"] < _SERVER_WAIT_TIMEOUT
     assert (kwargs["pool_size"] + kwargs["max_overflow"]) * _HPA_MAX_REPLICAS <= (
         _ECOSYSTEM_MYSQL_BUDGET
+    )
+
+
+def test_mysql_session_configures_utc_connect_hook():
+    """Every DB-API connection must set the session timezone to UTC."""
+    engine = MagicMock()
+    with patch("data_manager.db.mysql_session.event.listen") as listen:
+        configure_utc_session(engine)
+    listen.assert_called_once_with(engine, "connect", set_utc_session)
+
+    connection = MagicMock()
+    set_utc_session(connection, None)
+    connection.cursor.return_value.execute.assert_called_once_with(
+        "SET time_zone = '+00:00'"
     )

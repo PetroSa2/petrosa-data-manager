@@ -40,6 +40,7 @@ except ImportError:
 
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError, TemporalValueError
+from data_manager.db.mysql_session import configure_utc_session
 from data_manager.utils.circuit_breaker import DatabaseCircuitBreaker
 from data_manager.utils.retry import retry_transient
 
@@ -187,6 +188,8 @@ class MySQLAdapter(BaseAdapter):
         """Establish connection to MySQL."""
         try:
             self.engine = create_engine(self.connection_string, **self.engine_options)
+            if self.connection_string.startswith("mysql"):
+                configure_utc_session(self.engine)
             # Test connection
             if self.engine is not None:
                 with self.engine.connect() as conn:
@@ -1345,7 +1348,7 @@ def create_read_only_engine(connection_string: str) -> "Engine":
             "SQLAlchemy and MySQL driver required. "
             "Install: pip install sqlalchemy pymysql"
         )
-    return create_engine(
+    engine = create_engine(
         connection_string,
         pool_pre_ping=True,
         pool_size=2,
@@ -1357,6 +1360,9 @@ def create_read_only_engine(connection_string: str) -> "Engine":
         pool_recycle=10,
         connect_args={"charset": "utf8mb4", "autocommit": True},
     )
+    if connection_string.startswith("mysql"):
+        configure_utc_session(engine)
+    return engine
 
 
 def list_schemas(engine: "Engine") -> list[str]:
