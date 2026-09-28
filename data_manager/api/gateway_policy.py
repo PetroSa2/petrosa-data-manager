@@ -6,6 +6,7 @@ import logging
 
 from fastapi import HTTPException, Request
 
+import constants
 from data_manager.api.gateway_auth import auth_mode, record_gateway_request
 from data_manager.persistence_registry import REGISTRY
 
@@ -26,8 +27,8 @@ GENERIC_POLICY: dict[str, dict[str, set[str]]] = {
         "strategy_lifecycle_events": {"read", "insert"},
     },
     "mysql": {
-        "positions": {"read", "insert", "update", "upsert"},
-        "daily_pnl": {"read", "insert", "update", "upsert"},
+        "positions": {"read"},
+        "daily_pnl": {"read"},
         "*": {"read"},
     },
 }
@@ -61,6 +62,23 @@ def authorize_generic(
     request: Request, database: str, collection: str, op: str
 ) -> None:
     """Record and enforce a generic route policy decision."""
+    if (
+        database == "mysql"
+        and op != "read"
+        and not constants.GENERIC_MYSQL_WRITES_ENABLED
+    ):
+        record_gateway_request(request, database, collection, op, "denied")
+        logger.warning(
+            "generic_mysql_write_rejected collection=%s op=%s", collection, op
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "generic MySQL writes are disabled: MySQL is historic-only; "
+                "use the typed API"
+            ),
+        )
+
     allowed = check_generic(database, collection, op)
     verified = getattr(request.state, "gateway_auth_verified", True)
     decision = "allowed" if allowed else "denied"

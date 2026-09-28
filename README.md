@@ -161,7 +161,8 @@ Distinct from `/data/trades`, which serves raw market-data trades.
 
 ### Generic CRUD API
 
-* `GET /api/v1/{database}/{collection}` - Query records with filtering, sorting, pagination
+* `GET /api/v1/{database}/{collection}` - Query records with filtering, sorting, pagination.
+  Generic MySQL endpoints are read-only historic reference and return `X-Petrosa-Store: mysql-historic`.
 * `POST /api/v1/{database}/{collection}` - Insert single or multiple records
 * `PUT /api/v1/{database}/{collection}` - Update records with filtering
 * `DELETE /api/v1/{database}/{collection}` - Delete records with filtering
@@ -428,7 +429,7 @@ curl -X POST "http://localhost:8000/api/v1/mongodb/candles_BTCUSDT_1m?schema=can
 #### Update with Validation
 ```bash
 # Update with schema validation
-# Historic/research-only MySQL copy; never a live-path caller.
+# Historic/research-only MySQL copy; generic MySQL writes are disabled.
 curl -X PUT "http://localhost:8000/api/v1/mysql/orders?schema=order_v1&validate=true" \
   -H "Content-Type: application/json" \
   -d '{
@@ -634,8 +635,8 @@ All CRUD operations support optional schema validation:
 # Insert with validation
 POST /api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true
 
-# Update historic/research-only MySQL data with validation
-PUT /api/v1/mysql/orders?schema=order_v1&validate=true
+# Query historic/research-only MySQL data; generic MySQL writes are disabled
+GET /api/v1/mysql/orders?fields=order_id,status&limit=100
 
 # Batch operations with validation
 POST /api/v1/mongodb/candles_BTCUSDT_1m?schema=candle_v1&validate=true

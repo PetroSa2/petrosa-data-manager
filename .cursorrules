@@ -265,15 +265,13 @@ POST /api/v1/mongodb/candles_BTCUSDT_1m
 PUT /api/v1/mongodb/candles_BTCUSDT_1m
 DELETE /api/v1/mongodb/candles_BTCUSDT_1m
 
-# MySQL operations
+# MySQL operations are read-only historic reference
 GET /api/v1/mysql/klines?filter={"symbol":"BTCUSDT"}&limit=100
-POST /api/v1/mysql/klines
-PUT /api/v1/mysql/klines
-DELETE /api/v1/mysql/klines
+# Generic POST, PUT, and DELETE writes are disabled; use typed APIs for live data.
 
 # Batch operations
 POST /api/v1/mongodb/candles_BTCUSDT_1m/batch
-POST /api/v1/mysql/klines/batch
+# Generic MySQL batch writes are disabled.
 ```
 
 **Query with Filtering**:

@@ -248,6 +248,9 @@ INITIAL_STARTUP_DELAY = int(
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 API_WORKERS = int(os.getenv("API_WORKERS", "4"))
+GENERIC_MYSQL_WRITES_ENABLED = (
+    os.getenv("DM_GENERIC_MYSQL_WRITES_ENABLED", "false").lower() == "true"
+)
 
 # Binance API Configuration (for backfilling)
 BINANCE_API_BASE_URL = os.getenv("BINANCE_API_BASE_URL", "https://api.binance.com")
