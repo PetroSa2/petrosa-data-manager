@@ -14,7 +14,7 @@ class CioAutoResumeRepository(BaseRepository):
     """Store the durable registry used by CIO's auto-resume worker."""
 
     def _collection(self):
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             raise RuntimeError("MongoDB is not available")
         return self.mongodb.db[COLLECTION]
 
