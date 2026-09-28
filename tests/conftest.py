@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import constants
+
 # Disable OpenTelemetry auto-initialization during tests
 os.environ["OTEL_NO_AUTO_INIT"] = "1"
 os.environ["OTEL_SDK_DISABLED"] = "true"
@@ -19,6 +21,12 @@ def pytest_configure(config):
     """Setup before any tests are run."""
     os.environ["OTEL_NO_AUTO_INIT"] = "1"
     os.environ["OTEL_SDK_DISABLED"] = "true"
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_mysql_writes_for_existing_route_tests(monkeypatch):
+    """Keep pre-read-only route tests focused on their existing behavior."""
+    monkeypatch.setattr(constants, "GENERIC_MYSQL_WRITES_ENABLED", True)
 
 
 @pytest.fixture
