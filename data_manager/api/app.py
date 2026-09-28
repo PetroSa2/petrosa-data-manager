@@ -22,6 +22,7 @@ from data_manager.api.routes import (
     breaches,
     catalog,
     characterizations,
+    cio_state,
     config,
     config_rate_limits,
     dashboard,
@@ -32,6 +33,7 @@ from data_manager.api.routes import (
     fidelity,
     generic,
     health,
+    ingest,
     leases,
     leverage_bounds,
     lifecycle,
@@ -39,6 +41,7 @@ from data_manager.api.routes import (
     portfolio_state,
     raw,
     schemas,
+    service_config,
     strategies,
     strategy_lifecycle,
     strategy_timeline,
@@ -130,6 +133,7 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(health.router, prefix="/health", tags=["Health"])
     app.include_router(config_rate_limits.router)
+    app.include_router(service_config.router)
     app.include_router(config.router, tags=["Configuration"])
     app.include_router(raw.router, prefix="/api/v1/raw", tags=["Raw Queries"])
     app.include_router(
@@ -159,6 +163,7 @@ def create_app() -> FastAPI:
         prefix="/api/v1",
         tags=["Strategy Lifecycle"],
     )
+    app.include_router(cio_state.router, tags=["CIO Auto Resume"])
     app.include_router(pnl.router, prefix="/api/v1", tags=["P&L"])
     # System trade audit trail from execution_events (#529).
     app.include_router(system_trades.router, prefix="/api/v1", tags=["System Trades"])
@@ -202,6 +207,7 @@ def create_app() -> FastAPI:
     app.include_router(leases.router, tags=["Leases"])
     app.include_router(trading_state.router, tags=["Trading State"])
     app.include_router(generic.router, tags=["Generic CRUD"])
+    app.include_router(ingest.router)
 
     # Root endpoint
     @app.get("/")

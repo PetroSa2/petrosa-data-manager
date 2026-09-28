@@ -241,7 +241,8 @@ async def backfill_pair(
                 logger.info("candle_warmup: %s — %s", coll, result.skip_reason)
                 return result
 
-        rows = mysql.query_latest(
+        rows = await asyncio.to_thread(
+            mysql.query_latest,
             table,
             pair,
             config.min_candles,

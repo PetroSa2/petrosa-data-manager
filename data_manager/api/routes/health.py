@@ -329,7 +329,7 @@ async def data_health(
             if isinstance(timestamp, datetime)
             else datetime.now(UTC).isoformat()
         )
-        metadata = {"last_audit": last_audit, "data_source": "mysql"}
+        metadata = {"last_audit": last_audit, "data_source": "mongodb"}
     else:
         # No recorded health_metrics row yet (or db unavailable) — surface a
         # neutral, explicitly-flagged "no data" response instead of the
@@ -344,7 +344,7 @@ async def data_health(
         }
         metadata = {
             "last_audit": None,
-            "data_source": "mysql",
+            "data_source": "mongodb",
             "no_data": True,
         }
 

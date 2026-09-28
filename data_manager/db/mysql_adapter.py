@@ -119,6 +119,7 @@ class MySQLAdapter(BaseAdapter):
         self.engine: Engine | None = None
         self.metadata = MetaData()
         self.tables: dict[str, Table] = {}
+        self._tables_lock = threading.RLock()
 
         # Circuit breaker for reliability
         self.circuit_breaker = DatabaseCircuitBreaker("mysql")
@@ -462,6 +463,13 @@ class MySQLAdapter(BaseAdapter):
         self, interval: str, collection_name: str | None = None
     ) -> "Table":
         """Create or reflect a klines table for specific interval."""
+        with self._tables_lock:
+            return self._create_klines_table_locked(interval, collection_name)
+
+    def _create_klines_table_locked(
+        self, interval: str, collection_name: str | None = None
+    ) -> "Table":
+        """Create or reflect a klines table while holding the cache lock."""
         # Map binance interval to table suffix (e.g., 1h -> h1)
         suffix = interval
         if interval.endswith("m"):
@@ -537,6 +545,11 @@ class MySQLAdapter(BaseAdapter):
 
     def _get_table(self, collection: str) -> "Table":
         """Get table object for collection. Dynamically create or reflect."""
+        with self._tables_lock:
+            return self._get_table_locked(collection)
+
+    def _get_table_locked(self, collection: str) -> "Table":
+        """Resolve a table while holding the cache lock."""
         if collection in self.tables:
             return self.tables[collection]
 
@@ -615,11 +628,6 @@ class MySQLAdapter(BaseAdapter):
                 field,
                 collection,
             )
-
-    def record_ignored_fields(self, collection: str, fields: Sequence[str]) -> None:
-        """Record fields discarded before a MySQL upsert is written."""
-        for field in fields:
-            self._record_ignored_field(collection, field)
 
     @staticmethod
     def _normalize_temporal_value(value: Any, column: Any) -> Any:
@@ -924,16 +932,24 @@ class MySQLAdapter(BaseAdapter):
 
         table = self._get_table(collection)
 
-        conditions = [
-            table.c[key] == value
-            for key, value in filter_dict.items()
-            if key in table.c
-        ]
+        conditions = []
+        for key, value in filter_dict.items():
+            if key.startswith("$") or isinstance(value, dict):
+                raise DatabaseError(
+                    "update() refused: filter must be a flat equality match, "
+                    f"got operator-like entry {key!r}: {value!r}"
+                )
+            if key not in table.c:
+                logger.warning(
+                    "update() filter column %s does not exist on %s; 0 rows match",
+                    key,
+                    collection,
+                )
+                return 0
+            conditions.append(table.c[key] == value)
+
         if not conditions:
-            raise DatabaseError(
-                f"update() refused: filter {filter_dict!r} matches no columns "
-                f"on {collection} — would UPDATE every row"
-            )
+            raise DatabaseError("update() refused: empty filter")
 
         values: dict[str, Any] = {}
         for key, value in data.items():
