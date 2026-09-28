@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -142,6 +143,20 @@ def test_mysql_metadata_and_ddl_queries(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_row_value_falls_back_to_sequence() -> None:
     assert mod._row_value((8,), "missing") == 8
+
+
+def test_engine_factory_configures_utc_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = object()
+    monkeypatch.setenv("MYSQL_URI", "mysql+pymysql://user:pass@host/db")
+    with (
+        patch.object(mod.sa, "create_engine", return_value=engine) as create_engine,
+        patch.object(mod, "configure_utc_session") as configure_utc,
+    ):
+        assert mod._make_engine_from_env() is engine
+    create_engine.assert_called_once_with(
+        "mysql+pymysql://user:pass@host/db", future=True
+    )
+    configure_utc.assert_called_once_with(engine)
 
 
 def _rows(engine: sa.Engine) -> list[tuple[object, ...]]:
