@@ -262,7 +262,10 @@ class DrawdownService:
             return docs
         except Exception as e:  # noqa: BLE001 — surface failures as empty + log
             logger.error(
-                "drawdown_pnl_fetch_failed",
+                "drawdown_pnl_fetch_failed strategy_id=%s error_type=%s error=%s",
+                strategy_id,
+                type(e).__name__,
+                e,
                 extra={"strategy_id": strategy_id, "error": str(e)},
             )
             return []

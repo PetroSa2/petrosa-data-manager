@@ -14,7 +14,7 @@ class StrategyLifecycleRepository(BaseRepository):
     """Store and retrieve lifecycle transitions for a strategy."""
 
     def _collection(self):
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             raise RuntimeError("MongoDB is not available")
         return self.mongodb.db[COLLECTION]
 

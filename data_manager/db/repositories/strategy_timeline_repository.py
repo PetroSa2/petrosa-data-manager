@@ -146,7 +146,7 @@ class StrategyTimelineRepository(BaseRepository):
         to_ts: datetime | None,
         limit: int,
     ) -> list[dict[str, Any]]:
-        if not self.mongodb or not getattr(self.mongodb, "db", None):
+        if self.mongodb is None or getattr(self.mongodb, "db", None) is None:
             return []
         collection_name, ts_field, _ = _SOURCE_MAP[type_tag]
         query: dict[str, Any] = {"strategy_id": strategy_id}

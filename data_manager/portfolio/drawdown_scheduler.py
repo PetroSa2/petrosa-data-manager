@@ -29,6 +29,14 @@ from data_manager.portfolio.drawdown_service import DrawdownResult, DrawdownServ
 logger = logging.getLogger(__name__)
 
 
+def _describe_cause(exc: BaseException) -> str:
+    """Render the chained cause (``raise ... from``) or implicit context."""
+    cause = exc.__cause__ or exc.__context__
+    if cause is None:
+        return "none"
+    return f"{type(cause).__name__}: {cause}"
+
+
 class DrawdownScheduler:
     """Periodic loop that checks every strategy and publishes breaches."""
 
@@ -79,7 +87,11 @@ class DrawdownScheduler:
                 await self.run_cycle()
             except Exception as exc:  # noqa: BLE001 — never crash the loop
                 logger.error(
-                    "drawdown_scheduler_cycle_failed", extra={"error": str(exc)}
+                    "drawdown_scheduler_cycle_failed error_type=%s error=%s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                    extra={"error": str(exc), "error_type": type(exc).__name__},
                 )
             await asyncio.sleep(self._interval)
 
@@ -91,9 +103,25 @@ class DrawdownScheduler:
             try:
                 result = await self._service.compute(sid)
             except Exception as exc:  # noqa: BLE001
+                # The process log formatter is ``%(message)s`` — ``extra``
+                # fields are NOT rendered — so the strategy, exception and
+                # its cause must live in the message itself, plus the
+                # traceback via ``exc_info``.
+                cause = _describe_cause(exc)
                 logger.error(
-                    "drawdown_cycle_strategy_failed",
-                    extra={"strategy_id": sid, "error": str(exc)},
+                    "drawdown_cycle_strategy_failed strategy_id=%s "
+                    "error_type=%s error=%s cause=%s",
+                    sid,
+                    type(exc).__name__,
+                    exc,
+                    cause,
+                    exc_info=True,
+                    extra={
+                        "strategy_id": sid,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "cause": cause,
+                    },
                 )
                 continue
             results.append(result)
@@ -109,7 +137,9 @@ class DrawdownScheduler:
             return await self._mongo.list_all_strategy_ids()
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "drawdown_scheduler_discovery_failed",
-                extra={"error": str(exc)},
+                "drawdown_scheduler_discovery_failed error_type=%s error=%s",
+                type(exc).__name__,
+                exc,
+                extra={"error": str(exc), "error_type": type(exc).__name__},
             )
             return []
