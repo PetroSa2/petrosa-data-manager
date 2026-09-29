@@ -12,6 +12,7 @@ from prometheus_client import Counter
 
 import constants
 from data_manager.db.repositories.base_repository import BaseRepository
+from data_manager.maintenance.candle_sanity import validate_candle_document
 from data_manager.models.market_data import Candle, MongoKlineDoc, MySQLKlineRow
 from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_minutes
 
@@ -86,6 +87,10 @@ def map_mysql_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def map_mongo_kline_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
     """Map one extractor kline document to the API's canonical candle shape."""
+    if validate_candle_document(doc):
+        CANDLE_INVALID_DOCS.labels(reason="sanity_violation").inc()
+        return None
+
     price_fields = ("open_price", "high_price", "low_price", "close_price")
     if any(field not in doc or doc[field] is None for field in price_fields):
         CANDLE_INVALID_DOCS.labels(reason="missing_ohlc").inc()

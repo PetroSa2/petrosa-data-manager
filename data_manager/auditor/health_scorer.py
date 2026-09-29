@@ -12,12 +12,20 @@ except ImportError:
 
     UTC = timezone.utc  # noqa: UP017
 
+from prometheus_client import Gauge
+
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository, HealthRepository
 from data_manager.models.health import DataHealthMetrics
 from data_manager.utils.time_utils import as_aware_utc, calculate_expected_records
 
 logger = logging.getLogger(__name__)
+
+MONGO_CANDLES_COMPLETENESS = Gauge(
+    "data_manager_mongo_candles_completeness_ratio",
+    "Closed MongoDB candles present versus expected within the TTL window",
+    ["symbol", "timeframe"],
+)
 
 
 class HealthScorer:
@@ -83,6 +91,9 @@ class HealthScorer:
             # raise a ValidationError. The duplicate is still reported via
             # duplicates_count, so clamping here does not hide it.
             completeness = min(completeness, 100.0)
+            MONGO_CANDLES_COMPLETENESS.labels(symbol=symbol, timeframe=timeframe).set(
+                completeness / 100.0
+            )
 
             # Get freshness (seconds since last data point)
             latest_candles = await self.candle_repo.get_latest(

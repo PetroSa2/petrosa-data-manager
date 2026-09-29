@@ -60,17 +60,11 @@ last_seen_timestamp = Gauge(
     ["symbol", "timeframe"],
 )
 
-# Gap tolerance: a gap is declared when the time between consecutive
-# candles exceeds this many intervals. 2 intervals means we tolerate
-# one missed tick plus jitter before declaring a gap.
-STREAMING_GAP_TOLERANCE_INTERVALS = 2
+# A missing candle is actionable as soon as the next interval is absent.
+STREAMING_GAP_TOLERANCE_INTERVALS = 1
 
-# Minimum gap duration (seconds) below which we skip backfill to
-# avoid noisy micro-gaps from jitter. Must be greater than the
-# tolerance window (STREAMING_GAP_TOLERANCE_INTERVALS * interval)
-# so that it acts as a secondary filter for gaps that were
-# detected but are borderline.
-MIN_GAP_DURATION_SECONDS = 180  # 3 minutes
+# Retained as a compatibility constant; every detected closed-candle gap is filled.
+MIN_GAP_DURATION_SECONDS = 0
 
 # Maximum gap window to backfill in one request (seconds). Prevents
 # the backfill orchestrator from being asked to fill months of data
@@ -311,14 +305,6 @@ class StreamingGapDetector:
             gap_duration: Duration of the gap in seconds.
         """
         try:
-            # Apply minimum gap threshold
-            if gap_duration < MIN_GAP_DURATION_SECONDS:
-                logger.debug(
-                    f"Gap too short for backfill: {gap_duration:.0f}s "
-                    f"(min: {MIN_GAP_DURATION_SECONDS}s)"
-                )
-                return
-
             # Cap the backfill window
             effective_end = min(
                 gap_end,

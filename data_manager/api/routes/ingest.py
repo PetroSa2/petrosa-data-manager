@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -21,7 +21,10 @@ from data_manager.db.repositories.candle_repository import (
     mysql_table_name,
 )
 from data_manager.db.repositories.funding_repository import FundingRepository
+from data_manager.maintenance.candle_sanity import CANDLE_SANITY_VIOLATIONS
+from data_manager.models.events import BackfillRequest
 from data_manager.models.market_data import Candle, FundingRate
+from data_manager.utils.time_utils import parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ingest", tags=["Ingest"])
@@ -76,6 +79,53 @@ def _schedule_copy(rows: list, interval: str, adapter: Any) -> None:
     task.add_done_callback(_mysql_copy_tasks.discard)
 
 
+async def _quarantine_and_refetch(
+    documents: list[tuple[dict[str, Any], list[str]]],
+) -> None:
+    """Keep rejected payloads for audit and ask the Binance backfill path to retry."""
+    if not documents or db_manager is None:
+        return
+    mongo = getattr(db_manager, "mongodb_adapter", None)
+    if mongo is not None:
+        try:
+            collection = mongo.db["candle_quarantine"]
+            await collection.insert_many(
+                [
+                    {
+                        **document,
+                        "quarantine_reasons": reasons,
+                        "quarantined_at": datetime.now(UTC),
+                    }
+                    for document, reasons in documents
+                ],
+                ordered=False,
+            )
+        except Exception:
+            logger.warning("Unable to persist candle quarantine records", exc_info=True)
+
+    orchestrator = getattr(db_manager, "backfill_orchestrator", None)
+    if orchestrator is None:
+        return
+    for document, _ in documents:
+        try:
+            start = _parse_timestamp(document["timestamp"])
+            interval = str(document["interval"])
+            await orchestrator.create_backfill_job(
+                BackfillRequest(
+                    symbol=str(document["symbol"]),
+                    data_type="candles",
+                    timeframe=interval,
+                    start_time=start,
+                    end_time=start
+                    + timedelta(seconds=parse_timeframe_to_seconds(interval)),
+                    priority=1,
+                    source="candle_sanity_refetch",
+                )
+            )
+        except Exception:
+            logger.warning("Unable to schedule candle sanity refetch", exc_info=True)
+
+
 @router.post("/klines")
 async def ingest_klines(request: KlinesRequest) -> dict[str, Any]:
     if request.interval not in constants.SUPPORTED_INTERVALS:
@@ -88,14 +138,28 @@ async def ingest_klines(request: KlinesRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
 
     accepted: list[tuple[dict[str, Any], Candle]] = []
+    rejected_documents: list[tuple[dict[str, Any], list[str]]] = []
     rejected = 0
+    seen_timestamps: set[tuple[str, datetime]] = set()
     for raw in request.klines:
         document = {**raw, "symbol": request.symbol, "interval": request.interval}
         try:
             document["timestamp"] = _parse_timestamp(document.get("timestamp"))
+            key = (request.symbol, document["timestamp"])
+            if key in seen_timestamps:
+                CANDLE_SANITY_VIOLATIONS.labels(
+                    symbol=request.symbol,
+                    timeframe=request.interval,
+                    reason="duplicate_timestamp",
+                ).inc()
+                rejected += 1
+                rejected_documents.append((document, ["duplicate_timestamp"]))
+                continue
+            seen_timestamps.add(key)
             mapped = map_mongo_kline_doc(document)
             if mapped is None:
                 rejected += 1
+                rejected_documents.append((document, ["sanity_violation"]))
                 continue
             candle = Candle(
                 symbol=request.symbol,
@@ -111,8 +175,11 @@ async def ingest_klines(request: KlinesRequest) -> dict[str, Any]:
             )
         except (TypeError, ValueError, ArithmeticError):
             rejected += 1
+            rejected_documents.append((document, ["invalid_payload"]))
             continue
         accepted.append((document, candle))
+
+    await _quarantine_and_refetch(rejected_documents)
 
     operations = [
         UpdateOne(
@@ -148,6 +215,7 @@ async def ingest_klines(request: KlinesRequest) -> dict[str, Any]:
         "interval": request.interval,
         "received": len(request.klines),
         "rejected": rejected,
+        "quarantined": len(rejected_documents),
         "upserted": upserted,
         "matched": matched,
         "mysql_copy": copy_status,

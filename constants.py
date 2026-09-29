@@ -431,9 +431,9 @@ LEADER_ELECTION_TIMEOUT = int(os.getenv("LEADER_ELECTION_TIMEOUT", "30"))  # sec
 
 # Auto-Backfill Configuration
 ENABLE_AUTO_BACKFILL = os.getenv("ENABLE_AUTO_BACKFILL", "false").lower() == "true"
-MIN_AUTO_BACKFILL_GAP = int(
-    os.getenv("MIN_AUTO_BACKFILL_GAP", "3600")
-)  # seconds (1 hour)
+# Every missing closed candle is actionable.  Rate safety comes from the queue
+# and the per-request backfill window, not from dropping short gaps (#449).
+MIN_AUTO_BACKFILL_GAP = 0
 MAX_AUTO_BACKFILL_JOBS = int(
     os.getenv("MAX_AUTO_BACKFILL_JOBS", "5")
 )  # concurrent jobs

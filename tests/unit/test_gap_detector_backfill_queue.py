@@ -134,18 +134,18 @@ async def test_orchestrator_failure_queues_request(detector, queue, sample_gap):
     assert queued.symbol == "BTCUSDT"
 
 
-# --- Scenario 5: Small gap below threshold → skipped ---
+# --- Scenario 5: Small gap is still backfilled (#449) ---
 
 
 @pytest.mark.asyncio
-async def test_small_gap_below_threshold_skipped(detector, queue, mock_db_manager):
+async def test_small_gap_is_backfilled(detector, queue, mock_db_manager):
     detector.backfill_orchestrator = None
     detector.backfill_queue = queue
 
     small_gap = GapInfo(
         start_time=datetime(2026, 1, 1, tzinfo=UTC),
         end_time=datetime(2026, 1, 1, hour=0, minute=30, tzinfo=UTC),
-        duration_seconds=1800,  # 30 min — below MIN_AUTO_BACKFILL_GAP (3600)
+        duration_seconds=300,  # one missing 5m candle must not be skipped
         expected_records=30,
     )
 
@@ -153,7 +153,7 @@ async def test_small_gap_below_threshold_skipped(detector, queue, mock_db_manage
         symbol="BTCUSDT", timeframe="1h", gap=small_gap, severity="medium"
     )
 
-    assert queue.size == 0  # too small to queue
+    assert queue.size == 1
 
 
 # --- Scenario 6: GapDetector constructor accepts queue ---
