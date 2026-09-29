@@ -48,6 +48,7 @@ from data_manager.api.routes import (
     system_trades,
     trading_state,
 )
+from data_manager.maintenance import klines_completeness as _klines_completeness
 
 try:
     from petrosa_otel import config_rate_limit_middleware
