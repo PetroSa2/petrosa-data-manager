@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast, runtime_checkable
 
+import sqlalchemy as sa
+
 import constants
 from data_manager.db import mysql_adapter
 from data_manager.db.mongodb_adapter import MongoDBAdapter
@@ -176,14 +178,41 @@ class MySQLRetentionBackend:
 
     def __init__(self, adapter: MySQLAdapter, *, schema: str | None = None):
         self.adapter = adapter
-        self.schema = schema or constants.MYSQL_DB
+        self._explicit_schema = schema
+
+    def resolve_schema(self) -> str:
+        """Return the schema to query, preferring the live connection over env.
+
+        ``constants.MYSQL_DB`` defaults to ``petrosa_data_manager`` and is only
+        correct when ``MYSQL_DB`` is exported. Deployments that supply just
+        ``MYSQL_URI`` pointed the adapter at a real schema while this resolver
+        read the default, so discovery silently matched zero tables. The
+        connection string is authoritative because it is what the engine
+        actually connected to.
+        """
+        if self._explicit_schema:
+            return self._explicit_schema
+
+        engine = getattr(self.adapter, "engine", None)
+        database = getattr(getattr(engine, "url", None), "database", None)
+        if database:
+            return str(database)
+
+        connection_string = getattr(self.adapter, "connection_string", None)
+        if connection_string:
+            parsed = sa.engine.make_url(str(connection_string))
+            if parsed.database:
+                return parsed.database
+
+        return constants.MYSQL_DB
 
     async def list_klines_collections(self) -> list[str]:
         engine = getattr(self.adapter, "engine", None)
         if engine is None:
             raise RuntimeError("MySQL adapter has no connected engine")
+        schema = self.resolve_schema()
         inventory = await asyncio.to_thread(
-            mysql_adapter.table_inventory, engine, self.schema
+            mysql_adapter.table_inventory, engine, schema
         )
         return sorted(
             str(row.get("TABLE_NAME", row.get("table_name", "")))
@@ -516,10 +545,18 @@ async def prune_klines(
             collections = await backend.list_klines_collections()
 
         if not collections:
-            logger.info(
-                "klines_retention: no klines_* collections found for backend=%s",
-                backend.name,
-            )
+            if isinstance(backend, MySQLRetentionBackend):
+                logger.error(
+                    "klines_retention: no klines_* tables found in schema=%r for "
+                    "backend=mysql — MySQL retention is a no-op this run. Verify the "
+                    "schema in MYSQL_URI matches the deployed database.",
+                    backend.resolve_schema(),
+                )
+            else:
+                logger.info(
+                    "klines_retention: no klines_* collections found for backend=%s",
+                    backend.name,
+                )
             continue
 
         backend_dry_run = (
