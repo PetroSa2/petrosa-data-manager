@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from functools import lru_cache
 
 from fastapi import HTTPException, Request
@@ -22,7 +23,8 @@ GATEWAY_REQUESTS = Counter(
 
 _EXEMPT_PREFIXES = ("/health/",)
 _EXEMPT_PATHS = frozenset({"/metrics", "/docs", "/openapi.json"})
-_AUDIT_LOGGED: dict[tuple[str, str], float] = {}
+_AUDIT_LOGGED: OrderedDict[tuple[str, str], float] = OrderedDict()
+_AUDIT_LOGGED_MAX = 1024
 
 
 @lru_cache(maxsize=1)
@@ -50,7 +52,15 @@ def _audit_unverified(service: str, path: str) -> None:
     key = (service, path)
     if now - _AUDIT_LOGGED.get(key, 0) >= 300:
         logger.warning("gateway_auth_unverified service=%s path=%s", service, path)
+        _AUDIT_LOGGED.pop(key, None)
         _AUDIT_LOGGED[key] = now
+        while len(_AUDIT_LOGGED) > _AUDIT_LOGGED_MAX:
+            _AUDIT_LOGGED.popitem(last=False)
+
+
+def _audit_route(request: Request) -> str:
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or request.url.path
 
 
 async def require_service(request: Request) -> str:
@@ -78,7 +88,7 @@ async def require_service(request: Request) -> str:
             status_code=401, detail="valid service authentication required"
         )
 
-    _audit_unverified(service, request.url.path)
+    _audit_unverified(service, _audit_route(request))
     request.state.gateway_service = service
     request.state.gateway_auth_verified = False
     return service
