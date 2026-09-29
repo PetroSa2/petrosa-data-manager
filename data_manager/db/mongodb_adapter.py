@@ -21,7 +21,7 @@ from pydantic import BaseModel
 try:
     from motor import motor_asyncio
     from pymongo import ASCENDING, DESCENDING, IndexModel, ReturnDocument
-    from pymongo.errors import DuplicateKeyError, PyMongoError
+    from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
 
     MOTOR_AVAILABLE = True
 except ImportError:
@@ -29,12 +29,14 @@ except ImportError:
 
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
+from data_manager.db.write_result import WriteResult
 
 logger = logging.getLogger(__name__)
 
 # Matches a numeric UTC offset immediately followed by a literal "Z", e.g.
 # "2026-08-24T00:00:00+00:00Z" — the malformed double-suffix case from #263.
 _DOUBLE_TZ_SUFFIX_RE = re.compile(r"([+-]\d{2}:\d{2})Z$")
+_SYNTHETIC_ID_COLLECTION_PREFIXES = ("klines_", "candles_")
 
 
 def _normalize_iso_timestamp(ts: str) -> str:
@@ -113,13 +115,15 @@ class MongoDBAdapter(BaseAdapter):
             self._connected = False
             logger.info("Disconnected from MongoDB")
 
-    async def write(self, model_instances: list[BaseModel], collection: str) -> int:
+    async def write(
+        self, model_instances: list[BaseModel], collection: str
+    ) -> WriteResult:
         """Write model instances to MongoDB collection."""
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
         if not model_instances:
-            return 0
+            return WriteResult()
 
         try:
             coll = self.db[collection]
@@ -128,27 +132,33 @@ class MongoDBAdapter(BaseAdapter):
             documents = []
             for instance in model_instances:
                 doc = instance.model_dump()
-                # Create _id from symbol and timestamp for deduplication
-                if "symbol" in doc and "timestamp" in doc:
+                if "timestamp" in doc and isinstance(doc["timestamp"], str):
                     ts = doc["timestamp"]
-                    if isinstance(ts, str):
-                        try:
-                            ts = datetime.fromisoformat(ts)
-                        except ValueError:
-                            # Handle malformed producer timestamps (#263): bare
-                            # "Z" suffix, or a numeric UTC offset with a
-                            # redundant trailing "Z" (e.g. "+00:00Z").
-                            normalized = _normalize_iso_timestamp(ts)
-                            ts = datetime.fromisoformat(normalized)
-                            logger.warning(
-                                "Normalized malformed timestamp %r -> %r for "
-                                "collection %s",
-                                doc["timestamp"],
-                                normalized,
-                                collection,
-                            )
-                        # Normalize back into document for correct storage type
-                        doc["timestamp"] = ts
+                    try:
+                        ts = datetime.fromisoformat(ts)
+                    except ValueError:
+                        # Handle malformed producer timestamps (#263): bare
+                        # "Z" suffix, or a numeric UTC offset with a
+                        # redundant trailing "Z" (e.g. "+00:00Z").
+                        normalized = _normalize_iso_timestamp(ts)
+                        ts = datetime.fromisoformat(normalized)
+                        logger.warning(
+                            "Normalized malformed timestamp %r -> %r for collection %s",
+                            doc["timestamp"],
+                            normalized,
+                            collection,
+                        )
+                    doc["timestamp"] = ts
+
+                # Candles are one-row-per-symbol/timestamp. Signals carry their
+                # own unique identity and must not use millisecond timestamps.
+                if collection == "signals" and doc.get("signal_id"):
+                    doc["_id"] = doc["signal_id"]
+                elif collection.startswith(_SYNTHETIC_ID_COLLECTION_PREFIXES) and {
+                    "symbol",
+                    "timestamp",
+                }.issubset(doc):
+                    ts = doc["timestamp"]
                     timestamp_ms = int(ts.timestamp() * 1000)
                     doc["_id"] = f"{doc['symbol']}_{timestamp_ms}"
 
@@ -159,26 +169,31 @@ class MongoDBAdapter(BaseAdapter):
             # Insert with ordered=False to continue on duplicates
             try:
                 result = await coll.insert_many(documents, ordered=False)
-                return len(result.inserted_ids)
-            except DuplicateKeyError as e:
-                # Extract actual inserted count from error details
-                # This is expected behavior - duplicates are normal during backfill/replay
-                inserted_count = 0
-                if hasattr(e, "details") and e.details:
-                    inserted_count = e.details.get("nInserted", 0)
-                # Only log if we actually inserted something, otherwise it's just duplicates
-                if inserted_count > 0:
-                    logger.debug(
-                        f"Inserted {inserted_count}/{len(documents)} records to {collection} "
-                        f"(skipped {len(documents) - inserted_count} duplicates)"
+                return WriteResult(inserted=len(result.inserted_ids))
+            except BulkWriteError as e:
+                details = e.details or {}
+                write_errors = details.get("writeErrors", [])
+                duplicates = sum(error.get("code") == 11000 for error in write_errors)
+                failed = len(write_errors) - duplicates
+                inserted = int(details.get("nInserted", 0))
+                if failed:
+                    logger.error(
+                        "MongoDB bulk write had non-duplicate failures for %s: %s",
+                        collection,
+                        [error for error in write_errors if error.get("code") != 11000],
                     )
-                return inserted_count if inserted_count > 0 else 0
+                return WriteResult(inserted, duplicates, failed)
+            except DuplicateKeyError as e:
+                details = e.details or {}
+                return WriteResult(
+                    inserted=int(details.get("nInserted", 0)), duplicates=1
+                )
 
         except PyMongoError as e:
             # Check if this is a duplicate key error wrapped in another exception
             if "duplicate key error" in str(e).lower():
                 # Duplicates are expected - no need to log
-                return 0
+                return WriteResult(0, duplicates=1)
             # Only raise for actual errors, not duplicates
             logger.warning(f"MongoDB write error for {collection}: {e}")
             raise DatabaseError(f"Failed to write to MongoDB {collection}: {e}") from e
