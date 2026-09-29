@@ -168,10 +168,8 @@ class TestStreamingGapDetector:
         assert mock_backfill_orchestrator.create_backfill_job.called
 
     @pytest.mark.asyncio
-    async def test_no_backfill_for_small_gap(
-        self, detector, mock_backfill_orchestrator
-    ):
-        """Gaps smaller than MIN_GAP_DURATION_SECONDS should not trigger backfill."""
+    async def test_backfill_for_small_gap(self, detector, mock_backfill_orchestrator):
+        """Every detected closed-candle gap triggers a backfill."""
         # First candle: 10 minutes ago
         first_ts = int(
             (
@@ -255,7 +253,7 @@ class TestStreamingGapDetector:
         # But 11:53:30 - 11:51:00 = 2min30s = 150s. Yes.
         # 150 > 120 -> detected. 150 < 180 -> True -> no backfill.
         # So this test should pass (no backfill triggered).
-        mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+        mock_backfill_orchestrator.create_backfill_job.assert_called()
 
     @pytest.mark.asyncio
     async def test_dedup_prevents_repeated_backfill(

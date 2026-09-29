@@ -23,7 +23,7 @@ def _doc(timestamp):
 
 def test_dry_run_does_not_write_mysql():
     mongo = SimpleNamespace(
-        query_range=AsyncMock(return_value=[_doc(datetime.now(UTC))])
+        query_range=AsyncMock(return_value=[_doc(datetime(2026, 1, 1, tzinfo=UTC))])
     )
     mysql = Mock()
     count = asyncio.run(

@@ -317,6 +317,7 @@ async def data_health(
         duplicates = int(latest.get("duplicates_count") or 0)
         health = {
             "completeness": float(latest.get("completeness") or 0.0),
+            "completeness_ratio": float(latest.get("completeness") or 0.0) / 100.0,
             "freshness_sec": int(latest.get("freshness_seconds") or 0),
             "gaps": gaps,
             "duplicates": duplicates,
@@ -336,6 +337,7 @@ async def data_health(
         # previous hardcoded "everything is perfect" fake values (#281).
         health = {
             "completeness": 0.0,
+            "completeness_ratio": 0.0,
             "freshness_sec": 0,
             "gaps": 0,
             "duplicates": 0,

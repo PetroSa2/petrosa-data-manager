@@ -209,14 +209,14 @@ class TestMongoPath:
             "mongodb",
         ):
             mongodb = Mock()
-            mongodb.query_latest = AsyncMock(return_value=[mongo_doc(close="1")])
+            mongodb.query_latest = AsyncMock(return_value=[mongo_doc(close="105")])
             repo = CandleRepository(mysql_adapter=None, mongodb_adapter=mongodb)
             assert await repo.get_latest("BTCUSDT", "1h", limit=5) == [
                 {
                     "open": Decimal("100"),
                     "high": Decimal("110"),
                     "low": Decimal("90"),
-                    "close": Decimal("1"),
+                    "close": Decimal("105"),
                     "volume": Decimal("1000"),
                     "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
                     "symbol": "BTCUSDT",

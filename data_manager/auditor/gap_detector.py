@@ -226,14 +226,6 @@ class GapDetector:
             severity: Gap severity level
         """
         try:
-            # Check if gap exceeds minimum threshold
-            if gap.duration_seconds < constants.MIN_AUTO_BACKFILL_GAP:
-                logger.debug(
-                    f"Gap too small for auto-backfill: {gap.duration_seconds}s "
-                    f"(threshold: {constants.MIN_AUTO_BACKFILL_GAP}s)"
-                )
-                return
-
             # Create backfill request
             request = BackfillRequest(
                 symbol=symbol,
