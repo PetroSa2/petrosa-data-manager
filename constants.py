@@ -306,8 +306,20 @@ if CANDLE_DATABASE_TYPE not in {"mongodb", "mysql"}:
 KLINE_WRITER_VERSION = "data-manager"
 KLINE_WRITER_SOURCE = "data-manager-backfill"
 
-# Supported timeframes for candles
-SUPPORTED_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+# Supported timeframes for candles.
+#
+# Exactly the set the MySQL klines extractor and gap-filler are configured to
+# fill (petrosa_k8s/k8s/data-extractor/klines-{extractor,gap-filler}-cronjob*.yaml):
+# 5m, 15m, 30m, 1h, d1. `1m` and `4h` were listed here historically but no
+# CronJob ever wrote them — their MySQL tables were created by the 2026-03-13
+# schema DDL and have held 0 rows ever since (migration 011 drops them).
+#
+# Do not widen this list without first adding the matching extractor/gap-filler
+# CronJob. The MySQL candle rollback path
+# (CANDLE_DATABASE_TYPE=CANDLE_DUAL_WRITE_ENABLED, constants.py) maps
+# `timeframe` straight to `klines_{tf}`, so a listed-but-unwritten timeframe
+# resolves to a table with no data.
+SUPPORTED_TIMEFRAMES = ["5m", "15m", "30m", "1h", "1d"]
 
 # Timeframes the *execution* path actually requests. Sourced from the shared
 # `SUPPORTED_INTERVALS` configmap key (k8s/shared/configmaps/petrosa-common-config.yaml)
