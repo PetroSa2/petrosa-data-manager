@@ -41,6 +41,7 @@ except ImportError:
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError, TemporalValueError
 from data_manager.db.mysql_session import configure_utc_session
+from data_manager.db.write_result import WriteResult
 from data_manager.utils.circuit_breaker import DatabaseCircuitBreaker
 from data_manager.utils.retry import retry_transient
 
@@ -48,45 +49,6 @@ logger = logging.getLogger(__name__)
 
 _IGNORED_FIELD_WARNINGS: set[tuple[str, str]] = set()
 _IGNORED_FIELD_WARNINGS_LOCK = threading.Lock()
-
-
-class WriteResult(int):
-    """Outcome of a MySQL write — explicit ``inserted`` / ``duplicates`` / ``failed`` counts.
-
-    Subclasses ``int`` so existing callers / tests that compare the return value
-    against an integer (e.g. ``assert adapter.write(...) == 0``) keep working;
-    the integer value is the number of rows actually inserted. New callers can
-    read ``.inserted``, ``.duplicates``, and ``.failed`` directly — required by
-    petrosa-data-manager#213 AC2.3 so the boundary stops returning an ambiguous
-    plain ``0`` on the all-duplicates case.
-    """
-
-    inserted: int
-    duplicates: int
-    failed: int
-
-    ignored_count: int
-
-    def __new__(
-        cls,
-        inserted: int = 0,
-        duplicates: int = 0,
-        failed: int = 0,
-        ignored_count: int | None = None,
-    ) -> "WriteResult":
-        obj = super().__new__(cls, inserted)
-        obj.inserted = inserted
-        obj.duplicates = duplicates
-        obj.failed = failed
-        obj.ignored_count = duplicates if ignored_count is None else ignored_count
-        return obj
-
-    def as_dict(self) -> dict[str, int]:
-        return {
-            "inserted": self.inserted,
-            "duplicates": self.duplicates,
-            "failed": self.failed,
-        }
 
 
 class MySQLAdapter(BaseAdapter):

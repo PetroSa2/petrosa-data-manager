@@ -105,6 +105,22 @@ def test_kill_switch_does_not_affect_other_mongo_collections(client, monkeypatch
     api_module.db_manager.mongodb_adapter.write.assert_called_once()
 
 
+def test_mongo_response_preserves_write_counts(client):
+    api_module.db_manager.mongodb_adapter.write.return_value = WriteResult(
+        inserted=3, duplicates=2, failed=1
+    )
+
+    response = client.post(
+        "/api/v1/mongodb/alerts",
+        json={"data": {"symbol": "BTCUSDT", "message": "test"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["inserted_count"] == 3
+    assert response.json()["duplicates"] == 2
+    assert response.json()["failed"] == 1
+
+
 def test_kill_switch_does_not_affect_mysql_signals_path(client, monkeypatch):
     """The gate is Mongo-only — the legacy MySQL `signals` path (writer
     already removed per petrosa-bot-ta-analysis#284) is untouched."""

@@ -8,7 +8,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
 
 from data_manager.db.base_adapter import DatabaseError
 from data_manager.db.mongodb_adapter import MongoDBAdapter
@@ -119,6 +119,56 @@ class TestWrite:
         doc = coll.insert_many.call_args[0][0][0]
         assert doc["_id"] == "BTCUSDT_1767225600000"
         assert doc["value"] == 1.5  # Decimal → float
+
+    @pytest.mark.asyncio
+    async def test_signals_with_same_millisecond_use_signal_ids(self, adapter):
+        models = []
+        for signal_id in ("signal-1", "signal-2"):
+            model = MagicMock()
+            model.model_dump.return_value = {
+                "signal_id": signal_id,
+                "symbol": "BTCUSDT",
+                "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+            }
+            models.append(model)
+        coll = MagicMock()
+        coll.insert_many = AsyncMock(
+            return_value=MagicMock(inserted_ids=["signal-1", "signal-2"])
+        )
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        result = await adapter.write(models, "signals")
+
+        assert result.inserted == 2
+        assert result.duplicates == 0
+        assert [doc["_id"] for doc in coll.insert_many.call_args.args[0]] == [
+            "signal-1",
+            "signal-2",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_bulk_write_error_reports_duplicate_and_other_counts(self, adapter):
+        model = MagicMock()
+        model.model_dump.return_value = {"signal_id": "signal-1"}
+        error = BulkWriteError(
+            {
+                "nInserted": 3,
+                "writeErrors": [
+                    {"code": 11000, "errmsg": "duplicate"},
+                    {"code": 11000, "errmsg": "duplicate"},
+                    {"code": 121, "errmsg": "document validation failed"},
+                ],
+            }
+        )
+        coll = MagicMock()
+        coll.insert_many = AsyncMock(side_effect=error)
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        result = await adapter.write([model] * 6, "signals")
+
+        assert result.inserted == 3
+        assert result.duplicates == 2
+        assert result.failed == 1
 
     @pytest.mark.asyncio
     async def test_duplicate_key_error_returns_partial(self, adapter):

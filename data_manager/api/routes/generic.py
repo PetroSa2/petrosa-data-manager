@@ -745,9 +745,10 @@ async def insert_records(
             failed = write_result.failed
             ignored_count = write_result.ignored_count
         else:  # MongoDB
-            inserted_count = await adapter.write(model_instances, collection)
-            duplicates = 0
-            failed = 0
+            write_result = await adapter.write(model_instances, collection)
+            inserted_count = getattr(write_result, "inserted", int(write_result))
+            duplicates = getattr(write_result, "duplicates", 0)
+            failed = getattr(write_result, "failed", 0)
             ignored_count = 0
             if signals_mysql_copy_enabled:
                 _schedule_signals_mysql_copy([dict(item) for item in data_list_raw])
