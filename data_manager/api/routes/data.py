@@ -133,7 +133,14 @@ class FundingResponse(BaseModel):
 @router.get("/candles")
 async def get_candles(
     pair: str = Query(..., description="Trading pair symbol"),
-    period: str = Query(..., description="Candle period (e.g., '1m', '1h')"),
+    period: str = Query(
+        ...,
+        description=(
+            "Candle period. One of: "
+            + ", ".join(constants.SUPPORTED_TIMEFRAMES)
+            + " (the timeframes the klines extractor and gap-filler populate)"
+        ),
+    ),
     start: datetime | None = Query(None, description="Start timestamp"),
     end: datetime | None = Query(None, description="End timestamp"),
     limit: int = Query(
@@ -154,6 +161,20 @@ async def get_candles(
     if not api_module.db_manager or not api_module.db_manager.mongodb_adapter:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    # Reject unsupported periods up front with a 422 rather than letting the
+    # timeframe flow into a collection/table name and failing later as an
+    # opaque 500 — or, for a timeframe whose MySQL table was retired by
+    # migration 011, as "table doesn't exist".
+    normalized_period = period.strip().lower()
+    if normalized_period not in constants.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unsupported period {period!r}. Supported periods: "
+                f"{', '.join(constants.SUPPORTED_TIMEFRAMES)}"
+            ),
+        )
+
     try:
         # Initialize repository
         candle_repo = CandleRepository(
@@ -165,7 +186,7 @@ async def get_candles(
         if not end:
             end = datetime.now(UTC)
         if not start:
-            start = _default_candle_start(end, period, limit, offset)
+            start = _default_candle_start(end, normalized_period, limit, offset)
 
         # Push the row cap, pagination offset and sort direction down into
         # the database query (petrosa-data-manager#331) instead of fetching
@@ -176,7 +197,7 @@ async def get_candles(
         descending = sort_order.lower() == "desc"
         paginated_candles = await candle_repo.get_range(
             pair,
-            period,
+            normalized_period,
             start,
             end,
             limit=limit,
@@ -186,10 +207,10 @@ async def get_candles(
 
         total_count = await candle_repo.count(
             pair,
-            period,
+            normalized_period,
             start,
             end,
-            max_count=_expected_candle_count(start, end, period),
+            max_count=_expected_candle_count(start, end, normalized_period),
         )
 
         # Format response
@@ -215,7 +236,7 @@ async def get_candles(
 
         return {
             "pair": pair,
-            "period": period,
+            "period": normalized_period,
             "data": values,
             "pagination": {
                 "total": total_count,
@@ -247,7 +268,7 @@ async def get_candles(
             },
             "parameters": {
                 "pair": pair,
-                "period": period,
+                "period": normalized_period,
                 "start": start.isoformat() if start else None,
                 "end": end.isoformat() if end else None,
             },
