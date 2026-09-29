@@ -25,6 +25,7 @@ GENERIC_POLICY: dict[str, dict[str, set[str]]] = {
         "characterization_artifacts": {"read", "insert"},
         "config_rate_limits": {"read", "insert"},
         "strategy_lifecycle_events": {"read", "insert"},
+        "tradeengine_boot_probes": {"read", "insert"},
     },
     "mysql": {
         "positions": {"read"},
