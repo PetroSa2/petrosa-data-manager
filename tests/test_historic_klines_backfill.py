@@ -6,9 +6,13 @@ import pytest
 
 from data_manager.maintenance.historic_klines_backfill import (
     BackfillConfig,
+    _parse_args,
     run_backfill,
 )
-from data_manager.maintenance.klines_completeness import completeness_ratio
+from data_manager.maintenance.klines_completeness import (
+    completeness_ratio,
+    update_completeness,
+)
 
 ROW = [
     0,
@@ -83,3 +87,36 @@ def test_completeness_ratio_reports_gap():
     end = start + timedelta(hours=10)
 
     assert completeness_ratio(9, start, end, "1h") == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_backfill_options_and_invalid_checkpoint(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_text("not json")
+    args = _parse_args(["--symbols", "BTCUSDT", "--timeframes", "1d"])
+
+    assert args.symbols == "BTCUSDT"
+    assert args.timeframes == "1d"
+    assert checkpoint.read_text() == "not json"
+    config = BackfillConfig(
+        symbols=["BTCUSDT"],
+        timeframes=["1h"],
+        start=datetime(2026, 9, 24, tzinfo=UTC),
+        end=datetime(2026, 9, 24, 1, tzinfo=UTC),
+        checkpoint=checkpoint,
+    )
+    assert (await run_backfill(FakeBinance(), FakeMySQL(), config))["fetched"] == 1
+
+
+def test_update_completeness_publishes_metric():
+    class Mysql:
+        def get_record_count(self, table, start, end, symbol):
+            assert table == "klines_h1"
+            assert symbol == "BTCUSDT"
+            return 9
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(hours=10)
+    assert update_completeness(Mysql(), "BTCUSDT", "1h", start, end) == pytest.approx(
+        0.9
+    )
