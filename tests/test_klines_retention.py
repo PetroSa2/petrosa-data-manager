@@ -7,6 +7,7 @@ from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import sqlalchemy as sa
 
 from data_manager.maintenance import klines_retention as kr
 
@@ -188,6 +189,95 @@ async def test_mysql_discovery_requires_connected_engine():
     backend = kr.MySQLRetentionBackend(adapter)
     with pytest.raises(RuntimeError, match="connected engine"):
         await backend.list_klines_collections()
+
+
+def test_mysql_schema_prefers_live_engine_database_over_env_default():
+    """The engine knows what we connected to; env MYSQL_DB may be unset."""
+
+    class _Engine:
+        url = sa.engine.make_url("mysql+pymysql://u:p@host:3306/petrosa_crypto")
+
+    adapter = Mock()
+    adapter.engine = _Engine()
+    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
+
+    assert backend.resolve_schema() == "petrosa_crypto"
+
+
+def test_mysql_schema_falls_back_to_connection_string():
+    """Before connect() there is no engine, but the URI is still authoritative."""
+
+    adapter = Mock(spec=["engine", "connection_string"])
+    adapter.engine = None
+    adapter.connection_string = "mysql+pymysql://u:p@host:3306/petrosa_crypto"
+    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
+
+    assert backend.resolve_schema() == "petrosa_crypto"
+
+
+def test_mysql_schema_falls_back_to_constant_when_uri_has_no_database():
+    adapter = Mock(spec=["engine", "connection_string"])
+    adapter.engine = None
+    adapter.connection_string = "mysql+pymysql://u:p@host:3306/"
+    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
+
+    assert backend.resolve_schema() == kr.constants.MYSQL_DB
+
+
+def test_mysql_explicit_schema_argument_still_wins():
+    adapter = Mock()
+    adapter.engine = Mock()
+    backend = kr.MySQLRetentionBackend(
+        cast(kr.MySQLAdapter, adapter), schema="explicit_db"
+    )
+
+    assert backend.resolve_schema() == "explicit_db"
+
+
+@pytest.mark.asyncio
+async def test_mysql_discovery_uses_uri_schema_without_explicit_argument(monkeypatch):
+    """Regression: production passes no `schema=`, so the URI must be honoured.
+
+    petrosa_k8s#1158 W2b shipped with the CronJob exporting only MYSQL_URI, so
+    `constants.MYSQL_DB` fell back to `petrosa_data_manager`, discovery matched
+    zero tables, and the job exited 0 having pruned nothing.
+    """
+    seen: dict[str, str] = {}
+
+    def _inventory(engine, schema):
+        seen["schema"] = schema
+        return [{"TABLE_NAME": "klines_m5", "TABLE_TYPE": "BASE TABLE"}]
+
+    adapter = _FakeMySQLAdapter()
+    adapter.connection_string = "mysql+pymysql://u:p@host:3306/petrosa_crypto"
+    monkeypatch.setattr(kr.mysql_adapter, "table_inventory", _inventory)
+
+    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
+
+    assert await backend.list_klines_collections() == ["klines_m5"]
+    assert seen["schema"] == "petrosa_crypto"
+    assert seen["schema"] != kr.constants.MYSQL_DB
+
+
+@pytest.mark.asyncio
+async def test_mysql_empty_discovery_is_logged_as_error(monkeypatch, caplog):
+    """A MySQL backend that finds nothing must not fail silently again."""
+    monkeypatch.setattr(kr.mysql_adapter, "table_inventory", lambda engine, schema: [])
+
+    class _Engine:
+        url = sa.engine.make_url("mysql+pymysql://u:p@host:3306/petrosa_crypto")
+
+    adapter = _FakeMySQLAdapter()
+    adapter.engine = _Engine()
+    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
+
+    with caplog.at_level("ERROR"):
+        results = await kr.prune_klines([backend], kr.RetentionConfig())
+
+    assert results == []
+    assert "petrosa_crypto" in caplog.text
+    assert "no-op" in caplog.text
+    assert any(record.levelname == "ERROR" for record in caplog.records)
 
 
 class _FakeBackend:
