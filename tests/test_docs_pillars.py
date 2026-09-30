@@ -14,7 +14,7 @@ S2 = (
 
 def test_storage_pillars_are_canonical():
     architecture = (ROOT / "docs/persistence-architecture.md").read_text()
-    cursorrules = (ROOT / ".cursorrules").read_text()
+    cursorrules = (ROOT / "docs/agent-rules.md").read_text()
     assert S1 in architecture
     assert S2 in architecture
     assert S2 in cursorrules
