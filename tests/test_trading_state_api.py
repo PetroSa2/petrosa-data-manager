@@ -107,6 +107,13 @@ async def test_database_failures_are_503(monkeypatch):
     assert error.value.status_code == 503
 
 
+@pytest.mark.asyncio
+async def test_mysql_copy_status_exposes_in_memory_state():
+    result = await module.mysql_copy_status()
+    assert "pending" in result
+    assert result["retry_state"] == "in_memory; lost on restart"
+
+
 def test_mysql_copy_is_best_effort(monkeypatch):
     class Adapter:
         def get_column_names(self, table):
@@ -153,3 +160,24 @@ def test_mysql_copy_rejects_unknown_status_and_dead_letters(monkeypatch):
     before = module._copy_state["dead_lettered"]
     module._copy_to_mysql("positions", {"position_id": "p1", "status": "coerced"})
     assert module._copy_state["dead_lettered"] == before + 1
+
+
+def test_mysql_copy_retries_and_dead_letters_after_failure(monkeypatch):
+    class Adapter:
+        def get_column_names(self, table):
+            return {"position_id", "status"}
+
+        def update(self, *args):
+            raise RuntimeError("database unavailable")
+
+        def write(self, rows, table):
+            assert table == "trading_state_mysql_dead_letters"
+            assert rows
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(sleep=lambda _: None))
+    monkeypatch.setattr(
+        module.api_module, "db_manager", SimpleNamespace(mysql_adapter=Adapter())
+    )
+    before = module._copy_state["failed"]
+    module._copy_to_mysql("positions", {"position_id": "p1", "status": "closed"})
+    assert module._copy_state["failed"] == before + 1
