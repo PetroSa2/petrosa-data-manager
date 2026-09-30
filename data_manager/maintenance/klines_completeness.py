@@ -7,6 +7,7 @@ from typing import Any
 
 from prometheus_client import Gauge
 
+import constants
 from data_manager.db.repositories.candle_repository import mysql_table_name
 from data_manager.utils.time_utils import parse_timeframe_to_minutes
 
@@ -15,6 +16,18 @@ MYSQL_KLINES_COMPLETENESS = Gauge(
     "Expected versus present historic MySQL klines",
     ["symbol", "timeframe"],
 )
+
+
+def initialize_completeness_metrics() -> None:
+    """Create samples so the metric is present before the first refresh."""
+    for symbol in constants.SUPPORTED_PAIRS:
+        for timeframe in constants.SUPPORTED_TIMEFRAMES:
+            MYSQL_KLINES_COMPLETENESS.labels(symbol=symbol, timeframe=timeframe).set(
+                0.0
+            )
+
+
+initialize_completeness_metrics()
 
 
 def completeness_ratio(

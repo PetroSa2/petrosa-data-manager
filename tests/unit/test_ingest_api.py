@@ -119,6 +119,44 @@ def test_ingest_reports_unavailable_mysql_and_invalid_funding():
     assert invalid.value.status_code == 422
 
 
+def test_ingest_missing_mysql_adapter_records_failure(caplog):
+    collection = Mock()
+    collection.bulk_write = AsyncMock(return_value=SimpleNamespace())
+    ingest.set_database_manager(_manager(collection, None))
+
+    with caplog.at_level("ERROR"):
+        result = asyncio.run(
+            ingest.ingest_klines(
+                ingest.KlinesRequest(
+                    symbol="BTCUSDT", interval="15m", klines=[_kline()]
+                )
+            )
+        )
+
+    assert result["mysql_copy"] == "unavailable"
+    assert "klines_mysql_copy_unavailable" in caplog.text
+    assert (
+        ingest.KLINES_MYSQL_COPY.labels(
+            interval="15m", outcome="unavailable"
+        )._value.get()
+        >= 1
+    )
+
+
+def test_mysql_copy_failure_is_best_effort_and_logged(caplog):
+    mysql = Mock()
+    mysql.write_batch.side_effect = RuntimeError("mysql unavailable")
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(ingest._copy([{"symbol": "BTCUSDT"}], "15m", mysql))
+
+    assert "klines_mysql_copy_failed" in caplog.text
+    assert (
+        ingest.KLINES_MYSQL_COPY.labels(interval="15m", outcome="error")._value.get()
+        >= 1
+    )
+
+
 def test_ingest_requires_mongo():
     from fastapi import HTTPException
 
