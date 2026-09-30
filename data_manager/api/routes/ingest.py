@@ -68,7 +68,7 @@ async def _copy(rows: list, interval: str, adapter: Any) -> None:
         await asyncio.to_thread(adapter.write_batch, rows, mysql_table_name(interval))
     except Exception:
         KLINES_MYSQL_COPY.labels(interval=interval, outcome="error").inc()
-        logger.warning("klines_mysql_copy_failed", exc_info=True)
+        logger.error("klines_mysql_copy_failed", exc_info=True)
     else:
         KLINES_MYSQL_COPY.labels(interval=interval, outcome="success").inc()
 
@@ -210,6 +210,13 @@ async def ingest_klines(request: KlinesRequest) -> dict[str, Any]:
             mysql,
         )
         copy_status = "scheduled"
+    elif copy_status == "unavailable" and accepted:
+        KLINES_MYSQL_COPY.labels(interval=request.interval, outcome="unavailable").inc()
+        logger.error(
+            "klines_mysql_copy_unavailable: Mongo write succeeded but no MySQL "
+            "adapter is configured; historic completeness is at risk",
+            extra={"symbol": request.symbol, "interval": request.interval},
+        )
     return {
         "symbol": request.symbol,
         "interval": request.interval,
