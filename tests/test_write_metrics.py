@@ -54,5 +54,12 @@ def test_summary_shape_and_debug_safe_fields(caplog):
     assert record["event"] == "SUMMARY"
     assert record["window_seconds"] == 300
     assert record["service"] == "petrosa-data-manager"
-    assert set(record) == {"event", "window_seconds", "service", "writes", "lease_ops", "latency_seconds"}
+    assert set(record) == {
+        "event",
+        "window_seconds",
+        "service",
+        "writes",
+        "lease_ops",
+        "latency_seconds",
+    }
     assert json.loads(caplog.records[-1].message)["latency_seconds"]["p50"] == 0.2

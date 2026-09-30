@@ -38,7 +38,12 @@ def _percentile(values: list[float], percentile: float) -> float:
         return 0.0
     if len(values) == 1:
         return round(values[0], 6)
-    return round(statistics.quantiles(values, n=100, method="inclusive")[int(percentile * 100) - 1], 6)
+    return round(
+        statistics.quantiles(values, n=100, method="inclusive")[
+            int(percentile * 100) - 1
+        ],
+        6,
+    )
 
 
 class WriteSummary:
@@ -52,7 +57,9 @@ class WriteSummary:
         self._latencies: list[float] = []
         self._lock = Lock()
 
-    def write(self, collection: str, outcome: str, operation: str, duration: float) -> None:
+    def write(
+        self, collection: str, outcome: str, operation: str, duration: float
+    ) -> None:
         with self._lock:
             self._writes[f"{collection}:{outcome}:{operation}"] += 1
             self._latencies.append(max(0.0, duration))
