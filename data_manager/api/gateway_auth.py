@@ -51,7 +51,7 @@ def _audit_unverified(service: str, path: str) -> None:
     now = time.monotonic()
     key = (service, path)
     if now - _AUDIT_LOGGED.get(key, 0) >= 300:
-        logger.warning("gateway_auth_unverified service=%s path=%s", service, path)
+        logger.debug("gateway_auth_unverified service=%s path=%s", service, path)
         _AUDIT_LOGGED.pop(key, None)
         _AUDIT_LOGGED[key] = now
         while len(_AUDIT_LOGGED) > _AUDIT_LOGGED_MAX:

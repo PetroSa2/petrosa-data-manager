@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -9,6 +10,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from data_manager.db.repositories.base_repository import BaseRepository
+from data_manager.observability.write_metrics import SUMMARY, record_write
 
 LEASES_COLLECTION = "service_leases"
 
@@ -45,6 +47,7 @@ class LeaseRepository(BaseRepository):
 
     async def acquire(self, name: str, owner: str, ttl_s: int) -> dict[str, Any]:
         """Acquire or renew a lease, returning the current holder document."""
+        started = time.monotonic()
         now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl_s)
         query = {
@@ -69,25 +72,48 @@ class LeaseRepository(BaseRepository):
             doc = await self._collection().find_one_and_update(
                 query, update, upsert=True, return_document=ReturnDocument.AFTER
             )
-            return {"acquired": True, **self._document(doc)}
+            result = {"acquired": True, **self._document(doc)}
+            outcome = "success"
         except DuplicateKeyError:
             holder = await self._collection().find_one({"name": name})
-            return {"acquired": False, **(self._document(holder) or {"name": name})}
+            result = {"acquired": False, **(self._document(holder) or {"name": name})}
+            outcome = "duplicate"
+        SUMMARY.lease("acquired" if result["acquired"] else "contended")
+        record_write(LEASES_COLLECTION, outcome, "acquire", time.monotonic() - started)
+        return result
 
     async def renew(self, name: str, owner: str, ttl_s: int) -> dict[str, Any] | None:
         """Renew a currently-held lease; return ``None`` when ownership is lost."""
+        started = time.monotonic()
         now = datetime.now(UTC)
         doc = await self._collection().find_one_and_update(
             {"name": name, "owner": owner, "expires_at": {"$gte": now}},
             {"$set": {"expires_at": now + timedelta(seconds=ttl_s), "renewed_at": now}},
             return_document=ReturnDocument.AFTER,
         )
-        return self._document(doc)
+        result = self._document(doc)
+        SUMMARY.lease("renewed" if result is not None else "lost")
+        record_write(
+            LEASES_COLLECTION,
+            "success" if result is not None else "skipped",
+            "renew",
+            time.monotonic() - started,
+        )
+        return result
 
     async def release(self, name: str, owner: str) -> bool:
         """Release a lease only when the caller still owns it."""
+        started = time.monotonic()
         result = await self._collection().delete_one({"name": name, "owner": owner})
-        return bool(result.deleted_count)
+        released = bool(result.deleted_count)
+        SUMMARY.lease("released" if released else "not_owner")
+        record_write(
+            LEASES_COLLECTION,
+            "success" if released else "skipped",
+            "release",
+            time.monotonic() - started,
+        )
+        return released
 
     async def get(self, name: str) -> dict[str, Any] | None:
         """Return a lease by name, or ``None`` when it does not exist."""
