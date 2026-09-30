@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -233,9 +234,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         if args.json:
-            import json
-
-            print(json.dumps(document, default=str))
+            logger.info(
+                "index_usage_snapshot_report %s",
+                json.dumps({"level": "INFO", **document}, default=str),
+            )
         flush_metrics()
         return EXIT_OK
     except Exception as exc:  # userstat is optional and may be absent
