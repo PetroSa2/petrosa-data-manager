@@ -626,7 +626,6 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
-        self._shutdown_event.set()
         await self._cancel_database_retry()
         if self._summary_task:
             self._summary_task.cancel()
@@ -643,6 +642,7 @@ class DataManagerApp:
             except asyncio.CancelledError:
                 pass
             self.loop_lag_monitor_task = None
+        self._shutdown_event.set()
 
         # Flush telemetry first
         try:
