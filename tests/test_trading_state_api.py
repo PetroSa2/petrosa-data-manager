@@ -125,3 +125,31 @@ def test_mysql_copy_is_best_effort(monkeypatch):
     module._copy_to_mysql(
         "positions", {"position_id": "p1", "status": "closed", "unknown": 1}
     )
+
+
+def test_mysql_copy_missing_adapter_is_observable(monkeypatch):
+    monkeypatch.setattr(module.api_module, "db_manager", SimpleNamespace())
+    before = module._copy_state["failed"]
+    module._copy_to_mysql("positions", {"position_id": "p1"})
+    assert module._copy_state["failed"] == before + 1
+    assert module._copy_state["last_failure_time"]
+
+
+def test_mysql_copy_rejects_unknown_status_and_dead_letters(monkeypatch):
+    class Adapter:
+        def get_column_names(self, table):
+            return {"position_id", "status"}
+
+        def update(self, *args):
+            raise AssertionError("invalid values must not reach MySQL")
+
+        def write(self, rows, table):
+            assert table == "trading_state_mysql_dead_letters"
+            assert rows
+
+    monkeypatch.setattr(
+        module.api_module, "db_manager", SimpleNamespace(mysql_adapter=Adapter())
+    )
+    before = module._copy_state["dead_lettered"]
+    module._copy_to_mysql("positions", {"position_id": "p1", "status": "coerced"})
+    assert module._copy_state["dead_lettered"] == before + 1
