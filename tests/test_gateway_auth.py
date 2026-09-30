@@ -78,7 +78,7 @@ def test_cors_is_disabled_by_default(monkeypatch):
 @pytest.mark.asyncio
 async def test_unverified_requests_dedupe_by_route_template(monkeypatch, caplog):
     monkeypatch.setenv("DM_AUTH_MODE", "audit")
-    with caplog.at_level("WARNING", logger="data_manager.api.gateway_auth"):
+    with caplog.at_level("DEBUG", logger="data_manager.api.gateway_auth"):
         for index in range(100):
             await gateway_auth.require_service(
                 _request(f"/positions/{index}", "/positions/{position_id}")
@@ -95,7 +95,7 @@ async def test_unverified_requests_log_different_route_templates_separately(
     monkeypatch, caplog
 ):
     monkeypatch.setenv("DM_AUTH_MODE", "audit")
-    with caplog.at_level("WARNING", logger="data_manager.api.gateway_auth"):
+    with caplog.at_level("DEBUG", logger="data_manager.api.gateway_auth"):
         await gateway_auth.require_service(_request("/positions/1", "/positions/{id}"))
         await gateway_auth.require_service(_request("/orders/1", "/orders/{id}"))
 

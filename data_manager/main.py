@@ -31,6 +31,7 @@ from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.consumer.pnl_consumer import PnlConsumer
 from data_manager.db.database_manager import DatabaseManager
+from data_manager.observability.write_metrics import SUMMARY, summary_loop
 from data_manager.services.alert_dispatcher import AlertDispatcher
 
 if TYPE_CHECKING:
@@ -106,6 +107,7 @@ class DataManagerApp:
         self.running = False
         self._shutdown_event = asyncio.Event()
         self._db_retry_task: asyncio.Task | None = None
+        self._summary_task: asyncio.Task | None = None
         self._db_retry_base_seconds = float(
             os.getenv("DM_DB_INIT_RETRY_BASE_SECONDS", "2")
         )
@@ -186,6 +188,7 @@ class DataManagerApp:
         )
 
         self._start_loop_lag_monitor()
+        self._summary_task = asyncio.create_task(summary_loop(self._shutdown_event))
 
         # Start Prometheus metrics server
         try:
@@ -623,8 +626,15 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
-        self._shutdown_event.set()
         await self._cancel_database_retry()
+        if self._summary_task:
+            self._summary_task.cancel()
+            try:
+                await self._summary_task
+            except asyncio.CancelledError:
+                pass
+            self._summary_task = None
+        SUMMARY.emit(force=True)
         if self.loop_lag_monitor_task:
             self.loop_lag_monitor_task.cancel()
             try:
@@ -632,6 +642,7 @@ class DataManagerApp:
             except asyncio.CancelledError:
                 pass
             self.loop_lag_monitor_task = None
+        self._shutdown_event.set()
 
         # Flush telemetry first
         try:
