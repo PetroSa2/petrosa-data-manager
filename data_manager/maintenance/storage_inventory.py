@@ -802,11 +802,11 @@ async def _amain(argv: Iterable[str] | None = None) -> int:
     _classify_all(report)
     _attribute_400mb(report)
 
-    print(render_markdown(report))
-    if args.json:
-        print("```json")
-        print(json.dumps(report_to_dict(report), indent=2, default=str))
-        print("```")
+    # Keep the complete report in one structured log record. Printing the
+    # markdown (or a bare JSON document) makes Loki classify the output as
+    # unknown and splits one audit across hundreds of unstructured lines.
+    payload = {"level": "INFO", "report": report_to_dict(report)}
+    logger.info("storage_inventory_report %s", json.dumps(payload, default=str))
 
     return _compute_exit_code(report, run_mongo, run_mysql)
 
