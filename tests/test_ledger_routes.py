@@ -1,4 +1,6 @@
-from datetime import date
+import hashlib
+import json
+from datetime import date, datetime
 
 import pytest
 from fastapi import HTTPException
@@ -56,3 +58,95 @@ def test_economic_hash_ignores_balance_and_source_run():
     assert ledger.LedgerRepository.economic_hash(
         first
     ) == ledger.LedgerRepository.economic_hash(second)
+
+
+class Result:
+    def __init__(self, row=None, scalar=1):
+        self.row = row
+        self.scalar = scalar
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self.row
+
+    def scalar_one(self):
+        return self.scalar
+
+
+class FakeLedgerRepository(ledger.LedgerRepository):
+    def __init__(self, responses):
+        super().__init__(None, None)
+        self.responses = iter(responses)
+        self.statements = []
+
+    def _run(self, statement, params=None):
+        self.statements.append(statement)
+        return next(self.responses, Result())
+
+
+def test_insert_day_is_idempotent_and_records_revision():
+    payload = daily_payload()
+    repo = FakeLedgerRepository([Result(None), Result(scalar=1), Result()])
+    result = repo.insert_day(payload, datetime.now())
+    assert result["created"] is True
+    assert result["revision"] == 1
+    assert len(repo.statements) == 4
+    same = FakeLedgerRepository(
+        [Result({"payload_hash": repo.economic_hash(payload), "revision": 1})]
+    )
+    assert same.insert_day(payload, datetime.now())["created"] is False
+
+
+def test_insert_day_final_restatement_increments_metric():
+    payload = daily_payload(is_final=True)
+    previous = {"payload_hash": "different", "revision": 1, "is_final": True}
+    repo = FakeLedgerRepository(
+        [Result(previous), Result(scalar=2), Result(), Result(), Result()]
+    )
+    result = repo.insert_day(payload, datetime.now())
+    assert result["restated"] is True
+    assert any("ledger_exchange_metrics" in statement for statement in repo.statements)
+
+
+def test_position_snapshot_deduplicates_and_writes_rows():
+    payload = {
+        "as_of_ms": 1000,
+        "source_run_id": "run",
+        "rows": [
+            {
+                "symbol": "BTCUSDT",
+                "position_side": "LONG",
+                "quantity": "1",
+                "entry_price": "2",
+                "mark_price": "3",
+                "unrealized_pnl": "1",
+            }
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            {"rows": payload["rows"]}, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    repo = FakeLedgerRepository([Result(None), Result(), Result()])
+    assert repo.put_positions(payload, datetime.now())["created"] is True
+    same = FakeLedgerRepository([Result({"payload_hash": digest, "as_of_ms": 900})])
+    assert same.put_positions(payload, datetime.now())["created"] is False
+
+
+@pytest.mark.asyncio
+async def test_routes_delegate_to_repository(monkeypatch):
+    class Repo:
+        def insert_day(self, payload, received_at):
+            return {"created": True}
+
+        def put_positions(self, payload, received_at):
+            return {"created": True}
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    daily = ledger.DailyLedger.model_validate(daily_payload())
+    assert (await ledger.put_exchange_daily(date(2026, 9, 30), daily))["created"]
+    positions = ledger.PositionsSnapshot(as_of_ms=10, source_run_id="run")
+    assert (await ledger.put_exchange_positions(10, positions))["created"]
