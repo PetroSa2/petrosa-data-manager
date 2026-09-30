@@ -91,6 +91,7 @@ def _schedule_mysql_copy(operation: str, document: dict[str, Any]) -> None:
     _copy_state["pending"] += 1
     task = asyncio.create_task(asyncio.to_thread(_copy_to_mysql, operation, document))
     _copy_tasks.add(task)
+
     def _complete(done: asyncio.Task) -> None:
         _copy_tasks.discard(done)
         _copy_state["pending"] = max(0, _copy_state["pending"] - 1)
@@ -104,7 +105,9 @@ def _record_failure(operation: str, reason: str) -> None:
     MYSQL_COPY_FAILED.labels(operation=operation, reason=reason).inc()
 
 
-def _dead_letter(adapter: Any, operation: str, document: dict[str, Any], reason: str) -> None:
+def _dead_letter(
+    adapter: Any, operation: str, document: dict[str, Any], reason: str
+) -> None:
     payload = {
         "operation": operation,
         "reason": reason,
@@ -131,10 +134,15 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
     adapter = getattr(manager, "mysql_adapter", None) if manager else None
     if adapter is None:
         _record_failure(operation, "adapter_missing")
-        _dead_letter(adapter or _NullDeadLetterAdapter(), operation, document, "adapter_missing")
+        _dead_letter(
+            adapter or _NullDeadLetterAdapter(), operation, document, "adapter_missing"
+        )
         return
     table = "daily_pnl" if operation == "daily_pnl" else "positions"
-    if table == "positions" and document.get("status") not in (None, *_VALID_POSITION_STATUSES):
+    if table == "positions" and document.get("status") not in (
+        None,
+        *_VALID_POSITION_STATUSES,
+    ):
         _record_failure(operation, "invalid_value")
         _dead_letter(adapter, operation, document, "invalid_value")
         return
@@ -154,7 +162,11 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
                 from pydantic import create_model
 
                 adapter.write(
-                    [create_model("TradingStateRow", **{k: (Any, v) for k, v in data.items()})()],
+                    [
+                        create_model(
+                            "TradingStateRow", **{k: (Any, v) for k, v in data.items()}
+                        )()
+                    ],
                     table,
                 )
             return
@@ -163,7 +175,9 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
                 time.sleep(_COPY_BACKOFF_SECONDS * (attempt + 1))
                 continue
             _record_failure(operation, "copy_error")
-            logger.exception("trading_state_mysql_copy_failed", extra={"operation": operation})
+            logger.exception(
+                "trading_state_mysql_copy_failed", extra={"operation": operation}
+            )
             _dead_letter(adapter, operation, document, str(exc))
 
 
