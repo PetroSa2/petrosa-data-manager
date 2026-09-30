@@ -151,7 +151,7 @@ class LedgerRepository(BaseRepository):
     def put_positions(
         self, payload: dict[str, Any], received_at: datetime
     ) -> dict[str, Any]:
-        content = {"as_of_ms": payload["as_of_ms"], "rows": payload["rows"]}
+        content = {"rows": payload["rows"]}
         digest = hashlib.sha256(
             json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
