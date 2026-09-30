@@ -85,3 +85,44 @@ async def test_missing_database_returns_503():
             )
         )
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_bookkeeping_paths_bypass_generic_throttle(monkeypatch):
+    calls = []
+
+    async def generic_middleware(request, call_next):
+        calls.append(request.url.path)
+        return await call_next(request)
+
+    monkeypatch.setattr(api_app, "config_rate_limit_middleware", generic_middleware)
+
+    async def call_next(request):
+        return request.url.path
+
+    for path in (
+        "/api/v1/config/rate-limits/check",
+        "/api/v1/config/rate-limits/record",
+    ):
+        request = SimpleNamespace(url=SimpleNamespace(path=path))
+        assert await api_app._config_rate_limit_middleware(request, call_next) == path
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_other_mutations_remain_throttled(monkeypatch):
+    calls = []
+
+    async def generic_middleware(request, call_next):
+        calls.append(request.url.path)
+        return await call_next(request)
+
+    monkeypatch.setattr(api_app, "config_rate_limit_middleware", generic_middleware)
+
+    async def call_next(request):
+        return "allowed"
+
+    request = SimpleNamespace(url=SimpleNamespace(path="/api/v1/config/application"))
+    assert await api_app._config_rate_limit_middleware(request, call_next) == "allowed"
+    assert calls == ["/api/v1/config/application"]

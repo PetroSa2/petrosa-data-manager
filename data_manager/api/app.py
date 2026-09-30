@@ -60,6 +60,20 @@ logger = logging.getLogger(__name__)
 # Global database manager reference (will be set by main app)
 db_manager = None
 
+_RATE_LIMIT_BOOKKEEPING_PATHS = frozenset(
+    {
+        "/api/v1/config/rate-limits/check",
+        "/api/v1/config/rate-limits/record",
+    }
+)
+
+
+async def _config_rate_limit_middleware(request, call_next):
+    """Keep rate-limit bookkeeping from recursively rate limiting itself."""
+    if request.url.path in _RATE_LIMIT_BOOKKEEPING_PATHS:
+        return await call_next(request)
+    return await config_rate_limit_middleware(request, call_next)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,7 +102,7 @@ def create_app() -> FastAPI:
 
     # Register configuration rate limit middleware
     if config_rate_limit_middleware:
-        app.middleware("http")(config_rate_limit_middleware)
+        app.middleware("http")(_config_rate_limit_middleware)
         logger.info("✅ Configuration rate limit middleware registered")
 
     # CORS middleware
