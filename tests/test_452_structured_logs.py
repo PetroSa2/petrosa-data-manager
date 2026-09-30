@@ -4,8 +4,10 @@ import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from data_manager.maintenance import index_usage_snapshot as ius
-from data_manager.maintenance import storage_inventory as si
+from data_manager.maintenance import (
+    index_usage_snapshot as ius,
+    storage_inventory as si,
+)
 
 
 def test_storage_inventory_emits_report_as_one_structured_log_record(
