@@ -32,7 +32,9 @@ def test_index_usage_json_is_logged_with_explicit_level(caplog, monkeypatch):
     document = {"captured_at": "2026-09-30T00:00:00+00:00", "indexes": [], "tables": []}
     monkeypatch.setenv("MYSQL_URI", "mysql://example")
     monkeypatch.setenv("MONGODB_URL", "mongodb://example")
-    monkeypatch.setattr(ius, "create_read_only_engine", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(
+        ius, "create_read_only_engine", MagicMock(return_value=MagicMock())
+    )
     monkeypatch.setattr(ius, "MongoDBAdapter", MagicMock())
     monkeypatch.setattr(ius, "flush_metrics", MagicMock())
 
