@@ -1,3 +1,8 @@
+> **Legacy rules, moved unchanged on 2026-09-30.** This file is the repository's previous `.cursorrules`. It was
+> written for one editor, is partly boilerplate copied between repositories, and has not been re-verified against the
+> code. `AGENTS.md` is the maintained source: where the two disagree, `AGENTS.md` and the code win. Delete sections as
+> they are found to be stale.
+
 # MASTER RULES: See petrosa_k8s/.cursorrules
 
 **IMPORTANT**: This file contains service-specific rules only. For ecosystem-wide rules, architecture, shared resources, deployment patterns, and cross-service integration, always refer to:
