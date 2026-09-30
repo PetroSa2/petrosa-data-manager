@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["day", "source_run_id", "is_final", "row_count", "rows", "wallet_balance", "balance_as_of_ms", "income_after_day_end"],
+  "properties": {
+    "day": {"type": "string", "format": "date"},
+    "source_run_id": {"type": "string", "minLength": 1},
+    "is_final": {"type": "boolean"},
+    "row_count": {"type": "integer", "minimum": 0},
+    "first_income_time_ms": {"type": ["integer", "null"]},
+    "last_income_time_ms": {"type": ["integer", "null"]},
+    "wallet_balance": {"type": "string"},
+    "balance_as_of_ms": {"type": "integer"},
+    "income_after_day_end": {"type": "object", "additionalProperties": {"type": "string"}},
+    "rows": {"type": "array", "items": {"type": "object", "required": ["asset", "income_by_type"], "properties": {"symbol": {"type": "string"}, "asset": {"type": "string"}, "income_by_type": {"type": "object", "additionalProperties": {"type": "string"}}}}}
+  }
+}

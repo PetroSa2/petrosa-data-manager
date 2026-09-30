@@ -30,6 +30,11 @@ GENERIC_POLICY: dict[str, dict[str, set[str]]] = {
     "mysql": {
         "positions": {"read"},
         "daily_pnl": {"read"},
+        "ledger_exchange_day_revision": {"read"},
+        "ledger_exchange_daily": {"read"},
+        "ledger_exchange_positions_snapshot": {"read"},
+        "ledger_exchange_positions": {"read"},
+        "ledger_exchange_metrics": {"read"},
         "*": {"read"},
     },
 }
@@ -54,7 +59,10 @@ def check_generic(database: str, collection: str, op: str) -> bool:
     """Return whether a generic gateway operation is allowlisted."""
     return op in _operations_for(database, collection) or (
         database == "mysql"
-        and collection not in {"positions", "daily_pnl"}
+        and collection not in {
+            "positions", "daily_pnl", "ledger_exchange_day_revision", "ledger_exchange_daily",
+            "ledger_exchange_positions_snapshot", "ledger_exchange_positions", "ledger_exchange_metrics",
+        }
         and op == "read"
     )
 

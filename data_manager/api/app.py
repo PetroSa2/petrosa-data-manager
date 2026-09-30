@@ -35,6 +35,7 @@ from data_manager.api.routes import (
     health,
     ingest,
     leases,
+    ledger,
     leverage_bounds,
     lifecycle,
     pnl,
@@ -220,6 +221,7 @@ def create_app() -> FastAPI:
 
     # New API routes
     app.include_router(leases.router, tags=["Leases"])
+    app.include_router(ledger.router, tags=["Exchange Ledger"])
     app.include_router(trading_state.router, tags=["Trading State"])
     app.include_router(ingest.router)
     app.include_router(generic.router, tags=["Generic CRUD"])
