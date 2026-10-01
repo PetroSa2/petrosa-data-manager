@@ -74,6 +74,9 @@ class Result:
     def scalar_one(self):
         return self.scalar
 
+    def all(self):
+        return self.row or []
+
 
 class FakeLedgerRepository(ledger.LedgerRepository):
     def __init__(self, responses):
@@ -150,3 +153,67 @@ async def test_routes_delegate_to_repository(monkeypatch):
     assert (await ledger.put_exchange_daily(date(2026, 9, 30), daily))["created"]
     positions = ledger.PositionsSnapshot(as_of_ms=10, source_run_id="run")
     assert (await ledger.put_exchange_positions(10, positions))["created"]
+
+
+@pytest.mark.asyncio
+async def test_tieout_routes_publish_metrics_and_validate_range(monkeypatch):
+    class Repo:
+        def tieout(self, first, last):
+            return {"days": [{"unexplained": "1.25"}], "cumulative_variance": "1.25"}
+
+        def positions_tieout(self):
+            return {
+                "phantom_rows": [],
+                "ledger_open_rows": [],
+                "exchange_positions": [],
+            }
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    result = await ledger.get_tieout(date(2026, 9, 30), date(2026, 9, 30))
+    assert result["cumulative_variance"] == "1.25"
+    assert (await ledger.get_positions_tieout())["phantom_rows"] == []
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_tieout(date(2026, 10, 2), date(2026, 10, 1))
+    assert error.value.status_code == 422
+
+
+def test_tieout_returns_daily_components_and_cumulative_variance():
+    repo = FakeLedgerRepository(
+        [
+            Result(
+                [
+                    {
+                        "day": date(2026, 9, 30),
+                        "realized_pnl": "-40",
+                        "commission": "-2.92",
+                        "funding_fee": "-4",
+                        "other_income_total": "0",
+                        "is_final": True,
+                    }
+                ]
+            ),
+            Result([{"date": date(2026, 9, 30), "daily_pnl": "0"}]),
+        ]
+    )
+    day = repo.tieout(date(2026, 9, 30), date(2026, 9, 30))["days"][0]
+    assert day["realized_and_fees"]["exchange"] == "-42.92"
+    assert day["realized_and_fees"]["variance"] == "42.92"
+    assert day["funding"]["status"] == "unbooked_by_design"
+
+
+def test_positions_tieout_maps_sides_and_reports_phantoms():
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result([{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+            Result(
+                [
+                    {"symbol": "BTCUSDT", "position_side": "BUY", "quantity": "1"},
+                    {"symbol": "ETHUSDT", "position_side": "SELL", "quantity": "1"},
+                ]
+            ),
+        ]
+    )
+    result = repo.positions_tieout()
+    assert result["ledger_open_rows"][0]["position_side"] == "LONG"
+    assert len(result["phantom_rows"]) == 1

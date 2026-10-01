@@ -6,7 +6,8 @@ import asyncio
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from prometheus_client import Counter, Gauge
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -21,6 +22,18 @@ import data_manager.api.app as api_module
 from data_manager.db.repositories.ledger_repository import LedgerRepository
 
 router = APIRouter(prefix="/api/v1/ledger")
+TIEOUT_VARIANCE = Gauge(
+    "ledger_tieout_variance_usd", "Latest ledger tie-out variance", ["window"]
+)
+TIEOUT_CUMULATIVE = Gauge(
+    "ledger_tieout_cumulative_variance_usd", "Cumulative ledger tie-out variance"
+)
+OPEN_POSITION_VARIANCE = Gauge(
+    "ledger_open_positions_variance", "Ledger rows without exchange positions"
+)
+EXCEEDING_DAYS = Counter(
+    "ledger_tieout_days_exceeding_total", "Tie-out days exceeding materiality"
+)
 KNOWN_TYPES = {
     "REALIZED_PNL",
     "COMMISSION",
@@ -169,6 +182,43 @@ async def put_exchange_positions(as_of_ms: int, body: PositionsSnapshot):
         return await asyncio.to_thread(
             _repo().put_positions, body.model_dump(mode="json"), datetime.now(UTC)
         )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Ledger database unavailable"
+        ) from exc
+
+
+@router.get("/tieout")
+async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(...)):
+    if from_ > to or (to - from_).days > 366:
+        raise HTTPException(status_code=422, detail="invalid tie-out range")
+    try:
+        result = await asyncio.to_thread(_repo().tieout, from_, to)
+        variances = [Decimal(day["unexplained"]) for day in result["days"]]
+        TIEOUT_VARIANCE.labels(window="latest").set(
+            float(variances[-1]) if variances else 0
+        )
+        TIEOUT_VARIANCE.labels(window="worst_in_window").set(
+            float(max(variances, key=lambda value: abs(value), default=Decimal("0")))
+        )
+        TIEOUT_CUMULATIVE.set(float(result["cumulative_variance"]))
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Ledger database unavailable"
+        ) from exc
+
+
+@router.get("/positions-tieout")
+async def get_positions_tieout():
+    try:
+        result = await asyncio.to_thread(_repo().positions_tieout)
+        OPEN_POSITION_VARIANCE.set(len(result["phantom_rows"]))
+        return result
     except HTTPException:
         raise
     except Exception as exc:
