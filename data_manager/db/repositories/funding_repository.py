@@ -2,6 +2,7 @@
 Repository for funding rate data operations.
 """
 
+import asyncio
 import logging
 import os
 from datetime import UTC, datetime
@@ -54,7 +55,7 @@ class FundingRepository(BaseRepository):
         """
         try:
             count = await self.mongodb.write([funding], "funding_rates")
-            self._persist_mysql([funding])
+            await asyncio.to_thread(self._persist_mysql, [funding])
             return count > 0
         except Exception as e:
             logger.error(f"Failed to insert funding rate for {funding.symbol}: {e}")
@@ -75,7 +76,7 @@ class FundingRepository(BaseRepository):
 
         try:
             count = await self.mongodb.write(funding_rates, "funding_rates")
-            self._persist_mysql(funding_rates)
+            await asyncio.to_thread(self._persist_mysql, funding_rates)
             return count
 
         except Exception as e:

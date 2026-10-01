@@ -2,6 +2,7 @@
 Backfill management endpoints.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -176,7 +177,8 @@ async def list_backfill_jobs(
     """
     backfill_repo = _get_backfill_repo()
     if backfill_repo:
-        rows, total_count = backfill_repo.list_jobs(
+        rows, total_count = await asyncio.to_thread(
+            backfill_repo.list_jobs,
             status=status,
             symbol=symbol,
             data_type=data_type,

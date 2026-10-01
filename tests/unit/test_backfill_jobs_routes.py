@@ -8,6 +8,7 @@ DB-backed. These tests assert the routes now call the real repository.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -129,6 +130,37 @@ def test_list_backfill_jobs_returns_real_data(client):
     assert body["pagination"]["total"] == 1
     assert len(body["data"]) == 1
     assert body["data"][0]["job_id"] == _JOB_ROW["job_id"]
+
+
+@pytest.mark.unit
+def test_list_backfill_jobs_runs_mysql_query_off_event_loop(client):
+    fake_manager = MagicMock()
+    fake_manager.mysql_adapter = MagicMock()
+    fake_manager.mongodb_adapter = MagicMock()
+    api_module.db_manager = fake_manager
+    on_loop = []
+
+    from data_manager.db.repositories import BackfillRepository
+
+    real_list_jobs = BackfillRepository.list_jobs
+
+    def fake_list_jobs(self, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            on_loop.append(False)
+        else:
+            on_loop.append(True)
+        return [_JOB_ROW], 1
+
+    BackfillRepository.list_jobs = fake_list_jobs
+    try:
+        resp = client.get("/backfill/jobs")
+    finally:
+        BackfillRepository.list_jobs = real_list_jobs
+
+    assert resp.status_code == 200
+    assert on_loop == [False]
 
 
 @pytest.mark.unit
