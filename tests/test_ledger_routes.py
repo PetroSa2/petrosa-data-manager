@@ -74,6 +74,9 @@ class Result:
     def scalar_one(self):
         return self.scalar
 
+    def all(self):
+        return self.row or []
+
 
 class FakeLedgerRepository(ledger.LedgerRepository):
     def __init__(self, responses):
@@ -150,3 +153,49 @@ async def test_routes_delegate_to_repository(monkeypatch):
     assert (await ledger.put_exchange_daily(date(2026, 9, 30), daily))["created"]
     positions = ledger.PositionsSnapshot(as_of_ms=10, source_run_id="run")
     assert (await ledger.put_exchange_positions(10, positions))["created"]
+
+
+def test_tieout_returns_daily_components_and_cumulative_variance():
+    repo = FakeLedgerRepository(
+        [
+            Result(
+                [
+                    {
+                        "day": date(2026, 9, 30),
+                        "realized_pnl": "-40",
+                        "commission": "-2.92",
+                        "funding_fee": "-4",
+                        "other_income_total": "0",
+                        "is_final": True,
+                    }
+                ]
+            ),
+            Result([{"date": date(2026, 9, 30), "daily_pnl": "0"}]),
+        ]
+    )
+    result = repo.tieout(date(2026, 9, 30), date(2026, 9, 30))
+    day = result["days"][0]
+    assert day["realized_and_fees"]["exchange"] == "-42.92"
+    assert day["realized_and_fees"]["variance"] == "42.92"
+    assert day["funding"]["status"] == "unbooked_by_design"
+
+
+def test_positions_tieout_maps_sides_and_reports_phantoms():
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result([{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+            Result(
+                [
+                    {"symbol": "BTCUSDT", "position_side": "BUY", "quantity": "1"},
+                    {"symbol": "ETHUSDT", "position_side": "SELL", "quantity": "1"},
+                ]
+            ),
+        ]
+    )
+    result = repo.positions_tieout()
+    assert result["ledger_open_rows"] == [
+        {"symbol": "BTCUSDT", "position_side": "LONG", "ledger_open_rows": 1},
+        {"symbol": "ETHUSDT", "position_side": "SHORT", "ledger_open_rows": 1},
+    ]
+    assert len(result["phantom_rows"]) == 1
