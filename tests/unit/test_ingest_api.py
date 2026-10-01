@@ -53,9 +53,7 @@ def test_ingest_klines_accepts_extractor_data_payload():
     mysql = Mock()
     ingest.set_database_manager(_manager(collection, mysql))
 
-    request = ingest.KlinesRequest(
-        symbol="BTCUSDT", interval="15m", data=[_kline()]
-    )
+    request = ingest.KlinesRequest(symbol="BTCUSDT", interval="15m", data=[_kline()])
     result = asyncio.run(ingest.ingest_klines(request))
 
     assert result["mysql_copy"] == "scheduled"
