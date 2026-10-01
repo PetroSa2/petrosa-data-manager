@@ -44,6 +44,41 @@ def test_mysql_row_has_exact_klines_column_parity(timeframe):
     )
 
 
+def test_klines_table_keeps_all_historic_columns_and_uses_natural_primary_key():
+    adapter = MySQLAdapter("sqlite:///:memory:")
+    table = adapter._create_klines_table("1h")
+
+    assert sorted(table.c.keys()) == sorted(
+        [
+            "id",
+            "symbol",
+            "timestamp",
+            "open_time",
+            "close_time",
+            "interval",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "volume",
+            "quote_asset_volume",
+            "number_of_trades",
+            "taker_buy_base_asset_volume",
+            "taker_buy_quote_asset_volume",
+            "price_change",
+            "price_change_percent",
+            "extracted_at",
+            "extractor_version",
+            "source",
+        ]
+    )
+    assert tuple(column.name for column in table.primary_key.columns) == (
+        "symbol",
+        "timestamp",
+    )
+    assert any(constraint.name == "uq_klines_h1_id" for constraint in table.constraints)
+
+
 @pytest.mark.parametrize("timeframe", ["1m", "5m", "15m", "1h", "4h", "1d"])
 def test_mysql_row_is_complete_for_strict_mode(timeframe):
     adapter = MySQLAdapter("sqlite:///:memory:")

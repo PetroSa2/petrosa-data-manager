@@ -24,9 +24,11 @@ try:
         Integer,
         MetaData,
         Numeric,
+        PrimaryKeyConstraint,
         String,
         Table,
         Text,
+        UniqueConstraint,
         create_engine,
     )
     from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
@@ -454,7 +456,7 @@ class MySQLAdapter(BaseAdapter):
         table = Table(
             physical_table_name,
             self.metadata,
-            Column("id", String(64), primary_key=True),
+            Column("id", String(64), nullable=False),
             Column("symbol", String(20), nullable=False),
             Column("timestamp", DateTime, nullable=False),
             Column("open_time", DateTime, nullable=False),
@@ -474,6 +476,8 @@ class MySQLAdapter(BaseAdapter):
             Column("extracted_at", DateTime, nullable=False),
             Column("extractor_version", String(20), nullable=False),
             Column("source", String(50), nullable=False),
+            PrimaryKeyConstraint("symbol", "timestamp"),
+            UniqueConstraint("id", name=f"uq_{physical_table_name}_id"),
             extend_existing=True,
         )
 
