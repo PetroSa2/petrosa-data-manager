@@ -191,10 +191,7 @@ async def put_exchange_positions(as_of_ms: int, body: PositionsSnapshot):
 
 
 @router.get("/tieout")
-async def get_tieout(
-    from_: date = Query(..., alias="from"),
-    to: date = Query(...),
-):
+async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(...)):
     if from_ > to or (to - from_).days > 366:
         raise HTTPException(status_code=422, detail="invalid tie-out range")
     try:

@@ -207,15 +207,10 @@ class LedgerRepository(BaseRepository):
         """Build a bounded daily comparison from the latest exchange revisions."""
         days = (
             self._run(
-                "SELECT r.*, COALESCE(SUM(e.realized_pnl),0) realized_pnl, "
-                "COALESCE(SUM(e.commission),0) commission, COALESCE(SUM(e.funding_fee),0) funding_fee, "
-                "COALESCE(SUM(e.transfer+e.commission_rebate+e.api_rebate+e.insurance_clear+"
-                "e.auto_exchange+e.other_unnamed),0) other_income_total "
-                "FROM ledger_exchange_day_revision r JOIN (SELECT day, MAX(revision) revision "
-                "FROM ledger_exchange_day_revision WHERE day BETWEEN :first AND :last GROUP BY day) latest "
-                "ON latest.day=r.day AND latest.revision=r.revision LEFT JOIN ledger_exchange_daily e "
-                "ON e.day=r.day AND e.revision=r.revision GROUP BY r.day,r.revision "
-                "ORDER BY r.day",
+                "SELECT r.*, COALESCE(SUM(e.realized_pnl),0) realized_pnl, COALESCE(SUM(e.commission),0) commission, "
+                "COALESCE(SUM(e.funding_fee),0) funding_fee, COALESCE(SUM(e.transfer+e.commission_rebate+e.api_rebate+e.insurance_clear+e.auto_exchange+e.other_unnamed),0) other_income_total "
+                "FROM ledger_exchange_day_revision r JOIN (SELECT day, MAX(revision) revision FROM ledger_exchange_day_revision WHERE day BETWEEN :first AND :last GROUP BY day) latest ON latest.day=r.day AND latest.revision=r.revision "
+                "LEFT JOIN ledger_exchange_daily e ON e.day=r.day AND e.revision=r.revision GROUP BY r.day,r.revision ORDER BY r.day",
                 {"first": first, "last": last},
             )
             .mappings()
@@ -232,27 +227,24 @@ class LedgerRepository(BaseRepository):
         pnl_by_day = {
             row["date"].isoformat(): Decimal(str(row["daily_pnl"])) for row in pnl
         }
-        result = []
-        cumulative = Decimal("0")
+        result, cumulative = [], Decimal("0")
         known = {row["day"].isoformat(): row for row in days}
         for offset in range((last - first).days + 1):
             day = first + timedelta(days=offset)
-            key = day.isoformat()
-            row = known.get(key)
+            key, row = day.isoformat(), known.get(day.isoformat())
             exchange = (
-                (Decimal(str(row["realized_pnl"])) + Decimal(str(row["commission"])))
+                Decimal(str(row["realized_pnl"])) + Decimal(str(row["commission"]))
                 if row
                 else Decimal("0")
             )
             ledger = pnl_by_day.get(key)
-            variance = (ledger - exchange) if ledger is not None else Decimal("0")
+            variance = ledger - exchange if ledger is not None else Decimal("0")
             cumulative += variance
-            if not row:
-                status = "ledger_missing" if exchange else "tied"
-            elif ledger is None and exchange:
-                status = "ledger_missing"
-            else:
-                status = "tied" if variance == 0 else "unconfigured"
+            status = (
+                "ledger_missing"
+                if ledger is None and exchange
+                else ("tied" if variance == 0 else "unconfigured")
+            )
             result.append(
                 {
                     "day": key,
@@ -319,10 +311,10 @@ class LedgerRepository(BaseRepository):
         exchange_keys = {(r["symbol"], r["position_side"]): r for r in exchange}
         grouped: dict[tuple[str, str], int] = {}
         for row in ledger:
-            side = str(row["position_side"]).upper()
-            side = {"BUY": "LONG", "SELL": "SHORT"}.get(side, side)
-            key = (row["symbol"], side)
-            grouped[key] = grouped.get(key, 0) + 1
+            side = {"BUY": "LONG", "SELL": "SHORT"}.get(
+                str(row["position_side"]).upper(), str(row["position_side"]).upper()
+            )
+            grouped[(row["symbol"], side)] = grouped.get((row["symbol"], side), 0) + 1
         open_rows = [
             {"symbol": s, "position_side": side, "ledger_open_rows": count}
             for (s, side), count in grouped.items()
