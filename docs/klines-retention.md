@@ -95,16 +95,12 @@ to `365` days. The fallback is conservative on purpose.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `KLINES_RETENTION_BACKENDS` | `mongodb` | Comma-separated backends to run sequentially: `mongodb`, `mysql` historic copy. |
-| `KLINES_RETENTION_MYSQL_DRY_RUN` | `true` | Count historic-copy rows without deleting them until explicitly set to `false`. |
-| `KLINES_RETENTION_MYSQL_CHUNK_SLEEP_MS` | `250` | Delay between MySQL chunks to yield the shared connection. |
-| `KLINES_RETENTION_MYSQL_MAX_ROWS_PER_CHUNK` | `50000` | Halve an oversized MySQL time chunk before deleting, down to one hour. |
+| `KLINES_RETENTION_BACKENDS` | `mongodb` | Retention is restricted to MongoDB operational collections. Any other backend is rejected. |
 
 ### Connection
 
-Reuses the canonical `MONGODB_URL` and `MYSQL_URI` env vars. A missing or
-unreachable `MYSQL_URI` logs a warning and skips MySQL while MongoDB continues;
-MongoDB still exits with code `2` when `MONGODB_URL` is not set.
+Reuses the canonical `MONGODB_URL` env var. MongoDB exits with code `2` when
+`MONGODB_URL` is not set.
 
 ## Observability
 
