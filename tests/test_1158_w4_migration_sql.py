@@ -83,6 +83,7 @@ def test_tier1_skip_reason_is_explicit():
 @pytest.mark.integration
 def test_tier1_mysql57_rehearsal():
     """Run by the lab job when MYSQL57_REHEARSAL_DSN is configured."""
+    assert TIER1_SKIP_REASON
     dsn = pytest.importorskip("os").environ.get("MYSQL57_REHEARSAL_DSN")
     if not dsn:
         pytest.skip(TIER1_SKIP_REASON)
