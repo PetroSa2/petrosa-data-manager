@@ -86,6 +86,9 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "ledger_exchange_metrics": durable(
         mysql_table="ledger_exchange_metrics", key="metric"
     ),
+    "ledger_adjustments": durable(
+        mysql_table="ledger_adjustments", key="adjustment_id"
+    ),
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
     "service_leases": transient_only(reason="coordination lease API; safe to recreate"),

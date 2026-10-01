@@ -35,6 +35,7 @@ GENERIC_POLICY: dict[str, dict[str, set[str]]] = {
         "ledger_exchange_positions_snapshot": {"read"},
         "ledger_exchange_positions": {"read"},
         "ledger_exchange_metrics": {"read"},
+        "ledger_adjustments": {"read"},
         "*": {"read"},
     },
 }
@@ -68,6 +69,7 @@ def check_generic(database: str, collection: str, op: str) -> bool:
             "ledger_exchange_positions_snapshot",
             "ledger_exchange_positions",
             "ledger_exchange_metrics",
+            "ledger_adjustments",
         }
         and op == "read"
     )
