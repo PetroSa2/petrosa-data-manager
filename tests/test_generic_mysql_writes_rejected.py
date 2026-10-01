@@ -28,6 +28,11 @@ def client(mock_db_manager, monkeypatch):
     [
         ("post", "/api/v1/mysql/positions", {"data": {"position_id": "p1"}}),
         (
+            "post",
+            "/api/v1/mysql/ledger_adjustments",
+            {"data": {"adjustment_id": "a1"}},
+        ),
+        (
             "put",
             "/api/v1/mysql/positions",
             {"filter": {"position_id": "p1"}, "data": {"status": "open"}},

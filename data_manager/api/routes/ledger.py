@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from prometheus_client import Counter, Gauge
@@ -19,6 +21,11 @@ from pydantic import (
 )
 
 import data_manager.api.app as api_module
+from data_manager.db.repositories.ledger_adjustments_repository import (
+    AdjustmentConflictError,
+    AdjustmentValidationError,
+    LedgerAdjustmentsRepository,
+)
 from data_manager.db.repositories.ledger_repository import LedgerRepository
 
 router = APIRouter(prefix="/api/v1/ledger")
@@ -154,6 +161,48 @@ def _repo() -> LedgerRepository:
     return LedgerRepository(manager.mysql_adapter, None)
 
 
+def _adjustments_repo() -> LedgerAdjustmentsRepository:
+    manager = api_module.db_manager
+    if not manager or not getattr(manager, "mysql_adapter", None):
+        raise HTTPException(status_code=503, detail="Database not available")
+    return LedgerAdjustmentsRepository(manager.mysql_adapter, None)
+
+
+class LedgerAdjustmentWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    adjustment_id: StrictStr
+    applied_at: datetime
+    applied_by: StrictStr
+    approved_by: StrictStr
+    target_table: StrictStr
+    target_key: StrictStr
+    before: dict[StrictStr, Any]
+    after: dict[StrictStr, Any]
+    reason_code: Literal["phantom_superseded", "status_correction", "annotation"]
+    evidence_ref: StrictStr
+    run_mode: Literal["dry_run", "apply"]
+    dry_run_adjustment_id: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.run_mode == "apply" and not self.dry_run_adjustment_id:
+            raise ValueError("dry_run_adjustment_id is required for apply")
+        if self.run_mode == "dry_run" and self.dry_run_adjustment_id:
+            raise ValueError("dry_run_adjustment_id is only for apply")
+        return self
+
+
+class PositionSupersedeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: StrictInt
+    expected_before: dict[StrictStr, Any]
+    reason_code: Literal["phantom_superseded", "status_correction", "annotation"]
+    evidence_ref: StrictStr
+    applied_by: StrictStr
+    approved_by: StrictStr
+    dry_run_adjustment_id: StrictStr
+
+
 @router.put("/exchange-daily/{day}")
 async def put_exchange_daily(day: date, body: DailyLedger):
     if body.day != day:
@@ -219,6 +268,69 @@ async def get_positions_tieout():
         result = await asyncio.to_thread(_repo().positions_tieout)
         OPEN_POSITION_VARIANCE.set(len(result["phantom_rows"]))
         return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Ledger database unavailable"
+        ) from exc
+
+
+@router.post("/adjustments", status_code=201)
+async def post_adjustment(body: LedgerAdjustmentWrite):
+    try:
+        return await asyncio.to_thread(
+            _adjustments_repo().insert_adjustment, body.model_dump(mode="json")
+        )
+    except AdjustmentValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Ledger database unavailable"
+        ) from exc
+
+
+@router.get("/adjustments")
+async def get_adjustments(
+    target_table: str | None = None,
+    target_key: str | None = None,
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
+):
+    if from_ and to and from_ > to:
+        raise HTTPException(status_code=422, detail="invalid adjustment range")
+    try:
+        rows = await asyncio.to_thread(
+            _adjustments_repo().list_adjustments,
+            target_table=target_table,
+            target_key=target_key,
+            from_time=from_,
+            to_time=to,
+        )
+        return {"data": rows, "count": len(rows)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Ledger database unavailable"
+        ) from exc
+
+
+@router.post("/positions/supersede")
+async def post_positions_supersede(body: PositionSupersedeRequest):
+    payload = body.model_dump(mode="json")
+    payload["adjustment_id"] = str(uuid.uuid4())
+    payload["applied_at"] = datetime.now(UTC)
+    try:
+        return await asyncio.to_thread(_adjustments_repo().supersede_position, payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AdjustmentConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AdjustmentValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
