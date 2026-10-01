@@ -335,13 +335,17 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> RetentionConf
     )
     dry_run = env.get("KLINES_RETENTION_DRY_RUN", "").lower() == "true"
     backends = tuple(
-        backend
-        for backend in (
-            value.strip().lower()
-            for value in env.get("KLINES_RETENTION_BACKENDS", "mongodb").split(",")
-        )
-        if backend in {"mongodb", "mysql"}
+        value.strip().lower()
+        for value in env.get("KLINES_RETENTION_BACKENDS", "mongodb").split(",")
+        if value.strip()
     ) or ("mongodb",)
+    unsupported = set(backends) - {"mongodb"}
+    if unsupported:
+        selected = ", ".join(sorted(unsupported))
+        raise ValueError(
+            f"Unsupported klines retention backend(s): {selected}; "
+            "retention is restricted to MongoDB"
+        )
     mysql_chunk_sleep_ms = _parse_int_env(
         env, "KLINES_RETENTION_MYSQL_CHUNK_SLEEP_MS", 250, minimum=0
     )
@@ -539,6 +543,11 @@ async def prune_klines(
         backend_list = [_coerce_backend(backends)]
 
     for backend in backend_list:
+        if backend.name != "mongodb":
+            raise ValueError(
+                f"Unsupported klines retention backend: {backend.name}; "
+                "retention is restricted to MongoDB"
+            )
         if config.collections_override is not None:
             collections = list(config.collections_override)
         else:

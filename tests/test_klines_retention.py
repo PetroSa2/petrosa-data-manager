@@ -110,7 +110,7 @@ def test_load_config_from_env_ignores_non_integer_values_and_clamps_below_minimu
     assert config.batch_days == 1
 
 
-def test_load_config_from_env_defaults_to_mongodb_and_mysql_dry_run():
+def test_load_config_from_env_defaults_to_mongodb():
     config = kr.load_config_from_env({})
     assert config.backends == ("mongodb",)
     assert config.mysql_dry_run is True
@@ -118,19 +118,11 @@ def test_load_config_from_env_defaults_to_mongodb_and_mysql_dry_run():
     assert config.mysql_max_rows_per_chunk == 50_000
 
 
-def test_load_config_from_env_reads_mysql_controls():
-    config = kr.load_config_from_env(
-        {
-            "KLINES_RETENTION_BACKENDS": "mongodb,mysql",
-            "KLINES_RETENTION_MYSQL_DRY_RUN": "false",
-            "KLINES_RETENTION_MYSQL_CHUNK_SLEEP_MS": "0",
-            "KLINES_RETENTION_MYSQL_MAX_ROWS_PER_CHUNK": "123",
-        }
-    )
-    assert config.backends == ("mongodb", "mysql")
-    assert config.mysql_dry_run is False
-    assert config.mysql_chunk_sleep_ms == 0
-    assert config.mysql_max_rows_per_chunk == 123
+@pytest.mark.parametrize("backends", ["mysql", "mongodb,mysql"])
+def test_load_config_from_env_rejects_mysql_backend(backends):
+    with pytest.raises(ValueError) as exc_info:
+        kr.load_config_from_env({"KLINES_RETENTION_BACKENDS": backends})
+    assert "restricted to MongoDB" in str(exc_info.value)
 
 
 class _FakeMySQLAdapter:
@@ -260,24 +252,10 @@ async def test_mysql_discovery_uses_uri_schema_without_explicit_argument(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_mysql_empty_discovery_is_logged_as_error(monkeypatch, caplog):
-    """A MySQL backend that finds nothing must not fail silently again."""
-    monkeypatch.setattr(kr.mysql_adapter, "table_inventory", lambda engine, schema: [])
-
-    class _Engine:
-        url = sa.engine.make_url("mysql+pymysql://u:p@host:3306/petrosa_crypto")
-
-    adapter = _FakeMySQLAdapter()
-    adapter.engine = _Engine()
-    backend = kr.MySQLRetentionBackend(cast(kr.MySQLAdapter, adapter))
-
-    with caplog.at_level("ERROR"):
-        results = await kr.prune_klines([backend], kr.RetentionConfig())
-
-    assert results == []
-    assert "petrosa_crypto" in caplog.text
-    assert "no-op" in caplog.text
-    assert any(record.levelname == "ERROR" for record in caplog.records)
+async def test_prune_klines_rejects_mysql_backend():
+    backend = _FakeBackend()
+    with pytest.raises(ValueError, match="restricted to MongoDB"):
+        await kr.prune_klines([backend], kr.RetentionConfig())
 
 
 class _FakeBackend:
@@ -362,7 +340,7 @@ async def test_mysql_prune_dry_run_paces_between_chunks(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prune_klines_normalizes_mysql_timeframes():
+async def test_prune_klines_rejects_mysql_timeframes():
     backend = _FakeBackend()
     config = kr.RetentionConfig(
         windows_days={"5m": 14},
@@ -370,13 +348,12 @@ async def test_prune_klines_normalizes_mysql_timeframes():
         mysql_dry_run=True,
         max_chunks_per_collection=1,
     )
-    results = await kr.prune_klines(backend, config, now=_aware(2026, 6, 1))
-    assert results[0].backend == "mysql"
-    assert results[0].dry_run is True
+    with pytest.raises(ValueError, match="restricted to MongoDB"):
+        await kr.prune_klines(backend, config, now=_aware(2026, 6, 1))
 
 
 class _EmptyBackend:
-    name = "mysql"
+    name = "mongodb"
 
     async def list_klines_collections(self):
         return []
@@ -398,13 +375,10 @@ async def test_prune_klines_skips_backend_without_collections():
 
 
 @pytest.mark.asyncio
-async def test_amain_skips_missing_mysql_without_failing(monkeypatch):
+async def test_amain_rejects_mysql_backend(monkeypatch):
     monkeypatch.setenv("KLINES_RETENTION_BACKENDS", "mysql")
-    monkeypatch.setattr(kr.constants, "MYSQL_URI", None)
-    prune = AsyncMock()
-    monkeypatch.setattr(kr, "prune_klines", prune)
-    assert await kr._amain([]) == 0
-    prune.assert_awaited_once()
+    with pytest.raises(ValueError, match="restricted to MongoDB"):
+        await kr._amain([])
 
 
 @pytest.mark.asyncio
