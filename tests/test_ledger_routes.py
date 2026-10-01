@@ -155,6 +155,28 @@ async def test_routes_delegate_to_repository(monkeypatch):
     assert (await ledger.put_exchange_positions(10, positions))["created"]
 
 
+@pytest.mark.asyncio
+async def test_tieout_routes_publish_metrics_and_validate_range(monkeypatch):
+    class Repo:
+        def tieout(self, first, last):
+            return {"days": [{"unexplained": "1.25"}], "cumulative_variance": "1.25"}
+
+        def positions_tieout(self):
+            return {
+                "phantom_rows": [],
+                "ledger_open_rows": [],
+                "exchange_positions": [],
+            }
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    result = await ledger.get_tieout(date(2026, 9, 30), date(2026, 9, 30))
+    assert result["cumulative_variance"] == "1.25"
+    assert (await ledger.get_positions_tieout())["phantom_rows"] == []
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_tieout(date(2026, 10, 2), date(2026, 10, 1))
+    assert error.value.status_code == 422
+
+
 def test_tieout_returns_daily_components_and_cumulative_variance():
     repo = FakeLedgerRepository(
         [
