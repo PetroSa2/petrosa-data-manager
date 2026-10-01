@@ -129,8 +129,9 @@ def test_insert_apply_requires_matching_dry_run():
     repo.insert_adjustment(apply_payload)
 
     missing_ref = _adjustment(run_mode="apply", dry_run_adjustment_id=str(uuid4()))
-    with pytest.raises(AdjustmentValidationError):
+    with pytest.raises(AdjustmentValidationError) as error:
         repo.insert_adjustment(missing_ref)
+    assert "matching dry_run" in str(error.value)
 
 
 def test_monetary_column_change_is_rejected():
@@ -140,8 +141,9 @@ def test_monetary_column_change_is_rejected():
     payload = _adjustment(run_mode="dry_run")
     payload["before"]["pnl"] = "0.00"
     payload["after"]["pnl"] = "1.00"
-    with pytest.raises(AdjustmentValidationError):
+    with pytest.raises(AdjustmentValidationError) as error:
         repo.insert_adjustment(payload)
+    assert "monetary" in str(error.value)
 
 
 def test_hash_chain_verification_detects_tampering():
@@ -204,7 +206,7 @@ def test_supersede_conflict_on_expected_before_drift():
     repo = _repo(engine)
     dry_run = _adjustment(run_mode="dry_run")
     repo.insert_adjustment(dry_run)
-    with pytest.raises(AdjustmentConflictError):
+    with pytest.raises(AdjustmentConflictError) as error:
         repo.supersede_position(
             {
                 "id": 1,
@@ -218,6 +220,7 @@ def test_supersede_conflict_on_expected_before_drift():
                 "applied_at": datetime.now(UTC),
             }
         )
+    assert "changed since dry_run" in str(error.value)
 
 
 def test_supersede_rolls_back_when_audit_insert_fails():
