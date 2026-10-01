@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -202,3 +202,148 @@ class LedgerRepository(BaseRepository):
                 },
             )
         return {"as_of_ms": payload["as_of_ms"], "created": True}
+
+    def tieout(self, first: date, last: date) -> dict[str, Any]:
+        """Build a bounded daily comparison from the latest exchange revisions."""
+        days = (
+            self._run(
+                "SELECT r.*, COALESCE(SUM(e.realized_pnl),0) realized_pnl, "
+                "COALESCE(SUM(e.commission),0) commission, COALESCE(SUM(e.funding_fee),0) funding_fee, "
+                "COALESCE(SUM(e.transfer+e.commission_rebate+e.api_rebate+e.insurance_clear+"
+                "e.auto_exchange+e.other_unnamed),0) other_income_total "
+                "FROM ledger_exchange_day_revision r JOIN (SELECT day, MAX(revision) revision "
+                "FROM ledger_exchange_day_revision WHERE day BETWEEN :first AND :last GROUP BY day) latest "
+                "ON latest.day=r.day AND latest.revision=r.revision LEFT JOIN ledger_exchange_daily e "
+                "ON e.day=r.day AND e.revision=r.revision GROUP BY r.day,r.revision "
+                "ORDER BY r.day",
+                {"first": first, "last": last},
+            )
+            .mappings()
+            .all()
+        )
+        pnl = (
+            self._run(
+                "SELECT date, daily_pnl FROM daily_pnl WHERE date BETWEEN :first AND :last",
+                {"first": first, "last": last},
+            )
+            .mappings()
+            .all()
+        )
+        pnl_by_day = {
+            row["date"].isoformat(): Decimal(str(row["daily_pnl"])) for row in pnl
+        }
+        result = []
+        cumulative = Decimal("0")
+        known = {row["day"].isoformat(): row for row in days}
+        for offset in range((last - first).days + 1):
+            day = first + timedelta(days=offset)
+            key = day.isoformat()
+            row = known.get(key)
+            exchange = (
+                (Decimal(str(row["realized_pnl"])) + Decimal(str(row["commission"])))
+                if row
+                else Decimal("0")
+            )
+            ledger = pnl_by_day.get(key)
+            variance = (ledger - exchange) if ledger is not None else Decimal("0")
+            cumulative += variance
+            if not row:
+                status = "ledger_missing" if exchange else "tied"
+            elif ledger is None and exchange:
+                status = "ledger_missing"
+            else:
+                status = "tied" if variance == 0 else "unconfigured"
+            result.append(
+                {
+                    "day": key,
+                    "realized_and_fees": {
+                        "exchange": str(exchange),
+                        "ledger": str(ledger) if ledger is not None else None,
+                        "variance": str(variance),
+                    },
+                    "funding": {
+                        "exchange": str(row["funding_fee"]) if row else "0",
+                        "ledger": None,
+                        "status": "unbooked_by_design",
+                    },
+                    "other_income_total": str(row["other_income_total"])
+                    if row
+                    else "0",
+                    "unexplained": str(variance),
+                    "cumulative_variance": str(cumulative),
+                    "status": status,
+                    "roll_forward": {
+                        "difference_class": "provisional"
+                        if row and not row["is_final"]
+                        else "opening_missing"
+                    },
+                }
+            )
+        return {
+            "from": first.isoformat(),
+            "to": last.isoformat(),
+            "days": result,
+            "cumulative_variance": str(cumulative),
+        }
+
+    def positions_tieout(self) -> dict[str, Any]:
+        """Compare latest exchange positions with open historic rows."""
+        snapshot = (
+            self._run(
+                "SELECT * FROM ledger_exchange_positions_snapshot ORDER BY as_of_ms DESC LIMIT 1"
+            )
+            .mappings()
+            .first()
+        )
+        if not snapshot:
+            return {
+                "ledger_open_rows": [],
+                "exchange_positions": [],
+                "phantom_rows": [],
+            }
+        exchange = (
+            self._run(
+                "SELECT symbol, position_side, quantity FROM ledger_exchange_positions WHERE as_of_ms=:as_of_ms",
+                {"as_of_ms": snapshot["as_of_ms"]},
+            )
+            .mappings()
+            .all()
+        )
+        ledger = (
+            self._run(
+                "SELECT symbol, position_side, quantity FROM positions WHERE status IN ('open','partially_closed')"
+            )
+            .mappings()
+            .all()
+        )
+        exchange_keys = {(r["symbol"], r["position_side"]): r for r in exchange}
+        grouped: dict[tuple[str, str], int] = {}
+        for row in ledger:
+            side = str(row["position_side"]).upper()
+            side = {"BUY": "LONG", "SELL": "SHORT"}.get(side, side)
+            key = (row["symbol"], side)
+            grouped[key] = grouped.get(key, 0) + 1
+        open_rows = [
+            {"symbol": s, "position_side": side, "ledger_open_rows": count}
+            for (s, side), count in grouped.items()
+        ]
+        exchange_rows = [
+            {
+                "symbol": s,
+                "position_side": side,
+                "exchange_positions": 1,
+                "quantity": str(r["quantity"]),
+            }
+            for (s, side), r in exchange_keys.items()
+        ]
+        phantom = [
+            row
+            for row in open_rows
+            if (row["symbol"], row["position_side"]) not in exchange_keys
+        ]
+        return {
+            "as_of_ms": snapshot["as_of_ms"],
+            "ledger_open_rows": open_rows,
+            "exchange_positions": exchange_rows,
+            "phantom_rows": phantom,
+        }
