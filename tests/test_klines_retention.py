@@ -120,8 +120,9 @@ def test_load_config_from_env_defaults_to_mongodb():
 
 @pytest.mark.parametrize("backends", ["mysql", "mongodb,mysql"])
 def test_load_config_from_env_rejects_mysql_backend(backends):
-    with pytest.raises(ValueError, match="restricted to MongoDB"):
+    with pytest.raises(ValueError) as exc_info:
         kr.load_config_from_env({"KLINES_RETENTION_BACKENDS": backends})
+    assert "restricted to MongoDB" in str(exc_info.value)
 
 
 class _FakeMySQLAdapter:
