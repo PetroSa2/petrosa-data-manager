@@ -101,17 +101,31 @@ async def migrate_collections(
     ]
 
 
-async def _run_cli(apply: bool, batch_size: int) -> None:
+async def _run_cli(
+    apply: bool, batch_size: int, collection: str | None = None
+) -> None:
     adapter = MongoDBAdapter(
         constants.MONGODB_URL,
-        database_name=constants.MONGODB_DB,
+        database_name=constants.CANDLE_MONGO_DATABASE,
     )
     adapter.connect()
     try:
         names = await adapter.list_collections()
         selected = sorted(
-            name for name in names if name.startswith(("klines_", "trades_"))
+            name
+            for name in names
+            if name.startswith("klines_")
+            or name == "trades"
+            or name.startswith("trades_")
         )
+        if collection is not None:
+            if collection not in selected:
+                raise ValueError(f"migration collection not found: {collection}")
+            selected = [collection]
+        if not selected:
+            raise RuntimeError(
+                "no candle or trade collections found in the configured Mongo database"
+            )
         results = await migrate_collections(
             adapter.db,
             selected,
@@ -127,8 +141,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--batch-size", type=int, default=1000)
+    parser.add_argument("--collection")
     args = parser.parse_args()
-    asyncio.run(_run_cli(args.apply, args.batch_size))
+    asyncio.run(_run_cli(args.apply, args.batch_size, args.collection))
 
 
 if __name__ == "__main__":

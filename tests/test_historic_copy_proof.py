@@ -1,6 +1,16 @@
 from datetime import UTC, date, datetime, timedelta
 
-from data_manager.maintenance.historic_copy_proof import prove_daily_copy
+from data_manager.maintenance.historic_copy_proof import (
+    is_proof_collection,
+    prove_daily_copy,
+)
+
+
+def test_proof_collection_selection_includes_plain_trades():
+    assert is_proof_collection("trades")
+    assert is_proof_collection("trades_BTCUSDT")
+    assert is_proof_collection("execution_events")
+    assert not is_proof_collection("tradesome")
 
 
 def test_daily_copy_proof_requires_mysql_to_cover_each_day():
