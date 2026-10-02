@@ -25,3 +25,10 @@ CREATE TABLE IF NOT EXISTS ledger_exchange_positions (
   FOREIGN KEY (as_of_ms) REFERENCES ledger_exchange_positions_snapshot(as_of_ms)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS ledger_exchange_metrics (metric VARCHAR(128) PRIMARY KEY, value BIGINT NOT NULL DEFAULT 0) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  migration_id VARCHAR(128) NOT NULL PRIMARY KEY,
+  applied_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO schema_migrations (migration_id, applied_at)
+VALUES ('014_ledger_exchange_store', UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE migration_id = VALUES(migration_id);

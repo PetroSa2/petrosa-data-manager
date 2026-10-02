@@ -31,6 +31,7 @@ from data_manager.consumer.intent_consumer import IntentConsumer
 from data_manager.consumer.market_data_consumer import MarketDataConsumer
 from data_manager.consumer.pnl_consumer import PnlConsumer
 from data_manager.db.database_manager import DatabaseManager
+from data_manager.db.migration_status import unapplied_migrations
 from data_manager.observability.write_metrics import SUMMARY, summary_loop
 from data_manager.services.alert_dispatcher import AlertDispatcher
 
@@ -177,6 +178,19 @@ class DataManagerApp:
         )
         logger.info("Event-loop lag monitor enabled")
 
+    async def _check_schema_migrations(self) -> None:
+        """Warn about operator migrations that have no completion record."""
+        if not self.db_manager or not self.db_manager.mysql_adapter:
+            return
+        try:
+            missing = await asyncio.to_thread(
+                unapplied_migrations, self.db_manager.mysql_adapter.engine
+            )
+            if missing:
+                logger.warning("Unapplied operator migrations: %s", ", ".join(missing))
+        except Exception as exc:
+            logger.warning("Unable to check operator migration status: %s", exc)
+
     async def start(self) -> None:
         """Start all application components."""
         logger.info(
@@ -211,6 +225,7 @@ class DataManagerApp:
             await self.db_manager.initialize()
             db_init_attempts_total.labels(result="success").inc()
             logger.info("Database connections initialized successfully")
+            await self._check_schema_migrations()
             if self.db_manager.mongodb_adapter:
                 from data_manager.db.repositories.service_config_repository import (
                     ServiceConfigRepository,
@@ -595,6 +610,7 @@ class DataManagerApp:
                 await manager.initialize()
                 db_init_attempts_total.labels(result="success").inc()
                 self.db_manager = manager
+                await self._check_schema_migrations()
                 from data_manager import api
 
                 api.app.db_manager = manager
