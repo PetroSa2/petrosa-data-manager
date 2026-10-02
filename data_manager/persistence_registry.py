@@ -54,7 +54,7 @@ def operational(
 
 
 REGISTRY: dict[str, PersistenceSpec] = {
-    "signals": durable(mysql_table="signals", key="symbol+timestamp"),
+    "signals": durable(mysql_table="signals", key="signal_key", reason="point-in-time durable signal record"),
     "cio_decisions": durable(mysql_table="cio_decisions", key="decision_id"),
     "execution_events": durable(
         mysql_table="execution_events",
