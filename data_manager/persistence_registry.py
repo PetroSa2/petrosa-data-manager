@@ -189,8 +189,19 @@ PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
             min_retention=">=400 candles per interval",
         ),
     ),
-    ("analytics_", transient_only(reason="recomputable from klines")),
-    ("trades_", transient_only(reason="raw market data is owned by the extractor")),
+    (
+        "analytics_",
+        transient_only(reason="recomputable from klines; Mongo TTL 3 days"),
+    ),
+    (
+        "trades_",
+        durable(
+            mysql_table="trades",
+            key="symbol+timestamp",
+            pending=True,
+            reason="raw trade copy; Mongo TTL follows historic-copy lag",
+        ),
+    ),
     (
         "depth_",
         transient_only(reason="market-depth cache; not retained by this service"),

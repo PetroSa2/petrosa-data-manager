@@ -221,6 +221,11 @@ class DataManagerApp:
                 ).ensure_indexes()
                 await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
                 await self.db_manager.mongodb_adapter.ensure_indexes("funding_rates")
+                await self.db_manager.mongodb_adapter.ensure_indexes("execution_events")
+                collections = await self.db_manager.mongodb_adapter.list_collections()
+                for collection in collections:
+                    if collection.startswith(("analytics_", "trades_")):
+                        await self.db_manager.mongodb_adapter.ensure_indexes(collection)
                 for collection in (
                     "health_metrics",
                     "audit_logs",

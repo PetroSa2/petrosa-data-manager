@@ -275,7 +275,7 @@ class TestWrite:
 
     @pytest.mark.asyncio
     async def test_offset_only_timestamp_is_parsed_directly(self, adapter):
-        """A well-formed numeric-offset-only timestamp needs no normalization."""
+        """A well-formed numeric-offset timestamp is stored as UTC."""
         model = MagicMock()
         model.model_dump.return_value = {
             "symbol": "BTCUSDT",
@@ -288,7 +288,8 @@ class TestWrite:
         assert n == 1
         doc = coll.insert_many.call_args[0][0][0]
         assert isinstance(doc["timestamp"], datetime)
-        assert doc["timestamp"].utcoffset().total_seconds() == 5 * 3600
+        assert doc["timestamp"].utcoffset().total_seconds() == 0
+        assert doc["timestamp"].hour == 19
 
 
 class TestWriteBatch:
@@ -483,8 +484,43 @@ class TestEnsureIndexes:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         await adapter.ensure_indexes("trades_BTCUSDT")
         indexes = coll.create_indexes.call_args[0][0]
-        # Default time-series indexes: 2.
-        assert len(indexes) == 2
+        # Trade collections are bounded after the historic copy window.
+        assert len(indexes) == 1
+        assert indexes[0].document["expireAfterSeconds"] > 0
+
+    @pytest.mark.asyncio
+    async def test_normalizes_naive_iso_timestamps_to_utc(self, adapter):
+        adapter.db.__getitem__ = MagicMock(return_value=MagicMock())
+        coll = adapter.db["trades_BTCUSDT"]
+        coll.insert_many = AsyncMock(
+            return_value=MagicMock(inserted_ids=["one"])
+        )
+
+        from pydantic import BaseModel
+
+        class Event(BaseModel):
+            timestamp: str
+
+        await adapter.write([Event(timestamp="2026-10-02T12:00:00")], "trades_BTCUSDT")
+
+        stored = coll.insert_many.call_args.args[0][0]
+        assert stored["timestamp"].tzinfo is not None
+        assert stored["timestamp"].utcoffset().total_seconds() == 0
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_timestamp_before_mongo_write(self, adapter):
+        coll = MagicMock()
+        coll.insert_many = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        from pydantic import BaseModel
+
+        class Event(BaseModel):
+            timestamp: str
+
+        with pytest.raises(ValueError, match="invalid timestamp"):
+            await adapter.write([Event(timestamp="not-a-date")], "trades_BTCUSDT")
+        coll.insert_many.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_creates_non_unique_extractor_kline_index(self, adapter):
@@ -538,6 +574,22 @@ class TestEnsureIndexes:
         assert (
             ttl[0].document["expireAfterSeconds"] == constants.CIO_DECISIONS_TTL_SECONDS
         )
+
+    @pytest.mark.asyncio
+    async def test_execution_events_have_bounded_timestamp_ttl(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("execution_events")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
+        assert len(ttl) == 1
+        assert ttl[0].document["name"] == "timestamp_ttl"
+        assert ttl[0].document["partialFilterExpression"] == {
+            "mysql_copied_at": {"$exists": True}
+        }
 
     @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):

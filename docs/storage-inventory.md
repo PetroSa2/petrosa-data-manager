@@ -23,6 +23,29 @@ klines-retention CronJob ([`petrosa_k8s#787`](https://github.com/PetroSa2/petros
 which ships paused; the audit is what tells the operator whether to unpause
 it and what other retention work to file.
 
+## Current operational retention contract
+
+MongoDB is the real-time store and MySQL is the permanent historic store. The
+application self-heals these policies at startup; values are configurable with
+the environment variables named in `constants.py`:
+
+| Collection | Policy | Default window |
+| --- | --- | --- |
+| `intents` | TTL on `received_at` | 1 day |
+| `cio_decisions` | TTL on `received_at` | 1 day |
+| `signals` | TTL on its inserted-at field | 1 hour |
+| `alerts` | TTL on `_ttl_inserted_at` | 7 days |
+| `execution_events` | TTL on `timestamp` | 30 days |
+| `analytics_*` | TTL on `metadata.computed_at` | 3 days |
+| `trades_*` | TTL on `timestamp`, after historic-copy lag | 7 days |
+| `klines_*` | bounded `klines-retention` job | per-timeframe window |
+
+Every timestamp used by a TTL policy must be a BSON date in UTC. The historic
+copy must be available before durable records are eligible for deletion; a
+retention job must defer deletion when copy health or lag cannot be verified.
+Collections outside this table are configuration, coordination, or audit
+state and must have an explicit registry classification and bounded policy.
+
 ## Safety model (two layers — both required)
 
 | Layer | Mechanism | Code reference |
