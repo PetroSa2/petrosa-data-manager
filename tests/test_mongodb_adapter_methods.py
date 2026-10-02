@@ -484,9 +484,9 @@ class TestEnsureIndexes:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         await adapter.ensure_indexes("trades_BTCUSDT")
         indexes = coll.create_indexes.call_args[0][0]
-        # Trade collections are bounded after the historic copy window.
-        assert len(indexes) == 1
-        assert indexes[0].document["expireAfterSeconds"] > 0
+        # Raw trades must also live in MySQL: no TTL until the copy is proven.
+        assert len(indexes) == 2
+        assert all("expireAfterSeconds" not in ix.document for ix in indexes)
 
     @pytest.mark.asyncio
     async def test_normalizes_naive_iso_timestamps_to_utc(self, adapter):
@@ -573,21 +573,36 @@ class TestEnsureIndexes:
             ttl[0].document["expireAfterSeconds"] == constants.CIO_DECISIONS_TTL_SECONDS
         )
 
+    # Collections whose rows must also live in MySQL (the historic copy). They never get a TTL in code
+    # until the copy is proven (data-manager#498): MongoDB would delete history that exists nowhere else.
+    MYSQL_COPY_REQUIRED = (
+        "execution_events",
+        "pnl_events",
+        "trades_BTCUSDT",
+        "trades_ETHUSDT",
+        "positions",
+        "daily_pnl",
+    )
+
     @pytest.mark.asyncio
-    async def test_execution_events_have_bounded_timestamp_ttl(self, adapter):
+    @pytest.mark.parametrize("collection", MYSQL_COPY_REQUIRED)
+    async def test_mysql_copy_required_collections_never_get_a_ttl(
+        self, adapter, collection
+    ):
         coll = MagicMock()
         coll.create_indexes = AsyncMock()
         adapter.db.__getitem__ = MagicMock(return_value=coll)
 
-        await adapter.ensure_indexes("execution_events")
+        await adapter.ensure_indexes(collection)
 
         indexes = coll.create_indexes.call_args.args[0]
-        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
-        assert len(ttl) == 1
-        assert ttl[0].document["name"] == "timestamp_ttl"
-        assert ttl[0].document["partialFilterExpression"] == {
-            "mysql_copied_at": {"$exists": True}
-        }
+        assert indexes
+        assert all("expireAfterSeconds" not in ix.document for ix in indexes)
+
+    def test_no_execution_events_ttl_setting_exists(self):
+        import constants
+
+        assert not hasattr(constants, "EXECUTION_EVENTS_TTL_SECONDS")
 
     @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):

@@ -759,13 +759,8 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("decision_id", ASCENDING)]),
                     IndexModel([("order_id", ASCENDING)]),
                     IndexModel([("strategy_id", ASCENDING)]),
+                    IndexModel([("timestamp", ASCENDING)]),
                     IndexModel([("event_type", ASCENDING)]),
-                    IndexModel(
-                        [("timestamp", ASCENDING)],
-                        expireAfterSeconds=constants.EXECUTION_EVENTS_TTL_SECONDS,
-                        name="timestamp_ttl",
-                        partialFilterExpression={"mysql_copied_at": {"$exists": True}},
-                    ),
                 ]
             elif collection == "pnl_events":
                 # Cross-service identifier contract (P0.2d): `pnl_events` collection.
@@ -859,14 +854,6 @@ class MongoDBAdapter(BaseAdapter):
                         [("metadata.computed_at", ASCENDING)],
                         expireAfterSeconds=constants.ANALYTICS_TTL_SECONDS,
                         name="computed_at_ttl",
-                    ),
-                ]
-            elif collection.startswith("trades_"):
-                indexes = [
-                    IndexModel(
-                        [("timestamp", ASCENDING)],
-                        expireAfterSeconds=constants.TRADES_RETENTION_DAYS * 86400,
-                        name="timestamp_ttl",
                     ),
                 ]
             else:
