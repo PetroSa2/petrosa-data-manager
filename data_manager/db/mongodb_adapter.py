@@ -869,7 +869,9 @@ class MongoDBAdapter(BaseAdapter):
                     ),
                 ]
             elif collection.startswith("trades_"):
-                indexes = [IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)])]
+                indexes = [
+                    IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)])
+                ]
                 if constants.HISTORIC_COPY_PROOF_ENABLED:
                     indexes.append(
                         IndexModel(

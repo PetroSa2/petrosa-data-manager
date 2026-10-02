@@ -605,7 +605,9 @@ class TestEnsureIndexes:
         assert constants.HISTORIC_COPY_PROOF_ENABLED is False
 
     @pytest.mark.asyncio
-    async def test_copy_required_ttls_are_enabled_after_proof(self, adapter, monkeypatch):
+    async def test_copy_required_ttls_are_enabled_after_proof(
+        self, adapter, monkeypatch
+    ):
         import constants
 
         monkeypatch.setattr(constants, "HISTORIC_COPY_PROOF_ENABLED", True)
