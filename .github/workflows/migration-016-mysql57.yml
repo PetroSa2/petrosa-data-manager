@@ -1,0 +1,48 @@
+name: Migration 016 MySQL 5.7
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/migration-016-mysql57.yml
+      - data_manager/scripts/migrations/016_signals_point_in_time.sql
+      - data_manager/scripts/migrations/016_signals_point_in_time_rollback.sql
+      - tests/test_463_signal_migration.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/migration-016-mysql57.yml
+      - data_manager/scripts/migrations/016_signals_point_in_time.sql
+      - data_manager/scripts/migrations/016_signals_point_in_time_rollback.sql
+      - tests/test_463_signal_migration.py
+
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: labpass
+          MYSQL_DATABASE: petrosa_lab
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -plabpass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run migration rehearsal
+        env:
+          MYSQL_REHEARSAL_HOST: 127.0.0.1
+          MYSQL_REHEARSAL_PORT: 3306
+          MYSQL_REHEARSAL_USER: root
+          MYSQL_REHEARSAL_PASSWORD: labpass
+          MYSQL_REHEARSAL_DATABASE: petrosa_lab
+        run: pytest -q tests/test_463_signal_migration.py

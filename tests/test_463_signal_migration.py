@@ -38,50 +38,52 @@ def test_signal_rollback_targets_only_added_schema():
 def test_signal_migration_rehearsal_on_mysql_57():
     pymysql = pytest.importorskip("pymysql")
     container_name = "petrosa-signal-migration-mysql-57"
-    subprocess.run(
-        ["docker", "rm", "-f", container_name], check=False, capture_output=True
-    )
-    docker = subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-d",
-            "--name",
-            container_name,
-            "-e",
-            "MYSQL_ROOT_PASSWORD=labpass",
-            "-e",
-            "MYSQL_DATABASE=petrosa_lab",
-            "-p",
-            "0:3306",
-            "mysql:5.7",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if docker.returncode != 0:
-        if os.getenv("CI"):
-            pytest.fail(f"MySQL 5.7 container failed to start: {docker.stderr.strip()}")
-        pytest.skip("Docker is unavailable for the local MySQL 5.7 rehearsal")
-
-    try:
+    external_host = os.getenv("MYSQL_REHEARSAL_HOST")
+    owns_container = external_host is None
+    port = int(os.getenv("MYSQL_REHEARSAL_PORT", "3306"))
+    if owns_container:
+        subprocess.run(
+            ["docker", "rm", "-f", container_name], check=False, capture_output=True
+        )
+        docker = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-d",
+                "--name",
+                container_name,
+                "-e",
+                "MYSQL_ROOT_PASSWORD=labpass",
+                "-e",
+                "MYSQL_DATABASE=petrosa_lab",
+                "-p",
+                "0:3306",
+                "mysql:5.7",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if docker.returncode != 0:
+            pytest.skip("Docker is unavailable for the local MySQL 5.7 rehearsal")
         port_result = subprocess.run(
             ["docker", "port", container_name, "3306/tcp"],
             check=True,
             capture_output=True,
             text=True,
         )
-        port = int(port_result.stdout.rsplit(":", 1)[1].strip())
+        port = int(port_result.stdout.splitlines()[0].rsplit(":", 1)[1].strip())
+
+    try:
         connection = None
         for _ in range(30):
             try:
                 connection = pymysql.connect(
-                    host="127.0.0.1",
+                    host=external_host or "127.0.0.1",
                     port=port,
-                    user="root",
-                    password="labpass",
-                    database="petrosa_lab",
+                    user=os.getenv("MYSQL_REHEARSAL_USER", "root"),
+                    password=os.getenv("MYSQL_REHEARSAL_PASSWORD", "labpass"),
+                    database=os.getenv("MYSQL_REHEARSAL_DATABASE", "petrosa_lab"),
                     connect_timeout=2,
                     autocommit=True,
                 )
@@ -144,6 +146,7 @@ def test_signal_migration_rehearsal_on_mysql_57():
                     assert columns == base_columns
                     assert index_count == 0
     finally:
-        subprocess.run(
-            ["docker", "rm", "-f", container_name], check=False, capture_output=True
-        )
+        if owns_container:
+            subprocess.run(
+                ["docker", "rm", "-f", container_name], check=False, capture_output=True
+            )
