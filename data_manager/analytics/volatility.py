@@ -20,6 +20,7 @@ from data_manager.analytics.base import BaseCalculator
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
 from data_manager.models.analytics import MetricMetadata, VolatilityMetrics
+from data_manager.utils.time_utils import parse_timeframe_to_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,16 @@ class VolatilityCalculator(BaseCalculator):
             end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
+
+            unique_candles = []
+            seen_keys = set()
+            for candle in candles:
+                timestamp = candle.get("timestamp")
+                key = (candle.get("symbol", symbol), timestamp)
+                if timestamp is None or key not in seen_keys:
+                    seen_keys.add(key)
+                    unique_candles.append(candle)
+            candles = unique_candles
 
             if len(candles) < 20:  # Need minimum data points
                 await self._insufficient_data(
@@ -123,11 +134,13 @@ class VolatilityCalculator(BaseCalculator):
             vov = df["rolling_vol"].rolling(window=rolling_window).std().iloc[-1]
 
             # Create metadata
+            interval_seconds = parse_timeframe_to_minutes(timeframe) * 60
+            expected_records = int((end - start).total_seconds() / interval_seconds) + 1
             metadata = MetricMetadata(
                 method="rolling_stddev",
                 window=f"{window_days}d",
                 parameters={"rolling_window": rolling_window},
-                completeness=len(candles) / (window_days * 24) * 100,  # Approximate
+                completeness=len(candles) / expected_records * 100,
                 computed_at=datetime.now(UTC),
             )
 

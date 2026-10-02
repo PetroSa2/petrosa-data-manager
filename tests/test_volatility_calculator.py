@@ -110,6 +110,119 @@ async def test_calculate_volatility_minimum_data(volatility_calculator):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_calculate_volatility_inclusive_boundary_is_complete(
+    volatility_calculator, mock_db_manager
+):
+    """An inclusive 30-day hourly range contains 721 expected candles."""
+    base_time = datetime.now(UTC) - timedelta(days=30)
+    candles = [
+        {
+            "symbol": "BTCUSDT",
+            "timestamp": base_time + timedelta(hours=i),
+            "open": Decimal("50000.0"),
+            "high": Decimal("51000.0"),
+            "low": Decimal("49000.0"),
+            "close": Decimal("50500.0"),
+            "volume": Decimal("1000.0"),
+        }
+        for i in range(721)
+    ]
+    volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
+    mock_db_manager.mongodb_adapter.write = AsyncMock()
+
+    result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
+
+    assert result is not None
+    assert result.metadata.completeness == pytest.approx(100.0)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_calculate_volatility_deduplicates_timestamps(
+    volatility_calculator, mock_db_manager
+):
+    """Repeated candle timestamps do not inflate completeness or calculations."""
+    base_time = datetime.now(UTC) - timedelta(days=30)
+    candles = [
+        {
+            "symbol": "BTCUSDT",
+            "timestamp": base_time + timedelta(hours=i),
+            "open": Decimal("50000.0"),
+            "high": Decimal("51000.0"),
+            "low": Decimal("49000.0"),
+            "close": Decimal("50500.0"),
+            "volume": Decimal("1000.0"),
+        }
+        for i in range(721)
+    ]
+    candles.append(candles[-1].copy())
+    volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
+    mock_db_manager.mongodb_adapter.write = AsyncMock()
+
+    result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
+
+    assert result is not None
+    assert result.metadata.completeness == pytest.approx(100.0)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_calculate_volatility_reports_partial_completeness(
+    volatility_calculator, mock_db_manager
+):
+    """A partial inclusive range reports its unique candle percentage."""
+    base_time = datetime.now(UTC) - timedelta(days=30)
+    candles = [
+        {
+            "symbol": "BTCUSDT",
+            "timestamp": base_time + timedelta(hours=i),
+            "open": Decimal("50000.0"),
+            "high": Decimal("51000.0"),
+            "low": Decimal("49000.0"),
+            "close": Decimal("50500.0"),
+            "volume": Decimal("1000.0"),
+        }
+        for i in range(361)
+    ]
+    volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
+    mock_db_manager.mongodb_adapter.write = AsyncMock()
+
+    result = await volatility_calculator.calculate_volatility("BTCUSDT", "1h", 30)
+
+    assert result is not None
+    assert result.metadata.completeness == pytest.approx(361 / 721 * 100)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_calculate_volatility_uses_daily_timeframe_interval(
+    volatility_calculator, mock_db_manager
+):
+    """Daily windows use one-day intervals instead of an hourly denominator."""
+    base_time = datetime.now(UTC) - timedelta(days=30)
+    candles = [
+        {
+            "symbol": "BTCUSDT",
+            "timestamp": base_time + timedelta(days=i),
+            "open": Decimal("50000.0"),
+            "high": Decimal("51000.0"),
+            "low": Decimal("49000.0"),
+            "close": Decimal("50500.0"),
+            "volume": Decimal("1000.0"),
+        }
+        for i in range(31)
+    ]
+    volatility_calculator.candle_repo.get_range = AsyncMock(return_value=candles)
+    mock_db_manager.mongodb_adapter.write = AsyncMock()
+
+    result = await volatility_calculator.calculate_volatility("BTCUSDT", "1d", 30)
+
+    assert result is not None
+    assert result.metadata.completeness == pytest.approx(100.0)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_calculate_volatility_error_handling(volatility_calculator):
     """Test volatility calculation error handling."""
     # Mock repository to raise exception
