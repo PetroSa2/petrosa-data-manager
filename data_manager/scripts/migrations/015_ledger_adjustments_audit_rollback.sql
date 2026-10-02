@@ -25,8 +25,9 @@ CREATE TABLE IF NOT EXISTS ledger_adjustments (
 ) ENGINE=InnoDB;
 
 SET @positions_pnl_unknown_sql = IF(
-  EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions'),
-  "ALTER TABLE positions ADD COLUMN IF NOT EXISTS pnl_unknown TINYINT(1) NOT NULL DEFAULT 0",
+  EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions')
+  AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'positions' AND COLUMN_NAME = 'pnl_unknown'),
+  "ALTER TABLE positions ADD COLUMN pnl_unknown TINYINT(1) NOT NULL DEFAULT 0",
   "SELECT 'positions table absent; pnl_unknown column skipped' AS migration_note"
 );
 PREPARE positions_pnl_unknown_stmt FROM @positions_pnl_unknown_sql;

@@ -1,6 +1,10 @@
 -- Operator-run additive migration for data-manager#463.
 -- Capture SHOW CREATE TABLE signals before and after this file in the runbook.
 -- SHOW CREATE TABLE signals;
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_id VARCHAR(128) NOT NULL PRIMARY KEY,
+    applied_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
 --
 -- One statement, one table rebuild. On MySQL 5.7 every ADD COLUMN rebuilds the table, and signals is large, so the
 -- missing columns and the unique index are collected into a single ALTER TABLE, run in place without blocking
@@ -38,3 +42,6 @@ PREPARE signals_alter_stmt FROM @signals_alter_ddl;
 EXECUTE signals_alter_stmt;
 DEALLOCATE PREPARE signals_alter_stmt;
 -- SHOW CREATE TABLE signals;
+INSERT INTO schema_migrations (migration_id, applied_at)
+VALUES ('016_signals_point_in_time', UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE migration_id = VALUES(migration_id);
