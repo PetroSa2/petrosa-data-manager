@@ -124,6 +124,22 @@ def map_mongo_kline_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def map_mongo_kline_documents(
+    documents: list[dict[str, Any]],
+    timeframe: str,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize a Mongo range result in one synchronous worker operation."""
+    closed_documents = _closed_mongo_documents(documents, timeframe)
+    candles = [
+        mapped
+        for document in closed_documents
+        if (mapped := map_mongo_kline_doc(document)) is not None
+    ]
+    return candles[:limit] if limit is not None else candles
+
+
 def _closed_mongo_documents(
     documents: list[dict[str, Any]], timeframe: str, *, now: datetime | None = None
 ) -> list[dict[str, Any]]:
@@ -308,11 +324,12 @@ class CandleRepository(BaseRepository):
                     offset=offset,
                     descending=descending,
                 )
-                return [
-                    mapped
-                    for document in documents
-                    if (mapped := map_mongo_kline_doc(document)) is not None
-                ]
+                return await asyncio.to_thread(
+                    map_mongo_kline_documents,
+                    documents,
+                    timeframe,
+                    limit=limit,
+                )
             rows = await asyncio.to_thread(
                 adapter.query_range,
                 self._get_mysql_table_name(timeframe),
@@ -579,14 +596,12 @@ class CandleRepository(BaseRepository):
                     offset=offset,
                     descending=descending,
                 )
-                documents = _closed_mongo_documents(documents, timeframe)
-                candles = [
-                    mapped
-                    for document in documents
-                    if (mapped := map_mongo_kline_doc(document)) is not None
-                ]
-                if limit is not None:
-                    candles = candles[:limit]
+                candles = await asyncio.to_thread(
+                    map_mongo_kline_documents,
+                    documents,
+                    timeframe,
+                    limit=limit,
+                )
         except Exception as e:
             logger.error(f"Failed to query candles for {symbol} {timeframe}: {e}")
             candles = []

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
@@ -9,6 +10,7 @@ from data_manager.db.repositories.candle_repository import (
     CandleRepository,
     candle_to_mongo_kline,
     map_mongo_kline_doc,
+    map_mongo_kline_documents,
 )
 from data_manager.models.market_data import Candle
 
@@ -94,16 +96,25 @@ async def test_mongo_latest_reads_extractor_collection_and_filters_invalid_docs(
 
 
 @pytest.mark.asyncio
-async def test_mongo_range_reads_extractor_collection_and_maps_docs():
+async def test_mongo_range_maps_documents_off_event_loop(monkeypatch):
     mongo = Mock()
     mongo.query_range = AsyncMock(return_value=[live_doc()])
     start = NOW - timedelta(hours=1)
+    original_to_thread = asyncio.to_thread
+    dispatched = []
+
+    async def tracked_to_thread(func, *args, **kwargs):
+        dispatched.append(func)
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", tracked_to_thread)
 
     result = await repository(mongo).get_range(
         "BTCUSDT", "1h", start, NOW, limit=5, descending=True
     )
 
     assert result[0]["close"] == Decimal("83823.70")
+    assert dispatched == [map_mongo_kline_documents]
     mongo.query_range.assert_awaited_once_with(
         "klines_1h",
         start,

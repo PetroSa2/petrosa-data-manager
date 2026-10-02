@@ -20,6 +20,7 @@ from data_manager.db.repositories.candle_repository import (
     MYSQL_CANDLE_COLUMNS,
     CandleRepository,
     map_mongo_kline_doc,
+    map_mongo_kline_documents,
     map_mysql_row,
     mongo_collection_name,
     mysql_table_name,
@@ -566,7 +567,7 @@ class TestReadFallback:
             assert repo.last_read_source == "mongodb"
 
     @pytest.mark.asyncio
-    async def test_rollback_direction_falls_back_to_mongo(self):
+    async def test_rollback_direction_falls_back_to_mongo_off_loop(self, monkeypatch):
         # After a rollback MySQL is primary again; a hole in MySQL must be
         # covered by Mongo, not surfaced as an empty window (AC4).
         with _patch_primary("mysql"), _patch_fallback(True):
@@ -575,10 +576,19 @@ class TestReadFallback:
             mongodb = Mock()
             mongodb.query_range = AsyncMock(return_value=[klines_row(NOW)])
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
+            original_to_thread = asyncio.to_thread
+            dispatched = []
+
+            async def tracked_to_thread(func, *args, **kwargs):
+                dispatched.append(func)
+                return await original_to_thread(func, *args, **kwargs)
+
+            monkeypatch.setattr(asyncio, "to_thread", tracked_to_thread)
 
             result = await repo.get_range("BTCUSDT", "1h", NOW, NOW)
 
             assert result == [map_mongo_kline_doc(klines_row(NOW))]
+            assert dispatched[-1] is map_mongo_kline_documents
             assert repo.last_read_source == "mongodb"
 
     @pytest.mark.asyncio
