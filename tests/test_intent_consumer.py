@@ -90,7 +90,9 @@ async def test_persist_dual_writes_to_mysql(intent_consumer, mock_db_manager):
 
 
 @pytest.mark.asyncio
-async def test_persist_runs_mysql_write_off_event_loop(intent_consumer, mock_db_manager):
+async def test_persist_runs_mysql_write_off_event_loop(
+    intent_consumer, mock_db_manager
+):
     event = IntentEvent.from_nats_message(_intent_payload())
     assert event is not None
     event_loop_thread = threading.get_ident()

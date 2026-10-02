@@ -70,9 +70,7 @@ class SeasonalityCalculator(BaseCalculator):
         for hour in range(24):
             hour_data = df[df["hour"] == hour]["close"]
             hourly_pattern[str(hour)] = (
-                _required_decimal(
-                    hour_data.mean(), f"{symbol} hourly_pattern[{hour}]"
-                )
+                _required_decimal(hour_data.mean(), f"{symbol} hourly_pattern[{hour}]")
                 if len(hour_data) > 0
                 else Decimal("0")
             )
