@@ -234,8 +234,8 @@ async def test_ensure_mongodb_indexes_covers_operational_collections(monkeypatch
     await app._ensure_mongodb_indexes()
 
     service_config.return_value.ensure_indexes.assert_awaited_once_with()
-    assert adapter.ensure_indexes.await_count == 9
+    assert adapter.ensure_indexes.await_count == 10
     adapter.ensure_indexes.assert_any_await("analytics_btc")
     awaited = [call.args[0] for call in adapter.ensure_indexes.await_args_list]
-    assert "trades_btc" not in awaited
+    assert "trades_btc" in awaited
     adapter.ensure_indexes.assert_any_await("klines_1m")

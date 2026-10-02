@@ -599,10 +599,35 @@ class TestEnsureIndexes:
         assert indexes
         assert all("expireAfterSeconds" not in ix.document for ix in indexes)
 
-    def test_no_execution_events_ttl_setting_exists(self):
+    def test_copy_required_ttls_are_disabled_without_proof(self):
         import constants
 
-        assert not hasattr(constants, "EXECUTION_EVENTS_TTL_SECONDS")
+        assert constants.HISTORIC_COPY_PROOF_ENABLED is False
+
+    @pytest.mark.asyncio
+    async def test_copy_required_ttls_are_enabled_after_proof(
+        self, adapter, monkeypatch
+    ):
+        import constants
+
+        monkeypatch.setattr(constants, "HISTORIC_COPY_PROOF_ENABLED", True)
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("execution_events")
+        indexes = coll.create_indexes.call_args.args[0]
+        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
+        assert len(ttl) == 1
+        assert ttl[0].document["partialFilterExpression"] == {
+            "mysql_copied_at": {"$exists": True}
+        }
+
+        await adapter.ensure_indexes("trades_BTCUSDT")
+        indexes = coll.create_indexes.call_args.args[0]
+        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
+        assert len(ttl) == 1
+        assert ttl[0].document["expireAfterSeconds"] == constants.TRADES_TTL_SECONDS
 
     @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):

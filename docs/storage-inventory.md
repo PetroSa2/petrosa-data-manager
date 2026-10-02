@@ -35,16 +35,32 @@ the environment variables named in `constants.py`:
 | `cio_decisions` | TTL on `received_at` | 1 day |
 | `signals` | TTL on its inserted-at field | 1 hour |
 | `alerts` | TTL on `_ttl_inserted_at` | 7 days |
-| `execution_events` | none until the MySQL copy is proven (data-manager#498) | none |
+| `execution_events` | proof-gated TTL on `timestamp` with `mysql_copied_at` filter | 30 days after proof |
 | `analytics_*` | TTL on `metadata.computed_at` | 3 days |
-| `trades_*` | none until the MySQL copy is proven (data-manager#498) | none |
+| `trades_*` | proof-gated TTL on BSON `timestamp` | 7 days, above copy lag |
 | `klines_*` | bounded `klines-retention` job | per-timeframe window |
 
-A collection whose rows must also live in MySQL (`execution_events`, `pnl_events`, `trades_*`, `positions`, `daily_pnl`) never gets a TTL in code; a test pins that list. Every timestamp used by a TTL policy must be a BSON date in UTC. The historic
-copy must be available before durable records are eligible for deletion; a
-retention job must defer deletion when copy health or lag cannot be verified.
+Every timestamp used by a TTL policy must be a BSON date in UTC. The
+`execution_events` and `trades_*` TTLs are disabled unless
+`MONGODB_HISTORIC_COPY_PROVEN=true` is set after the copy proof passes. The
+execution-event TTL also requires `mysql_copied_at`; startup remains fail-closed
+when proof state is absent.
 Collections outside this table are configuration, coordination, or audit
 state and must have an explicit registry classification and bounded policy.
+
+## Legacy timestamp and copy proof procedure
+
+Run `python -m data_manager.maintenance.legacy_timestamp_migration` in dry-run
+mode first, review the candidate and invalid counts, then rerun with `--apply`.
+It processes `_id`-ordered batches and does not delete documents. Invalid values
+must be corrected or quarantined before the migration is considered complete.
+
+The copy proof compares UTC-day counts in MongoDB and MySQL for the configured
+retention window. Every Mongo count must be less than or equal to its MySQL
+count, and the newest checked day is delayed by the configured copy lag. Record
+the per-day result in the pull request or operator ticket, then set
+`MONGODB_HISTORIC_COPY_PROVEN=true` for the deployment. Leave it false when any
+day is missing or lagging.
 
 ## Safety model (two layers — both required)
 
