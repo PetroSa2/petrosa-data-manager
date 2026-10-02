@@ -70,7 +70,11 @@ def _adapter():
     return SimpleNamespace(
         engine=engine,
         tables={"signals": signals, "execution_events": execution, "klines_5m": klines},
-        _get_table=lambda name: {"signals": signals, "execution_events": execution, "klines_5m": klines}[name],
+        _get_table=lambda name: {
+            "signals": signals,
+            "execution_events": execution,
+            "klines_5m": klines,
+        }[name],
         _ensure_connected=lambda: engine,
         query_range=query_range,
     )
@@ -108,28 +112,54 @@ def test_replay_joins_fill_and_excludes_legacy_by_default():
     repository.upsert(_signal(decision_id="decision-1"))
     with adapter.engine.begin() as conn:
         conn.execute(
-            adapter.tables["execution_events"].insert().values(
-                decision_id="decision-1", order_id="order-1", event_type="filled",
-                fill_qty=2, fill_price=12, price=12, pnl=3,
+            adapter.tables["execution_events"]
+            .insert()
+            .values(
+                decision_id="decision-1",
+                order_id="order-1",
+                event_type="filled",
+                fill_qty=2,
+                fill_price=12,
+                price=12,
+                pnl=3,
             )
         )
         conn.execute(
-            adapter.tables["signals"].insert().values(
-                symbol="ETHUSDT", timeframe="5m", strategy="legacy",
-                signal_type="buy", period="5m", confidence=1,
-                metadata={}, timestamp=datetime.now(UTC),
+            adapter.tables["signals"]
+            .insert()
+            .values(
+                symbol="ETHUSDT",
+                timeframe="5m",
+                strategy="legacy",
+                signal_type="buy",
+                period="5m",
+                confidence=1,
+                metadata={},
+                timestamp=datetime.now(UTC),
             )
         )
     rows, total = repository.replay(
-        strategy=None, symbol=None, timeframe="5m", from_ts=None, to_ts=None,
-        limit=10, offset=0, include_legacy=False,
+        strategy=None,
+        symbol=None,
+        timeframe="5m",
+        from_ts=None,
+        to_ts=None,
+        limit=10,
+        offset=0,
+        include_legacy=False,
     )
     assert total == 1
     assert rows[0]["execution_id"] == "order-1"
     assert rows[0]["fill_outcome"]["pnl"] == 3
     _, legacy_total = repository.replay(
-        strategy=None, symbol=None, timeframe="5m", from_ts=None, to_ts=None,
-        limit=10, offset=0, include_legacy=True,
+        strategy=None,
+        symbol=None,
+        timeframe="5m",
+        from_ts=None,
+        to_ts=None,
+        limit=10,
+        offset=0,
+        include_legacy=True,
     )
     assert legacy_total == 2
 
@@ -138,15 +168,19 @@ def test_coverage_reports_missing_kline_and_legacy_count():
     adapter = _adapter()
     repository = SignalRepository(adapter)
     repository.upsert(_signal(key="signal-1"))
-    repository.upsert(_signal(key="signal-2", bar_open_time=datetime(2026, 1, 1, 0, 5, tzinfo=UTC)))
+    repository.upsert(
+        _signal(key="signal-2", bar_open_time=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+    )
     with adapter.engine.begin() as conn:
         conn.execute(
-            adapter.tables["klines_5m"].insert().values(
-                symbol="BTCUSDT", open_time=datetime(2026, 1, 1, tzinfo=UTC)
-            )
+            adapter.tables["klines_5m"]
+            .insert()
+            .values(symbol="BTCUSDT", open_time=datetime(2026, 1, 1, tzinfo=UTC))
         )
     result = repository.coverage(
-        strategy="test", symbol="BTCUSDT", timeframe="5m",
+        strategy="test",
+        symbol="BTCUSDT",
+        timeframe="5m",
         from_ts=datetime(2026, 1, 1, tzinfo=UTC),
         to_ts=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=1),
     )
