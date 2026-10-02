@@ -492,9 +492,7 @@ class TestEnsureIndexes:
     async def test_normalizes_naive_iso_timestamps_to_utc(self, adapter):
         adapter.db.__getitem__ = MagicMock(return_value=MagicMock())
         coll = adapter.db["trades_BTCUSDT"]
-        coll.insert_many = AsyncMock(
-            return_value=MagicMock(inserted_ids=["one"])
-        )
+        coll.insert_many = AsyncMock(return_value=MagicMock(inserted_ids=["one"]))
 
         from pydantic import BaseModel
 
