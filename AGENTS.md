@@ -25,7 +25,7 @@ Run the local pipeline or at least lint and tests before opening a pull request.
 ## Facts
 
 - Python: `requires-python = ">=3.11"`; `.python-version` is `3.11.9`.
-- Production MySQL is 5.7; migrations must use MySQL 5.7-compatible SQL.
+- Production MySQL is 5.7; migrations must use MySQL 5.7-compatible SQL. On a large table every ADD or DROP COLUMN rebuilds it, so a migration changes one table with a single in-place, non-blocking ALTER (ALGORITHM=INPLACE, LOCK=NONE) that holds all the changes.
 - Lint and format: ruff (config in `ruff.toml`).
 - Type checking: mypy (config in `mypy.ini`).
 - Tests: pytest, in `tests/`; the coverage floor is 40%.

@@ -1,109 +1,40 @@
 -- Operator-run additive migration for data-manager#463.
 -- Capture SHOW CREATE TABLE signals before and after this file in the runbook.
 -- SHOW CREATE TABLE signals;
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'signal_key') = 0,
-    'ALTER TABLE signals ADD COLUMN signal_key VARCHAR(191) NULL',
-    'SELECT 1'
+--
+-- One statement, one table rebuild. On MySQL 5.7 every ADD COLUMN rebuilds the table, and signals is large, so the
+-- missing columns and the unique index are collected into a single ALTER TABLE, run in place without blocking
+-- writes (ALGORITHM=INPLACE, LOCK=NONE: the server refuses to run it rather than falling back to a blocking copy).
+-- Rerunnable: columns and the index that already exist are left out, and when nothing is missing no ALTER runs.
+SET SESSION group_concat_max_len = 8192;
+SET @signals_alter_clauses := (
+    SELECT GROUP_CONCAT(wanted.ddl ORDER BY wanted.ord SEPARATOR ', ')
+    FROM (
+        SELECT 1 AS ord, 'c' AS kind, 'signal_key' AS name, 'ADD COLUMN signal_key VARCHAR(191) NULL' AS ddl
+        UNION ALL SELECT 2, 'c', 'bar_open_time', 'ADD COLUMN bar_open_time DATETIME NULL'
+        UNION ALL SELECT 3, 'c', 'bar_close_time', 'ADD COLUMN bar_close_time DATETIME NULL'
+        UNION ALL SELECT 4, 'c', 'entry_ref_price', 'ADD COLUMN entry_ref_price DECIMAL(30, 12) NULL'
+        UNION ALL SELECT 5, 'c', 'stop_loss', 'ADD COLUMN stop_loss DECIMAL(30, 12) NULL'
+        UNION ALL SELECT 6, 'c', 'take_profit', 'ADD COLUMN take_profit DECIMAL(30, 12) NULL'
+        UNION ALL SELECT 7, 'c', 'decision_id', 'ADD COLUMN decision_id VARCHAR(191) NULL'
+        UNION ALL SELECT 8, 'c', 'signal_revision_payload_hash', 'ADD COLUMN signal_revision_payload_hash CHAR(64) NULL'
+        UNION ALL SELECT 9, 'c', 'last_rejected_payload_hash', 'ADD COLUMN last_rejected_payload_hash CHAR(64) NULL'
+        UNION ALL SELECT 10, 'c', 'signal_revision_conflicts', 'ADD COLUMN signal_revision_conflicts INT UNSIGNED NOT NULL DEFAULT 0'
+        UNION ALL SELECT 11, 'i', 'uq_signals_signal_key', 'ADD UNIQUE INDEX uq_signals_signal_key (signal_key)'
+    ) AS wanted
+    WHERE (wanted.kind = 'c' AND wanted.name NOT IN (
+              SELECT column_name FROM information_schema.columns
+              WHERE table_schema = DATABASE() AND table_name = 'signals'))
+       OR (wanted.kind = 'i' AND wanted.name NOT IN (
+              SELECT index_name FROM information_schema.statistics
+              WHERE table_schema = DATABASE() AND table_name = 'signals'))
 );
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'bar_open_time') = 0,
-    'ALTER TABLE signals ADD COLUMN bar_open_time DATETIME NULL',
-    'SELECT 1'
+SET @signals_alter_ddl := IF(
+    @signals_alter_clauses IS NULL,
+    'SELECT 1',
+    CONCAT('ALTER TABLE signals ', @signals_alter_clauses, ', ALGORITHM=INPLACE, LOCK=NONE')
 );
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'bar_close_time') = 0,
-    'ALTER TABLE signals ADD COLUMN bar_close_time DATETIME NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'entry_ref_price') = 0,
-    'ALTER TABLE signals ADD COLUMN entry_ref_price DECIMAL(30, 12) NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'stop_loss') = 0,
-    'ALTER TABLE signals ADD COLUMN stop_loss DECIMAL(30, 12) NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'take_profit') = 0,
-    'ALTER TABLE signals ADD COLUMN take_profit DECIMAL(30, 12) NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'decision_id') = 0,
-    'ALTER TABLE signals ADD COLUMN decision_id VARCHAR(191) NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'signal_revision_payload_hash') = 0,
-    'ALTER TABLE signals ADD COLUMN signal_revision_payload_hash CHAR(64) NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'last_rejected_payload_hash') = 0,
-    'ALTER TABLE signals ADD COLUMN last_rejected_payload_hash CHAR(64) NULL',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
-
-SET @signals_column_ddl := IF(
-    (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signals' AND column_name = 'signal_revision_conflicts') = 0,
-    'ALTER TABLE signals ADD COLUMN signal_revision_conflicts INT UNSIGNED NOT NULL DEFAULT 0',
-    'SELECT 1'
-);
-PREPARE signals_column_stmt FROM @signals_column_ddl;
-EXECUTE signals_column_stmt;
-DEALLOCATE PREPARE signals_column_stmt;
--- Build the unique index only after all columns exist, and make reruns safe.
-SET @signals_key_index_exists := (
-    SELECT COUNT(*)
-    FROM information_schema.statistics
-    WHERE table_schema = DATABASE()
-      AND table_name = 'signals'
-      AND index_name = 'uq_signals_signal_key'
-);
-SET @signals_key_index_ddl := IF(
-    @signals_key_index_exists = 0,
-    'CREATE UNIQUE INDEX uq_signals_signal_key ON signals (signal_key)',
-    'SELECT 1'
-);
-PREPARE signals_key_index_stmt FROM @signals_key_index_ddl;
-EXECUTE signals_key_index_stmt;
-DEALLOCATE PREPARE signals_key_index_stmt;
+PREPARE signals_alter_stmt FROM @signals_alter_ddl;
+EXECUTE signals_alter_stmt;
+DEALLOCATE PREPARE signals_alter_stmt;
 -- SHOW CREATE TABLE signals;
