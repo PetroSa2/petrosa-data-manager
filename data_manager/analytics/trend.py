@@ -16,7 +16,11 @@ from decimal import Decimal
 import numpy as np
 import pandas as pd
 
-from data_manager.analytics.base import BaseCalculator
+from data_manager.analytics.base import (
+    BaseCalculator,
+    calculate_candle_completeness,
+    deduplicate_candles,
+)
 from data_manager.analytics.sanitize import safe_decimal
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository
@@ -67,6 +71,7 @@ class TrendCalculator(BaseCalculator):
             end = datetime.now(UTC)
             start = end - timedelta(days=window_days)
             candles = await self.candle_repo.get_range(symbol, timeframe, start, end)
+            candles = deduplicate_candles(candles, symbol)
 
             if len(candles) < 50:  # Need minimum data points
                 await self._insufficient_data(
@@ -132,7 +137,9 @@ class TrendCalculator(BaseCalculator):
                 method="moving_averages",
                 window=f"{window_days}d",
                 parameters={"sma_window": 20, "ema_span": 20},
-                completeness=len(candles) / (window_days * 24) * 100,
+                completeness=calculate_candle_completeness(
+                    len(candles), start, end, timeframe
+                ),
                 computed_at=datetime.now(UTC),
             )
 
