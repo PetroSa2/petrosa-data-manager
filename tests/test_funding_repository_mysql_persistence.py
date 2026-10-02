@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -38,3 +39,25 @@ async def test_funding_mysql_failure_does_not_block_mongo():
     repo = FundingRepository(mysql, mongo)
     assert await repo.insert(_rate()) is True
     mongo.write.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_funding_mysql_copy_runs_off_event_loop():
+    mongo = MagicMock()
+    mongo.write = AsyncMock(return_value=1)
+    mysql = MagicMock()
+    on_loop = []
+
+    def write(*_args):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            on_loop.append(False)
+        else:
+            on_loop.append(True)
+
+    mysql.write.side_effect = write
+    repo = FundingRepository(mysql, mongo)
+
+    assert await repo.insert(_rate()) is True
+    assert on_loop == [False]
