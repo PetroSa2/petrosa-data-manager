@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 from prometheus_client import Counter
@@ -43,6 +44,32 @@ analytics_backfill_triggered = Counter(
     "due to insufficient data (per calculator type)",
     ["calculator", "symbol", "timeframe"],
 )
+
+
+def deduplicate_candles(
+    candles: Iterable[dict], default_symbol: str
+) -> list[dict]:
+    """Keep one candle per symbol and timestamp without collapsing untimestamped rows."""
+    unique_candles = []
+    seen_keys = set()
+    for candle in candles:
+        timestamp = candle.get("timestamp")
+        key = (candle.get("symbol", default_symbol), timestamp)
+        if timestamp is None or key not in seen_keys:
+            seen_keys.add(key)
+            unique_candles.append(candle)
+    return unique_candles
+
+
+def calculate_candle_completeness(
+    candle_count: int, start: datetime, end: datetime, timeframe: str
+) -> float:
+    """Calculate completeness for an inclusive candle range."""
+    from data_manager.utils.time_utils import parse_timeframe_to_seconds
+
+    interval_seconds = parse_timeframe_to_seconds(timeframe)
+    expected_count = int((end - start).total_seconds() / interval_seconds) + 1
+    return candle_count / expected_count * 100 if expected_count > 0 else 0.0
 
 
 def _insufficient_backfill_enabled() -> bool:
