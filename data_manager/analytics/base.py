@@ -46,9 +46,7 @@ analytics_backfill_triggered = Counter(
 )
 
 
-def deduplicate_candles(
-    candles: Iterable[dict], default_symbol: str
-) -> list[dict]:
+def deduplicate_candles(candles: Iterable[dict], default_symbol: str) -> list[dict]:
     """Keep one candle per symbol and timestamp without collapsing untimestamped rows."""
     unique_candles = []
     seen_keys = set()
