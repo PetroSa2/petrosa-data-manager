@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 MIGRATIONS = Path(__file__).parents[1] / "data_manager" / "scripts" / "migrations"
+FORWARD_014 = MIGRATIONS / "014_ledger_exchange_store.sql"
 FORWARD = MIGRATIONS / "015_ledger_adjustments_audit.sql"
 ROLLBACK = MIGRATIONS / "015_ledger_adjustments_audit_rollback.sql"
 MYSQL_SKIP_REASON = (
@@ -16,6 +17,7 @@ MYSQL_SKIP_REASON = (
 
 
 def test_migration_files_exist_and_are_non_destructive():
+    assert FORWARD_014.is_file()
     assert FORWARD.is_file()
     assert ROLLBACK.is_file()
     forward = FORWARD.read_text().upper()
@@ -31,8 +33,17 @@ def test_migration_files_exist_and_are_non_destructive():
 def test_migration_is_explicitly_idempotent():
     forward = FORWARD.read_text().upper()
     assert "CREATE TABLE IF NOT EXISTS" in forward
-    assert "ADD COLUMN IF NOT EXISTS" in forward
-    assert "SHOW CREATE TABLE POSITIONS" in FORWARD.read_text().upper()
+    assert "INFORMATION_SCHEMA.COLUMNS" in forward
+    assert "ADD COLUMN IF NOT EXISTS" not in forward
+    assert "CREATE TABLE IF NOT EXISTS SCHEMA_MIGRATIONS" in forward
+    assert "015_LEDGER_ADJUSTMENTS_AUDIT" in forward
+
+
+def test_ledger_store_migration_is_tracked():
+    forward = FORWARD_014.read_text().upper()
+    assert "CREATE TABLE IF NOT EXISTS LEDGER_EXCHANGE_DAY_REVISION" in forward
+    assert "CREATE TABLE IF NOT EXISTS SCHEMA_MIGRATIONS" in forward
+    assert "014_LEDGER_EXCHANGE_STORE" in forward
 
 
 def test_migration_rehearsal_apply_rollback_apply():
@@ -53,6 +64,8 @@ def test_migration_rehearsal_apply_rollback_apply():
     try:
         with connection.cursor() as cursor:
             for sql in (
+                FORWARD_014.read_text(),
+                FORWARD_014.read_text(),
                 FORWARD.read_text(),
                 FORWARD.read_text(),
                 ROLLBACK.read_text(),
