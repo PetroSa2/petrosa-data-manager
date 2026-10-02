@@ -209,3 +209,32 @@ async def test_main_otel_import_error(mock_app_class, caplog):
             # Verify NO "Initializing OpenTelemetry" message (since setup_telemetry is None)
             log_messages = [record.message for record in caplog.records]
             assert not any("Initializing OpenTelemetry" in msg for msg in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_ensure_mongodb_indexes_covers_operational_collections(monkeypatch):
+    from data_manager.main import DataManagerApp
+
+    adapter = MagicMock()
+    adapter.ensure_indexes = AsyncMock()
+    adapter.list_collections = AsyncMock(
+        return_value=["analytics_btc", "trades_btc", "other"]
+    )
+    app = DataManagerApp()
+    app.db_manager = MagicMock(mongodb_adapter=adapter)
+    monkeypatch.setattr("data_manager.main.constants.SUPPORTED_INTERVALS", ["1m"])
+
+    service_config = MagicMock()
+    service_config.return_value.ensure_indexes = AsyncMock()
+    monkeypatch.setattr(
+        "data_manager.db.repositories.service_config_repository.ServiceConfigRepository",
+        service_config,
+    )
+
+    await app._ensure_mongodb_indexes()
+
+    service_config.return_value.ensure_indexes.assert_awaited_once_with()
+    assert adapter.ensure_indexes.await_count == 10
+    adapter.ensure_indexes.assert_any_await("analytics_btc")
+    adapter.ensure_indexes.assert_any_await("trades_btc")
+    adapter.ensure_indexes.assert_any_await("klines_1m")
