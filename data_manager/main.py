@@ -191,6 +191,33 @@ class DataManagerApp:
         except Exception as exc:
             logger.warning("Unable to check operator migration status: %s", exc)
 
+    async def _ensure_mongodb_indexes(self) -> None:
+        if not self.db_manager or not self.db_manager.mongodb_adapter:
+            return
+
+        from data_manager.db.repositories.service_config_repository import (
+            ServiceConfigRepository,
+        )
+
+        adapter = self.db_manager.mongodb_adapter
+        await ServiceConfigRepository(adapter).ensure_indexes()
+        await adapter.ensure_indexes("service_leases")
+        await adapter.ensure_indexes("funding_rates")
+        await adapter.ensure_indexes("execution_events")
+        collections = await adapter.list_collections()
+        for collection in collections:
+            if collection.startswith(("analytics_", "trades_")):
+                await adapter.ensure_indexes(collection)
+        for collection in (
+            "health_metrics",
+            "audit_logs",
+            "datasets",
+            "lineage_records",
+        ):
+            await adapter.ensure_indexes(collection)
+        for timeframe in constants.SUPPORTED_INTERVALS:
+            await adapter.ensure_indexes(f"klines_{timeframe}")
+
     async def start(self) -> None:
         """Start all application components."""
         logger.info(
@@ -226,27 +253,7 @@ class DataManagerApp:
             db_init_attempts_total.labels(result="success").inc()
             logger.info("Database connections initialized successfully")
             await self._check_schema_migrations()
-            if self.db_manager.mongodb_adapter:
-                from data_manager.db.repositories.service_config_repository import (
-                    ServiceConfigRepository,
-                )
-
-                await ServiceConfigRepository(
-                    self.db_manager.mongodb_adapter
-                ).ensure_indexes()
-                await self.db_manager.mongodb_adapter.ensure_indexes("service_leases")
-                await self.db_manager.mongodb_adapter.ensure_indexes("funding_rates")
-                for collection in (
-                    "health_metrics",
-                    "audit_logs",
-                    "datasets",
-                    "lineage_records",
-                ):
-                    await self.db_manager.mongodb_adapter.ensure_indexes(collection)
-                for timeframe in constants.SUPPORTED_INTERVALS:
-                    await self.db_manager.mongodb_adapter.ensure_indexes(
-                        f"klines_{timeframe}"
-                    )
+            await self._ensure_mongodb_indexes()
 
             # Update API server with initialized db_manager
             if self.api_server_task:

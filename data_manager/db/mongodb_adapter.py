@@ -98,6 +98,17 @@ class MongoDBAdapter(BaseAdapter):
                 return db_name if db_name else "petrosa_data_manager"
         return "petrosa_data_manager"
 
+    @staticmethod
+    def _as_utc_datetime(value: str) -> datetime:
+        """Parse a producer timestamp into a timezone-aware UTC datetime."""
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            parsed = datetime.fromisoformat(_normalize_iso_timestamp(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
     def connect(self) -> None:
         """Establish connection to MongoDB."""
         try:
@@ -135,19 +146,19 @@ class MongoDBAdapter(BaseAdapter):
                 if "timestamp" in doc and isinstance(doc["timestamp"], str):
                     ts = doc["timestamp"]
                     try:
-                        ts = datetime.fromisoformat(ts)
+                        ts = self._as_utc_datetime(ts)
                     except ValueError:
                         # Handle malformed producer timestamps (#263): bare
                         # "Z" suffix, or a numeric UTC offset with a
                         # redundant trailing "Z" (e.g. "+00:00Z").
-                        normalized = _normalize_iso_timestamp(ts)
-                        ts = datetime.fromisoformat(normalized)
                         logger.warning(
-                            "Normalized malformed timestamp %r -> %r for collection %s",
+                            "Rejected malformed timestamp %r for collection %s",
                             doc["timestamp"],
-                            normalized,
                             collection,
                         )
+                        raise ValueError(
+                            f"invalid timestamp for MongoDB collection {collection}"
+                        ) from None
                     doc["timestamp"] = ts
 
                 # Candles are one-row-per-symbol/timestamp. Signals carry their
@@ -748,8 +759,13 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("decision_id", ASCENDING)]),
                     IndexModel([("order_id", ASCENDING)]),
                     IndexModel([("strategy_id", ASCENDING)]),
-                    IndexModel([("timestamp", ASCENDING)]),
                     IndexModel([("event_type", ASCENDING)]),
+                    IndexModel(
+                        [("timestamp", ASCENDING)],
+                        expireAfterSeconds=constants.EXECUTION_EVENTS_TTL_SECONDS,
+                        name="timestamp_ttl",
+                        partialFilterExpression={"mysql_copied_at": {"$exists": True}},
+                    ),
                 ]
             elif collection == "pnl_events":
                 # Cross-service identifier contract (P0.2d): `pnl_events` collection.
@@ -836,6 +852,22 @@ class MongoDBAdapter(BaseAdapter):
                         [("symbol", ASCENDING), ("timestamp", DESCENDING)],
                         unique=False,
                     )
+                ]
+            elif collection.startswith("analytics_"):
+                indexes = [
+                    IndexModel(
+                        [("metadata.computed_at", ASCENDING)],
+                        expireAfterSeconds=constants.ANALYTICS_TTL_SECONDS,
+                        name="computed_at_ttl",
+                    ),
+                ]
+            elif collection.startswith("trades_"):
+                indexes = [
+                    IndexModel(
+                        [("timestamp", ASCENDING)],
+                        expireAfterSeconds=constants.TRADES_RETENTION_DAYS * 86400,
+                        name="timestamp_ttl",
+                    ),
                 ]
             else:
                 # Default time-series indexes

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from opentelemetry import trace
@@ -424,6 +425,16 @@ class ExecutionEventsConsumer:
             await asyncio.to_thread(
                 mysql_adapter.write, [event], EXECUTION_EVENTS_COLLECTION
             )
+            adapter = (
+                getattr(self.db_manager, "mongodb_adapter", None)
+                if self.db_manager
+                else None
+            )
+            if adapter is not None and getattr(adapter, "db", None) is not None:
+                await adapter.db[EXECUTION_EVENTS_COLLECTION].update_one(
+                    {"_id": f"{event.order_id}:{event.event_type}"},
+                    {"$set": {"mysql_copied_at": datetime.now(UTC)}},
+                )
         except Exception:
             metrics.MYSQL_PERSIST_FAILURES.labels(
                 collection=EXECUTION_EVENTS_COLLECTION
