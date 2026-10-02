@@ -759,9 +759,21 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("decision_id", ASCENDING)]),
                     IndexModel([("order_id", ASCENDING)]),
                     IndexModel([("strategy_id", ASCENDING)]),
-                    IndexModel([("timestamp", ASCENDING)]),
                     IndexModel([("event_type", ASCENDING)]),
                 ]
+                if constants.HISTORIC_COPY_PROOF_ENABLED:
+                    indexes.append(
+                        IndexModel(
+                            [("timestamp", ASCENDING)],
+                            expireAfterSeconds=constants.EXECUTION_EVENTS_TTL_SECONDS,
+                            name="timestamp_ttl",
+                            partialFilterExpression={
+                                "mysql_copied_at": {"$exists": True}
+                            },
+                        )
+                    )
+                else:
+                    indexes.append(IndexModel([("timestamp", ASCENDING)]))
             elif collection == "pnl_events":
                 # Cross-service identifier contract (P0.2d): `pnl_events` collection.
                 # A single decision can produce many P&L events over time
@@ -856,6 +868,18 @@ class MongoDBAdapter(BaseAdapter):
                         name="computed_at_ttl",
                     ),
                 ]
+            elif collection.startswith("trades_"):
+                indexes = [IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)])]
+                if constants.HISTORIC_COPY_PROOF_ENABLED:
+                    indexes.append(
+                        IndexModel(
+                            [("timestamp", ASCENDING)],
+                            expireAfterSeconds=constants.TRADES_TTL_SECONDS,
+                            name="timestamp_ttl",
+                        )
+                    )
+                else:
+                    indexes.append(IndexModel([("timestamp", ASCENDING)]))
             else:
                 # Default time-series indexes
                 indexes = [

@@ -138,6 +138,19 @@ MONITORING_MYSQL_COPY_ENABLED = (
 # lexicographic string comparison on the ISO-8601 `timestamp` field. Default 7 days;
 # revisit toward 3 days if raw ticks still trend toward the quota.
 TRADES_RETENTION_DAYS = int(os.getenv("TRADES_RETENTION_DAYS", "7"))
+HISTORIC_COPY_LAG_SECONDS = int(
+    os.getenv("MONGODB_HISTORIC_COPY_LAG_SECONDS", "172800")
+)
+HISTORIC_COPY_PROOF_ENABLED = (
+    os.getenv("MONGODB_HISTORIC_COPY_PROVEN", "false").lower() == "true"
+)
+EXECUTION_EVENTS_TTL_SECONDS = int(
+    os.getenv("MONGODB_EXECUTION_EVENTS_TTL_SECONDS", "2592000")
+)
+TRADES_TTL_SECONDS = max(
+    TRADES_RETENTION_DAYS * 86400,
+    HISTORIC_COPY_LAG_SECONDS + 86400,
+)
 
 # Feature Flags
 ENABLE_AUDITOR = os.getenv("ENABLE_AUDITOR", "true").lower() == "true"
