@@ -50,16 +50,25 @@ async def replay_signals(
     try:
         rows, total = await asyncio.to_thread(
             _repository().replay,
-            strategy=strategy, symbol=symbol, timeframe=timeframe,
-            from_ts=from_ts, to_ts=to_ts, limit=limit, offset=offset,
+            strategy=strategy,
+            symbol=symbol,
+            timeframe=timeframe,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            limit=limit,
+            offset=offset,
             include_legacy=include_legacy,
         )
     except DatabaseError as exc:
-        raise HTTPException(status_code=503, detail="signal replay unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="signal replay unavailable"
+        ) from exc
     return {
         "data": rows,
         "pagination": {
-            "total": total, "limit": limit, "offset": offset,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
             "has_next": offset + limit < total,
         },
     }
@@ -78,8 +87,13 @@ async def replay_coverage(
     try:
         return await asyncio.to_thread(
             _repository().coverage,
-            strategy=strategy, symbol=symbol, timeframe=timeframe,
-            from_ts=from_ts, to_ts=to_ts,
+            strategy=strategy,
+            symbol=symbol,
+            timeframe=timeframe,
+            from_ts=from_ts,
+            to_ts=to_ts,
         )
     except DatabaseError as exc:
-        raise HTTPException(status_code=503, detail="signal coverage unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="signal coverage unavailable"
+        ) from exc

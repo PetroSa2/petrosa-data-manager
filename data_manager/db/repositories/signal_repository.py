@@ -41,17 +41,30 @@ class SignalRepository:
         payload["signal_revision_payload_hash"] = payload_hash
         engine = self.adapter._ensure_connected()
         with engine.begin() as conn:
-            existing = conn.execute(
-                select(table).where(table.c.signal_key == signal.signal_key).with_for_update()
-            ).mappings().first()
+            existing = (
+                conn.execute(
+                    select(table)
+                    .where(table.c.signal_key == signal.signal_key)
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
             if existing is None:
-                conn.execute(table.insert().values(**{
-                    key: value for key, value in payload.items() if key in table.c
-                }))
+                conn.execute(
+                    table.insert().values(
+                        **{
+                            key: value
+                            for key, value in payload.items()
+                            if key in table.c
+                        }
+                    )
+                )
                 return {"status": "inserted", "signal_key": signal.signal_key}
 
             conflicts = [
-                key for key, value in payload.items()
+                key
+                for key, value in payload.items()
                 if key in table.c
                 and key not in {"signal_revision_payload_hash"}
                 and value is not None
@@ -64,17 +77,22 @@ class SignalRepository:
                     values["last_rejected_payload_hash"] = payload_hash
                 if "signal_revision_conflicts" in table.c:
                     values["signal_revision_conflicts"] = (
-                        (existing.get("signal_revision_conflicts") or 0) + 1
-                    )
+                        existing.get("signal_revision_conflicts") or 0
+                    ) + 1
                 _increment_conflict_metric()
             else:
                 values = {
-                    key: value for key, value in payload.items()
-                    if key in table.c and value is not None and existing.get(key) is None
+                    key: value
+                    for key, value in payload.items()
+                    if key in table.c
+                    and value is not None
+                    and existing.get(key) is None
                 }
             if values:
                 conn.execute(
-                    update(table).where(table.c.signal_key == signal.signal_key).values(**values)
+                    update(table)
+                    .where(table.c.signal_key == signal.signal_key)
+                    .values(**values)
                 )
             return {
                 "status": "conflict" if conflicts else "existing",
@@ -98,7 +116,11 @@ class SignalRepository:
         conditions = []
         if not include_legacy and "signal_key" in table.c:
             conditions.append(table.c.signal_key.is_not(None))
-        for name, value in (("strategy", strategy), ("symbol", symbol), ("timeframe", timeframe)):
+        for name, value in (
+            ("strategy", strategy),
+            ("symbol", symbol),
+            ("timeframe", timeframe),
+        ):
             if value and name in table.c:
                 conditions.append(table.c[name] == value)
         if from_ts and "bar_open_time" in table.c:
@@ -107,10 +129,22 @@ class SignalRepository:
             conditions.append(table.c.bar_open_time < _as_utc(to_ts))
 
         execution = self.adapter._get_table("execution_events")
-        signal_columns = [table.c[name] for name in (
-            "signal_key", "symbol", "timeframe", "strategy", "bar_open_time",
-            "bar_close_time", "entry_ref_price", "stop_loss", "take_profit", "decision_id",
-        ) if name in table.c]
+        signal_columns = [
+            table.c[name]
+            for name in (
+                "signal_key",
+                "symbol",
+                "timeframe",
+                "strategy",
+                "bar_open_time",
+                "bar_close_time",
+                "entry_ref_price",
+                "stop_loss",
+                "take_profit",
+                "decision_id",
+            )
+            if name in table.c
+        ]
         execution_columns = [
             execution.c.order_id.label("execution_id"),
             execution.c.event_type.label("fill_event_type"),
@@ -154,23 +188,41 @@ class SignalRepository:
         to_ts: datetime | None,
     ) -> dict[str, Any]:
         rows, total = self.replay(
-            strategy=strategy, symbol=symbol, timeframe=timeframe, from_ts=from_ts,
-            to_ts=to_ts, limit=100_000, offset=0, include_legacy=False,
+            strategy=strategy,
+            symbol=symbol,
+            timeframe=timeframe,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            limit=100_000,
+            offset=0,
+            include_legacy=False,
         )
         _legacy_rows, legacy_total = self.replay(
-            strategy=strategy, symbol=symbol, timeframe=timeframe, from_ts=from_ts,
-            to_ts=to_ts, limit=100_000, offset=0, include_legacy=True,
+            strategy=strategy,
+            symbol=symbol,
+            timeframe=timeframe,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            limit=100_000,
+            offset=0,
+            include_legacy=True,
         )
-        bars = [row["bar_open_time"] for row in rows if row.get("bar_open_time") is not None]
+        bars = [
+            row["bar_open_time"] for row in rows if row.get("bar_open_time") is not None
+        ]
         present: set[datetime] = set()
         last_kline: datetime | None = None
         if timeframe and symbol:
             klines = self.adapter.query_range(
-                f"klines_{timeframe}", _as_utc(from_ts) or datetime.min,
-                _as_utc(to_ts) or datetime.max, symbol=symbol,
+                f"klines_{timeframe}",
+                _as_utc(from_ts) or datetime.min,
+                _as_utc(to_ts) or datetime.max,
+                symbol=symbol,
                 columns=["open_time"],
             )
-            present = {_as_utc(row.get("open_time")) for row in klines if row.get("open_time")}
+            present = {
+                _as_utc(row.get("open_time")) for row in klines if row.get("open_time")
+            }
             last_kline = max(present) if present else None
         missing = [bar for bar in bars if bar not in present]
         return {

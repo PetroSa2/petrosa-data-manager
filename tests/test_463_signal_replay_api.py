@@ -18,7 +18,15 @@ def signal_client(mock_db_manager, monkeypatch):
 
         def replay(self, **kwargs):
             assert kwargs["include_legacy"] is False
-            return ([{"signal_key": "s-1", "bar_open_time": datetime(2026, 1, 1, tzinfo=UTC)}], 1)
+            return (
+                [
+                    {
+                        "signal_key": "s-1",
+                        "bar_open_time": datetime(2026, 1, 1, tzinfo=UTC),
+                    }
+                ],
+                1,
+            )
 
         def coverage(self, **kwargs):
             return {
@@ -41,7 +49,11 @@ def signal_client(mock_db_manager, monkeypatch):
 def test_signal_upsert_route(signal_client):
     response = signal_client.post(
         "/api/v1/signals",
-        json={"symbol": "BTCUSDT", "signal_key": "s-1", "bar_open_time": "2026-01-01T00:00:00Z"},
+        json={
+            "symbol": "BTCUSDT",
+            "signal_key": "s-1",
+            "bar_open_time": "2026-01-01T00:00:00Z",
+        },
     )
     assert response.status_code == 200
     assert response.json()["signal_key"] == "s-1"

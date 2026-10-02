@@ -223,8 +223,13 @@ def _build_mysql_signal_record(item: dict[str, Any]) -> dict[str, Any]:
     } | {
         key: item[key]
         for key in (
-            "signal_key", "bar_open_time", "bar_close_time", "entry_ref_price",
-            "stop_loss", "take_profit", "decision_id",
+            "signal_key",
+            "bar_open_time",
+            "bar_close_time",
+            "entry_ref_price",
+            "stop_loss",
+            "take_profit",
+            "decision_id",
         )
         if item.get(key) is not None
     }
