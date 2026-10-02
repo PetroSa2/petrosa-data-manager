@@ -220,6 +220,18 @@ def _build_mysql_signal_record(item: dict[str, Any]) -> dict[str, Any]:
         "strategy": item.get("strategy") or item.get("strategy_id") or "",
         "metadata": item.get("metadata") or {},
         "timestamp": item.get("timestamp") or datetime.now(UTC).isoformat(),
+    } | {
+        key: item[key]
+        for key in (
+            "signal_key",
+            "bar_open_time",
+            "bar_close_time",
+            "entry_ref_price",
+            "stop_loss",
+            "take_profit",
+            "decision_id",
+        )
+        if item.get(key) is not None
     }
 
 
@@ -256,6 +268,9 @@ def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
 
         from pydantic import BaseModel, ConfigDict
 
+        from data_manager.db.repositories.signal_repository import SignalRepository
+        from data_manager.models.signal import SignalRecord
+
         class _MySQLSignalModel(BaseModel):
             model_config = ConfigDict(extra="allow")
 
@@ -266,7 +281,10 @@ def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
                     "Skipping MySQL signals dual-write: payload missing 'symbol'"
                 )
                 continue
-            records.append(_MySQLSignalModel(**_build_mysql_signal_record(item)))
+            if item.get("signal_key"):
+                SignalRepository(mysql_adapter).upsert(SignalRecord(**item))
+            else:
+                records.append(_MySQLSignalModel(**_build_mysql_signal_record(item)))
 
         if not records:
             SIGNALS_MYSQL_COPY.labels(outcome="skipped").inc()

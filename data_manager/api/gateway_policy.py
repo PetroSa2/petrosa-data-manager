@@ -28,6 +28,7 @@ GENERIC_POLICY: dict[str, dict[str, set[str]]] = {
         "tradeengine_boot_probes": {"read", "insert"},
     },
     "mysql": {
+        "signals": {"read"},
         "positions": {"read"},
         "daily_pnl": {"read"},
         "ledger_exchange_day_revision": {"read"},
