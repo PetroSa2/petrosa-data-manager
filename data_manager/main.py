@@ -190,6 +190,7 @@ class DataManagerApp:
                 logger.warning("Unapplied operator migrations: %s", ", ".join(missing))
         except Exception as exc:
             logger.warning("Unable to check operator migration status: %s", exc)
+
     async def _ensure_mongodb_indexes(self) -> None:
         if not self.db_manager or not self.db_manager.mongodb_adapter:
             return
