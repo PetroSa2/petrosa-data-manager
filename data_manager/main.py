@@ -206,7 +206,7 @@ class DataManagerApp:
         await adapter.ensure_indexes("execution_events")
         collections = await adapter.list_collections()
         for collection in collections:
-            if collection.startswith(("analytics_", "trades_")):
+            if collection.startswith("analytics_"):
                 await adapter.ensure_indexes(collection)
         for collection in (
             "health_metrics",

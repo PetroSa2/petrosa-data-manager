@@ -35,12 +35,12 @@ the environment variables named in `constants.py`:
 | `cio_decisions` | TTL on `received_at` | 1 day |
 | `signals` | TTL on its inserted-at field | 1 hour |
 | `alerts` | TTL on `_ttl_inserted_at` | 7 days |
-| `execution_events` | TTL on `timestamp` | 30 days |
+| `execution_events` | none until the MySQL copy is proven (data-manager#498) | none |
 | `analytics_*` | TTL on `metadata.computed_at` | 3 days |
-| `trades_*` | TTL on `timestamp`, after historic-copy lag | 7 days |
+| `trades_*` | none until the MySQL copy is proven (data-manager#498) | none |
 | `klines_*` | bounded `klines-retention` job | per-timeframe window |
 
-Every timestamp used by a TTL policy must be a BSON date in UTC. The historic
+A collection whose rows must also live in MySQL (`execution_events`, `pnl_events`, `trades_*`, `positions`, `daily_pnl`) never gets a TTL in code; a test pins that list. Every timestamp used by a TTL policy must be a BSON date in UTC. The historic
 copy must be available before durable records are eligible for deletion; a
 retention job must defer deletion when copy health or lag cannot be verified.
 Collections outside this table are configuration, coordination, or audit

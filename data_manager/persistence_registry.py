@@ -199,7 +199,7 @@ PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
             mysql_table="trades",
             key="symbol+timestamp",
             pending=True,
-            reason="raw trade copy; Mongo TTL follows historic-copy lag",
+            reason="raw trade copy; no Mongo TTL until the historic copy is proven (data-manager#498)",
         ),
     ),
     (
