@@ -45,6 +45,23 @@ def test_ingest_klines_writes_and_schedules_mysql_copy(monkeypatch):
     asyncio.run(asyncio.sleep(0))
 
 
+def test_ingest_klines_accepts_extractor_data_payload():
+    collection = Mock()
+    collection.bulk_write = AsyncMock(
+        return_value=SimpleNamespace(upserted_count=1, matched_count=0)
+    )
+    mysql = Mock()
+    ingest.set_database_manager(_manager(collection, mysql))
+
+    request = ingest.KlinesRequest(symbol="BTCUSDT", interval="15m", data=[_kline()])
+    result = asyncio.run(ingest.ingest_klines(request))
+
+    assert result["mysql_copy"] == "scheduled"
+    assert result["upserted"] == 1
+    collection.bulk_write.assert_awaited_once()
+    asyncio.run(asyncio.sleep(0))
+
+
 def test_ingest_klines_rejects_bad_docs_and_honors_kill_switch(monkeypatch):
     collection = Mock()
     collection.bulk_write = AsyncMock(return_value=SimpleNamespace())

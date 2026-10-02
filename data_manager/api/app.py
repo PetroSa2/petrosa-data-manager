@@ -43,6 +43,7 @@ from data_manager.api.routes import (
     raw,
     schemas,
     service_config,
+    signals,
     strategies,
     strategy_lifecycle,
     strategy_timeline,
@@ -224,6 +225,7 @@ def create_app() -> FastAPI:
     app.include_router(ledger.router, tags=["Exchange Ledger"])
     app.include_router(trading_state.router, tags=["Trading State"])
     app.include_router(ingest.router)
+    app.include_router(signals.router, tags=["Signals"])
     app.include_router(generic.router, tags=["Generic CRUD"])
 
     # Root endpoint

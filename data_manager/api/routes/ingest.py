@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from prometheus_client import Counter
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from pymongo import UpdateOne
 
 import constants
@@ -40,7 +40,9 @@ KLINES_MYSQL_COPY = Counter(
 class KlinesRequest(BaseModel):
     symbol: str
     interval: str
-    klines: list[dict[str, Any]]
+    klines: list[dict[str, Any]] = Field(
+        validation_alias=AliasChoices("klines", "data")
+    )
 
 
 class FundingRequest(BaseModel):
