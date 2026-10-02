@@ -69,7 +69,7 @@ class SignalRepository:
                 and key not in {"signal_revision_payload_hash"}
                 and value is not None
                 and existing.get(key) is not None
-                and existing.get(key) != value
+                and not _same_value(existing.get(key), value)
             ]
             if conflicts:
                 values: dict[str, Any] = {}
@@ -208,7 +208,9 @@ class SignalRepository:
             include_legacy=True,
         )
         bars = [
-            row["bar_open_time"] for row in rows if row.get("bar_open_time") is not None
+            _as_utc(row["bar_open_time"])
+            for row in rows
+            if row.get("bar_open_time") is not None
         ]
         present: set[datetime] = set()
         last_kline: datetime | None = None
@@ -245,6 +247,12 @@ def _fill_outcome(row: dict[str, Any]) -> dict[str, Any] | None:
         "price": row.pop("execution_price", None),
         "pnl": row.pop("pnl", None),
     }
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    if isinstance(left, datetime) and isinstance(right, datetime):
+        return _as_utc(left) == _as_utc(right)
+    return left == right
 
 
 def _increment_conflict_metric() -> None:

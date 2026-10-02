@@ -50,7 +50,7 @@ class SignalRecord(BaseModel):
     def model_dump_for_storage(self) -> dict[str, Any]:
         values = self.model_dump(exclude_none=True)
         if self.timestamp is None:
-            values["timestamp"] = datetime.now(UTC)
+            values["timestamp"] = self.bar_open_time or datetime.now(UTC)
         if self.period is None:
             values["period"] = self.timeframe
         if self.action:
