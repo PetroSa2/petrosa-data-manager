@@ -52,6 +52,22 @@ def _two_candles():
     ]
 
 
+def _seasonality_candles():
+    now = datetime.now(UTC)
+    return [
+        {
+            "symbol": "BTCUSDT",
+            "close": Decimal(str(50000 + index)),
+            "open": Decimal(str(49900 + index)),
+            "high": Decimal(str(50100 + index)),
+            "low": Decimal(str(49800 + index)),
+            "volume": Decimal("100.0"),
+            "timestamp": now - timedelta(hours=100 - index),
+        }
+        for index in range(100)
+    ]
+
+
 def _enable_backfill():
     """Enable backfill via env-var."""
     os.environ["ANALYTICS_BACKFILL_ON_INSUFFICIENT"] = "true"
@@ -122,6 +138,26 @@ class TestSeasonalityCalculatorInsufficientData:
             trigger.on_verdict.assert_called_once()
         finally:
             _disable_backfill()
+
+    @pytest.mark.asyncio
+    async def test_cpu_calculation_runs_off_event_loop(self):
+        calc = SeasonalityCalculator(_make_db())
+        calc.candle_repo.get_range = AsyncMock(return_value=_seasonality_candles())
+        calc.db_manager.mongodb_adapter.write = AsyncMock()
+        event_loop_thread = __import__("threading").get_ident()
+        cpu_thread = None
+
+        def calculate_metrics(*args):
+            nonlocal cpu_thread
+            cpu_thread = __import__("threading").get_ident()
+            return SeasonalityCalculator._calculate_metrics(*args)
+
+        with patch.object(calc, "_calculate_metrics", side_effect=calculate_metrics):
+            result = await calc.calculate_seasonality("BTCUSDT", "1h")
+
+        assert result is not None
+        assert cpu_thread != event_loop_thread
+        calc.db_manager.mongodb_adapter.write.assert_awaited_once()
 
 
 class TestVolatilityCalculatorInsufficientData:

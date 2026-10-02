@@ -289,7 +289,9 @@ class IntentConsumer:
                 mysql = getattr(self.db_manager, "mysql_adapter", None)
                 if mysql is not None:
                     try:
-                        mysql.write([event], INTENTS_COLLECTION)
+                        await asyncio.to_thread(
+                            mysql.write, [event], INTENTS_COLLECTION
+                        )
                     except Exception:
                         _record_mysql_persist_failure(INTENTS_COLLECTION)
                         logger.warning("intent_mysql_persist_failed", exc_info=True)

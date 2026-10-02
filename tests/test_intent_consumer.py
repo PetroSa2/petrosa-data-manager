@@ -1,6 +1,8 @@
 """Tests for the CIO intent consumer (P0.2a)."""
 
 import json
+import os
+import threading
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -85,6 +87,31 @@ async def test_persist_dual_writes_to_mysql(intent_consumer, mock_db_manager):
     mock_db_manager.mysql_adapter.write.assert_called_once_with(
         [event], INTENTS_COLLECTION
     )
+
+
+@pytest.mark.asyncio
+async def test_persist_runs_mysql_write_off_event_loop(intent_consumer, mock_db_manager):
+    event = IntentEvent.from_nats_message(_intent_payload())
+    assert event is not None
+    event_loop_thread = threading.get_ident()
+    mysql_thread = None
+
+    def write_on_worker(*args):
+        nonlocal mysql_thread
+        mysql_thread = threading.get_ident()
+
+    mock_db_manager.mysql_adapter.write.side_effect = write_on_worker
+    assert await intent_consumer._persist(event) is True
+    assert mysql_thread != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_persist_skips_mysql_when_disabled(intent_consumer, mock_db_manager):
+    event = IntentEvent.from_nats_message(_intent_payload())
+    assert event is not None
+    with patch.dict(os.environ, {"PETROSA_INTENTS_MYSQL_PERSIST_ENABLED": "false"}):
+        assert await intent_consumer._persist(event) is True
+    mock_db_manager.mysql_adapter.write.assert_not_called()
 
 
 @pytest.mark.asyncio

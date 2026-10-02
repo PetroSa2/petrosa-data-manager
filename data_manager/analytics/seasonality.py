@@ -2,6 +2,7 @@
 Seasonality and cyclical pattern calculator.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -47,6 +48,95 @@ class SeasonalityCalculator(BaseCalculator):
             db_manager.mysql_adapter, db_manager.mongodb_adapter
         )
 
+    @staticmethod
+    def _calculate_metrics(
+        candles: list[dict],
+        symbol: str,
+        timeframe: str,
+        window_days: int,
+    ) -> SeasonalityMetrics:
+        df = pd.DataFrame(candles)
+        df["close"] = df["close"].apply(
+            lambda x: float(x) if isinstance(x, Decimal) else float(str(x))
+        )
+        df["volume"] = df["volume"].apply(
+            lambda x: float(x) if isinstance(x, Decimal) else float(str(x))
+        )
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["hour"] = df["timestamp"].dt.hour
+        df["day_of_week"] = df["timestamp"].dt.dayofweek
+
+        hourly_pattern = {}
+        for hour in range(24):
+            hour_data = df[df["hour"] == hour]["close"]
+            hourly_pattern[str(hour)] = (
+                _required_decimal(
+                    hour_data.mean(), f"{symbol} hourly_pattern[{hour}]"
+                )
+                if len(hour_data) > 0
+                else Decimal("0")
+            )
+
+        daily_pattern = {}
+        for day in range(7):
+            day_data = df[df["day_of_week"] == day]["close"]
+            daily_pattern[str(day)] = (
+                _required_decimal(day_data.mean(), f"{symbol} daily_pattern[{day}]")
+                if len(day_data) > 0
+                else Decimal("0")
+            )
+
+        current_hour = datetime.now(UTC).hour
+        seasonal_avg = float(hourly_pattern.get(str(current_hour), Decimal("0")))
+        current_price = df["close"].iloc[-1]
+        seasonal_deviation = (
+            _required_decimal(
+                (current_price - seasonal_avg) / seasonal_avg * 100,
+                f"{symbol} seasonal_deviation",
+            )
+            if seasonal_avg > 0
+            else Decimal("0")
+        )
+
+        prices = df["close"].values
+        fft_values = fft(prices)
+        frequencies = fftfreq(len(prices))
+        power_spectrum = np.abs(fft_values) ** 2
+        positive_freqs = frequencies[1 : len(frequencies) // 2]
+        positive_power = power_spectrum[1 : len(power_spectrum) // 2]
+        if len(positive_power) > 0:
+            dominant_freq_idx = np.argmax(positive_power)
+            dominant_freq = positive_freqs[dominant_freq_idx]
+            dominant_cycle = int(1 / dominant_freq) if dominant_freq != 0 else None
+        else:
+            dominant_cycle = None
+
+        hist, _ = np.histogram(df["close"], bins=50, density=True)
+        hist = hist[np.isfinite(hist) & (hist > 0)]
+        entropy_index = (
+            _required_decimal(entropy(hist), f"{symbol} entropy_index")
+            if len(hist) > 0
+            else Decimal("0")
+        )
+
+        metadata = MetricMetadata(
+            method="fourier_analysis",
+            window=f"{window_days}d",
+            parameters={"fft_size": len(prices)},
+            completeness=100.0,
+            computed_at=datetime.now(UTC),
+        )
+        return SeasonalityMetrics(
+            symbol=symbol,
+            timeframe=timeframe,
+            hourly_pattern=hourly_pattern,
+            daily_pattern=daily_pattern,
+            seasonal_deviation=seasonal_deviation,
+            entropy_index=entropy_index,
+            dominant_cycle=dominant_cycle,
+            metadata=metadata,
+        )
+
     async def calculate_seasonality(
         self,
         symbol: str,
@@ -81,108 +171,8 @@ class SeasonalityCalculator(BaseCalculator):
                 )
                 return None
 
-            # Convert to DataFrame
-            df = pd.DataFrame(candles)
-            df["close"] = df["close"].apply(
-                lambda x: float(x) if isinstance(x, Decimal) else float(str(x))
-            )
-            df["volume"] = df["volume"].apply(
-                lambda x: float(x) if isinstance(x, Decimal) else float(str(x))
-            )
-
-            # Ensure timestamp is datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-            # Extract time components
-            df["hour"] = df["timestamp"].dt.hour
-            df["day_of_week"] = df["timestamp"].dt.dayofweek
-
-            # Hourly pattern (0-23)
-            hourly_pattern = {}
-            for hour in range(24):
-                hour_data = df[df["hour"] == hour]["close"]
-                hourly_pattern[str(hour)] = (
-                    _required_decimal(
-                        hour_data.mean(), f"{symbol} hourly_pattern[{hour}]"
-                    )
-                    if len(hour_data) > 0
-                    else Decimal("0")
-                )
-
-            # Daily pattern (0-6: Monday-Sunday)
-            daily_pattern = {}
-            for day in range(7):
-                day_data = df[df["day_of_week"] == day]["close"]
-                daily_pattern[str(day)] = (
-                    _required_decimal(day_data.mean(), f"{symbol} daily_pattern[{day}]")
-                    if len(day_data) > 0
-                    else Decimal("0")
-                )
-
-            # Seasonal deviation (current vs seasonal average)
-            current_hour = datetime.now(UTC).hour
-            seasonal_avg = float(hourly_pattern.get(str(current_hour), Decimal("0")))
-            current_price = df["close"].iloc[-1]
-            seasonal_deviation = (
-                _required_decimal(
-                    (current_price - seasonal_avg) / seasonal_avg * 100,
-                    f"{symbol} seasonal_deviation",
-                )
-                if seasonal_avg > 0
-                else Decimal("0")
-            )
-
-            # Fourier analysis for cycle detection
-            prices = df["close"].values
-            fft_values = fft(prices)
-            frequencies = fftfreq(len(prices))
-
-            # Power spectrum
-            power_spectrum = np.abs(fft_values) ** 2
-
-            # Find dominant cycle (peak frequency, excluding DC component)
-            positive_freqs = frequencies[1 : len(frequencies) // 2]
-            positive_power = power_spectrum[1 : len(power_spectrum) // 2]
-
-            if len(positive_power) > 0:
-                dominant_freq_idx = np.argmax(positive_power)
-                dominant_freq = positive_freqs[dominant_freq_idx]
-                dominant_cycle = int(1 / dominant_freq) if dominant_freq != 0 else None
-            else:
-                dominant_cycle = None
-
-            # Entropy index (randomness measure). A constant/near-constant
-            # price series collapses all mass into one histogram bin,
-            # which with density=True can yield an infinite bin height
-            # and a non-finite entropy() result; sanitize before it
-            # reaches the Pydantic model (#315).
-            hist, _ = np.histogram(df["close"], bins=50, density=True)
-            hist = hist[np.isfinite(hist) & (hist > 0)]
-            entropy_index = (
-                _required_decimal(entropy(hist), f"{symbol} entropy_index")
-                if len(hist) > 0
-                else Decimal("0")
-            )
-
-            # Create metadata
-            metadata = MetricMetadata(
-                method="fourier_analysis",
-                window=f"{window_days}d",
-                parameters={"fft_size": len(prices)},
-                completeness=100.0,
-                computed_at=datetime.now(UTC),
-            )
-
-            # Create metrics object
-            metrics = SeasonalityMetrics(
-                symbol=symbol,
-                timeframe=timeframe,
-                hourly_pattern=hourly_pattern,
-                daily_pattern=daily_pattern,
-                seasonal_deviation=seasonal_deviation,
-                entropy_index=entropy_index,
-                dominant_cycle=dominant_cycle,
-                metadata=metadata,
+            metrics = await asyncio.to_thread(
+                self._calculate_metrics, candles, symbol, timeframe, window_days
             )
 
             # Store in MongoDB
@@ -191,7 +181,8 @@ class SeasonalityCalculator(BaseCalculator):
 
             logger.info(
                 f"Seasonality calculated for {symbol} {timeframe}: "
-                f"dominant_cycle={dominant_cycle}, entropy={float(entropy_index):.4f}"
+                f"dominant_cycle={metrics.dominant_cycle}, "
+                f"entropy={float(metrics.entropy_index):.4f}"
             )
 
             return metrics
