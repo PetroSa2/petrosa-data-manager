@@ -31,9 +31,7 @@ class CopyProofResult:
 
 def is_proof_collection(name: str) -> bool:
     """Return whether a Mongo collection requires a historic-copy proof."""
-    return name == "execution_events" or name == "trades" or name.startswith(
-        "trades_"
-    )
+    return name == "execution_events" or name == "trades" or name.startswith("trades_")
 
 
 def prove_daily_copy(
@@ -116,7 +114,9 @@ def _mysql_daily_counts(
         }
 
 
-async def _run_cli(collection: str | None, retention_days: int, copy_lag_seconds: int) -> None:
+async def _run_cli(
+    collection: str | None, retention_days: int, copy_lag_seconds: int
+) -> None:
     mongo = MongoDBAdapter(
         constants.MONGODB_URL,
         database_name=constants.CANDLE_MONGO_DATABASE,
@@ -140,7 +140,9 @@ async def _run_cli(collection: str | None, retention_days: int, copy_lag_seconds
         last_day = (now - lag).date()
         first_day = last_day - timedelta(days=retention_days - 1)
         start = datetime.combine(first_day, datetime.min.time(), tzinfo=UTC)
-        end = datetime.combine(last_day + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+        end = datetime.combine(
+            last_day + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+        )
         groups = (
             [("execution_events", ["execution_events"])]
             if collection == "execution_events"
@@ -168,7 +170,8 @@ async def _run_cli(collection: str | None, retention_days: int, copy_lag_seconds
                 for day, count in counts.items():
                     mongo_counts[day] = mongo_counts.get(day, 0) + count
             mysql_counts = _mysql_daily_counts(
-                mysql, "execution_events" if name == "execution_events" else "trades",
+                mysql,
+                "execution_events" if name == "execution_events" else "trades",
                 start=start,
                 end=end,
             )
@@ -191,7 +194,9 @@ async def _run_cli(collection: str | None, retention_days: int, copy_lag_seconds
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--collection")
-    parser.add_argument("--retention-days", type=int, default=constants.TRADES_RETENTION_DAYS)
+    parser.add_argument(
+        "--retention-days", type=int, default=constants.TRADES_RETENTION_DAYS
+    )
     parser.add_argument(
         "--copy-lag-seconds", type=int, default=constants.HISTORIC_COPY_LAG_SECONDS
     )

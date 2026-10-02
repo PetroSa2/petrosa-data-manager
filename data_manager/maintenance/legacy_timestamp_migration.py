@@ -101,9 +101,7 @@ async def migrate_collections(
     ]
 
 
-async def _run_cli(
-    apply: bool, batch_size: int, collection: str | None = None
-) -> None:
+async def _run_cli(apply: bool, batch_size: int, collection: str | None = None) -> None:
     adapter = MongoDBAdapter(
         constants.MONGODB_URL,
         database_name=constants.CANDLE_MONGO_DATABASE,
