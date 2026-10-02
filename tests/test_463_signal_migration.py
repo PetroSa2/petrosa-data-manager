@@ -38,9 +38,25 @@ def test_signal_rollback_targets_only_added_schema():
 def test_signal_migration_rehearsal_on_mysql_57():
     pymysql = pytest.importorskip("pymysql")
     container_name = "petrosa-signal-migration-mysql-57"
-    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+    subprocess.run(
+        ["docker", "rm", "-f", container_name], check=False, capture_output=True
+    )
     docker = subprocess.run(
-        ["docker", "run", "--rm", "-d", "--name", container_name, "-e", "MYSQL_ROOT_PASSWORD=labpass", "-e", "MYSQL_DATABASE=petrosa_lab", "-p", "0:3306", "mysql:5.7"],
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-d",
+            "--name",
+            container_name,
+            "-e",
+            "MYSQL_ROOT_PASSWORD=labpass",
+            "-e",
+            "MYSQL_DATABASE=petrosa_lab",
+            "-p",
+            "0:3306",
+            "mysql:5.7",
+        ],
         capture_output=True,
         text=True,
     )
@@ -83,13 +99,28 @@ def test_signal_migration_rehearsal_on_mysql_57():
                     "metadata JSON, timestamp DATETIME, created_at DATETIME)"
                 )
                 base_columns = {
-                    "id", "symbol", "timeframe", "period", "signal_type", "confidence", "strategy",
-                    "metadata", "timestamp", "created_at",
+                    "id",
+                    "symbol",
+                    "timeframe",
+                    "period",
+                    "signal_type",
+                    "confidence",
+                    "strategy",
+                    "metadata",
+                    "timestamp",
+                    "created_at",
                 }
                 added_columns = {
-                    "signal_key", "bar_open_time", "bar_close_time", "entry_ref_price", "stop_loss",
-                    "take_profit", "decision_id", "signal_revision_payload_hash",
-                    "last_rejected_payload_hash", "signal_revision_conflicts",
+                    "signal_key",
+                    "bar_open_time",
+                    "bar_close_time",
+                    "entry_ref_price",
+                    "stop_loss",
+                    "take_profit",
+                    "decision_id",
+                    "signal_revision_payload_hash",
+                    "last_rejected_payload_hash",
+                    "signal_revision_conflicts",
                 }
                 for migration in (FORWARD, FORWARD, ROLLBACK, ROLLBACK):
                     for statement in migration.read_text().split(";"):
@@ -113,4 +144,6 @@ def test_signal_migration_rehearsal_on_mysql_57():
                     assert columns == base_columns
                     assert index_count == 0
     finally:
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+        subprocess.run(
+            ["docker", "rm", "-f", container_name], check=False, capture_output=True
+        )
