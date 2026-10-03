@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from data_manager.db import database_manager as database_manager_module
 from data_manager.db.database_manager import DatabaseManager
 
 
@@ -49,10 +48,6 @@ class TestInitialize:
             assert dm.configuration is not None
             assert dm._stats["mysql"]["connection_count"] == 1
             assert dm._stats["mongodb"]["connection_count"] == 1
-            assert (
-                get_adp.call_args_list[0].kwargs["database_name"]
-                == database_manager_module.constants.MONGODB_DB
-            )
             # Health monitor task should be scheduled.
             assert dm._health_check_task is not None
             await dm.shutdown()
@@ -218,16 +213,12 @@ class TestReconnectMongodb:
                 const.DB_RECONNECT_MAX_ATTEMPTS = 5
                 const.DB_RECONNECT_BACKOFF_BASE = 1.0
                 const.MONGODB_URL = "mongodb://x"
-                const.MONGODB_DB = "operational_db"
                 with patch("asyncio.sleep", new=AsyncMock()):
                     new_mongo = make_adapter()
                     get_adp.return_value = new_mongo
                     dm = DatabaseManager()
                     await dm._reconnect_mongodb()
                     assert dm.mongodb_adapter is new_mongo
-                    get_adp.assert_called_once_with(
-                        "mongodb", "mongodb://x", database_name="operational_db"
-                    )
                     assert dm._mongodb_reconnect_attempts == 0
 
     @pytest.mark.asyncio

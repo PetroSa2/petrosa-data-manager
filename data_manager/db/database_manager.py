@@ -81,7 +81,7 @@ class DatabaseManager:
             self.mongodb_adapter = get_adapter(
                 "mongodb",
                 constants.MONGODB_URL,
-                database_name=constants.MONGODB_DB,
+                database_name=constants.CANDLE_MONGO_DATABASE,
             )
             self.mongodb_adapter.connect()
             self._stats["mongodb"]["connection_count"] += 1
@@ -319,7 +319,7 @@ class DatabaseManager:
             self.mongodb_adapter = get_adapter(
                 "mongodb",
                 constants.MONGODB_URL,
-                database_name=constants.MONGODB_DB,
+                database_name=constants.CANDLE_MONGO_DATABASE,
             )
             self.mongodb_adapter.connect()
 
