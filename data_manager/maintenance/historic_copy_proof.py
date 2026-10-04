@@ -214,7 +214,9 @@ async def prove_collection_group(
     last_day = (now - max(timedelta(days=retention_days), copy_lag)).date()
     first_day = oldest.date() if oldest is not None else last_day
     start = datetime.combine(first_day, datetime.min.time(), tzinfo=UTC)
-    end = datetime.combine(last_day + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+    end = datetime.combine(
+        last_day + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+    )
     mongo_counts: dict[date, int] = {}
     invalid = 0
     for member in members:
@@ -222,14 +224,10 @@ async def prove_collection_group(
         invalid += member_invalid
         if member_oldest is not None:
             for day, count in (
-                await _mongo_daily_counts(
-                    mongo_database, member, start=start, end=end
-                )
+                await _mongo_daily_counts(mongo_database, member, start=start, end=end)
             ).items():
                 mongo_counts[day] = mongo_counts.get(day, 0) + count
-    mysql_counts = _mysql_daily_counts(
-        mysql, "trades", start=start, end=end
-    )
+    mysql_counts = _mysql_daily_counts(mysql, "trades", start=start, end=end)
     return prove_daily_copy(
         collection,
         mongo_counts,
