@@ -32,6 +32,11 @@ def make_mongo_client():
     return client, db, leader_collection
 
 
+async def _wait_until(predicate):
+    while not predicate():
+        await asyncio.sleep(0)
+
+
 class TestInitialize:
     @pytest.mark.asyncio
     async def test_initialize_connects_and_ensures_indexes(self):
@@ -44,6 +49,7 @@ class TestInitialize:
         client.admin.command.assert_called_once_with("ping")
         # Three indexes created on leader_election collection.
         assert coll.create_index.call_count == 3
+        coll.create_index.assert_any_call("status", unique=True)
 
     @pytest.mark.asyncio
     async def test_initialize_propagates_connect_error(self):
@@ -120,6 +126,31 @@ class TestStart:
         assert ok is True
         assert mgr.is_leader is False
         assert mgr.leader_pod_id == "other-pod"
+        await mgr.stop()
+
+    @pytest.mark.asyncio
+    async def test_follower_takes_over_after_leader_disappears(self):
+        client, db, coll = make_mongo_client()
+        coll.find_one = AsyncMock(
+            side_effect=[
+                {
+                    "pod_id": "other-pod",
+                    "last_heartbeat": datetime.now(UTC),
+                },
+                None,
+                {"pod_id": "test-pod", "status": "leader"},
+            ]
+        )
+        coll.update_one = AsyncMock()
+        mgr = LeaderElectionManager()
+        mgr.pod_id = "test-pod"
+        mgr.heartbeat_interval = 0.001
+        mgr.mongodb_db = db
+
+        assert await mgr.start() is True
+        await asyncio.wait_for(_wait_until(lambda: mgr.is_leader), timeout=1)
+        await mgr.stop()
+        assert mgr.is_leader is False
 
 
 class TestTryBecomeLeader:
@@ -145,6 +176,8 @@ class TestTryBecomeLeader:
         ok = await mgr._try_become_leader()
         assert ok is True
         assert mgr.is_leader is True
+        update = coll.update_one.await_args.args[1]
+        assert update["$set"]["status"] == "leader"
 
     @pytest.mark.asyncio
     async def test_loses_election_when_other_pod_wins(self):
@@ -310,6 +343,26 @@ class TestStop:
         assert mgr.heartbeat_task.cancelled() or mgr.heartbeat_task.done()
         # Leadership was released.
         coll.delete_one.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_follower_task(self):
+        client, db, coll = make_mongo_client()
+        coll.find_one = AsyncMock(
+            return_value={
+                "pod_id": "other-pod",
+                "last_heartbeat": datetime.now(UTC),
+            }
+        )
+        mgr = LeaderElectionManager()
+        mgr.mongodb_db = db
+        mgr.heartbeat_interval = 60
+
+        await mgr.start()
+        follower_task = mgr.follower_task
+        await mgr.stop()
+
+        assert follower_task is not None
+        assert follower_task.cancelled() or follower_task.done()
 
 
 class TestGetStatus:

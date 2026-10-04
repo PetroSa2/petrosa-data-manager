@@ -3,6 +3,7 @@ Unit tests for AuditScheduler and AnalyticsScheduler.
 """
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -79,6 +80,76 @@ class TestAuditScheduler:
             await scheduler.run_audit_cycle()
             # Should not raise exception
             assert scheduler.last_audit_time is not None
+
+    @pytest.mark.asyncio
+    async def test_waits_for_leadership_then_runs_audit_cycle(self, mock_db_manager):
+        election = SimpleNamespace(
+            pod_id="test-pod", is_leader=False, heartbeat_interval=0.001
+        )
+        scheduler = AuditScheduler(mock_db_manager, leader_election=election)
+        scheduler.run_audit_cycle = AsyncMock(
+            side_effect=lambda: setattr(scheduler, "running", False)
+        )
+
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_LEADER_ELECTION = True
+            mock_constants.INITIAL_STARTUP_DELAY = 0
+            mock_constants.AUDIT_INTERVAL = 0
+            mock_constants.ENABLE_STREAMING_GAP_DETECTION = False
+
+            task = asyncio.create_task(scheduler.start())
+            await asyncio.sleep(0.002)
+            election.is_leader = True
+            await asyncio.wait_for(task, timeout=1)
+
+        scheduler.run_audit_cycle.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_ends_leadership_wait(self, mock_db_manager):
+        election = SimpleNamespace(
+            pod_id="test-pod", is_leader=False, heartbeat_interval=60
+        )
+        scheduler = AuditScheduler(mock_db_manager, leader_election=election)
+
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_LEADER_ELECTION = True
+            task = asyncio.create_task(scheduler.start())
+            await asyncio.sleep(0)
+            await scheduler.stop()
+            await asyncio.wait_for(task, timeout=1)
+
+        assert scheduler.running is False
+
+    @pytest.mark.asyncio
+    async def test_waits_again_after_losing_leadership(self, mock_db_manager):
+        election = SimpleNamespace(
+            pod_id="test-pod", is_leader=True, heartbeat_interval=0.001
+        )
+        scheduler = AuditScheduler(mock_db_manager, leader_election=election)
+        cycle_count = 0
+
+        async def run_cycle():
+            nonlocal cycle_count
+            cycle_count += 1
+            if cycle_count == 1:
+                election.is_leader = False
+            else:
+                scheduler.running = False
+
+        scheduler.run_audit_cycle = AsyncMock(side_effect=run_cycle)
+
+        with patch("data_manager.auditor.scheduler.constants") as mock_constants:
+            mock_constants.ENABLE_LEADER_ELECTION = True
+            mock_constants.INITIAL_STARTUP_DELAY = 0
+            mock_constants.AUDIT_INTERVAL = 0
+            mock_constants.ENABLE_STREAMING_GAP_DETECTION = False
+
+            task = asyncio.create_task(scheduler.start())
+            await asyncio.sleep(0.003)
+            election.is_leader = True
+            await asyncio.wait_for(task, timeout=1)
+
+        assert cycle_count == 2
 
 
 class TestAuditSchedulerStreaming:
