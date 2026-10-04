@@ -97,11 +97,8 @@ class MySQLAdapter(BaseAdapter):
         # important knob against the shared DBaaS limits (probed live
         # 2026-09-14: max_user_connections=30 shared, wait_timeout=15s).
         #
-        # - pool_recycle MUST be < the server wait_timeout (15s), else every
-        #   pooled connection is server-killed before reuse and
-        #   pool_pre_ping fires a reconnect on nearly every checkout (the
-        #   Aborted_clients=62541 churn from the mysql audit). 10s leaves a
-        #   safety margin under the 15s cap.
+        # - pool_recycle stays below the per-session wait timeout so pooled
+        #   connections are recycled before the server closes them.
         # - pool_size + max_overflow is capped so
         #   (pool_size + max_overflow) * HPA maxReplicas (k8s/data-manager/hpa.yaml, =2)
         #   stays at the ~24-connection ecosystem budget from #1059 (rather
@@ -110,7 +107,7 @@ class MySQLAdapter(BaseAdapter):
         #   window). 5 + 7 = 12/pod * 2 pods = 24.
         self.engine_options = {
             "pool_pre_ping": True,
-            "pool_recycle": 10,  # Must stay below server wait_timeout=15s (#299)
+            "pool_recycle": constants.MYSQL_POOL_RECYCLE,
             "pool_size": 5,  # Conservative for shared resources
             "max_overflow": 7,  # Right-sized: (5+7)*maxReplicas(2)=24 ecosystem budget
             "pool_timeout": 30,  # Timeout for connection acquisition
@@ -127,7 +124,8 @@ class MySQLAdapter(BaseAdapter):
                     "read_timeout": constants.DB_CONNECTION_TIMEOUT,
                     "write_timeout": constants.DB_CONNECTION_TIMEOUT,
                     "init_command": (
-                        f"SET SESSION sql_mode='{constants.MYSQL_SESSION_SQL_MODE}'"
+                        f"SET SESSION sql_mode='{constants.MYSQL_SESSION_SQL_MODE}', "
+                        f"wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}"
                     ),
                 }
             )
@@ -1320,11 +1318,14 @@ def create_read_only_engine(connection_string: str) -> "Engine":
         pool_size=2,
         max_overflow=2,
         pool_timeout=30,
-        # petrosa-data-manager#299 AC3: same wait_timeout=15s hazard applies
-        # here — recycle below the server timeout so audit-run connections
-        # are never server-killed before reuse.
-        pool_recycle=10,
-        connect_args={"charset": "utf8mb4", "autocommit": True},
+        pool_recycle=constants.MYSQL_POOL_RECYCLE,
+        connect_args={
+            "charset": "utf8mb4",
+            "autocommit": True,
+            "init_command": (
+                f"SET SESSION wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}"
+            ),
+        },
     )
     if connection_string.startswith("mysql"):
         configure_utc_session(engine)

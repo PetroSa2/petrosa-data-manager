@@ -178,7 +178,9 @@ async def connection_stats():
             "pool_size": mysql_engine_options.get("pool_size", 5),
             "max_overflow": mysql_engine_options.get("max_overflow", 7),
             "pool_timeout": mysql_engine_options.get("pool_timeout", 30),
-            "pool_recycle": mysql_engine_options.get("pool_recycle", 10),
+            "pool_recycle": mysql_engine_options.get(
+                "pool_recycle", constants.MYSQL_POOL_RECYCLE
+            ),
         },
         "mongodb": {
             "max_pool_size": 100,

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import constants
 from data_manager.db.mysql_adapter import MySQLAdapter
 
 MIGRATIONS = Path(__file__).parents[1] / "data_manager" / "scripts" / "migrations"
@@ -14,7 +15,11 @@ def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_unchanged():
         flag in args["init_command"]
         for flag in ("STRICT_TRANS_TABLES", "NO_ZERO_DATE", "NO_ZERO_IN_DATE")
     )
-    assert mysql.engine_options["pool_recycle"] == 10
+    assert mysql.engine_options["pool_recycle"] == constants.MYSQL_POOL_RECYCLE
+    assert (
+        f"wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}"
+        in args["init_command"]
+    )
     assert mysql.engine_options["pool_size"] == 5
     assert mysql.engine_options["max_overflow"] == 7
     assert mysql.engine_options["pool_pre_ping"] is True
