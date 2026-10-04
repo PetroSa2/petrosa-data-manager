@@ -120,14 +120,15 @@ async def test_mongo_counts_normalize_string_timestamps():
     )
 
     assert counts == {date(2026, 10, 8): 2}
-    assert database.collection.pipeline[0]["$project"]["normalized"]["$convert"]["to"] == "date"
+    assert (
+        database.collection.pipeline[0]["$project"]["normalized"]["$convert"]["to"]
+        == "date"
+    )
 
 
 @pytest.mark.asyncio
 async def test_mongo_metadata_reports_invalid_timestamps():
-    database = _Database(
-        [{"oldest": datetime(2026, 10, 8, tzinfo=UTC), "invalid": 1}]
-    )
+    database = _Database([{"oldest": datetime(2026, 10, 8, tzinfo=UTC), "invalid": 1}])
 
     oldest, invalid = await _mongo_timestamp_metadata(database, "trades")
 

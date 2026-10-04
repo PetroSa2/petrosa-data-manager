@@ -67,7 +67,10 @@ def prove_daily_copy(
     else:
         first_day = oldest_mongo_timestamp.astimezone(UTC).date()
     days = (
-        tuple(first_day + timedelta(days=offset) for offset in range((last_day - first_day).days + 1))
+        tuple(
+            first_day + timedelta(days=offset)
+            for offset in range((last_day - first_day).days + 1)
+        )
         if first_day <= last_day
         else ()
     )
@@ -114,9 +117,7 @@ async def _mongo_timestamp_metadata(
                     "_id": None,
                     "oldest": {"$min": "$normalized"},
                     "invalid": {
-                        "$sum": {
-                            "$cond": [{"$eq": ["$normalized", None]}, 1, 0]
-                        }
+                        "$sum": {"$cond": [{"$eq": ["$normalized", None]}, 1, 0]}
                     },
                 }
             },
@@ -222,7 +223,9 @@ async def _run_cli(
             member: await _mongo_timestamp_metadata(mongo.db, member)
             for member in selected
         }
-        usable_oldest = [oldest for oldest, _ in metadata.values() if oldest is not None]
+        usable_oldest = [
+            oldest for oldest, _ in metadata.values() if oldest is not None
+        ]
         if not usable_oldest:
             raise RuntimeError("no usable Mongo timestamps found in proof collections")
         first_day = min(usable_oldest).date()
@@ -255,7 +258,9 @@ async def _run_cli(
             for member in members:
                 member_oldest, member_invalid = metadata[member]
                 if member_oldest is not None:
-                    oldest = member_oldest if oldest is None else min(oldest, member_oldest)
+                    oldest = (
+                        member_oldest if oldest is None else min(oldest, member_oldest)
+                    )
                 invalid += member_invalid
                 counts = await _mongo_daily_counts(
                     mongo.db, member, start=start, end=end
