@@ -705,9 +705,11 @@ class MySQLAdapter(BaseAdapter):
         # avoid MySQL 5.x gap-lock contention that INSERT IGNORE causes on
         # unique-index conflicts (petrosa-data-manager#231).
         uses_on_dup_key = not insert_only and (
-            "extracted_at" in table.c or collection in {
-            "execution_events",
-            "pnl_events",
+            "extracted_at" in table.c
+            or collection
+            in {
+                "execution_events",
+                "pnl_events",
             }
         )
 

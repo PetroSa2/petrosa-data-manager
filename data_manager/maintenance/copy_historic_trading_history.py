@@ -63,7 +63,9 @@ def _save_checkpoint(path: Path, values: dict[str, str]) -> None:
 def _model(collection: str, document: dict[str, Any]) -> Any:
     value = {key: item for key, item in document.items() if key != "_id"}
     value["timestamp"] = _timestamp(value["timestamp"])
-    return MODEL_TYPES["execution_events" if collection == "execution_events" else "trades"](**value)
+    return MODEL_TYPES[
+        "execution_events" if collection == "execution_events" else "trades"
+    ](**value)
 
 
 async def copy_collection(
@@ -119,11 +121,18 @@ async def copy_collection(
                 checkpoint[collection] = last_timestamp.isoformat()
                 _save_checkpoint(checkpoint_path, checkpoint)
         copied += len(models)
-    return {"collection": collection, "rows": copied, "invalid": invalid, "days": dict(sorted(counts.items()))}
+    return {
+        "collection": collection,
+        "rows": copied,
+        "invalid": invalid,
+        "days": dict(sorted(counts.items())),
+    }
 
 
 async def run(args: argparse.Namespace) -> list[dict[str, Any]]:
-    mongo = MongoDBAdapter(constants.MONGODB_URL, database_name=constants.CANDLE_MONGO_DATABASE)
+    mongo = MongoDBAdapter(
+        constants.MONGODB_URL, database_name=constants.CANDLE_MONGO_DATABASE
+    )
     mysql = MySQLAdapter(constants.MYSQL_URI)
     mongo.connect()
     mysql.connect()

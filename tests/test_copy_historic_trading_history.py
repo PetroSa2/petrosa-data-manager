@@ -70,14 +70,13 @@ def test_collection_names_include_plain_and_symbol_trades():
         "trades",
         "trades_BTCUSDT",
     ]
-    assert _collection_names(["trades_BTCUSDT"], "trades_BTCUSDT") == [
-        "trades_BTCUSDT"
-    ]
+    assert _collection_names(["trades_BTCUSDT"], "trades_BTCUSDT") == ["trades_BTCUSDT"]
 
 
 def test_collection_names_reject_unknown_collection():
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(ValueError, match="not found") as error:
         _collection_names(["execution_events"], "trades")
+    assert "trades" in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -146,8 +145,9 @@ async def test_checkpoint_and_date_bounds_are_added_to_query():
 
 
 def test_parse_args_rejects_non_positive_batch_size():
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as error:
         _parse_args(["--batch-size", "0"])
+    assert error.value.code == 2
 
 
 def test_models_are_mapped_to_the_durable_table_names():
