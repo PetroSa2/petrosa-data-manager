@@ -896,11 +896,12 @@ class DataManagerApp:
             )
             await backfill_trigger.start()
 
-            await audit_scheduler.start()
             self._set_audit_scheduler_health_reference(audit_scheduler)
+            await audit_scheduler.start()
         except Exception as e:
             logger.error(f"Error in auditor: {e}", exc_info=True)
         finally:
+            self._set_audit_scheduler_health_reference(None)
             if backfill_trigger is not None:
                 await backfill_trigger.stop()
 
