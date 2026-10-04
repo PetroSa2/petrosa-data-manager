@@ -168,8 +168,9 @@ async def test_mongo_metadata_returns_no_usable_timestamp_for_empty_collection()
     ],
 )
 def test_prove_daily_copy_rejects_invalid_arguments(kwargs, message):
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError) as excinfo:
         prove_daily_copy("trades", {}, {}, **kwargs)
+    assert message in str(excinfo.value)
 
 
 @pytest.mark.asyncio
@@ -241,13 +242,14 @@ def test_mysql_daily_counts_groups_rows_by_day():
 
 
 def test_mysql_daily_counts_requires_a_connection():
-    with pytest.raises(RuntimeError, match="not connected"):
+    with pytest.raises(RuntimeError) as excinfo:
         _mysql_daily_counts(
             SimpleNamespace(engine=None),
             "trades",
             start=datetime(2026, 8, 8, tzinfo=UTC),
             end=datetime(2026, 8, 9, tzinfo=UTC),
         )
+    assert "not connected" in str(excinfo.value)
 
 
 # ---- the command line --------------------------------------------------------------------------
