@@ -89,6 +89,7 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     adapter.connect()
 
     _, kwargs = mock_create_engine.call_args
+    assert kwargs["pool_pre_ping"] is True
     assert kwargs["pool_recycle"] < _SERVER_WAIT_TIMEOUT
     assert (kwargs["pool_size"] + kwargs["max_overflow"]) * _HPA_MAX_REPLICAS <= (
         _ECOSYSTEM_MYSQL_BUDGET
