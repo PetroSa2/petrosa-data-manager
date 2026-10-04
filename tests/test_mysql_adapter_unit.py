@@ -93,7 +93,8 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     assert kwargs["pool_pre_ping"] is True
     assert kwargs["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert (
-        f"wait_timeout={_SESSION_WAIT_TIMEOUT}" in kwargs["connect_args"]["init_command"]
+        f"wait_timeout={_SESSION_WAIT_TIMEOUT}"
+        in kwargs["connect_args"]["init_command"]
     )
     assert (kwargs["pool_size"] + kwargs["max_overflow"]) * _HPA_MAX_REPLICAS <= (
         _ECOSYSTEM_MYSQL_BUDGET
