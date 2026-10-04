@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+import constants
 import data_manager.api.app as api_module
 from data_manager.api.app import create_app
 from data_manager.db.mysql_adapter import MySQLAdapter
@@ -54,12 +55,11 @@ def test_connections_reports_live_mysql_adapter_pool_config(client):
         "pool_size": 5,
         "max_overflow": 7,
         "pool_timeout": 30,
-        "pool_recycle": 10,
+        "pool_recycle": constants.MYSQL_POOL_RECYCLE,
     }
     # Ecosystem budget (#299 AC2): (pool_size + max_overflow) * maxReplicas(2) <= ~24
     assert (mysql_pool["pool_size"] + mysql_pool["max_overflow"]) * 2 <= 24
-    # Hardening (#299 AC1): pool_recycle below the shared server wait_timeout=15s
-    assert mysql_pool["pool_recycle"] < 15
+    assert mysql_pool["pool_recycle"] < constants.MYSQL_SESSION_WAIT_TIMEOUT
 
 
 @pytest.mark.unit
