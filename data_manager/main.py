@@ -117,6 +117,16 @@ class DataManagerApp:
         )
         self._database_consumers_started = False
 
+    def _set_leader_election_health_reference(self, leader_election) -> None:
+        from data_manager import api
+
+        api.app.leader_election = leader_election
+
+    def _set_audit_scheduler_health_reference(self, audit_scheduler) -> None:
+        from data_manager import api
+
+        api.app.audit_scheduler = audit_scheduler
+
     def _wire_route_publishers(self, deferred_publisher: Any) -> None:
         """Wire NATS publishers used by operator routes (#197).
 
@@ -284,9 +294,7 @@ class DataManagerApp:
             and self.db_manager
             and self.db_manager.mongodb_adapter
         ):
-            from data_manager import api
-
-            api.app.leader_election = None
+            self._set_leader_election_health_reference(None)
             try:
                 from data_manager.leader_election import LeaderElectionManager
 
@@ -295,9 +303,7 @@ class DataManagerApp:
                     self.db_manager.mongodb_adapter.client
                 )
                 await self.leader_election.start()
-                from data_manager import api
-
-                api.app.leader_election = self.leader_election
+                self._set_leader_election_health_reference(self.leader_election)
                 logger.info(
                     f"Leader election initialized: "
                     f"is_leader={self.leader_election.is_leader}, "
@@ -847,9 +853,7 @@ class DataManagerApp:
 
         logger.info("Starting auditor background worker")
 
-        from data_manager import api
-
-        api.app.audit_scheduler = None
+        self._set_audit_scheduler_health_reference(None)
 
         # Import here to avoid circular dependency
         from data_manager.auditor.scheduler import AuditScheduler
@@ -893,7 +897,7 @@ class DataManagerApp:
             await backfill_trigger.start()
 
             await audit_scheduler.start()
-            api.app.audit_scheduler = audit_scheduler
+            self._set_audit_scheduler_health_reference(audit_scheduler)
         except Exception as e:
             logger.error(f"Error in auditor: {e}", exc_info=True)
         finally:

@@ -8,6 +8,7 @@ import pytest
 
 import data_manager.api.app as api_module
 from data_manager.api.routes.health import audit_status, leader_status
+from data_manager.main import DataManagerApp
 
 
 @pytest.fixture(autouse=True)
@@ -64,3 +65,16 @@ async def test_runtime_health_routes_report_unwired_components():
     assert leader_response["message"] == "Leader election not initialized or disabled"
     assert audit_response["enabled"] is False
     assert audit_response["message"] == "Audit scheduler not initialized or disabled"
+
+
+@pytest.mark.unit
+def test_runtime_component_references_are_wired_to_api_module():
+    app = DataManagerApp()
+    leader = object()
+    scheduler = object()
+
+    app._set_leader_election_health_reference(leader)
+    app._set_audit_scheduler_health_reference(scheduler)
+
+    assert api_module.leader_election is leader
+    assert api_module.audit_scheduler is scheduler
