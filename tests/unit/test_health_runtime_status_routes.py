@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import constants
 import data_manager.api.app as api_module
+import data_manager.auditor.scheduler as scheduler_module
+import data_manager.services.backfill_trigger as backfill_trigger_module
 from data_manager.api.routes.health import audit_status, leader_status
 from data_manager.main import DataManagerApp
 
@@ -77,4 +80,30 @@ def test_runtime_component_references_are_wired_to_api_module():
     app._set_audit_scheduler_health_reference(scheduler)
 
     assert api_module.leader_election is leader
+    assert api_module.audit_scheduler is scheduler
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_auditor_start_wires_scheduler_reference(monkeypatch):
+    scheduler = MagicMock()
+    scheduler.start = AsyncMock()
+    trigger = MagicMock()
+    trigger.start = AsyncMock()
+    trigger.stop = AsyncMock()
+    monkeypatch.setattr(scheduler_module, "AuditScheduler", MagicMock(return_value=scheduler))
+    monkeypatch.setattr(
+        backfill_trigger_module,
+        "BackfillTrigger",
+        MagicMock(return_value=trigger),
+    )
+    monkeypatch.setattr(constants, "ENABLE_AUDITOR", True)
+
+    app = DataManagerApp()
+    app.db_manager = MagicMock()
+    app.db_manager.mongo_healthy.return_value = True
+    app.backfill_queue = MagicMock()
+
+    await app._run_auditor()
+
     assert api_module.audit_scheduler is scheduler
