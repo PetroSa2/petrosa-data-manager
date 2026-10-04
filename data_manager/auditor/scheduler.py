@@ -109,6 +109,7 @@ class AuditScheduler:
         self.leader_election = leader_election
         self.backfill_orchestrator = backfill_orchestrator
         self.running = False
+        self._stop_event = asyncio.Event()
         self.last_audit_time: datetime | None = None
 
         # P2.1 consumer (#634): wire the audit cycle into the shared
@@ -133,21 +134,34 @@ class AuditScheduler:
 
     async def start(self) -> None:
         """Start the audit scheduler."""
+        self.running = True
+        self._stop_event.clear()
+
         # Check if leader election is enabled and required
         if constants.ENABLE_LEADER_ELECTION:
             if not self.leader_election:
                 logger.error(
                     "Leader election is enabled but no LeaderElectionManager provided"
                 )
+                self.running = False
                 return
 
-            # Check if this pod is the leader
-            if not self.leader_election.is_leader:
+            while self.running and not self.leader_election.is_leader:
                 logger.info(
                     f"Pod {self.leader_election.pod_id} is not the leader. "
-                    f"Audit scheduler will not run on this pod."
+                    f"Waiting for leadership before starting audit scheduler."
                 )
                 audit_leader_status.set(0)
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=self.leader_election.heartbeat_interval,
+                    )
+                except TimeoutError:
+                    pass
+
+            if not self.running:
+                logger.info("Audit scheduler stopped while waiting for leadership")
                 return
 
             logger.info(
@@ -161,7 +175,6 @@ class AuditScheduler:
             )
             audit_leader_status.set(1)  # Assume leader if election disabled
 
-        self.running = True
         logger.info(
             f"Audit scheduler starting (delaying {constants.INITIAL_STARTUP_DELAY}s)"
         )
@@ -184,19 +197,32 @@ class AuditScheduler:
         logger.info("Audit scheduler active")
 
         while self.running:
-            try:
-                # Verify leadership if leader election is enabled
-                if (
-                    constants.ENABLE_LEADER_ELECTION
-                    and self.leader_election
-                    and not self.leader_election.is_leader
-                ):
-                    logger.warning(
-                        "Lost leadership! Stopping audit scheduler on this pod."
-                    )
-                    audit_leader_status.set(0)
+            if (
+                constants.ENABLE_LEADER_ELECTION
+                and self.leader_election
+                and not self.leader_election.is_leader
+            ):
+                logger.warning(
+                    "Lost leadership! Waiting for leadership before resuming audit scheduler."
+                )
+                audit_leader_status.set(0)
+                while self.running and not self.leader_election.is_leader:
+                    try:
+                        await asyncio.wait_for(
+                            self._stop_event.wait(),
+                            timeout=self.leader_election.heartbeat_interval,
+                        )
+                    except TimeoutError:
+                        pass
+                if not self.running:
                     break
+                logger.info(
+                    f"Pod {self.leader_election.pod_id} regained leadership. "
+                    "Resuming audit scheduler."
+                )
+                audit_leader_status.set(1)
 
+            try:
                 await self.run_audit_cycle()
                 await asyncio.sleep(constants.AUDIT_INTERVAL)
             except Exception as e:
@@ -210,6 +236,7 @@ class AuditScheduler:
     async def stop(self) -> None:
         """Stop the audit scheduler."""
         self.running = False
+        self._stop_event.set()
 
         # Stop streaming gap detector
         if self.streaming_detector:

@@ -37,6 +37,7 @@ class LeaderElectionManager:
         self.is_leader = False
         self.leader_pod_id: str | None = None
         self.heartbeat_task: asyncio.Task[None] | None = None
+        self.follower_task: asyncio.Task[None] | None = None
         self.mongodb_client: Any = None
         self.mongodb_db: Any = None
         self._running = False
@@ -78,7 +79,7 @@ class LeaderElectionManager:
             leader_collection = self.mongodb_db.leader_election
 
             # Index on status for quick leader lookup
-            await leader_collection.create_index("status")
+            await leader_collection.create_index("status", unique=True)
 
             # Index on pod_id for pod-specific queries
             await leader_collection.create_index("pod_id")
@@ -118,6 +119,7 @@ class LeaderElectionManager:
                 logger.info(
                     f"Pod {self.pod_id} is a FOLLOWER. Leader: {self.leader_pod_id}"
                 )
+                self.follower_task = asyncio.create_task(self._wait_for_leadership())
 
             return True
 
@@ -137,11 +139,41 @@ class LeaderElectionManager:
             except asyncio.CancelledError:
                 pass
 
+        if self.follower_task:
+            self.follower_task.cancel()
+            try:
+                await self.follower_task
+            except asyncio.CancelledError:
+                pass
+
         # Release leadership if we are the leader
         if self.is_leader:
             await self._release_leadership()
 
         logger.info("Leader election stopped")
+
+    async def _wait_for_leadership(self) -> None:
+        """Retry leader election until this pod wins or is stopped."""
+        try:
+            while self._running and not self.is_leader:
+                await asyncio.sleep(self.heartbeat_interval)
+                if not self._running:
+                    break
+
+                if await self._try_become_leader():
+                    logger.info(f"Pod {self.pod_id} elected as LEADER after retry")
+                    if self._running and self.heartbeat_task is None:
+                        self.heartbeat_task = asyncio.create_task(
+                            self._maintain_leadership()
+                        )
+                    break
+        except asyncio.CancelledError:
+            logger.info("Follower election task cancelled")
+        except Exception as e:
+            logger.error(f"Error retrying leader election: {e}", exc_info=True)
+        finally:
+            if asyncio.current_task() is self.follower_task:
+                self.follower_task = None
 
     async def _try_become_leader(self) -> bool:
         """
@@ -190,6 +222,7 @@ class LeaderElectionManager:
                 {"status": "leader"},
                 {
                     "$set": {
+                        "status": "leader",
                         "pod_id": self.pod_id,
                         "elected_at": datetime.now(UTC),
                         "last_heartbeat": datetime.now(UTC),
@@ -244,6 +277,10 @@ class LeaderElectionManager:
                             f"Lost leadership! Pod {self.pod_id} is no longer leader"
                         )
                         self.is_leader = False
+                        if self._running and self.follower_task is None:
+                            self.follower_task = asyncio.create_task(
+                                self._wait_for_leadership()
+                            )
                         break
 
             except asyncio.CancelledError:
@@ -254,6 +291,8 @@ class LeaderElectionManager:
                 await asyncio.sleep(5)  # Backoff on error
 
         logger.info("Leadership heartbeat stopped")
+        if asyncio.current_task() is self.heartbeat_task:
+            self.heartbeat_task = None
 
     async def _send_heartbeat(self) -> bool:
         """
@@ -330,6 +369,7 @@ class LeaderElectionManager:
 
         except Exception as e:
             logger.error(f"Error releasing leadership: {e}")
+            self.is_leader = False
 
     def get_status(self) -> dict:
         """
