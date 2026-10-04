@@ -23,10 +23,17 @@ class CopyProofResult:
     checked_days: tuple[date, ...]
     failures: tuple[str, ...]
     generated_at: datetime
+    oldest_mongo_timestamp: datetime | None = None
+    invalid_timestamp_count: int = 0
 
     @property
     def proven(self) -> bool:
-        return bool(self.checked_days) and not self.failures
+        return (
+            bool(self.checked_days)
+            and not self.failures
+            and self.oldest_mongo_timestamp is not None
+            and self.invalid_timestamp_count == 0
+        )
 
 
 def is_proof_collection(name: str) -> bool:
@@ -42,6 +49,8 @@ def prove_daily_copy(
     now: datetime | None = None,
     retention_days: int,
     copy_lag: timedelta,
+    oldest_mongo_timestamp: datetime | None = None,
+    invalid_timestamp_count: int = 0,
 ) -> CopyProofResult:
     """Require MySQL to contain at least as many rows for every complete UTC day."""
     if retention_days <= 0:
@@ -49,10 +58,25 @@ def prove_daily_copy(
     if copy_lag < timedelta(0):
         raise ValueError("copy_lag must not be negative")
     generated_at = (now or datetime.now(UTC)).astimezone(UTC)
-    last_day = (generated_at - copy_lag).date()
-    first_day = last_day - timedelta(days=retention_days - 1)
-    days = tuple(first_day + timedelta(days=offset) for offset in range(retention_days))
+    if invalid_timestamp_count < 0:
+        raise ValueError("invalid_timestamp_count must not be negative")
+    deletion_window = max(timedelta(days=retention_days), copy_lag)
+    last_day = (generated_at - deletion_window).date()
+    if oldest_mongo_timestamp is None:
+        first_day = last_day - timedelta(days=retention_days - 1)
+    else:
+        first_day = oldest_mongo_timestamp.astimezone(UTC).date()
+    days = (
+        tuple(
+            first_day + timedelta(days=offset)
+            for offset in range((last_day - first_day).days + 1)
+        )
+        if first_day <= last_day
+        else ()
+    )
     failures: list[str] = []
+    if invalid_timestamp_count:
+        failures.append(f"invalid timestamps: {invalid_timestamp_count}")
     for day in days:
         mongo_count = int(mongo_counts.get(day, 0))
         mysql_count = int(mysql_counts.get(day, 0))
@@ -65,7 +89,47 @@ def prove_daily_copy(
         checked_days=days,
         failures=tuple(failures),
         generated_at=generated_at,
+        oldest_mongo_timestamp=oldest_mongo_timestamp
+        or datetime.combine(first_day, datetime.min.time(), tzinfo=UTC),
+        invalid_timestamp_count=invalid_timestamp_count,
     )
+
+
+async def _mongo_timestamp_metadata(
+    database: Any, collection: str
+) -> tuple[datetime | None, int]:
+    cursor = database[collection].aggregate(
+        [
+            {
+                "$project": {
+                    "normalized": {
+                        "$convert": {
+                            "input": "$timestamp",
+                            "to": "date",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    }
+                }
+            },
+            {
+                "$group": {
+                    "_id": None,
+                    "oldest": {"$min": "$normalized"},
+                    "invalid": {
+                        "$sum": {"$cond": [{"$eq": ["$normalized", None]}, 1, 0]}
+                    },
+                }
+            },
+        ]
+    )
+    rows = await cursor.to_list(length=None)
+    if not rows:
+        return None, 0
+    oldest = rows[0].get("oldest")
+    if oldest is not None and oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=UTC)
+    return oldest, int(rows[0].get("invalid", 0))
 
 
 async def _mongo_daily_counts(
@@ -77,11 +141,27 @@ async def _mongo_daily_counts(
 ) -> dict[date, int]:
     cursor = database[collection].aggregate(
         [
-            {"$match": {"timestamp": {"$gte": start, "$lt": end}}},
+            {
+                "$project": {
+                    "normalized": {
+                        "$convert": {
+                            "input": "$timestamp",
+                            "to": "date",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    }
+                }
+            },
+            {"$match": {"normalized": {"$gte": start, "$lt": end}}},
             {
                 "$group": {
                     "_id": {
-                        "$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": "$normalized",
+                            "timezone": "UTC",
+                        }
                     },
                     "count": {"$sum": 1},
                 }
@@ -137,8 +217,18 @@ async def _run_cli(
             )
         now = datetime.now(UTC)
         lag = timedelta(seconds=copy_lag_seconds)
-        last_day = (now - lag).date()
-        first_day = last_day - timedelta(days=retention_days - 1)
+        deletion_window = max(timedelta(days=retention_days), lag)
+        last_day = (now - deletion_window).date()
+        metadata = {
+            member: await _mongo_timestamp_metadata(mongo.db, member)
+            for member in selected
+        }
+        usable_oldest = [
+            oldest for oldest, _ in metadata.values() if oldest is not None
+        ]
+        if not usable_oldest:
+            raise RuntimeError("no usable Mongo timestamps found in proof collections")
+        first_day = min(usable_oldest).date()
         start = datetime.combine(first_day, datetime.min.time(), tzinfo=UTC)
         end = datetime.combine(
             last_day + timedelta(days=1), datetime.min.time(), tzinfo=UTC
@@ -163,7 +253,15 @@ async def _run_cli(
                 continue
             name, members = group
             mongo_counts: dict[date, int] = {}
+            oldest = None
+            invalid = 0
             for member in members:
+                member_oldest, member_invalid = metadata[member]
+                if member_oldest is not None:
+                    oldest = (
+                        member_oldest if oldest is None else min(oldest, member_oldest)
+                    )
+                invalid += member_invalid
                 counts = await _mongo_daily_counts(
                     mongo.db, member, start=start, end=end
                 )
@@ -183,6 +281,8 @@ async def _run_cli(
                     now=now,
                     retention_days=retention_days,
                     copy_lag=lag,
+                    oldest_mongo_timestamp=oldest,
+                    invalid_timestamp_count=invalid,
                 ).__dict__
             )
         print(json.dumps(results, default=str))
