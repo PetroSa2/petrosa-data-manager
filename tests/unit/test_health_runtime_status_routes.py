@@ -91,7 +91,9 @@ async def test_auditor_start_wires_scheduler_reference(monkeypatch):
     trigger = MagicMock()
     trigger.start = AsyncMock()
     trigger.stop = AsyncMock()
-    monkeypatch.setattr(scheduler_module, "AuditScheduler", MagicMock(return_value=scheduler))
+    monkeypatch.setattr(
+        scheduler_module, "AuditScheduler", MagicMock(return_value=scheduler)
+    )
     monkeypatch.setattr(
         backfill_trigger_module,
         "BackfillTrigger",
