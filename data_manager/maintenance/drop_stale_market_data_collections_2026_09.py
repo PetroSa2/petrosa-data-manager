@@ -85,9 +85,15 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
+from data_manager.db.mysql_adapter import MySQLAdapter
+from data_manager.maintenance.historic_copy_proof import (
+    CopyProofResult,
+    prove_collection_group,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +108,7 @@ CATEGORY_TRADES_PLAIN = "trades_plain"
 # Categories processed by default in --apply mode. trades_symbol (wired
 # reader) requires the explicit --include-wired-reader opt-in (AC1 correction
 # precedent: #272 retained wired-but-empty-reader tables like `datasets`).
-DEFAULT_APPLY_CATEGORIES = (CATEGORY_TICKERS_SYMBOL, CATEGORY_TRADES_PLAIN)
+DEFAULT_APPLY_CATEGORIES = (CATEGORY_TICKERS_SYMBOL,)
 
 DEFAULT_MIN_AGE_DAYS = 30
 
@@ -119,6 +125,7 @@ class CollectionDropResult:
     newest_doc_age_days: float | None = None
     guard_tripped: bool = False
     retained_wired_reader: bool = False
+    retained_unproven: bool = False
     dropped: bool = False
 
 
@@ -168,6 +175,8 @@ async def process_collection(
     dry_run: bool,
     min_age_days: int,
     include_wired_reader: bool,
+    allow_plain_trades: bool = False,
+    trades_proof: CopyProofResult | None = None,
     now: datetime | None = None,
 ) -> CollectionDropResult:
     """Run the guarded-drop flow for a single collection. Never raises —
@@ -187,6 +196,16 @@ async def process_collection(
             __name__,
             collection,
         )
+        return result
+
+    if category == CATEGORY_TRADES_PLAIN and not allow_plain_trades:
+        result.retained_unproven = True
+        return result
+    if category == CATEGORY_TRADES_PLAIN and (
+        trades_proof is None or not trades_proof.proven
+    ):
+        result.retained_unproven = True
+        result.guard_tripped = True
         return result
 
     try:
@@ -265,6 +284,8 @@ async def execute_migration(
     min_age_days: int = DEFAULT_MIN_AGE_DAYS,
     include_wired_reader: bool = False,
     collections: list[str] | None = None,
+    allow_plain_trades: bool = False,
+    trades_proof: CopyProofResult | None = None,
 ) -> list[CollectionDropResult]:
     """Run the guarded-drop flow across every target collection.
 
@@ -283,6 +304,8 @@ async def execute_migration(
             dry_run=dry_run,
             min_age_days=min_age_days,
             include_wired_reader=include_wired_reader,
+            allow_plain_trades=allow_plain_trades,
+            trades_proof=trades_proof,
         )
         for name in targets
     ]
@@ -343,6 +366,11 @@ def _build_argparser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--allow-plain-trades",
+        action="store_true",
+        help="Opt in to dropping plain trades only after historic-copy proof passes.",
+    )
+    parser.add_argument(
         "--min-age-days",
         type=int,
         default=None,
@@ -384,20 +412,38 @@ async def _amain(argv: list[str] | None = None) -> int:
     min_age_days = _resolve_min_age_days(args.min_age_days)
 
     adapter = MongoDBAdapter(connection_string=connection_string)
+    mysql = MySQLAdapter(constants.MYSQL_URI) if args.allow_plain_trades else None
     adapter.connect()
+    if mysql is not None:
+        mysql.connect()
     try:
+        trades_proof = None
+        if args.allow_plain_trades:
+            trades_proof = await prove_collection_group(
+                adapter.db,
+                mysql,
+                "trades",
+                ["trades"],
+                now=datetime.now(UTC),
+                retention_days=constants.TRADES_RETENTION_DAYS,
+                copy_lag=timedelta(seconds=constants.HISTORIC_COPY_LAG_SECONDS),
+            )
         results = await execute_migration(
             adapter,
             dry_run=args.dry_run,
             min_age_days=min_age_days,
             include_wired_reader=args.include_wired_reader,
             collections=args.collections,
+            allow_plain_trades=args.allow_plain_trades,
+            trades_proof=trades_proof,
         )
     except Exception as exc:  # noqa: BLE001 — surface as a database error
         logger.error("database error during migration: %s", exc)
         return 4
     finally:
         adapter.disconnect()
+        if mysql is not None:
+            mysql.disconnect()
 
     dropped = [r.collection for r in results if r.dropped]
     guarded = [r.collection for r in results if r.guard_tripped]

@@ -11,6 +11,7 @@ from data_manager.maintenance.historic_copy_proof import (
     _mongo_timestamp_metadata,
     _mysql_daily_counts,
     is_proof_collection,
+    prove_collection_group,
     prove_daily_copy,
 )
 
@@ -186,6 +187,36 @@ async def test_timestamp_metadata_treats_a_naive_oldest_timestamp_as_utc():
 
     assert oldest == datetime(2026, 8, 8, 1, 2, tzinfo=UTC)
     assert invalid == 3
+
+
+@pytest.mark.asyncio
+async def test_collection_group_proof_combines_mongo_members(monkeypatch):
+    day = date(2026, 10, 8)
+
+    async def metadata(_database, member):
+        return datetime(2026, 10, 8, tzinfo=UTC), 0 if member == "trades" else 1
+
+    async def daily(_database, _collection, *, start, end):
+        assert start.date() == day
+        assert end.date() == date(2026, 10, 9)
+        return {day: 2}
+
+    monkeypatch.setattr(proof, "_mongo_timestamp_metadata", metadata)
+    monkeypatch.setattr(proof, "_mongo_daily_counts", daily)
+    monkeypatch.setattr(proof, "_mysql_daily_counts", lambda *args, **kwargs: {day: 2})
+
+    result = await prove_collection_group(
+        _Database([]),
+        SimpleNamespace(),
+        "trades",
+        ["trades", "trades_BTCUSDT"],
+        now=datetime(2026, 10, 10, 12, tzinfo=UTC),
+        retention_days=1,
+        copy_lag=timedelta(days=2),
+    )
+
+    assert result.proven is False
+    assert result.failures == ("invalid timestamps: 1", "2026-10-08: mongo=4 mysql=2")
 
 
 class _Result:
