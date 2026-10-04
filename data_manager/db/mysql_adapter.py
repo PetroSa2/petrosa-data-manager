@@ -631,7 +631,13 @@ class MySQLAdapter(BaseAdapter):
         except Exception:  # pragma: no cover - metrics must never break writes
             logger.debug("Failed to record ignored-insert metric", exc_info=True)
 
-    def write(self, model_instances: list[BaseModel], collection: str) -> WriteResult:
+    def write(
+        self,
+        model_instances: list[BaseModel],
+        collection: str,
+        *,
+        insert_only: bool = False,
+    ) -> WriteResult:
         """Write model instances to MySQL with retry + circuit breaker.
 
         Returns a :class:`WriteResult` carrying explicit ``inserted`` /
@@ -700,10 +706,12 @@ class MySQLAdapter(BaseAdapter):
         # klines tables carry `extracted_at`; use ON DUPLICATE KEY UPDATE to
         # avoid MySQL 5.x gap-lock contention that INSERT IGNORE causes on
         # unique-index conflicts (petrosa-data-manager#231).
-        uses_on_dup_key = "extracted_at" in table.c or collection in {
+        uses_on_dup_key = not insert_only and (
+            "extracted_at" in table.c or collection in {
             "execution_events",
             "pnl_events",
-        }
+            }
+        )
 
         def _write_attempt() -> int:
             """Single write attempt — returns rowcount or raises."""
@@ -835,7 +843,12 @@ class MySQLAdapter(BaseAdapter):
             ) from exc
 
     def write_batch(
-        self, model_instances: list[BaseModel], collection: str, batch_size: int = 1000
+        self,
+        model_instances: list[BaseModel],
+        collection: str,
+        batch_size: int = 1000,
+        *,
+        insert_only: bool = False,
     ) -> WriteResult:
         """Write model instances in batches, aggregating per-batch counts."""
         inserted = 0
@@ -845,7 +858,7 @@ class MySQLAdapter(BaseAdapter):
 
         for i in range(0, len(model_instances), batch_size):
             batch = model_instances[i : i + batch_size]
-            result = self.write(batch, collection)
+            result = self.write(batch, collection, insert_only=insert_only)
             inserted += result.inserted
             duplicates += result.duplicates
             ignored_count += result.ignored_count
