@@ -284,6 +284,9 @@ class DataManagerApp:
             and self.db_manager
             and self.db_manager.mongodb_adapter
         ):
+            from data_manager import api
+
+            api.app.leader_election = None
             try:
                 from data_manager.leader_election import LeaderElectionManager
 
@@ -292,6 +295,9 @@ class DataManagerApp:
                     self.db_manager.mongodb_adapter.client
                 )
                 await self.leader_election.start()
+                from data_manager import api
+
+                api.app.leader_election = self.leader_election
                 logger.info(
                     f"Leader election initialized: "
                     f"is_leader={self.leader_election.is_leader}, "
@@ -841,6 +847,10 @@ class DataManagerApp:
 
         logger.info("Starting auditor background worker")
 
+        from data_manager import api
+
+        api.app.audit_scheduler = None
+
         # Import here to avoid circular dependency
         from data_manager.auditor.scheduler import AuditScheduler
 
@@ -883,6 +893,7 @@ class DataManagerApp:
             await backfill_trigger.start()
 
             await audit_scheduler.start()
+            api.app.audit_scheduler = audit_scheduler
         except Exception as e:
             logger.error(f"Error in auditor: {e}", exc_info=True)
         finally:

@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 
 # Global database manager reference (will be set by main app)
 db_manager = None
+leader_election = None
+audit_scheduler = None
 
 _RATE_LIMIT_BOOKKEEPING_PATHS = frozenset(
     {
