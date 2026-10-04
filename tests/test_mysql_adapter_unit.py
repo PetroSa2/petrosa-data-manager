@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import constants
 from data_manager.db.mysql_adapter import MySQLAdapter
 from data_manager.db.mysql_session import configure_utc_session, set_utc_session
 
@@ -48,7 +49,7 @@ def test_mysql_adapter_init(mock_create_engine):
 # live 2026-09-14 — the ecosystem budget below is derived from those.
 _HPA_MAX_REPLICAS = 2  # k8s/data-manager/hpa.yaml maxReplicas
 _ECOSYSTEM_MYSQL_BUDGET = 24  # ~24 conns, leaving headroom under the 30 cap
-_SERVER_WAIT_TIMEOUT = 15  # seconds, probed live on the shared DBaaS
+_SESSION_WAIT_TIMEOUT = constants.MYSQL_SESSION_WAIT_TIMEOUT
 
 
 def test_mysql_adapter_pool_recycle_below_server_wait_timeout():
@@ -59,7 +60,7 @@ def test_mysql_adapter_pool_recycle_below_server_wait_timeout():
     churn documented in the mysql audit).
     """
     adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db")
-    assert adapter.engine_options["pool_recycle"] < _SERVER_WAIT_TIMEOUT
+    assert adapter.engine_options["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert adapter.engine_options["pool_recycle"] > 0
 
 
@@ -90,7 +91,11 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
 
     _, kwargs = mock_create_engine.call_args
     assert kwargs["pool_pre_ping"] is True
-    assert kwargs["pool_recycle"] < _SERVER_WAIT_TIMEOUT
+    assert kwargs["pool_recycle"] < _SESSION_WAIT_TIMEOUT
+    assert (
+        f"wait_timeout={_SESSION_WAIT_TIMEOUT}"
+        in kwargs["connect_args"]["init_command"]
+    )
     assert (kwargs["pool_size"] + kwargs["max_overflow"]) * _HPA_MAX_REPLICAS <= (
         _ECOSYSTEM_MYSQL_BUDGET
     )
