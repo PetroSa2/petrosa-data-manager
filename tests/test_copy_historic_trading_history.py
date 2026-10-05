@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -124,6 +124,21 @@ def test_timestamp_normalizes_iso_and_bson_datetimes_to_utc():
     )
     bson_datetime = datetime(2026, 8, 8, 12, 0)
     assert _timestamp(bson_datetime) == bson_datetime.replace(tzinfo=UTC)
+
+
+@pytest.mark.parametrize("value", [float("nan"), 10**30])
+def test_timestamp_rejects_invalid_numeric_values(value):
+    with pytest.raises(ValueError, match="timestamp"):
+        _timestamp(value)
+
+
+def test_timestamp_rejects_timezone_conversion_failures():
+    class BrokenTimezone(tzinfo):
+        def utcoffset(self, _value):
+            raise OverflowError("timezone overflow")
+
+    with pytest.raises(ValueError, match="timestamp"):
+        _timestamp(datetime(2026, 8, 8, tzinfo=BrokenTimezone()))
 
 
 def test_checkpoint_reads_json_object_and_rejects_other_values(tmp_path: Path):
@@ -300,6 +315,29 @@ async def test_account_fill_missing_required_column_is_invalid():
     del document["commission_asset"]
 
     mysql = Mysql()
+    result = await copy_collection(
+        Collection([document]),
+        mysql,
+        "trades",
+        batch_size=10,
+        apply=True,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result["invalid"] == 1
+    assert result["rows"] == 0
+    assert mysql.batches == []
+
+
+@pytest.mark.asyncio
+async def test_account_fill_non_finite_order_id_is_invalid():
+    document = trade()
+    document["order_id"] = float("nan")
+    mysql = Mysql()
+
     result = await copy_collection(
         Collection([document]),
         mysql,
