@@ -128,8 +128,9 @@ def test_timestamp_normalizes_iso_and_bson_datetimes_to_utc():
 
 @pytest.mark.parametrize("value", [float("nan"), 10**30])
 def test_timestamp_rejects_invalid_numeric_values(value):
-    with pytest.raises(ValueError, match="timestamp"):
+    with pytest.raises(ValueError, match="timestamp") as error:
         _timestamp(value)
+    assert "timestamp" in str(error.value)
 
 
 def test_timestamp_rejects_timezone_conversion_failures():
@@ -137,8 +138,9 @@ def test_timestamp_rejects_timezone_conversion_failures():
         def utcoffset(self, _value):
             raise OverflowError("timezone overflow")
 
-    with pytest.raises(ValueError, match="timestamp"):
+    with pytest.raises(ValueError, match="timestamp") as error:
         _timestamp(datetime(2026, 8, 8, tzinfo=BrokenTimezone()))
+    assert "timestamp" in str(error.value)
 
 
 def test_checkpoint_reads_json_object_and_rejects_other_values(tmp_path: Path):
