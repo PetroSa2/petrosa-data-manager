@@ -1,5 +1,6 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -94,6 +95,37 @@ def test_timestamp_accepts_datetime_epoch_and_naive_iso_values():
     assert _timestamp("2026-08-08T00:00:00") == aware
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        1786147200,
+        1786147200000,
+        "1786147200000",
+    ],
+)
+def test_timestamp_accepts_epoch_seconds_and_milliseconds(value):
+    assert _timestamp(value) == datetime(2026, 8, 8, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (1786147200.5, datetime(2026, 8, 8, 0, 0, 0, 500000, tzinfo=UTC)),
+        (Decimal("1786147200000"), datetime(2026, 8, 8, tzinfo=UTC)),
+    ],
+)
+def test_timestamp_accepts_float_seconds_and_decimal_milliseconds(value, expected):
+    assert _timestamp(value) == expected
+
+
+def test_timestamp_normalizes_iso_and_bson_datetimes_to_utc():
+    assert _timestamp("2026-08-09T01:30:00+02:00") == datetime(
+        2026, 8, 8, 23, 30, tzinfo=UTC
+    )
+    bson_datetime = datetime(2026, 8, 8, 12, 0)
+    assert _timestamp(bson_datetime) == bson_datetime.replace(tzinfo=UTC)
+
+
 def test_checkpoint_reads_json_object_and_rejects_other_values(tmp_path: Path):
     checkpoint = tmp_path / "checkpoint.json"
     checkpoint.write_text(json.dumps({"trades": "2026-08-09T00:00:00Z"}))
@@ -124,6 +156,25 @@ async def test_copy_is_dry_run_by_default_and_reports_days():
     assert result["rows"] == 2
     assert result["days"] == {"2026-08-08": 1, "2026-08-09": 1}
     assert mysql.batches == []
+
+
+@pytest.mark.asyncio
+async def test_execution_event_normalizes_epoch_milliseconds_and_reports_utc_day():
+    mysql = Mysql()
+    result = await copy_collection(
+        Collection([event(1786147200000)]),
+        mysql,
+        "execution_events",
+        batch_size=10,
+        apply=True,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result["days"] == {"2026-08-08": 1}
+    assert mysql.batches[0][0][0].timestamp == datetime(2026, 8, 8, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
@@ -190,6 +241,57 @@ async def test_account_fill_is_written_insert_only_and_reports_day():
     model = mysql.batches[0][0][0]
     assert model.order_id == "order-1"
     assert mysql.batches[0][1:] == ("trades", 10, True)
+
+
+@pytest.mark.asyncio
+async def test_account_fill_normalizes_numeric_id_and_millisecond_timestamps():
+    document = trade("1786235400000")
+    document["order_id"] = 123456789
+    document["trade_time"] = 1786235400000
+    document["extracted_at"] = datetime(2026, 8, 9, 12, tzinfo=UTC)
+    mysql = Mysql()
+
+    result = await copy_collection(
+        Collection([document]),
+        mysql,
+        "trades",
+        batch_size=10,
+        apply=True,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result["rows"] == 1
+    assert result["invalid"] == 0
+    model = mysql.batches[0][0][0]
+    assert model.order_id == "123456789"
+    assert model.timestamp == datetime(2026, 8, 9, 0, 30, tzinfo=UTC)
+    assert result["days"] == {"2026-08-09": 1}
+
+
+@pytest.mark.asyncio
+async def test_account_fill_reports_utc_day_for_offset_timestamp():
+    document = trade("2026-08-09T00:30:00+02:00")
+    document["trade_time"] = datetime(
+        2026, 8, 9, 0, 30, tzinfo=timezone(timedelta(hours=2))
+    )
+    mysql = Mysql()
+
+    result = await copy_collection(
+        Collection([document]),
+        mysql,
+        "trades",
+        batch_size=10,
+        apply=False,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result["days"] == {"2026-08-08": 1}
 
 
 @pytest.mark.asyncio
