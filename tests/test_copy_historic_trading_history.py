@@ -289,6 +289,35 @@ async def test_account_fill_normalizes_numeric_id_and_millisecond_timestamps():
 
 
 @pytest.mark.asyncio
+async def test_account_fill_accepts_present_null_exchange_fields():
+    document = trade()
+    document["timestamp"] = datetime(2026, 8, 9, 12, tzinfo=UTC)
+    document["order_id"] = None
+    document["commission"] = None
+    document["commission_asset"] = None
+    mysql = Mysql()
+
+    result = await copy_collection(
+        Collection([document]),
+        mysql,
+        "trades",
+        batch_size=10,
+        apply=True,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result["rows"] == 1
+    assert result["invalid"] == 0
+    model = mysql.batches[0][0][0]
+    assert model.order_id is None
+    assert model.commission is None
+    assert model.commission_asset is None
+
+
+@pytest.mark.asyncio
 async def test_account_fill_reports_utc_day_for_offset_timestamp():
     document = trade("2026-08-09T00:30:00+02:00")
     document["trade_time"] = datetime(
