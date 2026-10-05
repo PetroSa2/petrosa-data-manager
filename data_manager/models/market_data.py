@@ -107,9 +107,9 @@ class TradeFill(BaseModel):
     quantity: Decimal
     quote_quantity: Decimal
     is_buyer_maker: bool
-    order_id: str
-    commission: Decimal
-    commission_asset: str
+    order_id: str | None
+    commission: Decimal | None
+    commission_asset: str | None
     trade_time: datetime
     extracted_at: datetime
     extractor_version: str
