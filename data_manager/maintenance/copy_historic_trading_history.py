@@ -8,6 +8,7 @@ import json
 import os
 from collections import Counter
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +25,38 @@ MODEL_TYPES = {"execution_events": ExecutionEvent, "trades": TradeFill}
 def _timestamp(value: Any) -> datetime:
     if isinstance(value, datetime):
         parsed = value
-    elif isinstance(value, int | float):
-        parsed = datetime.fromtimestamp(float(value), UTC)
     else:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        numeric: Decimal | None = None
+        if not isinstance(value, bool) and isinstance(value, int | float | Decimal):
+            numeric = Decimal(str(value))
+        elif isinstance(value, str):
+            try:
+                numeric = Decimal(value)
+            except (InvalidOperation, ValueError):
+                numeric = None
+
+        if numeric is not None:
+            if not numeric.is_finite():
+                raise ValueError(f"invalid numeric timestamp: {value!r}")
+            if abs(numeric) >= Decimal("1e11"):
+                numeric /= Decimal(1000)
+            try:
+                parsed = datetime.fromtimestamp(float(numeric), UTC)
+            except (OverflowError, OSError, ValueError) as exc:
+                raise ValueError(f"invalid epoch timestamp: {value!r}") from exc
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid timestamp: {value!r}") from exc
+    try:
+        return (
+            parsed.replace(tzinfo=UTC)
+            if parsed.tzinfo is None
+            else parsed.astimezone(UTC)
+        )
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(f"invalid timestamp: {value!r}") from exc
 
 
 def _collection_names(names: list[str], requested: str | None) -> list[str]:
@@ -64,6 +92,13 @@ def _model(collection: str, document: dict[str, Any]) -> Any:
     value = {key: item for key, item in document.items() if key != "_id"}
     value["timestamp"] = _timestamp(value["timestamp"])
     if collection != "execution_events":
+        order_id = value["order_id"]
+        if isinstance(order_id, int | float | Decimal) and not isinstance(
+            order_id, bool
+        ):
+            if not Decimal(str(order_id)).is_finite():
+                raise ValueError(f"invalid order ID: {order_id!r}")
+            value["order_id"] = str(order_id)
         value["trade_time"] = _timestamp(value["trade_time"])
         value["extracted_at"] = _timestamp(value["extracted_at"])
     return MODEL_TYPES[
