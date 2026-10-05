@@ -94,7 +94,9 @@ def test_tier1_skip_reason_is_explicit():
 
 def _code(path: Path) -> str:
     return "\n".join(
-        line for line in path.read_text().splitlines() if not line.lstrip().startswith("--")
+        line
+        for line in path.read_text().splitlines()
+        if not line.lstrip().startswith("--")
     )
 
 
@@ -146,7 +148,9 @@ def _connect(pymysql):
             subprocess.run(
                 ["docker", "rm", "-f", container_name], check=False, capture_output=True
             )
-            pytest.skip("The local MySQL 5.7 image is unavailable on this host architecture")
+            pytest.skip(
+                "The local MySQL 5.7 image is unavailable on this host architecture"
+            )
         port = int(port_result.stdout.splitlines()[0].rsplit(":", 1)[1].strip())
     connection = None
     for _ in range(90):
