@@ -97,6 +97,28 @@ class Trade(BaseModel):
         json_encoders = {Decimal: str, datetime: lambda v: v.isoformat()}
 
 
+class TradeFill(BaseModel):
+    """Account fill row matching the durable MySQL ``trades`` table."""
+
+    symbol: str
+    trade_id: int
+    timestamp: datetime
+    price: Decimal
+    quantity: Decimal
+    quote_quantity: Decimal
+    is_buyer_maker: bool
+    order_id: str
+    commission: Decimal
+    commission_asset: str
+    trade_time: datetime
+    extracted_at: datetime
+    extractor_version: str
+    source: str
+
+    class Config:
+        json_encoders = {Decimal: str, datetime: lambda v: v.isoformat()}
+
+
 class OrderBookLevel(BaseModel):
     """Single order book level."""
 

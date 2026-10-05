@@ -194,6 +194,52 @@ def _mysql_daily_counts(
         }
 
 
+async def prove_collection_group(
+    mongo_database: Any,
+    mysql: MySQLAdapter,
+    collection: str,
+    members: list[str],
+    *,
+    now: datetime,
+    retention_days: int,
+    copy_lag: timedelta,
+) -> CopyProofResult:
+    """Run the durable copy proof for one logical Mongo collection group."""
+    metadata = {
+        member: await _mongo_timestamp_metadata(mongo_database, member)
+        for member in members
+    }
+    oldest_values = [oldest for oldest, _ in metadata.values() if oldest is not None]
+    oldest = min(oldest_values) if oldest_values else None
+    last_day = (now - max(timedelta(days=retention_days), copy_lag)).date()
+    first_day = oldest.date() if oldest is not None else last_day
+    start = datetime.combine(first_day, datetime.min.time(), tzinfo=UTC)
+    end = datetime.combine(
+        last_day + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+    )
+    mongo_counts: dict[date, int] = {}
+    invalid = 0
+    for member in members:
+        member_oldest, member_invalid = metadata[member]
+        invalid += member_invalid
+        if member_oldest is not None:
+            for day, count in (
+                await _mongo_daily_counts(mongo_database, member, start=start, end=end)
+            ).items():
+                mongo_counts[day] = mongo_counts.get(day, 0) + count
+    mysql_counts = _mysql_daily_counts(mysql, "trades", start=start, end=end)
+    return prove_daily_copy(
+        collection,
+        mongo_counts,
+        mysql_counts,
+        now=now,
+        retention_days=retention_days,
+        copy_lag=copy_lag,
+        oldest_mongo_timestamp=oldest,
+        invalid_timestamp_count=invalid,
+    )
+
+
 async def _run_cli(
     collection: str | None, retention_days: int, copy_lag_seconds: int
 ) -> None:

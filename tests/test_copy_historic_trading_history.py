@@ -63,7 +63,13 @@ def trade(timestamp="2026-08-09T12:00:00Z"):
         "quantity": "2",
         "quote_quantity": "200",
         "is_buyer_maker": True,
-        "side": "BUY",
+        "order_id": "order-1",
+        "commission": "0.01",
+        "commission_asset": "USDT",
+        "trade_time": timestamp,
+        "extracted_at": timestamp,
+        "extractor_version": "1.0.0",
+        "source": "binance",
     }
 
 
@@ -158,6 +164,55 @@ async def test_apply_writes_batches_and_checkpoint(tmp_path: Path):
     assert result["rows"] == 1
     assert mysql.batches[0][1:] == ("trades", 10, True)
     assert json.loads(checkpoint_path.read_text())["trades_BTCUSDT"]
+
+
+@pytest.mark.asyncio
+async def test_account_fill_is_written_insert_only_and_reports_day():
+    mysql = Mysql()
+    result = await copy_collection(
+        Collection([trade()]),
+        mysql,
+        "trades",
+        batch_size=10,
+        apply=True,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result == {
+        "collection": "trades",
+        "rows": 1,
+        "invalid": 0,
+        "days": {"2026-08-09": 1},
+    }
+    model = mysql.batches[0][0][0]
+    assert model.order_id == "order-1"
+    assert mysql.batches[0][1:] == ("trades", 10, True)
+
+
+@pytest.mark.asyncio
+async def test_account_fill_missing_required_column_is_invalid():
+    document = trade()
+    del document["commission_asset"]
+
+    mysql = Mysql()
+    result = await copy_collection(
+        Collection([document]),
+        mysql,
+        "trades",
+        batch_size=10,
+        apply=True,
+        checkpoint={},
+        checkpoint_path=None,
+        since=None,
+        until=None,
+    )
+
+    assert result["invalid"] == 1
+    assert result["rows"] == 0
+    assert mysql.batches == []
 
 
 @pytest.mark.asyncio

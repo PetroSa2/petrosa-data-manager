@@ -15,10 +15,10 @@ import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
 from data_manager.models.execution_event import ExecutionEvent
-from data_manager.models.market_data import Trade
+from data_manager.models.market_data import TradeFill
 
 COLLECTIONS = ("execution_events", "trades")
-MODEL_TYPES = {"execution_events": ExecutionEvent, "trades": Trade}
+MODEL_TYPES = {"execution_events": ExecutionEvent, "trades": TradeFill}
 
 
 def _timestamp(value: Any) -> datetime:
@@ -63,6 +63,9 @@ def _save_checkpoint(path: Path, values: dict[str, str]) -> None:
 def _model(collection: str, document: dict[str, Any]) -> Any:
     value = {key: item for key, item in document.items() if key != "_id"}
     value["timestamp"] = _timestamp(value["timestamp"])
+    if collection != "execution_events":
+        value["trade_time"] = _timestamp(value["trade_time"])
+        value["extracted_at"] = _timestamp(value["extracted_at"])
     return MODEL_TYPES[
         "execution_events" if collection == "execution_events" else "trades"
     ](**value)

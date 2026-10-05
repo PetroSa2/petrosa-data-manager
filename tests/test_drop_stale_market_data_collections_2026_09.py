@@ -287,6 +287,8 @@ class TestProcessCollectionPlainTrades:
             dry_run=False,
             min_age_days=30,
             include_wired_reader=False,
+            allow_plain_trades=True,
+            trades_proof=MagicMock(proven=True),
             now=_now(),
         )
 
@@ -305,11 +307,47 @@ class TestProcessCollectionPlainTrades:
             dry_run=False,
             min_age_days=30,
             include_wired_reader=False,
+            allow_plain_trades=True,
+            trades_proof=MagicMock(proven=True),
             now=_now(),
         )
 
         assert result.guard_tripped is True
         assert result.dropped is False
+
+    @pytest.mark.asyncio
+    async def test_plain_trades_is_retained_without_opt_in_or_proof(self):
+        adapter = AsyncMock()
+        result = await mod.process_collection(
+            adapter,
+            "trades",
+            dry_run=False,
+            min_age_days=30,
+            include_wired_reader=False,
+            now=_now(),
+        )
+
+        assert result.retained_unproven is True
+        assert result.guard_tripped is False
+        adapter.get_record_count.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_plain_trades_opt_in_refuses_failed_proof(self):
+        adapter = AsyncMock()
+        result = await mod.process_collection(
+            adapter,
+            "trades",
+            dry_run=False,
+            min_age_days=30,
+            include_wired_reader=False,
+            allow_plain_trades=True,
+            trades_proof=MagicMock(proven=False),
+            now=_now(),
+        )
+
+        assert result.retained_unproven is True
+        assert result.guard_tripped is True
+        adapter.get_record_count.assert_not_called()
 
 
 class TestExecuteMigration:
