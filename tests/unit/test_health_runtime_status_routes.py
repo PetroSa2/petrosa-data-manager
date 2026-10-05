@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -87,7 +88,55 @@ def test_runtime_component_references_are_wired_to_api_module():
 @pytest.mark.asyncio
 async def test_auditor_start_wires_scheduler_reference(monkeypatch):
     scheduler = MagicMock()
-    scheduler.start = AsyncMock()
+    scheduler.get_status.return_value = {
+        "running": True,
+        "is_leader": True,
+        "leader_pod_id": "pod-1",
+    }
+    start_called = asyncio.Event()
+    release_start = asyncio.Event()
+
+    async def start_scheduler():
+        start_called.set()
+        await release_start.wait()
+
+    scheduler.start = start_scheduler
+    trigger = MagicMock()
+    trigger.start = AsyncMock()
+    trigger.stop = AsyncMock()
+    monkeypatch.setattr(
+        scheduler_module, "AuditScheduler", MagicMock(return_value=scheduler)
+    )
+    monkeypatch.setattr(
+        backfill_trigger_module,
+        "BackfillTrigger",
+        MagicMock(return_value=trigger),
+    )
+    monkeypatch.setattr(constants, "ENABLE_AUDITOR", True)
+
+    app = DataManagerApp()
+    app.db_manager = MagicMock()
+    app.db_manager.mongo_healthy.return_value = True
+    app.backfill_queue = MagicMock()
+
+    auditor_task = asyncio.create_task(app._run_auditor())
+    await asyncio.wait_for(start_called.wait(), timeout=1)
+
+    assert api_module.audit_scheduler is scheduler
+    audit_response = await audit_status()
+    assert audit_response["enabled"] is True
+    assert audit_response["is_leader"] is True
+
+    release_start.set()
+    await auditor_task
+    assert api_module.audit_scheduler is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_auditor_clears_scheduler_reference_when_start_fails(monkeypatch):
+    scheduler = MagicMock()
+    scheduler.start = AsyncMock(side_effect=RuntimeError("scheduler failed"))
     trigger = MagicMock()
     trigger.start = AsyncMock()
     trigger.stop = AsyncMock()
@@ -108,4 +157,4 @@ async def test_auditor_start_wires_scheduler_reference(monkeypatch):
 
     await app._run_auditor()
 
-    assert api_module.audit_scheduler is scheduler
+    assert api_module.audit_scheduler is None
