@@ -17,6 +17,7 @@ try:
     import sqlalchemy as sa
     from sqlalchemy import (
         JSON,
+        BigInteger,
         Column,
         DateTime,
         Enum,
@@ -295,6 +296,28 @@ class MySQLAdapter(BaseAdapter):
             Column("created_at", DateTime, nullable=False),
             Column("updated_at", DateTime, nullable=False),
             Index("idx_daily_pnl_date", "date", unique=True),
+        )
+
+        self.tables["trades"] = Table(
+            "trades",
+            self.metadata,
+            Column("id", String(64), primary_key=True),
+            Column("symbol", String(20), nullable=False),
+            Column("trade_id", BigInteger, nullable=False),
+            Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
+            Column("price", Numeric(20, 8), nullable=False),
+            Column("quantity", Numeric(20, 8), nullable=False),
+            Column("quote_quantity", Numeric(20, 8), nullable=False),
+            Column("is_buyer_maker", Integer, nullable=False),
+            Column("order_id", BigInteger),
+            Column("commission", Numeric(20, 8)),
+            Column("commission_asset", String(20)),
+            Column("trade_time", MySQLDateTime(fsp=6), nullable=False),
+            Column("extracted_at", MySQLDateTime(fsp=6), nullable=False),
+            Column("extractor_version", String(20), nullable=False),
+            Column("source", String(50), nullable=False),
+            UniqueConstraint("trade_id", name="idx_trades_trade_id"),
+            Index("idx_trades_symbol_timestamp", "symbol", "timestamp"),
         )
 
         # 2026-09-20 — cio_decisions: the permanent, unbounded historic copy.
@@ -635,6 +658,7 @@ class MySQLAdapter(BaseAdapter):
         collection: str,
         *,
         insert_only: bool = False,
+        natural_key: str | None = None,
     ) -> WriteResult:
         """Write model instances to MySQL with retry + circuit breaker.
 
@@ -645,27 +669,37 @@ class MySQLAdapter(BaseAdapter):
         subclass valued at ``inserted``, preserving backward compatibility
         for callers that compare the result against a plain integer.
 
+        ``insert_only=True`` never changes an existing row: the caller names the
+        ``natural_key`` column (``trade_id`` for trades, ``event_key`` for
+        execution_events) and a collision runs ``natural_key = table.natural_key``,
+        a true no-op, so a surrogate primary key such as ``id`` is never rewritten.
+        MySQL reports a no-op duplicate as one affected row under the client's
+        FOUND_ROWS flag, so the duplicates are counted with a ``SELECT COUNT(*)``
+        of the batch keys before the insert instead of from ``rowcount``.
+
         Retry semantics (per #213 F1):
             * Transient errors (lost connection, deadlock, lock-wait timeout)
               are retried with backoff INSIDE the circuit breaker call. Each
               *exhausted* retry cycle counts as one breaker failure — the
               breaker still opens after ``failure_threshold`` exhausted
               cycles, not 5×3 raw underlying errors.
-            * ``IntegrityError`` is NOT retried (#213 AC2.2). Note: with
-              ``INSERT IGNORE`` MySQL downgrades duplicate-key collisions to
-              warnings and reduces ``rowcount`` instead of raising — so this
-              path almost never fires for duplicates (#213 F2). It still
-              catches genuine integrity faults (FK violation, NOT NULL).
+            * ``IntegrityError`` is NOT retried (#213 AC2.2). The insert-only
+              path uses a no-op duplicate update, while the legacy default
+              path retains ``INSERT IGNORE`` for its existing callers.
         """
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
         if not model_instances:
             return WriteResult(0, 0, 0, 0)
+        if insert_only and not natural_key:
+            raise ValueError("insert_only writes need the natural_key column name")
 
         # Prepare records once outside the retry loop so a retry never
         # mutates a payload that the previous attempt already normalized.
         table = self._get_table(collection)
+        if insert_only and natural_key not in table.c:
+            raise ValueError(f"{collection} has no natural_key column {natural_key!r}")
         records: list[dict[str, Any]] = []
         for instance in model_instances:
             record = instance.model_dump(
@@ -713,17 +747,35 @@ class MySQLAdapter(BaseAdapter):
             }
         )
 
+        batch_keys = [record[natural_key] for record in records] if insert_only else []
+        existing_rows = 0
+
         def _write_attempt() -> int:
             """Single write attempt — returns rowcount or raises."""
+            nonlocal existing_rows
             from sqlalchemy.dialects.mysql import insert as mysql_insert
 
             engine = self._ensure_connected()
             with engine.connect() as conn:
                 trans = conn.begin()
                 try:
-                    if uses_on_dup_key:
+                    if insert_only:
+                        existing_rows = int(
+                            conn.execute(
+                                sa.select(sa.func.count())
+                                .select_from(table)
+                                .where(table.c[natural_key].in_(set(batch_keys)))
+                            ).scalar()
+                            or 0
+                        )
+                    if uses_on_dup_key or insert_only:
                         ins = mysql_insert(table)
-                        if collection in {"execution_events", "pnl_events"}:
+                        if insert_only:
+                            # The column set to itself: a duplicate changes nothing.
+                            stmt = ins.on_duplicate_key_update(
+                                **{natural_key: table.c[natural_key]}
+                            )
+                        elif collection in {"execution_events", "pnl_events"}:
                             updates = {
                                 column.name: getattr(ins.inserted, column.name)
                                 for column in table.columns
@@ -748,7 +800,7 @@ class MySQLAdapter(BaseAdapter):
                 return retry_transient(_write_attempt)
             except IntegrityError:
                 # Non-transient: FK violation / NOT NULL / similar.
-                # ON DUPLICATE KEY UPDATE and INSERT IGNORE both absorb
+                # The default upsert and insert-only duplicate paths absorb
                 # duplicate-key collisions without raising here.
                 logger.warning(
                     "Integrity error writing to %s — not a duplicate (absorbed by upsert/ignore)",
@@ -779,8 +831,13 @@ class MySQLAdapter(BaseAdapter):
             # duplicates = rowcount - total; inserts = total - duplicates.
             duplicates = max(0, rowcount - total)
             ignored_count = 0
+        elif insert_only:
+            # rowcount is unusable here (FOUND_ROWS makes a no-op duplicate report 1): keys already
+            # stored plus keys repeated inside the batch are the duplicates.
+            duplicates = (total - len(set(batch_keys))) + existing_rows
+            ignored_count = 0
         else:
-            # INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
+            # Legacy INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
             duplicates = max(0, total - rowcount)
             ignored_count = duplicates
             self._record_ignored_insert(collection, ignored_count)
@@ -849,6 +906,7 @@ class MySQLAdapter(BaseAdapter):
         batch_size: int = 1000,
         *,
         insert_only: bool = False,
+        natural_key: str | None = None,
     ) -> WriteResult:
         """Write model instances in batches, aggregating per-batch counts."""
         inserted = 0
@@ -858,7 +916,9 @@ class MySQLAdapter(BaseAdapter):
 
         for i in range(0, len(model_instances), batch_size):
             batch = model_instances[i : i + batch_size]
-            result = self.write(batch, collection, insert_only=insert_only)
+            result = self.write(
+                batch, collection, insert_only=insert_only, natural_key=natural_key
+            )
             inserted += result.inserted
             duplicates += result.duplicates
             ignored_count += result.ignored_count
