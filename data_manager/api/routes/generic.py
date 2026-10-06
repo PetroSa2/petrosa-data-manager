@@ -3,6 +3,7 @@ Generic CRUD API endpoints for dynamic database/collection operations.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -30,6 +31,31 @@ from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _encode_cursor(value: Any, field: str, direction: int) -> str:
+    if isinstance(value, datetime):
+        value = {"__datetime__": value.isoformat()}
+    payload = {"field": field, "direction": direction, "value": value}
+    return base64.urlsafe_b64encode(
+        json.dumps(payload).encode()
+    ).decode()
+
+
+def _decode_cursor(cursor: str, sort_list: list[tuple[str, int]] | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+        field, direction = payload["field"], int(payload["direction"])
+        if not sort_list or sort_list[0] != (field, direction):
+            raise ValueError("cursor does not match the requested sort")
+        value = payload["value"]
+        if isinstance(value, dict) and set(value) == {"__datetime__"}:
+            payload["value"] = datetime.fromisoformat(value["__datetime__"])
+        elif not isinstance(value, str | int | float | bool):
+            raise ValueError("cursor value must be scalar")
+        return payload
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, UnicodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid cursor: {exc}") from exc
 
 
 def _serialize_write_result(result: Any) -> dict[str, Any]:
@@ -332,6 +358,7 @@ async def _execute_query_internal(
     limit: int,
     offset: int,
     field_list: list[str] | None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """Internal helper to execute a query against a database and collection.
 
@@ -346,10 +373,11 @@ async def _execute_query_internal(
     adapter = _get_adapter(database)
 
     sort_list = list(sort_dict.items()) if sort_dict else None
+    cursor_data = _decode_cursor(cursor, sort_list) if cursor else None
 
     try:
         if database == "mysql":
-            records, total_count = await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 adapter.find_paginated,
                 collection=collection,
                 filter_dict=filter_dict,
@@ -357,15 +385,24 @@ async def _execute_query_internal(
                 limit=limit,
                 offset=offset,
                 columns=field_list,
+                cursor=cursor_data,
+                include_cursor=True,
             )
         else:  # MongoDB
-            records, total_count = await adapter.find_paginated(
+            result = await adapter.find_paginated(
                 collection=collection,
                 filter_dict=filter_dict,
                 sort_list=sort_list,
                 limit=limit,
                 offset=offset,
+                cursor=cursor_data,
+                include_cursor=True,
             )
+        if len(result) == 2:
+            records, total_count = result
+            next_cursor_data = None
+        else:
+            records, total_count, next_cursor_data = result
     except DatabaseError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -387,6 +424,15 @@ async def _execute_query_internal(
             "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
             "has_next": offset + limit < total_count,
             "has_previous": offset > 0,
+            "next_cursor": (
+                _encode_cursor(
+                    next_cursor_data["value"],
+                    next_cursor_data["field"],
+                    next_cursor_data["direction"],
+                )
+                if next_cursor_data
+                else None
+            ),
         },
         "metadata": {
             "database": database,
@@ -603,6 +649,7 @@ async def get_records(
         constants.API_DEFAULT_PAGE_SIZE, ge=1, le=constants.API_MAX_PAGE_SIZE
     ),
     offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None, description="Opaque keyset cursor"),
     fields: str | None = Query(
         None, description="Comma-separated list of fields to include"
     ),
@@ -631,6 +678,7 @@ async def get_records(
             limit=limit,
             offset=offset,
             field_list=field_list,
+            cursor=cursor,
         )
         if database == "mysql":
             response.headers["X-Petrosa-Store"] = "mysql-historic"

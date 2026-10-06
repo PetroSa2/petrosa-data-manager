@@ -220,6 +220,9 @@ class DataManagerApp:
             if collection.startswith(("analytics_", "trades_")):
                 await adapter.ensure_indexes(collection)
         for collection in (
+            "positions",
+            "daily_pnl",
+            "signals",
             "health_metrics",
             "audit_logs",
             "datasets",
