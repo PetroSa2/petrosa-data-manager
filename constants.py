@@ -416,6 +416,10 @@ CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF = int(
     os.getenv("CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF", "300")
 )
 
+KLINES_MYSQL_FRESHNESS_INTERVAL_SECONDS = int(
+    os.getenv("KLINES_MYSQL_FRESHNESS_INTERVAL_SECONDS", "300")
+)
+
 # AC3 — no empty-read window. During the cutover the candle read path falls
 # back to the non-primary backend whenever the primary returns an empty or
 # short result, so execution never sees a starved candle window while Mongo is
