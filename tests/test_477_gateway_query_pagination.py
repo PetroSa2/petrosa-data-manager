@@ -23,6 +23,13 @@ def test_cursor_rejects_a_different_sort():
     assert "does not match" in str(exc_info.value)
 
 
+def test_cursor_rejects_a_non_scalar_value():
+    token = _encode_cursor({"unexpected": "object"}, "timestamp", 1)
+    with pytest.raises(Exception, match="scalar") as exc_info:
+        _decode_cursor(token, [("timestamp", 1)])
+    assert "scalar" in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 async def test_mongodb_cursor_page_returns_an_exclusive_next_cursor():
     adapter = MongoDBAdapter("mongodb://localhost:27017/test_db")

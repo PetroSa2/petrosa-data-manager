@@ -193,6 +193,30 @@ def _seed_datasets(adapter, rows):
 
 
 class TestMySQLFindPaginated:
+    def test_cursor_page_uses_exclusive_database_boundary(self, sqlite_adapter):
+        _seed_datasets(
+            sqlite_adapter,
+            [
+                _dataset_row(0, "BTCUSDT"),
+                _dataset_row(1, "BTCUSDT"),
+                _dataset_row(2, "BTCUSDT"),
+            ],
+        )
+        records, total, next_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=1,
+            cursor={
+                "field": "updated_at",
+                "direction": 1,
+                "value": datetime(2026, 1, 1, tzinfo=UTC),
+            },
+            include_cursor=True,
+        )
+        assert records[0]["dataset_id"] == "d1"
+        assert total == 2
+        assert next_cursor["value"] == records[0]["updated_at"]
+
     def test_raises_when_not_connected(self, sqlite_adapter):
         sqlite_adapter._connected = False
         with pytest.raises(DatabaseError, match="Not connected") as exc_info:
