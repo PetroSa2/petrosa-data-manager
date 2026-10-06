@@ -144,8 +144,9 @@ def test_timestamp_accepts_numeric_offset_before_trailing_z(value, expected):
 
 
 def test_timestamp_rejects_garbage_string():
-    with pytest.raises(ValueError, match="invalid timestamp"):
+    with pytest.raises(ValueError, match="invalid timestamp") as error:
         _timestamp("not-a-date")
+    assert "invalid timestamp" in str(error.value)
 
 
 def test_model_accepts_production_shaped_trade_fill():
