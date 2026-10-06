@@ -4,6 +4,7 @@ Analytics endpoints for computed metrics.
 
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 
 try:
     from datetime import UTC
@@ -245,6 +246,66 @@ async def get_strategy_performance(strategy_id: str):
             f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scorecard")
+async def get_scorecard(
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
+    group_by: str = Query("strategy"),
+    minimum_trades: int = Query(30, ge=0),
+) -> dict:
+    """Return a Decimal-string scorecard from immutable audit collections."""
+    if group_by not in {"strategy", "strategy_symbol", "cio_mode"}:
+        raise HTTPException(status_code=422, detail="group_by must be strategy, strategy_symbol, or cio_mode")
+    if from_ and to and from_ >= to:
+        raise HTTPException(status_code=422, detail="from must be before to")
+    if not api_module.db_manager or not getattr(api_module.db_manager, "mongodb_adapter", None):
+        raise HTTPException(status_code=503, detail="Database not available")
+    from data_manager.services.scorecard_service import ScorecardService
+
+    try:
+        return await ScorecardService(api_module.db_manager.mongodb_adapter).calculate(
+            start=from_, end=to, group_by=group_by, minimum_trades=minimum_trades
+        )
+    except Exception as exc:
+        logger.error("scorecard calculation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="Scorecard data unavailable") from exc
+
+
+@router.get("/scorecard/evaluate")
+async def evaluate_scorecard(
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
+    minimum_trades: int | None = Query(None, ge=0),
+) -> dict:
+    """Report scorecard policy outcomes without changing strategy state."""
+    if not api_module.db_manager or not getattr(api_module.db_manager, "mongodb_adapter", None):
+        raise HTTPException(status_code=503, detail="Database not available")
+    config = None
+    if getattr(api_module.db_manager, "configuration", None):
+        config = await api_module.db_manager.configuration.get_app_config()
+    parameters = (config or {}).get("parameters", {})
+    configured = all(
+        parameters.get(name) is not None
+        for name in ("scorecard_min_trades", "scorecard_min_expectancy_net", "scorecard_max_dd_fraction")
+    )
+    if not configured:
+        return {"status": "unconfigured", "groups": [], "writes": 0}
+    minimum = minimum_trades if minimum_trades is not None else int(parameters["scorecard_min_trades"])
+    scorecard = await get_scorecard(from_, to, "strategy", minimum)
+    evaluated = []
+    for group in scorecard["groups"]:
+        if not group["sample_ok"]:
+            status = "watch"
+        elif Decimal(str(group["expectancy_per_trade"] or "0")) < Decimal(str(parameters["scorecard_min_expectancy_net"])):
+            status = "disable"
+        elif Decimal(str(group["max_drawdown"] or "0")) > Decimal(str(parameters["scorecard_max_dd_fraction"])):
+            status = "disable"
+        else:
+            status = "keep"
+        evaluated.append({"strategy_id": group["group"], "status": status, "metrics": group})
+    return {"status": "configured", "thresholds": parameters, "groups": evaluated, "writes": 0}
 
 
 @router.get("/volume")

@@ -164,6 +164,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(data.router, prefix="/data", tags=["Data"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
+    app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(catalog.router, prefix="/catalog", tags=["Catalog"])
     app.include_router(backfill.router, prefix="/backfill", tags=["Backfill"])
     app.include_router(anomalies.router, prefix="/anomalies", tags=["Anomalies"])
