@@ -870,8 +870,9 @@ class MongoDBAdapter(BaseAdapter):
             elif collection.startswith("klines_"):
                 indexes = [
                     IndexModel(
-                        [("symbol", ASCENDING), ("timestamp", DESCENDING)],
-                        unique=False,
+                        [("symbol", ASCENDING), ("timestamp", ASCENDING)],
+                        unique=True,
+                        name="symbol_timestamp_unique",
                     )
                 ]
             elif collection.startswith("analytics_"):
@@ -913,8 +914,9 @@ class MongoDBAdapter(BaseAdapter):
 
             if collection.startswith("klines_"):
                 await coll.create_index(
-                    [("symbol", ASCENDING), ("timestamp", DESCENDING)],
-                    unique=False,
+                    [("symbol", ASCENDING), ("timestamp", ASCENDING)],
+                    unique=True,
+                    name="symbol_timestamp_unique",
                 )
             else:
                 await coll.create_indexes(indexes)

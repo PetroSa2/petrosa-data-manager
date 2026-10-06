@@ -49,6 +49,8 @@ class KlinePersistResult:
 
     #: Mongo documents created (``overwrite=True``: upserts; ``overwrite=False``: inserts).
     upserted: int = 0
+    #: Mongo documents rejected because their natural key already existed.
+    duplicates: int = 0
     #: Mongo documents that already existed and were replaced (``overwrite=True`` only).
     matched: int = 0
     #: ``scheduled``, ``copied``, ``disabled`` or ``unavailable``.
@@ -127,6 +129,7 @@ async def persist_klines(
             [candle_to_mongo_kline(candle) for _, candle in entries], collection
         )
         result.upserted = int(written)
+        result.duplicates = int(getattr(written, "duplicates", 0))
 
     if result.mysql_copy == "disabled":
         return result
