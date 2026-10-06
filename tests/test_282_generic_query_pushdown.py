@@ -291,6 +291,41 @@ def client(mock_db_manager):
 
 
 class TestGenericQueryDriverPushdown:
+    def test_get_records_returns_and_consumes_cursor(self, client):
+        adapter = api_module.db_manager.mongodb_adapter
+        adapter.find_paginated = AsyncMock(
+            return_value=(
+                [{"timestamp": datetime(2026, 1, 1, tzinfo=UTC)}],
+                2,
+                {
+                    "field": "timestamp",
+                    "direction": 1,
+                    "value": datetime(2026, 1, 1, tzinfo=UTC),
+                },
+            )
+        )
+        response = client.get(
+            "/api/v1/mongodb/trades_BTCUSDT",
+            params={"sort": '{"timestamp": 1}', "limit": 1},
+        )
+        assert response.status_code == 200
+        cursor = response.json()["pagination"]["next_cursor"]
+        assert cursor
+
+        response = client.get(
+            "/api/v1/mongodb/trades_BTCUSDT",
+            params={"sort": '{"timestamp": 1}', "limit": 1, "cursor": cursor},
+        )
+        assert response.status_code == 200
+        assert adapter.find_paginated.call_args.kwargs["cursor"]["field"] == "timestamp"
+
+    def test_get_records_rejects_cursor_with_wrong_sort(self, client):
+        response = client.get(
+            "/api/v1/mongodb/trades_BTCUSDT",
+            params={"sort": '{"timestamp": 1}', "cursor": "invalid"},
+        )
+        assert response.status_code == 400
+
     def test_get_records_pushes_limit_to_driver(self, client):
         response = client.get("/api/v1/mongodb/klines_5m", params={"limit": 1})
         assert response.status_code == 200
