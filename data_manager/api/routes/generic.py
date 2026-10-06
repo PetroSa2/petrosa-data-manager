@@ -710,6 +710,7 @@ async def insert_records(
             }
 
         adapter = _get_adapter(database)
+        kline_copy: str | None = None
 
         # Convert data to list if single record
         data_list = data_list_raw
@@ -770,6 +771,21 @@ async def insert_records(
             ignored_count = 0
             if signals_mysql_copy_enabled:
                 _schedule_signals_mysql_copy([dict(item) for item in data_list_raw])
+            interval = collection.removeprefix("klines_")
+            if (
+                collection.startswith("klines_")
+                and interval in constants.SUPPORTED_INTERVALS
+            ):
+                # No Mongo-only kline write path: copy to MySQL like the ingest route does.
+                from data_manager.db.repositories.kline_persistence import (
+                    schedule_documents_copy,
+                )
+
+                kline_copy = schedule_documents_copy(
+                    [dict(item) for item in data_list],
+                    interval,
+                    getattr(api_module.db_manager, "mysql_adapter", None),
+                )
 
         # Track metrics
         api_module.db_manager.increment_query_count(database)
@@ -788,6 +804,8 @@ async def insert_records(
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         }
+        if kline_copy is not None:
+            response["mysql_copy"] = kline_copy
         if duplicates and not inserted_count:
             response["message"] = (
                 f"No records inserted — {duplicates} duplicate(s) ignored"

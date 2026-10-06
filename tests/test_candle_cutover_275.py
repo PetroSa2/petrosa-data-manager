@@ -605,7 +605,10 @@ class TestReadFallback:
 
 class TestDualWrite:
     @pytest.mark.asyncio
-    async def test_disabled_by_default_writes_only_to_primary(self):
+    async def test_mongo_primary_writes_are_copied_to_mysql_even_with_dual_write_off(
+        self,
+    ):
+        # data-manager#526: a Mongo-only backfill write let MySQL starve, so the copy is not optional.
         with _patch_primary("mongodb"), _patch_dual_write(False):
             mongodb = Mock()
             mongodb.write = AsyncMock(return_value=1)
@@ -613,10 +616,11 @@ class TestDualWrite:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             assert await repo.insert(_candle()) is True
-            mysql.write_batch.assert_not_called()
+            mysql.write_batch.assert_called_once()
+            assert mysql.write_batch.call_args.kwargs["insert_only"] is True
 
     @pytest.mark.asyncio
-    async def test_enabled_mirrors_mongo_writes_into_mysql(self):
+    async def test_mongo_primary_with_dual_write_on_copies_to_mysql_exactly_once(self):
         with _patch_primary("mongodb"), _patch_dual_write(True):
             mongodb = Mock()
             mongodb.write = AsyncMock(return_value=1)
@@ -625,7 +629,6 @@ class TestDualWrite:
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
             assert await repo.insert(_candle()) is True
-            await asyncio.gather(*repo._mirror_tasks)
             mysql.write_batch.assert_called_once()
             assert mysql.write_batch.call_args[0][1] == "klines_h1"
             assert isinstance(mysql.write_batch.call_args[0][0][0], MySQLKlineRow)

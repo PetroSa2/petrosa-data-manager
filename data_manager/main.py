@@ -105,6 +105,7 @@ class DataManagerApp:
         self.pnl_publisher = None  # P4.1 follow-up (#652) — set in start()
         self.alert_dispatcher: AlertDispatcher | None = None  # #183 alert spine
         self.candle_warmup_scheduler = None  # #319 — set in start()
+        self.klines_freshness_task: asyncio.Task | None = None
         self.running = False
         self._shutdown_event = asyncio.Event()
         self._db_retry_task: asyncio.Task | None = None
@@ -588,6 +589,17 @@ class DataManagerApp:
         # first iteration immediately (the series appears within one refresh
         # interval of boot) rather than exiting on a stale False.
         asyncio.create_task(self._run_mongo_data_size_loop())
+        from data_manager.maintenance.klines_mysql_freshness import freshness_loop
+
+        self.klines_freshness_task = asyncio.create_task(
+            freshness_loop(
+                lambda: self.db_manager,
+                self._shutdown_event,
+                is_leader=lambda: (
+                    self.leader_election is None or self.leader_election.is_leader
+                ),
+            )
+        )
 
         # Wait for shutdown signal
         await self._shutdown_event.wait()
@@ -662,6 +674,13 @@ class DataManagerApp:
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
         await self._cancel_database_retry()
+        if self.klines_freshness_task:
+            self.klines_freshness_task.cancel()
+            try:
+                await self.klines_freshness_task
+            except asyncio.CancelledError:
+                pass
+            self.klines_freshness_task = None
         if self._summary_task:
             self._summary_task.cancel()
             try:
