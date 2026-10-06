@@ -502,47 +502,107 @@ def test_klines_write_uses_on_duplicate_key_not_insert_ignore():
         adapter.disconnect()
 
 
-def test_insert_only_trade_write_preserves_bigint_and_uses_noop_duplicate_update():
+def _trade(trade_id, symbol="BNBUSDT"):
+    return TradeFill(
+        symbol=symbol,
+        trade_id=trade_id,
+        timestamp="2026-08-09T17:20:55+00:00",
+        price="609.5",
+        quantity="0.02",
+        quote_quantity="12.19",
+        is_buyer_maker=False,
+        order_id="8552889559",
+        commission=None,
+        commission_asset=None,
+        trade_time="2026-08-09T17:20:55+00:00",
+        extracted_at="2026-08-09T17:20:55+00:00",
+        extractor_version="1.0.0",
+        source="binance",
+    )
+
+
+def _insert_only_write(records, existing=0, natural_key="trade_id"):
+    """Run an insert-only trades write on a fake connection; the first execute is the pre-count."""
     from sqlalchemy.dialects import mysql as mysql_dialect
 
     adapter = MySQLAdapter("sqlite:///:memory:")
     adapter.engine_options = {}
     adapter.connect()
     try:
-        record = TradeFill(
-            symbol="BNBUSDT",
-            trade_id=8_552_889_559,
-            timestamp="2026-08-09T17:20:55+00:00",
-            price="609.5",
-            quantity="0.02",
-            quote_quantity="12.19",
-            is_buyer_maker=False,
-            order_id="8552889559",
-            commission=None,
-            commission_asset=None,
-            trade_time="2026-08-09T17:20:55+00:00",
-            extracted_at="2026-08-09T17:20:55+00:00",
-            extractor_version="1.0.0",
-            source="binance",
-        )
-        captured: list = []
+        statements: list = []
+
+        def execute(statement, *args, **_kwargs):
+            statements.append((statement, args))
+            if len(statements) == 1:
+                return MagicMock(scalar=MagicMock(return_value=existing))
+            # FOUND_ROWS: a no-op duplicate update still reports one row per statement row.
+            return MagicMock(rowcount=len(records))
+
         fake_conn = MagicMock()
-        fake_conn.execute.side_effect = lambda statement, *_args, **_kwargs: (
-            captured.append(statement) or MagicMock(rowcount=1)
-        )
+        fake_conn.execute.side_effect = execute
         fake_conn.begin.return_value = MagicMock()
         fake_engine = MagicMock()
         fake_engine.connect.return_value.__enter__.return_value = fake_conn
 
         with patch.object(adapter, "_ensure_connected", return_value=fake_engine):
-            result = adapter.write([record], "trades", insert_only=True)
+            result = adapter.write(
+                records, "trades", insert_only=True, natural_key=natural_key
+            )
+        dialect = mysql_dialect.dialect()
+        return (
+            result,
+            [str(s.compile(dialect=dialect)) for s, _ in statements],
+            statements,
+        )
+    finally:
+        adapter.disconnect()
 
-        assert result.inserted == 1
-        written = fake_conn.execute.call_args.args[1][0]
-        assert written["trade_id"] == 8_552_889_559
-        sql = str(captured[0].compile(dialect=mysql_dialect.dialect()))
-        assert "ON DUPLICATE KEY UPDATE" in sql
-        assert "INSERT IGNORE" not in sql
+
+def test_insert_only_trade_write_preserves_bigint_and_noops_on_the_natural_key():
+    result, sql, statements = _insert_only_write([_trade(8_552_889_559)])
+
+    assert result.inserted == 1
+    assert result.duplicates == 0
+    written = statements[1][1][0][0]
+    assert written["trade_id"] == 8_552_889_559
+    assert written["id"]
+    insert = sql[1]
+    assert "INSERT IGNORE" not in insert
+    assert "INSERT INTO trades (id, " in insert
+    # The natural key is set to itself: a trade_id collision never rewrites the stored id.
+    assert "ON DUPLICATE KEY UPDATE trade_id = trades.trade_id" in insert
+    assert "VALUES(" not in insert.split("ON DUPLICATE KEY UPDATE", 1)[1]
+
+
+def test_insert_only_counts_duplicates_from_a_precount_not_from_rowcount():
+    records = [_trade(1), _trade(2), _trade(3)]
+
+    result, sql, _ = _insert_only_write(records, existing=1)
+
+    assert sql[0].startswith("SELECT count(*)")
+    assert "trades.trade_id IN" in sql[0]
+    assert result.inserted == 2
+    assert result.duplicates == 1
+    assert result.failed == 0
+
+
+def test_insert_only_counts_keys_repeated_inside_the_batch_as_duplicates():
+    result, _, _ = _insert_only_write([_trade(7), _trade(7), _trade(8)], existing=0)
+
+    assert result.inserted == 2
+    assert result.duplicates == 1
+
+
+def test_insert_only_requires_a_known_natural_key():
+    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter.engine_options = {}
+    adapter.connect()
+    try:
+        with pytest.raises(ValueError, match="natural_key") as no_key:
+            adapter.write([_trade(1)], "trades", insert_only=True)
+        with pytest.raises(ValueError, match="no natural_key column") as bad_key:
+            adapter.write([_trade(1)], "trades", insert_only=True, natural_key="nope")
+        assert no_key.value is not bad_key.value
     finally:
         adapter.disconnect()
 

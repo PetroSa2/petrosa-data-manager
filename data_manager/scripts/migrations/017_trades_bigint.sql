@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at DATETIME(6) NOT NULL
 ) ENGINE=InnoDB;
 
--- MySQL 5.7-safe and rerunnable: both changes are one online ALTER.
+-- MySQL 5.7-safe and rerunnable: both changes are one table-copy ALTER (MySQL 5.7 cannot change INT to
+-- BIGINT online, so no online-DDL clause); about 33,018 rows in petrosa_crypto.trades, seconds.
 SET @trades_alter_clauses := (
     SELECT GROUP_CONCAT(wanted.ddl ORDER BY wanted.ord SEPARATOR ', ')
     FROM (
@@ -35,7 +36,7 @@ SET @trades_alter_clauses := (
 SET @trades_alter_ddl := IF(
     @trades_alter_clauses IS NULL,
     'SELECT 1',
-    CONCAT('ALTER TABLE trades ', @trades_alter_clauses, ', ALGORITHM=INPLACE, LOCK=NONE')
+    CONCAT('ALTER TABLE trades ', @trades_alter_clauses, '')
 );
 PREPARE trades_alter_stmt FROM @trades_alter_ddl;
 EXECUTE trades_alter_stmt;

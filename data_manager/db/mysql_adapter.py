@@ -301,6 +301,7 @@ class MySQLAdapter(BaseAdapter):
         self.tables["trades"] = Table(
             "trades",
             self.metadata,
+            Column("id", String(64), primary_key=True),
             Column("symbol", String(20), nullable=False),
             Column("trade_id", BigInteger, nullable=False),
             Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
@@ -657,6 +658,7 @@ class MySQLAdapter(BaseAdapter):
         collection: str,
         *,
         insert_only: bool = False,
+        natural_key: str | None = None,
     ) -> WriteResult:
         """Write model instances to MySQL with retry + circuit breaker.
 
@@ -666,6 +668,14 @@ class MySQLAdapter(BaseAdapter):
         petrosa-data-manager#213 AC2.3). ``WriteResult`` is an ``int``
         subclass valued at ``inserted``, preserving backward compatibility
         for callers that compare the result against a plain integer.
+
+        ``insert_only=True`` never changes an existing row: the caller names the
+        ``natural_key`` column (``trade_id`` for trades, ``event_key`` for
+        execution_events) and a collision runs ``natural_key = table.natural_key``,
+        a true no-op, so a surrogate primary key such as ``id`` is never rewritten.
+        MySQL reports a no-op duplicate as one affected row under the client's
+        FOUND_ROWS flag, so the duplicates are counted with a ``SELECT COUNT(*)``
+        of the batch keys before the insert instead of from ``rowcount``.
 
         Retry semantics (per #213 F1):
             * Transient errors (lost connection, deadlock, lock-wait timeout)
@@ -682,10 +692,14 @@ class MySQLAdapter(BaseAdapter):
 
         if not model_instances:
             return WriteResult(0, 0, 0, 0)
+        if insert_only and not natural_key:
+            raise ValueError("insert_only writes need the natural_key column name")
 
         # Prepare records once outside the retry loop so a retry never
         # mutates a payload that the previous attempt already normalized.
         table = self._get_table(collection)
+        if insert_only and natural_key not in table.c:
+            raise ValueError(f"{collection} has no natural_key column {natural_key!r}")
         records: list[dict[str, Any]] = []
         for instance in model_instances:
             record = instance.model_dump(
@@ -733,39 +747,33 @@ class MySQLAdapter(BaseAdapter):
             }
         )
 
+        batch_keys = [record[natural_key] for record in records] if insert_only else []
+        existing_rows = 0
+
         def _write_attempt() -> int:
             """Single write attempt — returns rowcount or raises."""
+            nonlocal existing_rows
             from sqlalchemy.dialects.mysql import insert as mysql_insert
 
             engine = self._ensure_connected()
             with engine.connect() as conn:
                 trans = conn.begin()
                 try:
+                    if insert_only:
+                        existing_rows = int(
+                            conn.execute(
+                                sa.select(sa.func.count())
+                                .select_from(table)
+                                .where(table.c[natural_key].in_(set(batch_keys)))
+                            ).scalar()
+                            or 0
+                        )
                     if uses_on_dup_key or insert_only:
                         ins = mysql_insert(table)
                         if insert_only:
-                            unique_columns = list(table.primary_key.columns)
-                            if not unique_columns:
-                                unique_columns = [
-                                    column
-                                    for constraint in table.constraints
-                                    if isinstance(constraint, UniqueConstraint)
-                                    for column in constraint.columns
-                                ]
-                            if not unique_columns:
-                                unique_columns = [
-                                    column
-                                    for index in table.indexes
-                                    if index.unique
-                                    for column in index.columns
-                                ]
-                            if not unique_columns:
-                                raise DatabaseError(
-                                    f"No unique key available for insert-only write to {collection}"
-                                )
-                            key = unique_columns[0]
+                            # The column set to itself: a duplicate changes nothing.
                             stmt = ins.on_duplicate_key_update(
-                                **{key.name: getattr(ins.inserted, key.name)}
+                                **{natural_key: table.c[natural_key]}
                             )
                         elif collection in {"execution_events", "pnl_events"}:
                             updates = {
@@ -824,9 +832,9 @@ class MySQLAdapter(BaseAdapter):
             duplicates = max(0, rowcount - total)
             ignored_count = 0
         elif insert_only:
-            # A no-op duplicate update reports zero affected rows in MySQL.
-            inserts = min(total, max(0, rowcount))
-            duplicates = total - inserts
+            # rowcount is unusable here (FOUND_ROWS makes a no-op duplicate report 1): keys already
+            # stored plus keys repeated inside the batch are the duplicates.
+            duplicates = (total - len(set(batch_keys))) + existing_rows
             ignored_count = 0
         else:
             # Legacy INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
@@ -898,6 +906,7 @@ class MySQLAdapter(BaseAdapter):
         batch_size: int = 1000,
         *,
         insert_only: bool = False,
+        natural_key: str | None = None,
     ) -> WriteResult:
         """Write model instances in batches, aggregating per-batch counts."""
         inserted = 0
@@ -907,7 +916,9 @@ class MySQLAdapter(BaseAdapter):
 
         for i in range(0, len(model_instances), batch_size):
             batch = model_instances[i : i + batch_size]
-            result = self.write(batch, collection, insert_only=insert_only)
+            result = self.write(
+                batch, collection, insert_only=insert_only, natural_key=natural_key
+            )
             inserted += result.inserted
             duplicates += result.duplicates
             ignored_count += result.ignored_count

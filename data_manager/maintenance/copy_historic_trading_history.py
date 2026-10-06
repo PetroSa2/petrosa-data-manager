@@ -22,6 +22,8 @@ from data_manager.models.market_data import TradeFill
 
 COLLECTIONS = ("execution_events", "trades")
 MODEL_TYPES = {"execution_events": ExecutionEvent, "trades": TradeFill}
+# The column an insert-only write matches duplicates on (never rewritten, never the surrogate id).
+NATURAL_KEYS = {"execution_events": "event_key", "trades": "trade_id"}
 
 
 def _timestamp(value: Any) -> datetime:
@@ -160,11 +162,13 @@ async def copy_collection(
             last_timestamp = model.timestamp
             counts[model.timestamp.astimezone(UTC).date().isoformat()] += 1
         if models and apply:
+            table = "execution_events" if collection == "execution_events" else "trades"
             result: WriteResult = mysql.write_batch(
                 models,
-                "execution_events" if collection == "execution_events" else "trades",
+                table,
                 batch_size,
                 insert_only=True,
+                natural_key=NATURAL_KEYS[table],
             )
             inserted += result.inserted
             duplicates += result.duplicates

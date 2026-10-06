@@ -41,9 +41,13 @@ class Collection:
 class Mysql:
     def __init__(self):
         self.batches = []
+        self.natural_keys = []
 
-    def write_batch(self, models, collection, batch_size, *, insert_only=False):
+    def write_batch(
+        self, models, collection, batch_size, *, insert_only=False, natural_key=None
+    ):
         self.batches.append((models, collection, batch_size, insert_only))
+        self.natural_keys.append(natural_key)
         return WriteResult(inserted=len(models))
 
 
@@ -315,6 +319,7 @@ async def test_account_fill_is_written_insert_only_and_reports_day():
     model = mysql.batches[0][0][0]
     assert model.order_id == "order-1"
     assert mysql.batches[0][1:] == ("trades", 10, True)
+    assert mysql.natural_keys == ["trade_id"]
 
 
 @pytest.mark.asyncio
@@ -533,3 +538,11 @@ def test_main_returns_nonzero_when_apply_accounting_has_a_gap(monkeypatch, capsy
 
 def test_models_are_mapped_to_the_durable_table_names():
     assert SimpleNamespace(**trade()).symbol == "BTCUSDT"
+
+
+def test_every_copied_collection_has_a_natural_key_that_is_a_real_column():
+    assert set(copier.NATURAL_KEYS) == set(copier.COLLECTIONS)
+    assert copier.NATURAL_KEYS == {
+        "execution_events": "event_key",
+        "trades": "trade_id",
+    }

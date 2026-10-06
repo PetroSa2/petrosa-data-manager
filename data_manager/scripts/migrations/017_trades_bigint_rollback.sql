@@ -9,7 +9,7 @@ SET @trades_rollback_needed := (
 );
 SET @trades_rollback_ddl := IF(
     @trades_rollback_needed,
-    'ALTER TABLE trades MODIFY trade_id INT NOT NULL, MODIFY order_id INT NULL, ALGORITHM=INPLACE, LOCK=NONE',
+    'ALTER TABLE trades MODIFY trade_id INT NOT NULL, MODIFY order_id INT NULL',
     'SELECT 1'
 );
 PREPARE trades_rollback_stmt FROM @trades_rollback_ddl;
