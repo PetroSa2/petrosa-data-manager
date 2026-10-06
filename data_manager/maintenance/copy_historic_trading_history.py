@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -45,8 +46,14 @@ def _timestamp(value: Any) -> datetime:
             except (OverflowError, OSError, ValueError) as exc:
                 raise ValueError(f"invalid epoch timestamp: {value!r}") from exc
         else:
+            timestamp = str(value)
+            if timestamp.endswith("Z"):
+                if re.search(r"[+-]\d{2}:\d{2}Z$", timestamp):
+                    timestamp = timestamp[:-1]
+                else:
+                    timestamp = f"{timestamp[:-1]}+00:00"
             try:
-                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(timestamp)
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid timestamp: {value!r}") from exc
     try:
