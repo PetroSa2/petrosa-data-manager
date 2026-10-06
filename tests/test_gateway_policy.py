@@ -19,3 +19,10 @@ def test_every_registry_entry_has_policy_decision():
 
     for collection in REGISTRY:
         assert collection in GENERIC_POLICY["mongodb"] or collection in DENY_BY_DESIGN
+
+
+def test_the_equity_peak_collection_is_readable_and_upsertable_but_not_deletable():
+    assert check_generic("mongodb", "risk_equity_peak", "read") is True
+    assert check_generic("mongodb", "risk_equity_peak", "upsert") is True
+    assert check_generic("mongodb", "risk_equity_peak", "delete") is False
+    assert REGISTRY["risk_equity_peak"].classification == "operational"

@@ -128,6 +128,9 @@ REGISTRY: dict[str, PersistenceSpec] = {
         reason="operational strategy lifecycle state (served via /api/v1/strategies/{id}/lifecycle)"
     ),
     "cio_auto_resume_registry": operational(reason="cio auto-resume durable state"),
+    "risk_equity_peak": operational(
+        reason="tradeengine equity peak for the drawdown-from-peak rule"
+    ),
     "trading_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"
     ),
