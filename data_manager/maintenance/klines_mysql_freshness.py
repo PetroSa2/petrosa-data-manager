@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -73,9 +73,9 @@ async def check_freshness(
                     else float("inf")
                 )
                 stale = not mysql_time or lag > 2 * parse_timeframe_to_seconds(interval)
-                KLINES_MYSQL_LAG_SECONDS.labels(
-                    symbol=symbol, interval=interval
-                ).set(lag if mysql_time else -1)
+                KLINES_MYSQL_LAG_SECONDS.labels(symbol=symbol, interval=interval).set(
+                    lag if mysql_time else -1
+                )
                 KLINES_MYSQL_STALE.labels(symbol=symbol, interval=interval).set(
                     int(stale)
                 )
@@ -111,18 +111,25 @@ async def freshness_loop(
     stop_event: asyncio.Event,
     *,
     interval_seconds: int | None = None,
+    is_leader: Callable[[], bool] | None = None,
 ) -> None:
-    """Run freshness checks until the application asks the loop to stop."""
+    """Run freshness checks until the application asks the loop to stop.
+
+    With ``is_leader`` the checks run only while this replica holds the lease, so replicas do not
+    repeat each other.
+    """
     delay = interval_seconds or constants.KLINES_MYSQL_FRESHNESS_INTERVAL_SECONDS
     while not stop_event.is_set():
         db_manager = (
-            db_manager_source()
-            if callable(db_manager_source)
-            else db_manager_source
+            db_manager_source() if callable(db_manager_source) else db_manager_source
         )
         mongo = getattr(db_manager, "mongodb_adapter", None)
         mysql = getattr(db_manager, "mysql_adapter", None)
-        if mongo is not None and mysql is not None:
+        if (
+            (is_leader is None or is_leader())
+            and mongo is not None
+            and mysql is not None
+        ):
             await check_freshness(
                 mongo,
                 mysql,

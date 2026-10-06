@@ -288,6 +288,30 @@ class CandleRepository(BaseRepository):
             return None
         return self.mongodb if self._primary_is_mysql() else None
 
+    async def _persist_klines(self, candles: list[Candle]) -> int:
+        """Mongo write plus the insert-only MySQL copy, through the one shared kline path.
+
+        The backfill used to write Mongo only, which let MySQL starve (data-manager#526).
+        """
+        # Imported here because the persistence module imports this one.
+        from data_manager.db.repositories.kline_persistence import persist_klines
+
+        by_timeframe: dict[str, list[Candle]] = {}
+        for candle in candles:
+            by_timeframe.setdefault(candle.timeframe, []).append(candle)
+        total = 0
+        for timeframe, group in by_timeframe.items():
+            result = await persist_klines(
+                self.mongodb,
+                self.mysql,
+                timeframe,
+                [(None, candle) for candle in group],
+                overwrite=False,
+                wait_for_copy=True,
+            )
+            total += result.upserted
+        return total
+
     def _schedule_mirror_write(self, candles: list[Candle]) -> None:
         if not constants.CANDLE_DUAL_WRITE_ENABLED or not candles:
             return
@@ -449,11 +473,9 @@ class CandleRepository(BaseRepository):
                     self.mysql.write, [candle_to_mysql_kline(candle)], table
                 )
             else:
-                collection = self._get_collection_name(candle.symbol, candle.timeframe)
-                count = await self.mongodb.write(
-                    [candle_to_mongo_kline(candle)], collection
-                )
-            self._schedule_mirror_write([candle])
+                count = await self._persist_klines([candle])
+            if self._primary_is_mysql():
+                self._schedule_mirror_write([candle])
             return count > 0
         except Exception as e:
             logger.error(
@@ -499,26 +521,9 @@ class CandleRepository(BaseRepository):
                     total_inserted += count
                     logger.debug(f"Inserted {count} candles to {table}")
             else:
-                # Group candles by symbol and timeframe
-                candles_by_collection: dict[str, list[Candle]] = {}
-                for candle in candles:
-                    collection = self._get_collection_name(
-                        candle.symbol, candle.timeframe
-                    )
-                    candles_by_collection.setdefault(collection, []).append(candle)
-
-                for collection, collection_candles in candles_by_collection.items():
-                    count = await self.mongodb.write(
-                        [
-                            candle_to_mongo_kline(candle)
-                            for candle in collection_candles
-                        ],
-                        collection,
-                    )
-                    total_inserted += count
-                    logger.debug(f"Inserted {count} candles to {collection}")
-
-            self._schedule_mirror_write(candles)
+                total_inserted = await self._persist_klines(candles)
+            if self._primary_is_mysql():
+                self._schedule_mirror_write(candles)
             return total_inserted
 
         except Exception as e:

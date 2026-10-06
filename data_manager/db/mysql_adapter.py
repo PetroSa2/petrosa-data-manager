@@ -658,7 +658,7 @@ class MySQLAdapter(BaseAdapter):
         collection: str,
         *,
         insert_only: bool = False,
-        natural_key: str | None = None,
+        natural_key: str | Sequence[str] | None = None,
     ) -> WriteResult:
         """Write model instances to MySQL with retry + circuit breaker.
 
@@ -671,7 +671,8 @@ class MySQLAdapter(BaseAdapter):
 
         ``insert_only=True`` never changes an existing row: the caller names the
         ``natural_key`` column (``trade_id`` for trades, ``event_key`` for
-        execution_events) and a collision runs ``natural_key = table.natural_key``,
+        execution_events) or tuple of columns (``(symbol, timestamp)`` for klines)
+        and a collision runs ``natural_key = table.natural_key``,
         a true no-op, so a surrogate primary key such as ``id`` is never rewritten.
         MySQL reports a no-op duplicate as one affected row under the client's
         FOUND_ROWS flag, so the duplicates are counted with a ``SELECT COUNT(*)``
@@ -698,8 +699,12 @@ class MySQLAdapter(BaseAdapter):
         # Prepare records once outside the retry loop so a retry never
         # mutates a payload that the previous attempt already normalized.
         table = self._get_table(collection)
-        if insert_only and natural_key not in table.c:
-            raise ValueError(f"{collection} has no natural_key column {natural_key!r}")
+        key_names = (
+            (natural_key,) if isinstance(natural_key, str) else tuple(natural_key or ())
+        )
+        missing = [name for name in key_names if name not in table.c]
+        if insert_only and missing:
+            raise ValueError(f"{collection} has no natural_key column {missing[0]!r}")
         records: list[dict[str, Any]] = []
         for instance in model_instances:
             record = instance.model_dump(
@@ -747,7 +752,16 @@ class MySQLAdapter(BaseAdapter):
             }
         )
 
-        batch_keys = [record[natural_key] for record in records] if insert_only else []
+        batch_keys = (
+            [
+                tuple(record[name] for name in key_names)
+                if len(key_names) > 1
+                else record[key_names[0]]
+                for record in records
+            ]
+            if insert_only
+            else []
+        )
         existing_rows = 0
 
         def _write_attempt() -> int:
@@ -764,7 +778,13 @@ class MySQLAdapter(BaseAdapter):
                             conn.execute(
                                 sa.select(sa.func.count())
                                 .select_from(table)
-                                .where(table.c[natural_key].in_(set(batch_keys)))
+                                .where(
+                                    sa.tuple_(*(table.c[n] for n in key_names)).in_(
+                                        set(batch_keys)
+                                    )
+                                    if len(key_names) > 1
+                                    else table.c[key_names[0]].in_(set(batch_keys))
+                                )
                             ).scalar()
                             or 0
                         )
@@ -773,7 +793,7 @@ class MySQLAdapter(BaseAdapter):
                         if insert_only:
                             # The column set to itself: a duplicate changes nothing.
                             stmt = ins.on_duplicate_key_update(
-                                **{natural_key: table.c[natural_key]}
+                                **{key_names[0]: table.c[key_names[0]]}
                             )
                         elif collection in {"execution_events", "pnl_events"}:
                             updates = {
@@ -906,7 +926,7 @@ class MySQLAdapter(BaseAdapter):
         batch_size: int = 1000,
         *,
         insert_only: bool = False,
-        natural_key: str | None = None,
+        natural_key: str | Sequence[str] | None = None,
     ) -> WriteResult:
         """Write model instances in batches, aggregating per-batch counts."""
         inserted = 0

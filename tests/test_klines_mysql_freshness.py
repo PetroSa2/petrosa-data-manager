@@ -38,13 +38,13 @@ def test_stale_copy_includes_missing_mysql_rows():
 
 def test_failed_pair_does_not_stop_other_checks():
     newest = datetime(2026, 10, 6, 17, tzinfo=UTC)
-    mongo = SimpleNamespace(query_latest=AsyncMock(side_effect=[RuntimeError("down"), _row(newest)]))
+    mongo = SimpleNamespace(
+        query_latest=AsyncMock(side_effect=[RuntimeError("down"), _row(newest)])
+    )
     mysql = Mock()
     mysql.query_latest.return_value = _row(newest)
 
-    result = asyncio.run(
-        check_freshness(mongo, mysql, ["BTCUSDT"], ["1h", "1d"])
-    )
+    result = asyncio.run(check_freshness(mongo, mysql, ["BTCUSDT"], ["1h", "1d"]))
 
     assert result == {"error": 1, "fresh": 1}
 

@@ -592,7 +592,13 @@ class DataManagerApp:
         from data_manager.maintenance.klines_mysql_freshness import freshness_loop
 
         self.klines_freshness_task = asyncio.create_task(
-            freshness_loop(lambda: self.db_manager, self._shutdown_event)
+            freshness_loop(
+                lambda: self.db_manager,
+                self._shutdown_event,
+                is_leader=lambda: (
+                    self.leader_election is None or self.leader_election.is_leader
+                ),
+            )
         )
 
         # Wait for shutdown signal

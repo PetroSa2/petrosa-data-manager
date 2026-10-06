@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+from data_manager.db.write_result import WriteResult
 from data_manager.maintenance.copy_mongo_klines_to_mysql import (
     copy_interval,
     map_documents,
@@ -51,6 +52,7 @@ def test_apply_batches_rows():
         )
     )
     mysql = Mock()
+    mysql.write_batch.return_value = WriteResult(inserted=1)
     count = asyncio.run(
         copy_interval(
             mongo,
