@@ -562,7 +562,10 @@ class MongoDBAdapter(BaseAdapter):
         end: datetime | None = None,
         cursor: dict[str, Any] | None = None,
         include_cursor: bool = False,
-    ) -> tuple[list[dict[str, Any]], int] | tuple[list[dict[str, Any]], int, dict[str, Any] | None]:
+    ) -> (
+        tuple[list[dict[str, Any]], int]
+        | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
+    ):
         """Query a collection with filter/sort/limit/offset pushed to the driver.
 
         Resolves petrosa-data-manager#282: the generic query API previously

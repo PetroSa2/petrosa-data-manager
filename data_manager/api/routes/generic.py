@@ -37,12 +37,12 @@ def _encode_cursor(value: Any, field: str, direction: int) -> str:
     if isinstance(value, datetime):
         value = {"__datetime__": value.isoformat()}
     payload = {"field": field, "direction": direction, "value": value}
-    return base64.urlsafe_b64encode(
-        json.dumps(payload).encode()
-    ).decode()
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
 
 
-def _decode_cursor(cursor: str, sort_list: list[tuple[str, int]] | None) -> dict[str, Any]:
+def _decode_cursor(
+    cursor: str, sort_list: list[tuple[str, int]] | None
+) -> dict[str, Any]:
     try:
         payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
         field, direction = payload["field"], int(payload["direction"])

@@ -18,8 +18,9 @@ def test_cursor_round_trip_and_sort_binding():
 
 def test_cursor_rejects_a_different_sort():
     token = _encode_cursor("BTCUSDT", "symbol", 1)
-    with pytest.raises(Exception, match="does not match"):
+    with pytest.raises(Exception, match="does not match") as exc_info:
         _decode_cursor(token, [("timestamp", 1)])
+    assert "does not match" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

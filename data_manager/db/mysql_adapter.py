@@ -1237,7 +1237,10 @@ class MySQLAdapter(BaseAdapter):
         columns: Sequence[str] | None = None,
         cursor: dict[str, Any] | None = None,
         include_cursor: bool = False,
-    ) -> tuple[list[dict[str, Any]], int] | tuple[list[dict[str, Any]], int, dict[str, Any] | None]:
+    ) -> (
+        tuple[list[dict[str, Any]], int]
+        | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
+    ):
         """Query a table with filter/sort/limit/offset pushed to the driver.
 
         Resolves petrosa-data-manager#282: the generic query API previously
@@ -1321,7 +1324,9 @@ class MySQLAdapter(BaseAdapter):
                         ]
                         if order_clauses:
                             query = query.order_by(*order_clauses)
-                    query = query.limit(limit + 1 if include_cursor and sort_list else limit)
+                    query = query.limit(
+                        limit + 1 if include_cursor and sort_list else limit
+                    )
                     if not cursor:
                         query = query.offset(offset)
 
