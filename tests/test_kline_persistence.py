@@ -89,6 +89,23 @@ async def test_a_single_backfill_insert_is_copied_too():
 
 
 @pytest.mark.asyncio
+async def test_existing_backfill_key_is_counted_as_duplicate_and_copied():
+    mongo = Mock()
+    mongo.write = AsyncMock(return_value=WriteResult(duplicates=1))
+    mysql = Mock()
+    mysql.write_batch.return_value = WriteResult(inserted=1)
+
+    result = await persist_klines(
+        mongo, mysql, "1h", [(None, _candle())], overwrite=False, wait_for_copy=True
+    )
+
+    assert result.upserted == 0
+    assert result.duplicates == 1
+    mongo.write.assert_awaited_once()
+    mysql.write_batch.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_a_failed_mysql_copy_is_counted_and_never_fails_the_mongo_write():
     mongo = Mock()
     mongo.write = AsyncMock(return_value=WriteResult(inserted=1))

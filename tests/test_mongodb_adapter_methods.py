@@ -229,6 +229,20 @@ class TestWrite:
         assert await adapter.write([model], "x") == 0
 
     @pytest.mark.asyncio
+    async def test_klines_index_is_unique_and_ascending(self, adapter):
+        coll = MagicMock()
+        coll.create_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("klines_1h")
+
+        coll.create_index.assert_awaited_once_with(
+            [("symbol", 1), ("timestamp", 1)],
+            unique=True,
+            name="symbol_timestamp_unique",
+        )
+
+    @pytest.mark.asyncio
     async def test_pymongo_error_raises_database_error(self, adapter):
         model = MagicMock()
         model.model_dump.return_value = {
@@ -558,7 +572,7 @@ class TestEnsureIndexes:
         coll.insert_many.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_creates_non_unique_extractor_kline_index(self, adapter):
+    async def test_creates_unique_extractor_kline_index(self, adapter):
         coll = MagicMock()
         coll.create_index = AsyncMock()
         adapter.db.__getitem__ = MagicMock(return_value=coll)
@@ -566,7 +580,9 @@ class TestEnsureIndexes:
         await adapter.ensure_indexes("klines_1h")
 
         coll.create_index.assert_awaited_once_with(
-            [("symbol", 1), ("timestamp", -1)], unique=False
+            [("symbol", 1), ("timestamp", 1)],
+            unique=True,
+            name="symbol_timestamp_unique",
         )
 
     @pytest.mark.asyncio
