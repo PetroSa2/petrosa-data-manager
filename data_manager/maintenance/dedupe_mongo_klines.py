@@ -28,7 +28,9 @@ def _day(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone(UTC).date().isoformat()
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date().isoformat()
+        return (
+            datetime.fromisoformat(str(value).replace("Z", "+00:00")).date().isoformat()
+        )
     except (TypeError, ValueError):
         return "unknown"
 
@@ -89,9 +91,13 @@ async def dedupe_collection(
         if not dry_run:
             for documents in duplicate_groups:
                 survivor = choose_survivor(documents)
-                losers = [doc["_id"] for doc in documents if doc["_id"] != survivor["_id"]]
+                losers = [
+                    doc["_id"] for doc in documents if doc["_id"] != survivor["_id"]
+                ]
                 if losers:
-                    deleted += (await collection.delete_many({"_id": {"$in": losers}})).deleted_count
+                    deleted += (
+                        await collection.delete_many({"_id": {"$in": losers}})
+                    ).deleted_count
         results.append(
             DedupeResult(
                 collection=collection_name,
@@ -113,17 +119,23 @@ async def _run_cli(apply: bool, collection: str | None) -> None:
     adapter.connect()
     try:
         names = sorted(
-            name for name in await adapter.list_collections() if name.startswith("klines_")
+            name
+            for name in await adapter.list_collections()
+            if name.startswith("klines_")
         )
         if collection is not None:
             if collection not in names:
                 raise ValueError(f"dedupe collection not found: {collection}")
             names = [collection]
         if not names:
-            raise RuntimeError("no klines collections found in the configured Mongo database")
+            raise RuntimeError(
+                "no klines collections found in the configured Mongo database"
+            )
         results = []
         for name in names:
-            results.extend(await dedupe_collection(adapter.db[name], name, dry_run=not apply))
+            results.extend(
+                await dedupe_collection(adapter.db[name], name, dry_run=not apply)
+            )
         print(json.dumps([result.__dict__ for result in results]))
     finally:
         adapter.disconnect()
