@@ -437,13 +437,17 @@ class MongoDBAdapter(BaseAdapter):
             if symbol:
                 query["symbol"] = symbol
 
-            cursor = coll.find(query).sort(
-                [
-                    ("timestamp", -1),
-                    ("metadata.computed_at", -1),
-                    ("_id", -1),
-                ]
-            ).limit(limit)
+            cursor = (
+                coll.find(query)
+                .sort(
+                    [
+                        ("timestamp", -1),
+                        ("metadata.computed_at", -1),
+                        ("_id", -1),
+                    ]
+                )
+                .limit(limit)
+            )
             documents = await cursor.to_list(length=limit)
 
             # Remove _id from results
