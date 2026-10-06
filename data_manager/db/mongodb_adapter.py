@@ -143,6 +143,10 @@ class MongoDBAdapter(BaseAdapter):
             documents = []
             for instance in model_instances:
                 doc = instance.model_dump()
+                if collection.startswith("analytics_"):
+                    computed_at = doc.get("metadata", {}).get("computed_at")
+                    if computed_at is not None:
+                        doc["timestamp"] = computed_at
                 if "timestamp" in doc and isinstance(doc["timestamp"], str):
                     ts = doc["timestamp"]
                     try:
@@ -433,7 +437,13 @@ class MongoDBAdapter(BaseAdapter):
             if symbol:
                 query["symbol"] = symbol
 
-            cursor = coll.find(query).sort("timestamp", -1).limit(limit)
+            cursor = coll.find(query).sort(
+                [
+                    ("timestamp", -1),
+                    ("metadata.computed_at", -1),
+                    ("_id", -1),
+                ]
+            ).limit(limit)
             documents = await cursor.to_list(length=limit)
 
             # Remove _id from results
@@ -862,6 +872,14 @@ class MongoDBAdapter(BaseAdapter):
                 ]
             elif collection.startswith("analytics_"):
                 indexes = [
+                    IndexModel(
+                        [
+                            ("symbol", ASCENDING),
+                            ("timestamp", DESCENDING),
+                            ("metadata.computed_at", DESCENDING),
+                        ],
+                        name="latest_analytics",
+                    ),
                     IndexModel(
                         [("metadata.computed_at", ASCENDING)],
                         expireAfterSeconds=constants.ANALYTICS_TTL_SECONDS,

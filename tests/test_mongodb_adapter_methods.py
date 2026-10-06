@@ -121,6 +121,23 @@ class TestWrite:
         assert doc["value"] == 1.5  # Decimal → float
 
     @pytest.mark.asyncio
+    async def test_analytics_write_copies_computed_at_to_timestamp(self, adapter):
+        computed_at = datetime(2026, 1, 1, tzinfo=UTC)
+        model = MagicMock()
+        model.model_dump.return_value = {
+            "symbol": "BTCUSDT",
+            "metadata": {"computed_at": computed_at},
+        }
+        coll = MagicMock()
+        coll.insert_many = AsyncMock(return_value=MagicMock(inserted_ids=["id"]))
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.write([model], "analytics_BTCUSDT_regime")
+
+        doc = coll.insert_many.call_args.args[0][0]
+        assert doc["timestamp"] == computed_at
+
+    @pytest.mark.asyncio
     async def test_signals_with_same_millisecond_use_signal_ids(self, adapter):
         models = []
         for signal_id in ("signal-1", "signal-2"):
@@ -426,6 +443,26 @@ class TestQueryLatest:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         result = await adapter.query_latest("x", symbol="BTCUSDT", limit=3)
         assert "_id" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_sorts_new_and_legacy_documents_by_computation_time(self, adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.query_latest("analytics_BTCUSDT_regime", limit=1)
+
+        cursor.sort.assert_called_once_with(
+            [
+                ("timestamp", -1),
+                ("metadata.computed_at", -1),
+                ("_id", -1),
+            ]
+        )
 
     @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):
