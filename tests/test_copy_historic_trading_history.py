@@ -126,6 +126,48 @@ def test_timestamp_normalizes_iso_and_bson_datetimes_to_utc():
     assert _timestamp(bson_datetime) == bson_datetime.replace(tzinfo=UTC)
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (
+            "2026-08-09T17:23:11.349000+00:00Z",
+            datetime(2026, 8, 9, 17, 23, 11, 349000, tzinfo=UTC),
+        ),
+        (
+            "2026-08-09T17:23:11+00:00Z",
+            datetime(2026, 8, 9, 17, 23, 11, tzinfo=UTC),
+        ),
+    ],
+)
+def test_timestamp_accepts_numeric_offset_before_trailing_z(value, expected):
+    assert _timestamp(value) == expected
+
+
+def test_timestamp_rejects_garbage_string():
+    with pytest.raises(ValueError, match="invalid timestamp"):
+        _timestamp("not-a-date")
+
+
+def test_model_accepts_production_shaped_trade_fill():
+    document = trade("2026-08-09T17:23:11.349000+00:00Z")
+    document.update(
+        order_id=None,
+        commission=None,
+        commission_asset=None,
+    )
+
+    model = copier._model("trades", document)
+
+    assert model.timestamp == datetime(2026, 8, 9, 17, 23, 11, 349000, tzinfo=UTC)
+    assert model.trade_id == 1
+    assert model.order_id is None
+    assert model.commission is None
+    assert model.commission_asset is None
+    assert str(model.price) == "100"
+    assert str(model.quantity) == "2"
+    assert str(model.quote_quantity) == "200"
+
+
 @pytest.mark.parametrize("value", [float("nan"), 10**30])
 def test_timestamp_rejects_invalid_numeric_values(value):
     with pytest.raises(ValueError, match="timestamp") as error:
