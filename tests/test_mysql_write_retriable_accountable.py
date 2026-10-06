@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from data_manager.db.mysql_adapter import MySQLAdapter, WriteResult
+from data_manager.models.market_data import TradeFill
 from data_manager.utils.circuit_breaker import (
     CircuitBreakerOpenError,
     DatabaseCircuitBreaker,
@@ -497,6 +498,51 @@ def test_klines_write_uses_on_duplicate_key_not_insert_ignore():
         assert "ON DUPLICATE KEY UPDATE" in sql
         assert "INSERT IGNORE" not in sql
         assert "extracted_at" in sql
+    finally:
+        adapter.disconnect()
+
+
+def test_insert_only_trade_write_preserves_bigint_and_uses_noop_duplicate_update():
+    from sqlalchemy.dialects import mysql as mysql_dialect
+
+    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter.engine_options = {}
+    adapter.connect()
+    try:
+        record = TradeFill(
+            symbol="BNBUSDT",
+            trade_id=8_552_889_559,
+            timestamp="2026-08-09T17:20:55+00:00",
+            price="609.5",
+            quantity="0.02",
+            quote_quantity="12.19",
+            is_buyer_maker=False,
+            order_id="8552889559",
+            commission=None,
+            commission_asset=None,
+            trade_time="2026-08-09T17:20:55+00:00",
+            extracted_at="2026-08-09T17:20:55+00:00",
+            extractor_version="1.0.0",
+            source="binance",
+        )
+        captured: list = []
+        fake_conn = MagicMock()
+        fake_conn.execute.side_effect = lambda statement, *_args, **_kwargs: (
+            captured.append(statement) or MagicMock(rowcount=1)
+        )
+        fake_conn.begin.return_value = MagicMock()
+        fake_engine = MagicMock()
+        fake_engine.connect.return_value.__enter__.return_value = fake_conn
+
+        with patch.object(adapter, "_ensure_connected", return_value=fake_engine):
+            result = adapter.write([record], "trades", insert_only=True)
+
+        assert result.inserted == 1
+        written = fake_conn.execute.call_args.args[1][0]
+        assert written["trade_id"] == 8_552_889_559
+        sql = str(captured[0].compile(dialect=mysql_dialect.dialect()))
+        assert "ON DUPLICATE KEY UPDATE" in sql
+        assert "INSERT IGNORE" not in sql
     finally:
         adapter.disconnect()
 

@@ -17,6 +17,7 @@ try:
     import sqlalchemy as sa
     from sqlalchemy import (
         JSON,
+        BigInteger,
         Column,
         DateTime,
         Enum,
@@ -295,6 +296,27 @@ class MySQLAdapter(BaseAdapter):
             Column("created_at", DateTime, nullable=False),
             Column("updated_at", DateTime, nullable=False),
             Index("idx_daily_pnl_date", "date", unique=True),
+        )
+
+        self.tables["trades"] = Table(
+            "trades",
+            self.metadata,
+            Column("symbol", String(20), nullable=False),
+            Column("trade_id", BigInteger, nullable=False),
+            Column("timestamp", MySQLDateTime(fsp=6), nullable=False),
+            Column("price", Numeric(20, 8), nullable=False),
+            Column("quantity", Numeric(20, 8), nullable=False),
+            Column("quote_quantity", Numeric(20, 8), nullable=False),
+            Column("is_buyer_maker", Integer, nullable=False),
+            Column("order_id", BigInteger),
+            Column("commission", Numeric(20, 8)),
+            Column("commission_asset", String(20)),
+            Column("trade_time", MySQLDateTime(fsp=6), nullable=False),
+            Column("extracted_at", MySQLDateTime(fsp=6), nullable=False),
+            Column("extractor_version", String(20), nullable=False),
+            Column("source", String(50), nullable=False),
+            UniqueConstraint("trade_id", name="idx_trades_trade_id"),
+            Index("idx_trades_symbol_timestamp", "symbol", "timestamp"),
         )
 
         # 2026-09-20 — cio_decisions: the permanent, unbounded historic copy.
@@ -651,11 +673,9 @@ class MySQLAdapter(BaseAdapter):
               *exhausted* retry cycle counts as one breaker failure — the
               breaker still opens after ``failure_threshold`` exhausted
               cycles, not 5×3 raw underlying errors.
-            * ``IntegrityError`` is NOT retried (#213 AC2.2). Note: with
-              ``INSERT IGNORE`` MySQL downgrades duplicate-key collisions to
-              warnings and reduces ``rowcount`` instead of raising — so this
-              path almost never fires for duplicates (#213 F2). It still
-              catches genuine integrity faults (FK violation, NOT NULL).
+            * ``IntegrityError`` is NOT retried (#213 AC2.2). The insert-only
+              path uses a no-op duplicate update, while the legacy default
+              path retains ``INSERT IGNORE`` for its existing callers.
         """
         if not self._connected:
             raise DatabaseError("Not connected to database")
@@ -721,9 +741,33 @@ class MySQLAdapter(BaseAdapter):
             with engine.connect() as conn:
                 trans = conn.begin()
                 try:
-                    if uses_on_dup_key:
+                    if uses_on_dup_key or insert_only:
                         ins = mysql_insert(table)
-                        if collection in {"execution_events", "pnl_events"}:
+                        if insert_only:
+                            unique_columns = list(table.primary_key.columns)
+                            if not unique_columns:
+                                unique_columns = [
+                                    column
+                                    for constraint in table.constraints
+                                    if isinstance(constraint, UniqueConstraint)
+                                    for column in constraint.columns
+                                ]
+                            if not unique_columns:
+                                unique_columns = [
+                                    column
+                                    for index in table.indexes
+                                    if index.unique
+                                    for column in index.columns
+                                ]
+                            if not unique_columns:
+                                raise DatabaseError(
+                                    f"No unique key available for insert-only write to {collection}"
+                                )
+                            key = unique_columns[0]
+                            stmt = ins.on_duplicate_key_update(
+                                **{key.name: getattr(ins.inserted, key.name)}
+                            )
+                        elif collection in {"execution_events", "pnl_events"}:
                             updates = {
                                 column.name: getattr(ins.inserted, column.name)
                                 for column in table.columns
@@ -748,7 +792,7 @@ class MySQLAdapter(BaseAdapter):
                 return retry_transient(_write_attempt)
             except IntegrityError:
                 # Non-transient: FK violation / NOT NULL / similar.
-                # ON DUPLICATE KEY UPDATE and INSERT IGNORE both absorb
+                # The default upsert and insert-only duplicate paths absorb
                 # duplicate-key collisions without raising here.
                 logger.warning(
                     "Integrity error writing to %s — not a duplicate (absorbed by upsert/ignore)",
@@ -779,8 +823,13 @@ class MySQLAdapter(BaseAdapter):
             # duplicates = rowcount - total; inserts = total - duplicates.
             duplicates = max(0, rowcount - total)
             ignored_count = 0
+        elif insert_only:
+            # A no-op duplicate update reports zero affected rows in MySQL.
+            inserts = min(total, max(0, rowcount))
+            duplicates = total - inserts
+            ignored_count = 0
         else:
-            # INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
+            # Legacy INSERT IGNORE: MySQL reports 1 per insert, 0 per ignored duplicate.
             duplicates = max(0, total - rowcount)
             ignored_count = duplicates
             self._record_ignored_insert(collection, ignored_count)

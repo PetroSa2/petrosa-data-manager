@@ -16,6 +16,7 @@ from typing import Any
 import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
+from data_manager.db.write_result import WriteResult
 from data_manager.models.execution_event import ExecutionEvent
 from data_manager.models.market_data import TradeFill
 
@@ -140,6 +141,9 @@ async def copy_collection(
     counts: Counter[str] = Counter()
     invalid = 0
     copied = 0
+    inserted = 0
+    duplicates = 0
+    failed = 0
     while True:
         documents = await cursor.to_list(length=batch_size)
         if not documents:
@@ -156,12 +160,15 @@ async def copy_collection(
             last_timestamp = model.timestamp
             counts[model.timestamp.astimezone(UTC).date().isoformat()] += 1
         if models and apply:
-            mysql.write_batch(
+            result: WriteResult = mysql.write_batch(
                 models,
                 "execution_events" if collection == "execution_events" else "trades",
                 batch_size,
                 insert_only=True,
             )
+            inserted += result.inserted
+            duplicates += result.duplicates
+            failed += result.failed
             if checkpoint_path and last_timestamp:
                 checkpoint[collection] = last_timestamp.isoformat()
                 _save_checkpoint(checkpoint_path, checkpoint)
@@ -170,6 +177,9 @@ async def copy_collection(
         "collection": collection,
         "rows": copied,
         "invalid": invalid,
+        "inserted": inserted,
+        "duplicates": duplicates,
+        "failed": failed,
         "days": dict(sorted(counts.items())),
     }
 
@@ -225,8 +235,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    results = asyncio.run(run(_parse_args(argv)))
+    args = _parse_args(argv)
+    results = asyncio.run(run(args))
     print(json.dumps(results, sort_keys=True))
+    if args.apply and any(
+        result["inserted"] + result["duplicates"] != result["rows"]
+        for result in results
+    ):
+        return 1
     return 0
 
 

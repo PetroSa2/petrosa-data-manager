@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from data_manager.db.write_result import WriteResult
 from data_manager.maintenance import copy_historic_trading_history as copier
 from data_manager.maintenance.copy_historic_trading_history import (
     _collection_names,
@@ -43,6 +44,7 @@ class Mysql:
 
     def write_batch(self, models, collection, batch_size, *, insert_only=False):
         self.batches.append((models, collection, batch_size, insert_only))
+        return WriteResult(inserted=len(models))
 
 
 def event(timestamp="2026-08-08T12:00:00Z"):
@@ -167,6 +169,15 @@ def test_model_accepts_production_shaped_trade_fill():
     assert str(model.price) == "100"
     assert str(model.quantity) == "2"
     assert str(model.quote_quantity) == "200"
+
+
+def test_model_preserves_large_binance_trade_id():
+    document = trade()
+    document["trade_id"] = 8_552_889_559
+
+    model = copier._model("trades", document)
+
+    assert model.trade_id == 8_552_889_559
 
 
 @pytest.mark.parametrize("value", [float("nan"), 10**30])
@@ -296,6 +307,9 @@ async def test_account_fill_is_written_insert_only_and_reports_day():
         "collection": "trades",
         "rows": 1,
         "invalid": 0,
+        "inserted": 1,
+        "duplicates": 0,
+        "failed": 0,
         "days": {"2026-08-09": 1},
     }
     model = mysql.batches[0][0][0]
@@ -497,6 +511,24 @@ def test_main_prints_results(monkeypatch, capsys):
     monkeypatch.setattr(copier, "run", fake_run)
     assert copier.main([]) == 0
     assert '"collection": "trades"' in capsys.readouterr().out
+
+
+def test_main_returns_nonzero_when_apply_accounting_has_a_gap(monkeypatch, capsys):
+    async def fake_run(_args):
+        return [
+            {
+                "collection": "trades",
+                "rows": 2,
+                "inserted": 1,
+                "duplicates": 0,
+                "failed": 0,
+            }
+        ]
+
+    monkeypatch.setattr(copier, "run", fake_run)
+
+    assert copier.main(["--apply"]) == 1
+    assert '"rows": 2' in capsys.readouterr().out
 
 
 def test_models_are_mapped_to_the_durable_table_names():
