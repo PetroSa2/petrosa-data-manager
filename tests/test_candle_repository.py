@@ -500,6 +500,29 @@ class TestMysqlPath:
         mongodb.get_record_count.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_historic_reads_return_empty_without_mysql(self):
+        repo = CandleRepository(mysql_adapter=None, mongodb_adapter=Mock())
+
+        assert (
+            await repo.get_historic_range("BTCUSDT", "1h", datetime.min, datetime.max)
+            == []
+        )
+        assert await repo.count_historic("BTCUSDT", "1h") == 0
+
+    @pytest.mark.asyncio
+    async def test_historic_reads_swallow_mysql_errors(self):
+        mysql = Mock()
+        mysql.query_range.side_effect = RuntimeError("offline")
+        mysql.get_record_count.side_effect = RuntimeError("offline")
+        repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=None)
+
+        assert (
+            await repo.get_historic_range("BTCUSDT", "1h", datetime.min, datetime.max)
+            == []
+        )
+        assert await repo.count_historic("BTCUSDT", "1h") == 0
+
+    @pytest.mark.asyncio
     async def test_get_latest_maps_mysql_columns(self):
         with patch(
             "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import data_manager.api.app as api_module
+from data_manager.db.repositories.candle_repository import CandleRepository
 
 
 @pytest.fixture
@@ -78,3 +79,39 @@ def test_historic_route_rejects_unsupported_period_without_database_calls(
     assert response.status_code == 422
     mock_db_manager.mysql_adapter.query_range.assert_not_called()
     mock_db_manager.mongodb_adapter.query_range.assert_not_called()
+
+
+def test_historic_route_rejects_reversed_range(client, mock_db_manager):
+    response = client.get(
+        "/data/candles/historic?pair=BTCUSDT&period=1h&"
+        "start=2020-01-01T02:00:00Z&end=2020-01-01T00:00:00Z"
+    )
+
+    assert response.status_code == 422
+    mock_db_manager.mysql_adapter.query_range.assert_not_called()
+
+
+def test_historic_route_returns_503_without_mysql(client, monkeypatch):
+    monkeypatch.setattr(api_module, "db_manager", None)
+
+    response = client.get(
+        "/data/candles/historic?pair=BTCUSDT&period=1h&"
+        "start=2020-01-01T00:00:00Z&end=2020-01-01T02:00:00Z"
+    )
+
+    assert response.status_code == 503
+
+
+def test_historic_route_returns_500_for_unexpected_repository_error(
+    client, monkeypatch
+):
+    async def fail(*args, **kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(CandleRepository, "get_historic_range", fail)
+    response = client.get(
+        "/data/candles/historic?pair=BTCUSDT&period=1h&"
+        "start=2020-01-01T00:00:00Z&end=2020-01-01T02:00:00Z"
+    )
+
+    assert response.status_code == 500
