@@ -185,6 +185,10 @@ class MarketRegime(BaseModel):
         ..., ge=0.0, le=1.0, description="Regime confidence score"
     )
     metadata: MetricMetadata = Field(..., description="Computation metadata")
+    inputs: dict[str, Any] | None = Field(
+        default=None,
+        description="Classifier inputs: raw ratios, thresholds, clarity, how long the regime has held",
+    )
 
     model_config = ConfigDict(
         json_encoders={Decimal: str, datetime: lambda v: v.isoformat()}

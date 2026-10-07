@@ -1,8 +1,32 @@
 """
 Market regime classifier.
+
+Confidence of the residual ``transitional`` regime (petrosa-data-manager#534)
+---------------------------------------------------------------------------
+The rule-based regimes keep their fixed rule confidences (0.70-0.90). The
+residual ``transitional`` regime used to report a constant 0.6, so no consumer
+could tell a clear mixed reading from one sitting on a threshold. It is now
+
+    confidence = 0.5 + 0.4 * min(clarity_volatility, clarity_volume)
+
+(range 0.5-0.9, rounded to 4 decimals), where the *clarity* of an input is how
+far it sits from the threshold that would change its level, in [0, 1]:
+
+* ``medium`` (``low <= x <= high``): ``min(x - low, high - x) / ((high - low) / 2)``,
+  0 on a threshold and 1 at the middle of the band;
+* ``high`` (``x > high``): ``min(1, (x - high) / high)``;
+* ``low`` (``x < low``): ``min(1, (low - x) / low)``;
+* a missing or non-finite input has clarity 0.
+
+The weakest input decides: a transitional reading is only as sure as the less
+clear of the two levels it rests on. With the CIO's low-confidence cut at 0.70
+a transitional regime is therefore confident from a clarity of 0.5.
+The classifier also reports how long the current regime has held, from the
+stored history, and the raw inputs and thresholds (``inputs`` on the regime).
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 
 try:
@@ -18,6 +42,32 @@ from data_manager.models.analytics import MarketRegime, MetricMetadata
 
 logger = logging.getLogger(__name__)
 
+VOL_HIGH = 0.5  # 50% annualized volatility
+VOL_LOW = 0.2  # 20% annualized volatility
+VOLUME_HIGH = 1.5  # 50% above baseline
+VOLUME_LOW = 0.7  # 30% below baseline
+TRANSITIONAL_FLOOR = 0.5
+TRANSITIONAL_SPAN = 0.4
+#: How many stored observations are read to tell how long the current regime has held.
+HOLD_HISTORY = 96
+
+
+def level_clarity(value: float, low: float, high: float) -> float:
+    """How far ``value`` sits from the threshold that would change its level, in [0, 1] (see module doc)."""
+    if value is None or not math.isfinite(value):
+        return 0.0
+    if value > high:
+        return min(1.0, (value - high) / high)
+    if value < low:
+        return min(1.0, (low - value) / low) if low > 0 else 1.0
+    return min(value - low, high - value) / ((high - low) / 2)
+
+
+def transitional_confidence(vol_clarity: float, volume_clarity: float) -> float:
+    """Confidence of a ``transitional`` reading: the weaker input decides (see module doc)."""
+    clarity = max(0.0, min(1.0, vol_clarity, volume_clarity))
+    return round(TRANSITIONAL_FLOOR + TRANSITIONAL_SPAN * clarity, 4)
+
 
 class RegimeClassifier:
     """Classifies market conditions based on computed metrics."""
@@ -30,6 +80,30 @@ class RegimeClassifier:
             db_manager: Database manager instance
         """
         self.db_manager = db_manager
+
+    async def _held(self, symbol: str, regime: str) -> tuple[int, datetime | None]:
+        """How many consecutive stored observations (this one included) read ``regime``, and since when.
+
+        Best effort: a read failure or an empty history gives (1, None), never an error.
+        """
+        try:
+            history = await self.db_manager.mongodb_adapter.query_latest(
+                f"analytics_{symbol}_regime", symbol=symbol, limit=HOLD_HISTORY
+            )
+        except Exception as exc:
+            logger.warning(f"Regime history unavailable for {symbol}: {exc}")
+            return 1, None
+        held, since = 1, None
+        for row in history if isinstance(history, list) else []:
+            if not isinstance(row, dict) or row.get("regime") != regime:
+                break
+            held += 1
+            stamp = row.get("timestamp") or (row.get("metadata") or {}).get(
+                "computed_at"
+            )
+            if isinstance(stamp, datetime):
+                since = stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+        return held, since
 
     async def classify_regime(self, symbol: str, timeframe: str) -> MarketRegime | None:
         """
@@ -68,11 +142,11 @@ class RegimeClassifier:
                 roc = float(trend_data[0].get("rate_of_change", 0))
 
             # Define thresholds (can be calibrated based on historical percentiles)
-            vol_high = annualized_vol > 0.5  # 50% annualized volatility
-            vol_low = annualized_vol < 0.2  # 20% annualized volatility
+            vol_high = annualized_vol > VOL_HIGH
+            vol_low = annualized_vol < VOL_LOW
 
-            volume_high = volume_spike_ratio > 1.5  # 50% above baseline
-            volume_low = volume_spike_ratio < 0.7  # 30% below baseline
+            volume_high = volume_spike_ratio > VOLUME_HIGH
+            volume_low = volume_spike_ratio < VOLUME_LOW
 
             trend_bullish = roc > 2.0  # 2% positive rate of change
             trend_bearish = roc < -2.0  # 2% negative rate of change
@@ -126,7 +200,31 @@ class RegimeClassifier:
                 confidence = 0.7
             else:
                 regime = "transitional"
-                confidence = 0.6
+            vol_clarity = level_clarity(annualized_vol, VOL_LOW, VOL_HIGH)
+            volume_clarity = level_clarity(volume_spike_ratio, VOLUME_LOW, VOLUME_HIGH)
+            if regime == "transitional":
+                confidence = transitional_confidence(vol_clarity, volume_clarity)
+            held_observations, held_since = await self._held(symbol, regime)
+            computed_at = datetime.now(UTC)
+            inputs = {
+                "annualized_volatility": annualized_vol,
+                "volume_spike_ratio": volume_spike_ratio,
+                "rate_of_change": roc,
+                "thresholds": {
+                    "vol_high": VOL_HIGH,
+                    "vol_low": VOL_LOW,
+                    "volume_high": VOLUME_HIGH,
+                    "volume_low": VOLUME_LOW,
+                },
+                "clarity": {"volatility": vol_clarity, "volume": volume_clarity},
+                "confidence_basis": (
+                    "transitional: 0.5 + 0.4 * min(clarity); fixed rule confidence otherwise"
+                    if regime == "transitional"
+                    else "fixed rule confidence"
+                ),
+                "held_observations": held_observations,
+                "held_since": (held_since or computed_at).isoformat(),
+            }
 
             # Create metadata
             metadata = MetricMetadata(
@@ -139,7 +237,7 @@ class RegimeClassifier:
                     "volume_low_threshold": 0.7,
                 },
                 completeness=100.0,
-                computed_at=datetime.now(UTC),
+                computed_at=computed_at,
             )
 
             # Create regime object
@@ -152,6 +250,7 @@ class RegimeClassifier:
                 trend_direction=trend_direction,
                 confidence=Decimal(str(confidence)),
                 metadata=metadata,
+                inputs=inputs,
             )
 
             # Store in MongoDB
