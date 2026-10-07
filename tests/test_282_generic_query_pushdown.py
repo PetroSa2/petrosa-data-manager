@@ -83,7 +83,7 @@ class TestMongoFindPaginated:
         assert "_id" not in documents[0]
 
         coll.find.assert_called_once_with({"symbol": "BTCUSDT"})
-        cursor.sort.assert_called_once_with([("timestamp", -1), ("_id", -1)])
+        cursor.sort.assert_called_once_with([("timestamp", -1)])
         cursor.skip.assert_called_once_with(0)
         cursor.limit.assert_called_once_with(1)
         coll.count_documents.assert_awaited_once_with({"symbol": "BTCUSDT"})
@@ -178,6 +178,7 @@ class TestMongoFindPaginated:
                 "sort": [("timestamp", 1), ("_id", 1)],
                 "values": [datetime(2026, 1, 1, tzinfo=UTC), "trade-1"],
             },
+            include_cursor=True,
         )
 
         query = coll.find.call_args.args[0]
@@ -186,6 +187,45 @@ class TestMongoFindPaginated:
             "$lt": datetime(2026, 1, 3, tzinfo=UTC),
         }
         assert "$or" in query["$and"][1]
+
+    @pytest.mark.asyncio
+    async def test_legacy_cursor_normalizes_timestamp(self, mongo_adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        coll.count_documents = AsyncMock(return_value=0)
+        mongo_adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await mongo_adapter.find_paginated(
+            "trades_BTCUSDT",
+            sort_list=[("timestamp", 1)],
+            cursor={
+                "field": "timestamp",
+                "direction": 1,
+                "value": "2026-01-01T00:00:00Z",
+            },
+        )
+
+        query = coll.find.call_args.args[0]
+        assert query["$or"][0]["$and"][-1] == {
+            "timestamp": {"$gt": datetime(2026, 1, 1, tzinfo=UTC)}
+        }
+
+    @pytest.mark.asyncio
+    async def test_cursor_rejects_mismatched_sort(self, mongo_adapter):
+        with pytest.raises(DatabaseError, match="unique sort") as exc_info:
+            await mongo_adapter.find_paginated(
+                "trades_BTCUSDT",
+                sort_list=[("timestamp", 1)],
+                cursor={
+                    "sort": [("updated_at", 1), ("_id", 1)],
+                    "values": ["2026-01-01T00:00:00Z", "trade-1"],
+                },
+            )
+        assert "unique sort" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +347,44 @@ class TestMySQLFindPaginated:
         )
         assert records == []
         assert total == 0
+
+    def test_legacy_cursor_normalizes_timestamp(self, sqlite_adapter):
+        records, total = sqlite_adapter.find_paginated(
+            "audit_logs",
+            sort_list=[("timestamp", 1)],
+            cursor={
+                "field": "timestamp",
+                "direction": 1,
+                "value": "2026-01-01T00:00:00Z",
+            },
+        )
+
+        assert records == []
+        assert total == 0
+
+    def test_cursor_rejects_mismatched_sort(self, sqlite_adapter):
+        with pytest.raises(DatabaseError, match="unique sort") as exc_info:
+            sqlite_adapter.find_paginated(
+                "datasets",
+                sort_list=[("updated_at", 1)],
+                cursor={
+                    "sort": [("name", 1), ("dataset_id", 1)],
+                    "values": ["dataset-0", "d0"],
+                },
+            )
+        assert "unique sort" in str(exc_info.value)
+
+    def test_cursor_rejects_unknown_boundary_field(self, sqlite_adapter):
+        with pytest.raises(DatabaseError, match="cursor field") as exc_info:
+            sqlite_adapter.find_paginated(
+                "datasets",
+                sort_list=[("missing", 1)],
+                cursor={
+                    "sort": [("missing", 1)],
+                    "values": ["value"],
+                },
+            )
+        assert "cursor field" in str(exc_info.value)
 
     def test_unknown_sort_column_is_skipped_not_error(self, sqlite_adapter):
         _seed_datasets(sqlite_adapter, [_dataset_row(1, "BTCUSDT")])

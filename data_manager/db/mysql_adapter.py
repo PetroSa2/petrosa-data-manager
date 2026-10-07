@@ -1288,7 +1288,7 @@ class MySQLAdapter(BaseAdapter):
                     return [], 0
                 conditions.append(table.c[key] == value)
         effective_sort = list(sort_list or [])
-        if effective_sort:
+        if include_cursor and effective_sort:
             primary_keys = [column.name for column in table.primary_key.columns]
             if primary_keys:
                 effective_sort.extend(
@@ -1322,7 +1322,9 @@ class MySQLAdapter(BaseAdapter):
                     table.c[name] == normalized_values[pos]
                     for pos, (name, _) in enumerate(cursor_sort[:index])
                 ]
-                boundary = table.c[field] > value if direction == 1 else table.c[field] < value
+                boundary = (
+                    table.c[field] > value if direction == 1 else table.c[field] < value
+                )
                 comparisons.append(and_(*prefix, boundary))
             conditions.append(or_(*comparisons))
 

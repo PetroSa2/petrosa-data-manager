@@ -604,7 +604,11 @@ class MongoDBAdapter(BaseAdapter):
                 timestamp_filter["$lt"] = end
             query["timestamp"] = timestamp_filter
         effective_sort = list(sort_list or [])
-        if effective_sort and "_id" not in {field for field, _ in effective_sort}:
+        if (
+            include_cursor
+            and effective_sort
+            and "_id" not in {field for field, _ in effective_sort}
+        ):
             effective_sort.append(("_id", effective_sort[0][1]))
         if cursor:
             cursor_sort = [tuple(item) for item in cursor.get("sort", [])]

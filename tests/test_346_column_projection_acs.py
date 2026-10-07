@@ -565,7 +565,7 @@ async def test_ac10a_generic_without_field_list_selects_whole_table(
     pre_change = (
         select(table)
         .where(and_(table.c.symbol == "BTCUSDT"))
-        .order_by(table.c.timestamp.asc())
+        .order_by(table.c.timestamp.asc(), table.c.symbol.asc())
         .limit(10)
         .offset(0)
     )
