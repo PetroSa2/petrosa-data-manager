@@ -70,13 +70,14 @@ def test_cursor_rejects_a_non_scalar_value():
     )
     with pytest.raises(Exception, match="scalar") as exc_info:
         _decode_cursor(token, [("timestamp", 1)])
-        assert "scalar" in str(exc_info.value)
+    assert "scalar" in str(exc_info.value)
 
 
 def test_cursor_rejects_missing_unique_tiebreaker():
     token = _encode_cursor(["2026-01-01T00:00:00+00:00"], [("timestamp", 1)])
-    with pytest.raises(Exception, match="tiebreaker"):
+    with pytest.raises(Exception, match="tiebreaker") as exc_info:
         _decode_cursor(token, [("timestamp", 1)])
+    assert "unique tiebreaker" in str(exc_info.value)
 
 
 def test_legacy_cursor_is_rejected_after_encoding():
@@ -133,6 +134,7 @@ async def test_mongodb_cursor_page_returns_an_exclusive_next_cursor():
         sort_list=[("timestamp", 1)],
         limit=1,
         include_cursor=True,
+        unique_sort=True,
     )
 
     assert len(records) == 1
@@ -161,6 +163,7 @@ async def test_mongodb_cursor_page_at_end_has_no_next_cursor():
         sort_list=[("timestamp", 1)],
         limit=1,
         include_cursor=True,
+        unique_sort=True,
     )
 
     assert records == []

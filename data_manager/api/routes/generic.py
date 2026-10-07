@@ -393,6 +393,7 @@ async def _execute_query_internal(
     offset: int,
     field_list: list[str] | None,
     cursor: str | None = None,
+    paginate: str | None = None,
 ) -> dict[str, Any]:
     """Internal helper to execute a query against a database and collection.
 
@@ -400,6 +401,11 @@ async def _execute_query_internal(
     the driver via ``find_paginated`` instead of loading the entire
     collection/table into memory and slicing it in Python. Response time now
     scales with ``limit``, not collection size.
+
+    Keyset pagination is opt-in: the unique sort tiebreaker, the extra
+    ``limit + 1`` row and ``next_cursor`` are only used with ``cursor`` or
+    ``paginate="cursor"`` (page 1). A plain sorted request runs with exactly
+    the caller's sort spec and limit, so index-backed sorts stay index-backed.
     """
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database manager not available")
@@ -407,6 +413,7 @@ async def _execute_query_internal(
     adapter = _get_adapter(database)
 
     sort_list = list(sort_dict.items()) if sort_dict else None
+    unique = bool(cursor) or paginate == "cursor"
     cursor_data = _decode_cursor(cursor, sort_list) if cursor else None
     if cursor_data and "sort" in cursor_data:
         sort_list = cursor_data["sort"]
@@ -422,7 +429,8 @@ async def _execute_query_internal(
                 offset=offset,
                 columns=field_list,
                 cursor=cursor_data,
-                include_cursor=True,
+                include_cursor=unique,
+                unique_sort=unique,
             )
         else:  # MongoDB
             result = await adapter.find_paginated(
@@ -432,7 +440,8 @@ async def _execute_query_internal(
                 limit=limit,
                 offset=offset,
                 cursor=cursor_data,
-                include_cursor=True,
+                include_cursor=unique,
+                unique_sort=unique,
             )
         if len(result) == 2:
             records, total_count = result
@@ -690,6 +699,14 @@ async def get_records(
     ),
     offset: int = Query(0, ge=0),
     cursor: str | None = Query(None, description="Opaque keyset cursor"),
+    paginate: str | None = Query(
+        None,
+        pattern="^cursor$",
+        description=(
+            "Set to 'cursor' to get keyset pagination (unique sort tiebreaker "
+            "and next_cursor) from page 1; implied by ``cursor``"
+        ),
+    ),
     fields: str | None = Query(
         None, description="Comma-separated list of fields to include"
     ),
@@ -719,6 +736,7 @@ async def get_records(
             offset=offset,
             field_list=field_list,
             cursor=cursor,
+            paginate=paginate,
         )
         if database == "mysql":
             response.headers["X-Petrosa-Store"] = "mysql-historic"

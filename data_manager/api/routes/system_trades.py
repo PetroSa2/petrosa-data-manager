@@ -230,6 +230,7 @@ async def get_system_trades_summary(
         "fee_total": fee_total,
         "publisher_pnl_sum": publisher_pnl if publisher_pnl_count else None,
         "publisher_pnl_count": publisher_pnl_count,
+        "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
         "truncated": len(rows) >= _SUMMARY_MAX_FILLS,
         "filters": {
             "strategy_id": strategy_id,

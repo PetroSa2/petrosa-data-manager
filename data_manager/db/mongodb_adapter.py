@@ -562,6 +562,7 @@ class MongoDBAdapter(BaseAdapter):
         end: datetime | None = None,
         cursor: dict[str, Any] | None = None,
         include_cursor: bool = False,
+        unique_sort: bool = False,
     ) -> (
         tuple[list[dict[str, Any]], int]
         | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
@@ -587,6 +588,13 @@ class MongoDBAdapter(BaseAdapter):
                 semantics and the previous in-memory ``_apply_sort`` behavior.
             limit: Max documents to return.
             offset: Documents to skip before collecting ``limit``.
+            cursor: Keyset cursor from a previous page; implies ``unique_sort``.
+            include_cursor: Return ``(documents, total, next_cursor_data)``.
+            unique_sort: Opt in to keyset pagination: ``_id`` is appended to
+                the sort as a tiebreaker and one extra document is fetched to
+                detect a next page. Off by default, so a plain sorted request
+                uses exactly the caller's sort spec and ``limit`` (index-backed
+                sorts such as ``{"close_time": -1}`` stay index-backed).
 
         Returns:
             ``(documents, total_count)`` — ``total_count`` reflects the full
@@ -603,9 +611,10 @@ class MongoDBAdapter(BaseAdapter):
             if end is not None:
                 timestamp_filter["$lt"] = end
             query["timestamp"] = timestamp_filter
+        keyset = unique_sort or (bool(cursor) and "sort" in cursor)
         effective_sort = list(sort_list or [])
         if (
-            include_cursor
+            keyset
             and effective_sort
             and "_id" not in {field for field, _ in effective_sort}
         ):
@@ -643,7 +652,7 @@ class MongoDBAdapter(BaseAdapter):
             db_cursor = coll.find(query)
             if effective_sort:
                 db_cursor = db_cursor.sort(effective_sort)
-            fetch_limit = limit + 1 if include_cursor and effective_sort else limit
+            fetch_limit = limit + 1 if keyset and effective_sort else limit
             if not cursor:
                 db_cursor = db_cursor.skip(offset)
             db_cursor = db_cursor.limit(fetch_limit)
@@ -661,7 +670,7 @@ class MongoDBAdapter(BaseAdapter):
                 doc.pop("_id", None)
 
             next_data = None
-            if has_next and effective_sort and documents:
+            if keyset and has_next and effective_sort and documents:
                 next_data = {
                     "sort": effective_sort,
                     "values": next_values,
