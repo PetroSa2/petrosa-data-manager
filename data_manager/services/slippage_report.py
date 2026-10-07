@@ -52,6 +52,14 @@ def _field(row: dict[str, Any], name: str) -> Any:
     return payload.get(name) if isinstance(payload, dict) else None
 
 
+def _has_field(row: dict[str, Any], name: str) -> bool:
+    """Whether a telemetry field exists on the event or in its ``payload`` (null counts as present)."""
+    if name in row:
+        return True
+    payload = row.get("payload")
+    return isinstance(payload, dict) and name in payload
+
+
 def fill_role(row: dict[str, Any]) -> str:
     """``exit`` for a reduce-only fill (stop-loss, take-profit, close), ``entry`` otherwise."""
     role = _field(row, "role")
@@ -130,6 +138,8 @@ def build_report(
     by_pair: dict[tuple[str, str], list[float]] = defaultdict(list)
     overall: list[float] = []
     without_slippage = 0
+    without_telemetry = 0
+    without_intended = 0
     without_time = 0
     considered = 0
     for row in fills:
@@ -141,6 +151,14 @@ def build_report(
         slippage = _number(_field(row, "slippage_bp"))
         if slippage is None:
             without_slippage += 1
+            if not _has_field(row, "slippage_bp"):
+                without_telemetry += (
+                    1  # the fill event carries no cost telemetry at all
+                )
+            elif _number(_field(row, "intended_price")) is None:
+                without_intended += (
+                    1  # emitted, but there was no intended price to measure against
+                )
             continue
         when = _when(row.get("fill_time") or row.get("timestamp"))
         symbol = str(row.get("symbol") or "")
@@ -159,6 +177,9 @@ def build_report(
         "fills_considered": considered,
         "fills_with_slippage": len(overall),
         "fills_without_slippage": without_slippage,
+        # Why: no slippage_bp on the event at all (not emitted), or emitted null for want of an intended price
+        "fills_without_cost_telemetry": without_telemetry,
+        "fills_without_intended_price": without_intended,
         "fills_without_time_or_symbol": without_time,
         "overall": _stats(overall, overall_median) if overall else None,
         "by_regime": {
@@ -177,6 +198,8 @@ def summary_lines(report: dict[str, Any]) -> list[str]:
     lines = [
         f"slippage per regime (role={report['role']}): {report['fills_with_slippage']} of "
         f"{report['fills_considered']} fills have slippage"
+        f" ({report['fills_without_cost_telemetry']} carry no cost telemetry, "
+        f"{report['fills_without_intended_price']} have no intended price)"
     ]
     overall = report["overall"]
     if overall:
