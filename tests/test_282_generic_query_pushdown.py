@@ -193,6 +193,30 @@ def _seed_datasets(adapter, rows):
 
 
 class TestMySQLFindPaginated:
+    def test_cursor_page_uses_exclusive_database_boundary(self, sqlite_adapter):
+        _seed_datasets(
+            sqlite_adapter,
+            [
+                _dataset_row(0, "BTCUSDT"),
+                _dataset_row(1, "BTCUSDT"),
+                _dataset_row(2, "BTCUSDT"),
+            ],
+        )
+        records, total, next_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=1,
+            cursor={
+                "field": "updated_at",
+                "direction": 1,
+                "value": datetime(2026, 1, 1, tzinfo=UTC),
+            },
+            include_cursor=True,
+        )
+        assert records[0]["dataset_id"] == "d1"
+        assert total == 2
+        assert next_cursor["value"] == records[0]["updated_at"]
+
     def test_raises_when_not_connected(self, sqlite_adapter):
         sqlite_adapter._connected = False
         with pytest.raises(DatabaseError, match="Not connected") as exc_info:
@@ -291,6 +315,41 @@ def client(mock_db_manager):
 
 
 class TestGenericQueryDriverPushdown:
+    def test_get_records_returns_and_consumes_cursor(self, client):
+        adapter = api_module.db_manager.mongodb_adapter
+        adapter.find_paginated = AsyncMock(
+            return_value=(
+                [{"timestamp": datetime(2026, 1, 1, tzinfo=UTC)}],
+                2,
+                {
+                    "field": "timestamp",
+                    "direction": 1,
+                    "value": datetime(2026, 1, 1, tzinfo=UTC),
+                },
+            )
+        )
+        response = client.get(
+            "/api/v1/mongodb/trades_BTCUSDT",
+            params={"sort": '{"timestamp": 1}', "limit": 1},
+        )
+        assert response.status_code == 200
+        cursor = response.json()["pagination"]["next_cursor"]
+        assert cursor
+
+        response = client.get(
+            "/api/v1/mongodb/trades_BTCUSDT",
+            params={"sort": '{"timestamp": 1}', "limit": 1, "cursor": cursor},
+        )
+        assert response.status_code == 200
+        assert adapter.find_paginated.call_args.kwargs["cursor"]["field"] == "timestamp"
+
+    def test_get_records_rejects_cursor_with_wrong_sort(self, client):
+        response = client.get(
+            "/api/v1/mongodb/trades_BTCUSDT",
+            params={"sort": '{"timestamp": 1}', "cursor": "invalid"},
+        )
+        assert response.status_code == 400
+
     def test_get_records_pushes_limit_to_driver(self, client):
         response = client.get("/api/v1/mongodb/klines_5m", params={"limit": 1})
         assert response.status_code == 200
