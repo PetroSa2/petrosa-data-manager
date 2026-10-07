@@ -53,6 +53,36 @@ ZERO = Decimal("0")
 QUOTE_ASSETS = ("USDT", "USDC", "BUSD", "FDUSD", "USD")
 
 
+@dataclass
+class FillEntry:
+    when: datetime
+    fee: Decimal = ZERO
+    fee_known: bool = False
+    is_entry: bool = False
+    realized: Decimal = ZERO
+    reported_pnl: Decimal | None = None
+
+
+@dataclass
+class UnattributedFill:
+    when: datetime | None
+    symbol: str
+    reason: str
+    fee: Decimal = ZERO
+    fee_known: bool = False
+    reported_pnl: Decimal | None = None
+
+
+@dataclass
+class OpenRound:
+    strategy_id: str
+    symbol: str
+    position_side: str
+    opened_at: datetime
+    entry_notional: Decimal
+    log: tuple[FillEntry, ...]
+
+
 def _dec(value: Any) -> Decimal:
     """A Decimal of a number as written (``str`` of a float), ZERO when unusable."""
     try:
@@ -77,6 +107,7 @@ class _Cycle:
     decision_ids: list[str] = field(default_factory=list)
     #: True once any fill of the round is a synthetic exit (petrosa-data-manager#603)
     synthetic: bool = False
+    log: list[FillEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -96,6 +127,7 @@ class ClosedRound:
     decision_ids: tuple[str, ...] = ()
     #: True when the round was closed by a synthetic exit (petrosa-data-manager#603)
     synthetic: bool = False
+    log: tuple[FillEntry, ...] = ()
 
     @property
     def holding_seconds(self) -> float:
@@ -180,6 +212,7 @@ class RoundBook:
         self.excluded_pre_history: list[ClosedRound] = []
         self._excluded_fills: dict[str, int] = defaultdict(int)
         self._excluded_lots: dict[str, int] = defaultdict(int)
+        self.unattributed_fills: list[UnattributedFill] = []
 
     def set_cut_over(self, cut_over_ms: int | float | None) -> None:
         """Set the exchange-history cut-over: a synthetic round opened before it is excluded, not an outcome."""
@@ -196,7 +229,7 @@ class RoundBook:
         strategy_id = str(row.get("strategy_id") or "").strip()
         if strategy_id.lower() in PLACEHOLDER_STRATEGIES:
             reason = "no_strategy_id" if not strategy_id else "placeholder_strategy_id"
-            self._unattributed(reason)
+            self._unattributed(reason, row)
             return
         side, mapped = order_side(row)
         if mapped:
@@ -212,10 +245,10 @@ class RoundBook:
             or not price
             or when is None
         ):
-            self._unattributed("unusable_fill")
+            self._unattributed("unusable_fill", row)
             return
         if qty <= 0 or price <= 0:
-            self._unattributed("unusable_fill")
+            self._unattributed("unusable_fill", row)
             return
 
         self._row = row
@@ -275,6 +308,7 @@ class RoundBook:
         remaining = _dec(qty)
         matched = ZERO
         realized = 0.0
+        realized_before = cycle.realized_dec
         while remaining > ZERO and opposite:
             lot = opposite[0]
             lot_quantity = _dec(lot.qty)
@@ -295,6 +329,9 @@ class RoundBook:
             if _dec(lot.qty) == ZERO:
                 opposite.popleft()
         cycle.realized += realized
+        if self._entry_ref is not None:
+            self._entry_ref.realized = cycle.realized_dec - realized_before
+            self._entry_ref.is_entry = matched <= ZERO
         if matched > ZERO:
             cycle.exit_fills += 1
             self._exit[strategy_id] += 1
@@ -323,6 +360,7 @@ class RoundBook:
                     position_ids=tuple(cycle.position_ids),
                     decision_ids=tuple(cycle.decision_ids),
                     synthetic=cycle.synthetic,
+                    log=tuple(cycle.log),
                 ),
                 cycle,
                 strategy_id,
@@ -362,7 +400,7 @@ class RoundBook:
             lots.append(self._lot(qty, price, when))
             return
         if not lots:
-            self._unattributed("exit_without_entry")
+            self._unattributed("exit_without_entry", getattr(self, "_row", None))
             return
         self._fills[strategy_id] += 1
         cycle = book.cycle if book.cycle is not None else _Cycle(opened_at=when)
@@ -372,6 +410,7 @@ class RoundBook:
         self._tag(cycle)
         self._exit[strategy_id] += 1
         remaining = _dec(qty)
+        realized_before = cycle.realized_dec
         while remaining > ZERO and lots:
             lot = lots[0]
             lot_quantity = _dec(lot.qty)
@@ -390,6 +429,9 @@ class RoundBook:
             remaining -= take
             if _dec(lot.qty) == ZERO:
                 lots.popleft()
+        if self._entry_ref is not None:
+            self._entry_ref.realized = cycle.realized_dec - realized_before
+            self._entry_ref.is_entry = False
         if not lots:
             self._record_close(
                 ClosedRound(
@@ -407,11 +449,42 @@ class RoundBook:
                     position_ids=tuple(cycle.position_ids),
                     decision_ids=tuple(cycle.decision_ids),
                     synthetic=cycle.synthetic,
+                    log=tuple(cycle.log),
                 ),
                 cycle,
                 strategy_id,
             )
             book.cycle = None
+
+    @staticmethod
+    def _field_of(row: dict[str, Any], name: str) -> Any:
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        return row.get(name) if row.get(name) is not None else payload.get(name)
+
+    @classmethod
+    def _fee_of(cls, row: dict[str, Any]) -> Decimal | None:
+        fee = cls._field_of(row, "fee")
+        if fee is None:
+            fee = cls._field_of(row, "fees")
+        asset = str(cls._field_of(row, "fee_asset") or "").upper()
+        status = str(cls._field_of(row, "fee_status") or "").lower()
+        symbol = str(row.get("symbol") or "")
+        quote = next((q for q in QUOTE_ASSETS if symbol.endswith(q)), "")
+        in_quote = bool(asset) and asset == quote or (not asset and bool(quote))
+        if fee is None or status in ("unknown", "needs_conversion") or not in_quote:
+            return None
+        return abs(_dec(fee))
+
+    @classmethod
+    def _reported_pnl_of(cls, row: dict[str, Any]) -> Decimal | None:
+        for name in ("pnl", "realized_pnl"):
+            value = cls._field_of(row, name)
+            if value is not None and not isinstance(value, bool):
+                try:
+                    return Decimal(str(value))
+                except (InvalidOperation, ValueError):
+                    return None
+        return None
 
     def _tag(self, cycle: _Cycle, *, decision_only: bool = False) -> None:
         """Book the current fill's fee and identifiers on the round it belongs to.
@@ -428,28 +501,45 @@ class RoundBook:
         if not decision_only and row.get("synthetic"):
             cycle.synthetic = True
 
+        self._entry_ref = None
+        when = _when(row)
+        if not decision_only and when is not None:
+            fee = self._fee_of(row)
+            self._entry_ref = FillEntry(
+                when=when,
+                fee=fee if fee is not None else ZERO,
+                fee_known=fee is not None,
+                reported_pnl=self._reported_pnl_of(row),
+            )
+            cycle.log.append(self._entry_ref)
+
         buckets = [("decision_id", cycle.decision_ids)]
         if not decision_only:
-            fee = field_of("fee")
-            if fee is None:
-                fee = field_of("fees")
-            asset = str(field_of("fee_asset") or "").upper()
-            status = str(field_of("fee_status") or "").lower()
-            symbol = str(row.get("symbol") or "")
-            quote = next((q for q in QUOTE_ASSETS if symbol.endswith(q)), "")
-            in_quote = bool(asset) and asset == quote or (not asset and bool(quote))
-            if fee is None or status in ("unknown", "needs_conversion") or not in_quote:
+            fee_value = self._fee_of(row)
+            if fee_value is None:
                 cycle.fee_unknown_fills += 1
             else:
-                cycle.fees += abs(_dec(fee))
+                cycle.fees += fee_value
             buckets.insert(0, ("position_id", cycle.position_ids))
         for name, bucket in buckets:
             value = field_of(name)
             if value and str(value) not in bucket:
                 bucket.append(str(value))
 
-    def _unattributed(self, reason: str) -> None:
+    def _unattributed(self, reason: str, row: dict[str, Any] | None = None) -> None:
         self.unattributed[reason] += 1
+        if row is not None:
+            fee = self._fee_of(row)
+            self.unattributed_fills.append(
+                UnattributedFill(
+                    when=_when(row),
+                    symbol=str(row.get("symbol") or ""),
+                    reason=reason,
+                    fee=fee if fee is not None else ZERO,
+                    fee_known=fee is not None,
+                    reported_pnl=self._reported_pnl_of(row),
+                )
+            )
 
     def _record_close(
         self, closed: ClosedRound, cycle: _Cycle, strategy_id: str
@@ -659,6 +749,21 @@ class RoundBook:
             "position_id": lot.position_id,
             "reason": reason,
         }
+
+    def open_cycles(self) -> list[OpenRound]:
+        return [
+            OpenRound(
+                strategy_id=strategy_id,
+                symbol=symbol,
+                position_side=leg,
+                opened_at=book.cycle.opened_at,
+                entry_notional=book.cycle.entry_notional,
+                log=tuple(book.cycle.log),
+            )
+            for (strategy_id, symbol, leg), book in self._books.items()
+            if book.cycle is not None
+            and (book.cycle.fills > 0 or book.long or book.short)
+        ]
 
     def report(
         self,

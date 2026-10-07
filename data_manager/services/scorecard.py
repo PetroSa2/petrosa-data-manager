@@ -5,8 +5,9 @@ handled). Its **net** is the realized P&L minus the fees of all its fills (entry
 asset; a fill whose fee is missing or not in the quote asset is counted (``fee_unknown_fills``), never guessed.
 A round's **risk** is its entry notional x the stop distance the position carried (the stop actually placed, from the
 position row, else the decision's); its **net R** is net / risk. Rounds belong to the period of their **close time
-(UTC)**. Funding allocation and the ledger conservation check are not here yet (the response says so in
-``funding``).
+(UTC)**. Its **funding** is its share of the exchange funding of the days it was open at a 00/08/16 UTC mark
+(``scorecard_funding``, petrosa-data-manager#556), subtracted from the net, so net R and the keep/kill input
+include it; ``scorecard_ledger`` reconciles the period with the ledger.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from decimal import Decimal
 from statistics import median
 from typing import Any
 
-from data_manager.services.round_book import ClosedRound
+from data_manager.services.round_book import ClosedRound, FillEntry
 
 ZERO = Decimal("0")
 UNKNOWN_MODE = "unknown"
@@ -52,11 +53,16 @@ class ScoredRound:
     cio_mode: str
     position_ids: tuple[str, ...] = ()
     decision_ids: tuple[str, ...] = ()
+    funding: Decimal = ZERO  # cost (positive = paid) allocated to the round
+    round_index: int = (
+        -1
+    )  # position in the closed-round list: the key of the funding allocation
+    log: tuple[FillEntry, ...] = ()
     net: Decimal = field(init=False)
     net_r: Decimal | None = field(init=False)
 
     def __post_init__(self) -> None:
-        self.net = self.gross - self.fees
+        self.net = self.gross - self.fees - self.funding
         risk = (
             self.entry_notional * self.stop_fraction
             if self.stop_fraction is not None
@@ -81,15 +87,18 @@ def score_rounds(
     *,
     stops: Mapping[str, Decimal] | None = None,
     decisions: Mapping[str, Mapping[str, Any]] | None = None,
+    funding_cost: Mapping[int, Decimal] | None = None,
 ) -> list[ScoredRound]:
     """Attach cost, risk and mode to closed rounds.
 
     ``stops`` maps a position id to the stop fraction the position carried; ``decisions`` maps a decision id to
     ``{"source": ..., "stop_fraction": ...}`` (the fallback for the stop, and the CIO mode).
+    ``funding_cost`` maps a round's index in ``rounds`` to the funding it paid (positive = paid).
     """
     stops, decisions = stops or {}, decisions or {}
+    funding_cost = funding_cost or {}
     out: list[ScoredRound] = []
-    for r in rounds:
+    for index, r in enumerate(rounds):
         stop = next((stops[p] for p in r.position_ids if p in stops), None)
         mode = UNKNOWN_MODE
         for decision_id in r.decision_ids:
@@ -114,6 +123,9 @@ def score_rounds(
                 cio_mode=mode,
                 position_ids=r.position_ids,
                 decision_ids=r.decision_ids,
+                funding=funding_cost.get(index, ZERO),
+                round_index=index,
+                log=r.log,
             )
         )
     return sorted(out, key=lambda x: x.closed_at)
@@ -211,7 +223,7 @@ def metrics(rounds: list[ScoredRound], minimum: int | None) -> dict[str, Any]:
         "n_trades": n,
         "gross_pnl": s(gross),
         "fees": s(fees),
-        "funding_allocated": "0",
+        "funding_allocated": s(sum((r.funding for r in rounds), ZERO)),
         "net_pnl": s(net),
         "win_rate": s(Decimal(len(wins)) / n) if n else None,
         "avg_win": s(sum(wins, ZERO) / len(wins)) if wins else None,
@@ -253,8 +265,7 @@ def scorecard(
         "groups": groups,
         "total_net": s(sum((r.net for r in rounds), ZERO)),
         "total_fees": s(sum((r.fees for r in rounds), ZERO)),
-        "total_funding": "0",
-        "funding": "not allocated: ledger funding allocation and conservation are a separate step",
+        "total_funding": s(sum((r.funding for r in rounds), ZERO)),
     }
 
 
