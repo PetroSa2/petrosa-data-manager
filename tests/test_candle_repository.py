@@ -453,18 +453,20 @@ class TestMysqlPath:
             "mongodb",
         ):
             mysql = Mock()
-            mysql.query_range = Mock(return_value=[
-                {
-                    "open_price": "100",
-                    "high_price": "110",
-                    "low_price": "90",
-                    "close_price": "105",
-                    "volume": "1000",
-                    "timestamp": datetime(2020, 1, 1, tzinfo=UTC),
-                    "symbol": "BTCUSDT",
-                    "interval": "1h",
-                }
-            ])
+            mysql.query_range = Mock(
+                return_value=[
+                    {
+                        "open_price": "100",
+                        "high_price": "110",
+                        "low_price": "90",
+                        "close_price": "105",
+                        "volume": "1000",
+                        "timestamp": datetime(2020, 1, 1, tzinfo=UTC),
+                        "symbol": "BTCUSDT",
+                        "interval": "1h",
+                    }
+                ]
+            )
             mongodb = Mock()
             repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
 
