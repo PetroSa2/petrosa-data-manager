@@ -259,6 +259,16 @@ class CandleRepository(BaseRepository):
     #: which store actually answered instead of a hardcoded label (#275 AC5).
     last_read_source: str | None = None
 
+    def __init__(
+        self,
+        mysql_adapter: Any | None,
+        mongodb_adapter: Any | None,
+        *,
+        mongodb_only: bool = False,
+    ) -> None:
+        super().__init__(mysql_adapter, mongodb_adapter)
+        self.mongodb_only = mongodb_only
+
     def _get_collection_name(self, symbol: str, timeframe: str) -> str:
         """Get collection name for symbol and timeframe (MongoDB specific)."""
         return mongo_collection_name(symbol, timeframe)
@@ -275,7 +285,7 @@ class CandleRepository(BaseRepository):
     # ------------------------------------------------------------------
 
     def _primary_is_mysql(self) -> bool:
-        return constants.CANDLE_DATABASE_TYPE == "mysql"
+        return not self.mongodb_only and constants.CANDLE_DATABASE_TYPE == "mysql"
 
     def _fallback_adapter(self) -> Any | None:
         """Return the non-primary adapter when a fallback read is permitted.
@@ -455,6 +465,72 @@ class CandleRepository(BaseRepository):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def get_historic_range(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        descending: bool = False,
+    ) -> list[dict]:
+        """Read a historic candle range directly from the MySQL lake."""
+        if self.mysql is None:
+            return []
+        try:
+            rows = await asyncio.to_thread(
+                self.mysql.query_range,
+                self._get_mysql_table_name(timeframe),
+                start,
+                end,
+                symbol,
+                limit=limit,
+                offset=offset,
+                descending=descending,
+                columns=MYSQL_CANDLE_COLUMNS,
+            )
+            return [map_mysql_row(row) for row in rows]
+        except Exception as e:
+            logger.error(
+                "Failed to query historic candles for %s %s: %s",
+                symbol,
+                timeframe,
+                e,
+            )
+            return []
+
+    async def count_historic(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        max_count: int | None = None,
+    ) -> int:
+        """Count historic candles directly in the MySQL lake."""
+        if self.mysql is None:
+            return 0
+        try:
+            args: tuple[Any, ...] = (
+                self._get_mysql_table_name(timeframe),
+                start,
+                end,
+                symbol,
+            )
+            if max_count is not None:
+                args += (max_count,)
+            return await asyncio.to_thread(self.mysql.get_record_count, *args)
+        except Exception as e:
+            logger.error(
+                "Failed to count historic candles for %s %s: %s",
+                symbol,
+                timeframe,
+                e,
+            )
+            return 0
 
     async def insert(self, candle: Candle) -> bool:
         """

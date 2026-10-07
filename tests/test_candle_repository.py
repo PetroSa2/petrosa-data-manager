@@ -447,6 +447,57 @@ class TestMysqlPath:
             assert result[0]["close"] == "105"
 
     @pytest.mark.asyncio
+    async def test_get_historic_range_always_reads_mysql(self):
+        with patch(
+            "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",
+            "mongodb",
+        ):
+            mysql = Mock()
+            mysql.query_range = Mock(return_value=[
+                {
+                    "open_price": "100",
+                    "high_price": "110",
+                    "low_price": "90",
+                    "close_price": "105",
+                    "volume": "1000",
+                    "timestamp": datetime(2020, 1, 1, tzinfo=UTC),
+                    "symbol": "BTCUSDT",
+                    "interval": "1h",
+                }
+            ])
+            mongodb = Mock()
+            repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
+
+            result = await repo.get_historic_range(
+                "BTCUSDT",
+                "1h",
+                datetime(2020, 1, 1, tzinfo=UTC),
+                datetime(2020, 1, 2, tzinfo=UTC),
+                limit=10,
+                offset=2,
+                descending=True,
+            )
+
+            assert result[0]["close"] == "105"
+            mysql.query_range.assert_called_once()
+            mongodb.query_range.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_count_historic_reads_mysql_without_fallback(self):
+        mysql = Mock()
+        mysql.get_record_count = Mock(return_value=42)
+        mongodb = Mock()
+        repo = CandleRepository(mysql_adapter=mysql, mongodb_adapter=mongodb)
+
+        result = await repo.count_historic("BTCUSDT", "1h", max_count=100)
+
+        assert result == 42
+        mysql.get_record_count.assert_called_once_with(
+            "klines_h1", None, None, "BTCUSDT", 100
+        )
+        mongodb.get_record_count.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_get_latest_maps_mysql_columns(self):
         with patch(
             "data_manager.db.repositories.candle_repository.constants.CANDLE_DATABASE_TYPE",

@@ -178,8 +178,7 @@ async def get_candles(
     try:
         # Initialize repository
         candle_repo = CandleRepository(
-            api_module.db_manager.mysql_adapter,
-            api_module.db_manager.mongodb_adapter,
+            None, api_module.db_manager.mongodb_adapter, mongodb_only=True
         )
 
         # Set default time range if not provided
@@ -276,6 +275,105 @@ async def get_candles(
 
     except Exception as e:
         logger.error(f"Error fetching candles: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/candles/historic")
+async def get_historic_candles(
+    pair: str = Query(..., description="Trading pair symbol"),
+    period: str = Query(..., description="Candle period"),
+    start: datetime = Query(..., description="Start timestamp"),
+    end: datetime = Query(..., description="End timestamp"),
+    limit: int = Query(1000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    sort_order: str = Query("asc", description="Sort order by timestamp (asc, desc)"),
+) -> dict:
+    """Get long-lived research candles from MySQL, never MongoDB."""
+    if not api_module.db_manager or not api_module.db_manager.mysql_adapter:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    normalized_period = period.strip().lower()
+    if normalized_period not in constants.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unsupported period {period!r}. Supported periods: "
+                f"{', '.join(constants.SUPPORTED_TIMEFRAMES)}"
+            ),
+        )
+    if end < start:
+        raise HTTPException(status_code=422, detail="end must not precede start")
+
+    try:
+        candle_repo = CandleRepository(api_module.db_manager.mysql_adapter, None)
+        descending = sort_order.lower() == "desc"
+        candles = await candle_repo.get_historic_range(
+            pair,
+            normalized_period,
+            start,
+            end,
+            limit=limit,
+            offset=offset,
+            descending=descending,
+        )
+        total_count = await candle_repo.count_historic(
+            pair,
+            normalized_period,
+            start,
+            end,
+            max_count=_expected_candle_count(start, end, normalized_period),
+        )
+        values = [
+            {
+                "timestamp": (
+                    candle.get("timestamp").isoformat()
+                    if isinstance(candle.get("timestamp"), datetime)
+                    else str(candle.get("timestamp"))
+                ),
+                "open": str(candle.get("open")),
+                "high": str(candle.get("high")),
+                "low": str(candle.get("low")),
+                "close": str(candle.get("close")),
+                "volume": str(candle.get("volume")),
+                "quote_volume": str(candle.get("quote_volume"))
+                if candle.get("quote_volume")
+                else None,
+                "trades_count": candle.get("trades_count"),
+            }
+            for candle in candles
+        ]
+        return {
+            "pair": pair,
+            "period": normalized_period,
+            "data": values,
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+                "page": (offset // limit) + 1,
+                "pages": (total_count + limit - 1) // limit,
+                "has_next": offset + limit < total_count,
+                "has_previous": offset > 0,
+            },
+            "sort": {"by": "timestamp", "order": sort_order},
+            "metadata": {
+                "data_completeness": _completeness_pct(
+                    start, end, normalized_period, total_count
+                ),
+                "last_updated": datetime.now(UTC).isoformat(),
+                "source": "mysql",
+                "collection": mysql_table_name(normalized_period),
+                "records_returned": len(values),
+            },
+            "parameters": {
+                "pair": pair,
+                "period": normalized_period,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            },
+        }
+    except Exception as e:
+        logger.error("Error fetching historic candles: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
