@@ -17,9 +17,7 @@ def test_cursor_round_trip_and_sort_binding():
 
 
 def test_cursor_rejects_a_different_sort():
-    token = _encode_cursor(
-        ["BTCUSDT", "trade-1"], [("symbol", 1), ("trade_id", 1)]
-    )
+    token = _encode_cursor(["BTCUSDT", "trade-1"], [("symbol", 1), ("trade_id", 1)])
     with pytest.raises(Exception, match="does not match") as exc_info:
         _decode_cursor(token, [("timestamp", 1)])
     assert "does not match" in str(exc_info.value)
@@ -65,6 +63,7 @@ async def test_mongodb_cursor_page_returns_an_exclusive_next_cursor():
         sort_list=[("timestamp", 1)],
         limit=1,
         include_cursor=True,
+        unique_sort=True,
     )
 
     assert len(records) == 1
@@ -93,6 +92,7 @@ async def test_mongodb_cursor_page_at_end_has_no_next_cursor():
         sort_list=[("timestamp", 1)],
         limit=1,
         include_cursor=True,
+        unique_sort=True,
     )
 
     assert records == []

@@ -1237,6 +1237,7 @@ class MySQLAdapter(BaseAdapter):
         columns: Sequence[str] | None = None,
         cursor: dict[str, Any] | None = None,
         include_cursor: bool = False,
+        unique_sort: bool = False,
     ) -> (
         tuple[list[dict[str, Any]], int]
         | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
@@ -1266,6 +1267,12 @@ class MySQLAdapter(BaseAdapter):
                 differentiate order for it).
             limit: Max rows to return.
             offset: Rows to skip before collecting ``limit``.
+            cursor: Keyset cursor from a previous page; implies ``unique_sort``.
+            include_cursor: Return ``(records, total, next_cursor_data)``.
+            unique_sort: Opt in to keyset pagination: the primary key is
+                appended to the ORDER BY as a tiebreaker and one extra row is
+                fetched to detect a next page. Off by default, so a plain
+                sorted request keeps exactly the caller's ORDER BY and LIMIT.
 
         Returns:
             ``(records, total_count)`` — ``total_count`` reflects the full
@@ -1287,8 +1294,9 @@ class MySQLAdapter(BaseAdapter):
                 if key not in table.c:
                     return [], 0
                 conditions.append(table.c[key] == value)
+        keyset = unique_sort or bool(cursor)
         effective_sort = list(sort_list or [])
-        if effective_sort:
+        if keyset and effective_sort:
             primary_keys = [column.name for column in table.primary_key.columns]
             if primary_keys:
                 effective_sort.extend(
@@ -1322,7 +1330,9 @@ class MySQLAdapter(BaseAdapter):
                     table.c[name] == normalized_values[pos]
                     for pos, (name, _) in enumerate(cursor_sort[:index])
                 ]
-                boundary = table.c[field] > value if direction == 1 else table.c[field] < value
+                boundary = (
+                    table.c[field] > value if direction == 1 else table.c[field] < value
+                )
                 comparisons.append(and_(*prefix, boundary))
             conditions.append(or_(*comparisons))
 
@@ -1352,7 +1362,7 @@ class MySQLAdapter(BaseAdapter):
                         if order_clauses:
                             query = query.order_by(*order_clauses)
                     query = query.limit(
-                        limit + 1 if include_cursor and effective_sort else limit
+                        limit + 1 if keyset and effective_sort else limit
                     )
                     if not cursor:
                         query = query.offset(offset)
@@ -1363,7 +1373,7 @@ class MySQLAdapter(BaseAdapter):
                     if has_next:
                         records = records[:limit]
                     next_data = None
-                    if has_next and effective_sort and records:
+                    if keyset and has_next and effective_sort and records:
                         values = [records[-1].get(field) for field, _ in effective_sort]
                         next_data = {
                             "sort": effective_sort,
