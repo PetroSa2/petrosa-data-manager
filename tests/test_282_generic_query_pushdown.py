@@ -158,6 +158,133 @@ class TestMongoFindPaginated:
         with pytest.raises(DatabaseError, match="Failed to query"):
             await mongo_adapter.find_paginated("x")
 
+    @pytest.mark.asyncio
+    async def test_plain_sorted_request_keeps_its_sort_spec(self, mongo_adapter):
+        """No appended tiebreaker and no limit + 1 unless pagination is opted in.
+
+        The extractor's latest-candle lookups sort on ``close_time`` and rely on
+        the index serving that exact sort spec.
+        """
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.skip.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[{"_id": "x", "close_time": 1}])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        coll.count_documents = AsyncMock(return_value=10)
+        mongo_adapter.db.__getitem__ = MagicMock(return_value=coll)
+        for include_cursor in (False, True):
+            cursor.sort.reset_mock()
+            cursor.limit.reset_mock()
+            result = await mongo_adapter.find_paginated(
+                "klines_5m",
+                sort_list=[("close_time", -1)],
+                limit=1,
+                include_cursor=include_cursor,
+            )
+            cursor.sort.assert_called_once_with([("close_time", -1)])
+            cursor.limit.assert_called_once_with(1)
+            if include_cursor:
+                assert result[2] is None
+
+    @pytest.mark.asyncio
+    async def test_unique_sort_opts_in_to_tiebreaker_and_next_page(self, mongo_adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.skip.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(
+            return_value=[
+                {"_id": "a", "close_time": 2},
+                {"_id": "b", "close_time": 1},
+            ]
+        )
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        coll.count_documents = AsyncMock(return_value=10)
+        mongo_adapter.db.__getitem__ = MagicMock(return_value=coll)
+        documents, _, next_data = await mongo_adapter.find_paginated(
+            "klines_5m",
+            sort_list=[("close_time", -1)],
+            limit=1,
+            include_cursor=True,
+            unique_sort=True,
+        )
+        cursor.sort.assert_called_once_with([("close_time", -1), ("_id", -1)])
+        cursor.limit.assert_called_once_with(2)
+        assert len(documents) == 1
+        assert next_data["sort"] == [("close_time", -1), ("_id", -1)]
+
+    @pytest.mark.asyncio
+    async def test_cursor_keeps_timestamp_range(self, mongo_adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        coll.count_documents = AsyncMock(return_value=0)
+        mongo_adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await mongo_adapter.find_paginated(
+            "trades_BTCUSDT",
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 3, tzinfo=UTC),
+            sort_list=[("timestamp", 1)],
+            cursor={
+                "sort": [("timestamp", 1), ("_id", 1)],
+                "values": [datetime(2026, 1, 1, tzinfo=UTC), "trade-1"],
+            },
+            include_cursor=True,
+        )
+
+        query = coll.find.call_args.args[0]
+        assert query["$and"][0]["timestamp"] == {
+            "$gte": datetime(2026, 1, 1, tzinfo=UTC),
+            "$lt": datetime(2026, 1, 3, tzinfo=UTC),
+        }
+        assert "$or" in query["$and"][1]
+
+    @pytest.mark.asyncio
+    async def test_legacy_cursor_normalizes_timestamp(self, mongo_adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        coll.count_documents = AsyncMock(return_value=0)
+        mongo_adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await mongo_adapter.find_paginated(
+            "trades_BTCUSDT",
+            sort_list=[("timestamp", 1)],
+            cursor={
+                "field": "timestamp",
+                "direction": 1,
+                "value": "2026-01-01T00:00:00Z",
+            },
+        )
+
+        query = coll.find.call_args.args[0]
+        assert query["$or"][0]["$and"][-1] == {
+            "timestamp": {"$gt": datetime(2026, 1, 1, tzinfo=UTC)}
+        }
+
+    @pytest.mark.asyncio
+    async def test_cursor_rejects_mismatched_sort(self, mongo_adapter):
+        with pytest.raises(DatabaseError, match="unique sort") as exc_info:
+            await mongo_adapter.find_paginated(
+                "trades_BTCUSDT",
+                sort_list=[("timestamp", 1)],
+                cursor={
+                    "sort": [("updated_at", 1), ("_id", 1)],
+                    "values": ["2026-01-01T00:00:00Z", "trade-1"],
+                },
+            )
+        assert "unique sort" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # MySQLAdapter.find_paginated (real SQLite engine, like test_mysql_adapter_methods.py)
@@ -207,15 +334,17 @@ class TestMySQLFindPaginated:
             sort_list=[("updated_at", 1)],
             limit=1,
             cursor={
-                "field": "updated_at",
-                "direction": 1,
-                "value": datetime(2026, 1, 1, tzinfo=UTC),
+                "sort": [("updated_at", 1), ("dataset_id", 1)],
+                "values": [datetime(2026, 1, 1, tzinfo=UTC), "d0"],
             },
             include_cursor=True,
         )
         assert records[0]["dataset_id"] == "d1"
         assert total == 2
-        assert next_cursor["value"] == records[0]["updated_at"]
+        assert next_cursor["values"] == [
+            records[0]["updated_at"],
+            records[0]["dataset_id"],
+        ]
 
     def test_raises_when_not_connected(self, sqlite_adapter):
         sqlite_adapter._connected = False
@@ -246,6 +375,55 @@ class TestMySQLFindPaginated:
         # Sorted descending by updated_at (monotonic with i): skip d8, take d6, d4.
         assert [r["dataset_id"] for r in records] == ["d6", "d4"]
 
+    def test_cursor_pages_duplicate_sort_values_without_skips(self, sqlite_adapter):
+        rows = [_dataset_row(i, "BTCUSDT") for i in range(3)]
+        for row in rows:
+            row["updated_at"] = datetime(2026, 1, 1, tzinfo=UTC)
+        _seed_datasets(sqlite_adapter, rows)
+
+        page, _, next_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=2,
+            include_cursor=True,
+            unique_sort=True,
+        )
+        rest, _, end_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=2,
+            cursor=next_cursor,
+            include_cursor=True,
+        )
+
+        assert [row["dataset_id"] for row in page + rest] == ["d0", "d1", "d2"]
+        assert end_cursor is None
+
+    def test_plain_sorted_request_keeps_its_sort_spec(self, sqlite_adapter):
+        """Without unique_sort/cursor: caller's ORDER BY and LIMIT, no next page."""
+        rows = [_dataset_row(i, "BTCUSDT") for i in range(3)]
+        _seed_datasets(sqlite_adapter, rows)
+        statements = []
+        event = sa.event
+        event.listen(
+            sqlite_adapter.engine,
+            "before_cursor_execute",
+            lambda conn, cur, stmt, params, ctx, many: statements.append(stmt),
+        )
+        page, total, next_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=2,
+            include_cursor=True,
+        )
+        assert [row["dataset_id"] for row in page] == ["d0", "d1"]
+        assert total == 3
+        assert next_cursor is None
+        select = next(s for s in statements if "ORDER BY" in s)
+        order_by = select.split("ORDER BY", 1)[1].split("LIMIT", 1)[0]
+        assert "dataset_id" not in order_by
+        assert "updated_at" in order_by
+
     def test_unknown_filter_column_returns_empty_not_error(self, sqlite_adapter):
         _seed_datasets(sqlite_adapter, [_dataset_row(1, "BTCUSDT")])
         records, total = sqlite_adapter.find_paginated(
@@ -253,6 +431,45 @@ class TestMySQLFindPaginated:
         )
         assert records == []
         assert total == 0
+
+    def test_legacy_cursor_normalizes_timestamp(self, sqlite_adapter):
+        records, total = sqlite_adapter.find_paginated(
+            "audit_logs",
+            sort_list=[("timestamp", 1)],
+            cursor={
+                "field": "timestamp",
+                "direction": 1,
+                "value": "2026-01-01T00:00:00Z",
+            },
+        )
+
+        assert records == []
+        assert total == 0
+
+    def test_cursor_rejects_mismatched_sort(self, sqlite_adapter):
+        with pytest.raises(DatabaseError, match="unique sort") as exc_info:
+            sqlite_adapter.find_paginated(
+                "datasets",
+                sort_list=[("updated_at", 1)],
+                cursor={
+                    "sort": [("name", 1), ("dataset_id", 1)],
+                    "values": ["dataset-0", "d0"],
+                },
+            )
+        assert "unique sort" in str(exc_info.value)
+
+    def test_cursor_rejects_unknown_boundary_field(self, sqlite_adapter):
+        with pytest.raises(DatabaseError, match="cursor field") as exc_info:
+            sqlite_adapter.find_paginated(
+                "datasets",
+                sort_list=[("missing", 1)],
+                cursor={
+                    "sort": [("missing", 1), ("dataset_id", 1)],
+                    "values": ["value", "d0"],
+                },
+                unique_sort=True,
+            )
+        assert "cursor field" in str(exc_info.value)
 
     def test_unknown_sort_column_is_skipped_not_error(self, sqlite_adapter):
         _seed_datasets(sqlite_adapter, [_dataset_row(1, "BTCUSDT")])
@@ -322,17 +539,17 @@ class TestGenericQueryDriverPushdown:
                 [{"timestamp": datetime(2026, 1, 1, tzinfo=UTC)}],
                 2,
                 {
-                    "field": "timestamp",
-                    "direction": 1,
-                    "value": datetime(2026, 1, 1, tzinfo=UTC),
+                    "sort": [("timestamp", 1), ("_id", 1)],
+                    "values": [datetime(2026, 1, 1, tzinfo=UTC), "trade-1"],
                 },
             )
         )
         response = client.get(
             "/api/v1/mongodb/trades_BTCUSDT",
-            params={"sort": '{"timestamp": 1}', "limit": 1},
+            params={"sort": '{"timestamp": 1}', "limit": 1, "paginate": "cursor"},
         )
         assert response.status_code == 200
+        assert adapter.find_paginated.call_args.kwargs["unique_sort"] is True
         cursor = response.json()["pagination"]["next_cursor"]
         assert cursor
 
@@ -341,7 +558,31 @@ class TestGenericQueryDriverPushdown:
             params={"sort": '{"timestamp": 1}', "limit": 1, "cursor": cursor},
         )
         assert response.status_code == 200
-        assert adapter.find_paginated.call_args.kwargs["cursor"]["field"] == "timestamp"
+        assert adapter.find_paginated.call_args.kwargs["cursor"]["sort"] == [
+            ("timestamp", 1),
+            ("_id", 1),
+        ]
+        assert adapter.find_paginated.call_args.kwargs["unique_sort"] is True
+
+    def test_plain_sorted_request_keeps_its_sort_spec(self, client):
+        """A sorted GET without cursor/paginate is not turned into keyset paging."""
+        response = client.get(
+            "/api/v1/mongodb/klines_5m",
+            params={"sort": '{"close_time": -1}', "limit": 1},
+        )
+        assert response.status_code == 200
+        kwargs = api_module.db_manager.mongodb_adapter.find_paginated.call_args.kwargs
+        assert kwargs["sort_list"] == [("close_time", -1)]
+        assert kwargs["unique_sort"] is False
+        assert kwargs["include_cursor"] is False
+        assert kwargs["cursor"] is None
+        assert response.json()["pagination"]["next_cursor"] is None
+
+    def test_paginate_rejects_unknown_mode(self, client):
+        response = client.get(
+            "/api/v1/mongodb/klines_5m", params={"paginate": "offset"}
+        )
+        assert response.status_code == 422
 
     def test_get_records_rejects_cursor_with_wrong_sort(self, client):
         response = client.get(
