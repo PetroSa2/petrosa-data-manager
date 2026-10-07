@@ -66,6 +66,7 @@ def test_exits_filed_under_another_strategy_id_are_not_lost_but_explained():
         "fills": 3,
         "attributed_to_a_strategy": 1,
         "unattributed": 2,
+        "position_side_unknown": 1,
     }
 
 
@@ -273,3 +274,99 @@ def test_the_cli_prints_a_line_per_strategy_and_fails_only_when_a_fill_is_unacco
 
     report["accounted"] = False
     assert round_report.main([]) == 1
+
+
+# --- hedge mode: rounds are kept per position side -------------------------------------------------
+
+
+def test_hedge_legs_are_separate_rounds_not_netted():
+    # BTCUSDT has a LONG and a SHORT open at once: a SELL on the LONG closes it, it does not open or
+    # touch the SHORT.
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0, position_side="LONG"),
+        _fill("s1", "sell", 1.0, 90.0, 1, position_side="SHORT"),  # opens the SHORT
+        _fill(
+            "s1", "sell", 1.0, 110.0, 2, position_side="LONG"
+        ),  # closes the LONG: +10
+    ]
+    report = _report(rows)
+    stats = report["strategies"]["s1"]
+    assert stats["closed_rounds"] == 1
+    assert stats["open_rounds"] == 1  # the SHORT is still open
+    assert stats["entry_fills"] == 2
+    assert stats["exit_fills"] == 1
+    assert stats["realized_pnl_closed_rounds"] == pytest.approx(10.0)
+    assert stats["position_side_unknown"] == 0
+    assert report["totals"]["position_side_unknown"] == 0
+    assert report["accounted"] is True
+
+
+def test_buy_on_a_short_is_an_exit_and_the_short_pnl_is_inverted():
+    rows = [
+        _fill("s1", "sell", 2.0, 100.0, 0, position_side="SHORT"),
+        _fill("s1", "buy", 1.0, 95.0, 10, position_side="SHORT"),  # +5
+        _fill("s1", "buy", 1.0, 105.0, 20, position_side="SHORT"),  # -5, flat
+    ]
+    stats = _report(rows)["strategies"]["s1"]
+    assert stats["closed_rounds"] == 1
+    assert stats["entry_fills"] == 1
+    assert stats["exit_fills"] == 2
+    assert stats["realized_pnl_closed_rounds"] == pytest.approx(0.0)
+    assert stats["median_holding_seconds"] == pytest.approx(20 * 60)
+
+
+def test_position_side_is_read_from_ps_and_from_the_stored_payload():
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0, ps="LONG"),
+        _fill("s1", "sell", 1.0, 101.0, 1, payload={"position_side": "LONG"}),
+    ]
+    stats = _report(rows)["strategies"]["s1"]
+    assert stats["closed_rounds"] == 1
+    assert stats["position_side_unknown"] == 0
+
+
+def test_a_leg_exit_without_an_open_lot_is_unattributed_not_a_flip():
+    rows = [_fill("s1", "sell", 1.0, 100.0, 0, position_side="LONG")]
+    report = _report(rows)
+    assert report["unattributed"] == {"exit_without_entry": 1}
+    assert "s1" not in report["strategies"]
+
+
+def test_fills_without_a_position_side_are_netted_and_counted():
+    # today's netting: BUY then SELL close a round, and both rows are counted as netted
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0),
+        _fill("s1", "sell", 1.0, 101.0, 1),
+        _fill(
+            "s1", "buy", 1.0, 100.0, 2, position_side="BOTH"
+        ),  # one-way: nets, not "unknown"
+    ]
+    report = _report(rows)
+    stats = report["strategies"]["s1"]
+    assert stats["closed_rounds"] == 1
+    assert stats["position_side_unknown"] == 2
+    assert report["totals"]["position_side_unknown"] == 2
+    assert report["accounted"] is True
+
+
+def test_hedge_and_netted_fills_stay_fully_accounted_under_random_input():
+    rng = random.Random(7)
+    rows = []
+    for i in range(400):
+        extra = rng.choice(
+            [{}, {"position_side": "LONG"}, {"position_side": "SHORT"}, {"ps": "BOTH"}]
+        )
+        rows.append(
+            _fill(
+                rng.choice(["a", "b", "unknown"]),
+                rng.choice(["buy", "sell"]),
+                rng.choice([0.5, 1.0, 2.0]),
+                100 + rng.random(),
+                i,
+                symbol=rng.choice(["ETHUSDT", "BTCUSDT"]),
+                **extra,
+            )
+        )
+    report = _report(rows)
+    assert report["accounted"] is True
+    assert report["totals"]["fills"] == 400

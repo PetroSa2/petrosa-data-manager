@@ -5,9 +5,15 @@ of a strategy, so every fill has to end up in exactly one of three places: a clo
 explicit "unattributed" bucket with a reason. A strategy that shows fills and no rounds is then visible as a
 cause (all entries, no exits attributed to it) instead of an empty statistic.
 
-A round is one cycle of a ``(strategy_id, symbol)`` position: it opens with the first fill after the position was
-flat and closes when the open quantity returns to zero (a flip closes the round and opens the next one). Fills
-are matched first-in-first-out, as in the P&L calculator, so the realized figure of a round agrees with it.
+A round is one cycle of a ``(strategy_id, symbol, position_side)`` leg. The account is in hedge mode, where a BUY
+can open a LONG or close a SHORT, so a fill that carries its ``position_side`` (``LONG`` or ``SHORT``, also read
+from ``ps`` and from the stored ``payload``) is booked on that leg: BUY/SELL on a LONG is entry/exit, on a SHORT
+exit/entry, and a leg never flips. A fill without it is netted BUY against SELL on one ``(strategy_id, symbol)``
+book as before (a flip closes the round and opens the next one), and counted as ``position_side_unknown`` in the
+report so it is visible how many rows were netted. A round opens with the first entry fill after the leg was flat
+and closes when its open quantity returns to zero. Fills are matched first-in-first-out, as in the P&L
+calculator, so the realized figure of a round agrees with it. On a leg, the excess of an exit over the open lots
+is ignored, and an exit with no open lot at all is unattributed (``exit_without_entry``).
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from statistics import median
 from typing import Any
 
 FILL_EVENT_TYPES = frozenset({"filled", "partial_fill"})
+NET = "NET"  # the leg of fills netted without a position side
 UNATTRIBUTED = "_unattributed"
 #: Strategy ids that are placeholders, not strategies.
 PLACEHOLDER_STRATEGIES = frozenset({"", "unknown", "none", "null"})
@@ -47,6 +54,7 @@ class ClosedRound:
     closed_at: datetime
     realized: float
     fills: int
+    position_side: str = NET
 
     @property
     def holding_seconds(self) -> float:
@@ -85,11 +93,35 @@ def _when(row: dict[str, Any]) -> datetime | None:
     return None
 
 
+def position_side(row: dict[str, Any]) -> str:
+    """``LONG`` or ``SHORT`` when the fill carries its hedge-mode position side, else ``NET``.
+
+    Read from ``position_side`` or ``ps``, on the event or in its ``payload`` (non-canonical fields are stored
+    there). ``BOTH`` (one-way mode) and absent values net.
+    """
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    for source in (row, payload):
+        for key in ("position_side", "ps"):
+            value = str(source.get(key) or "").strip().upper()
+            if value in ("LONG", "SHORT"):
+                return value
+    return NET
+
+
+def _has_position_side(row: dict[str, Any]) -> bool:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    return any(
+        str(source.get(key) or "").strip().upper() in ("LONG", "SHORT", "BOTH")
+        for source in (row, payload)
+        for key in ("position_side", "ps")
+    )
+
+
 class RoundBook:
     """Replays fills in time order into rounds and keeps the books of every strategy."""
 
     def __init__(self) -> None:
-        self._books: dict[tuple[str, str], _Book] = defaultdict(_Book)
+        self._books: dict[tuple[str, str, str], _Book] = defaultdict(_Book)
         self.closed: list[ClosedRound] = []
         # strategy -> counters
         self._fills: dict[str, int] = defaultdict(int)
@@ -97,6 +129,8 @@ class RoundBook:
         self._exit: dict[str, int] = defaultdict(int)
         self._closed_fills: dict[str, int] = defaultdict(int)
         self.unattributed: dict[str, int] = defaultdict(int)
+        # fills netted because they carry no position side (per strategy)
+        self._side_unknown: dict[str, int] = defaultdict(int)
 
     def apply(self, row: dict[str, Any]) -> None:
         """Account for one fill row (other event types are not fills and are ignored)."""
@@ -125,13 +159,31 @@ class RoundBook:
             self._unattributed("unusable_fill")
             return
 
-        book = self._books[(strategy_id, symbol)]
+        leg = position_side(row)
+        book = self._books[(strategy_id, symbol, leg)]
+        if leg == NET:
+            self._apply_netted(book, strategy_id, str(symbol), side, qty, price, when)
+            if not _has_position_side(row):
+                self._side_unknown[strategy_id] += 1
+        else:
+            self._apply_leg(book, strategy_id, str(symbol), leg, side, qty, price, when)
+
+    def _apply_netted(
+        self,
+        book: _Book,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        when: datetime,
+    ) -> None:
+        """One book per (strategy, symbol), BUY netted against SELL (a fill with no position side)."""
         self._fills[strategy_id] += 1
         if book.cycle is None:
             book.cycle = _Cycle(opened_at=when)
         cycle = book.cycle
         cycle.fills += 1
-
         opposite, same = (
             (book.short, book.long) if side == "buy" else (book.long, book.short)
         )
@@ -160,13 +212,12 @@ class RoundBook:
             self._entry[strategy_id] += 1
         if remaining > 0:
             same.append(_Lot(qty=remaining, price=price))
-
         if matched > 0 and not opposite:
             # The position went flat (or flipped): the round is closed at this fill.
             self.closed.append(
                 ClosedRound(
                     strategy_id=strategy_id,
-                    symbol=str(symbol),
+                    symbol=symbol,
                     opened_at=cycle.opened_at,
                     closed_at=when,
                     realized=cycle.realized,
@@ -175,6 +226,66 @@ class RoundBook:
             )
             self._closed_fills[strategy_id] += cycle.fills
             book.cycle = _Cycle(opened_at=when) if remaining > 0 else None
+
+    def _apply_leg(
+        self,
+        book: _Book,
+        strategy_id: str,
+        symbol: str,
+        leg: str,
+        side: str,
+        qty: float,
+        price: float,
+        when: datetime,
+    ) -> None:
+        """One hedge-mode leg: BUY/SELL on a LONG is entry/exit, on a SHORT exit/entry; it never flips."""
+        lots = book.long if leg == "LONG" else book.short
+        entry_side = "buy" if leg == "LONG" else "sell"
+        if side == entry_side:
+            self._fills[strategy_id] += 1
+            if book.cycle is None:
+                book.cycle = _Cycle(opened_at=when)
+            book.cycle.fills += 1
+            book.cycle.entry_fills += 1
+            self._entry[strategy_id] += 1
+            lots.append(_Lot(qty=qty, price=price))
+            return
+        if not lots:
+            self._unattributed("exit_without_entry")
+            return
+        self._fills[strategy_id] += 1
+        cycle = book.cycle if book.cycle is not None else _Cycle(opened_at=when)
+        book.cycle = cycle
+        cycle.fills += 1
+        cycle.exit_fills += 1
+        self._exit[strategy_id] += 1
+        remaining = qty
+        while remaining > 0 and lots:
+            lot = lots[0]
+            take = min(lot.qty, remaining)
+            cycle.realized += (
+                (price - lot.price) * take
+                if leg == "LONG"
+                else (lot.price - price) * take
+            )
+            lot.qty -= take
+            remaining -= take
+            if lot.qty <= 0:
+                lots.popleft()
+        if not lots:
+            self.closed.append(
+                ClosedRound(
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    opened_at=cycle.opened_at,
+                    closed_at=when,
+                    realized=cycle.realized,
+                    fills=cycle.fills,
+                    position_side=leg,
+                )
+            )
+            self._closed_fills[strategy_id] += cycle.fills
+            book.cycle = None
 
     def _unattributed(self, reason: str) -> None:
         self.unattributed[reason] += 1
@@ -188,7 +299,7 @@ class RoundBook:
         since = now - timedelta(days=window_days)
         open_rounds: dict[str, int] = defaultdict(int)
         open_fills: dict[str, int] = defaultdict(int)
-        for (strategy_id, _symbol), book in self._books.items():
+        for (strategy_id, _symbol, _leg), book in self._books.items():
             if book.cycle is not None and (
                 book.cycle.fills > 0 or book.long or book.short
             ):
@@ -217,6 +328,8 @@ class RoundBook:
                 "median_holding_seconds": median(holding) if holding else None,
                 "n": len(recent),
                 "realized_pnl_closed_rounds": sum(r.realized for r in rounds),
+                # fills netted BUY against SELL because they carry no position side
+                "position_side_unknown": self._side_unknown[strategy_id],
             }
         attributed = sum(self._fills.values())
         unattributed = sum(self.unattributed.values())
@@ -227,6 +340,7 @@ class RoundBook:
                 "fills": attributed + unattributed,
                 "attributed_to_a_strategy": attributed,
                 "unattributed": unattributed,
+                "position_side_unknown": sum(self._side_unknown.values()),
             },
             # Every fill is in a closed round, the open round of its strategy, or unattributed.
             "accounted": all(

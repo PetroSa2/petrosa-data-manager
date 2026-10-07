@@ -56,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     for strategy_id, stats in report["strategies"].items():
         print(_line(strategy_id, stats))
     print(f"unattributed fills: {report['unattributed'] or 'none'}")
+    print(
+        "fills netted without a position side: "
+        f"{report['totals']['position_side_unknown']}"
+    )
     print(json.dumps(report, default=str, sort_keys=True))
     return 0 if report["accounted"] else 1
 
