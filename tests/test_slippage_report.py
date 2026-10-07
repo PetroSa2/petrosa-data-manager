@@ -299,3 +299,24 @@ def test_the_cli_prints_the_summary_and_the_json(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "turbulent_illiquidity: n=1" in out
     assert '"by_regime"' in out
+
+
+def test_fills_without_slippage_are_split_into_no_telemetry_and_no_intended_price():
+    fills = [
+        _fill("ETHUSDT", 2.0, 5),
+        # emitted before the telemetry existed on this path: no slippage_bp key at all
+        {"event_type": "filled", "symbol": "ETHUSDT", "fill_time": T0, "payload": {}},
+        {"event_type": "filled", "symbol": "ETHUSDT", "fill_time": T0},
+        # emitted, but with no intended price to measure against
+        _fill("ETHUSDT", None, 6, payload={"intended_price": None}),
+        # emitted with an intended price but no usable fill price
+        _fill("ETHUSDT", None, 7, payload={"intended_price": 100.0}),
+    ]
+    report = build_report(fills, {"ETHUSDT": [_regime("balanced_market", 0)]})
+    assert report["fills_considered"] == 5
+    assert report["fills_with_slippage"] == 1
+    assert report["fills_without_slippage"] == 4
+    assert report["fills_without_cost_telemetry"] == 2
+    assert report["fills_without_intended_price"] == 1
+    line = summary_lines(report)[0]
+    assert "2 carry no cost telemetry" in line and "1 have no intended price" in line
