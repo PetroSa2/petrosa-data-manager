@@ -39,9 +39,13 @@ class FakeMySQL:
     def __init__(self):
         self.calls = []
 
-    def write_batch(self, rows, table, batch_size):
+    def write_batch(
+        self, rows, table, batch_size, *, insert_only=False, natural_key=None
+    ):
         self.calls.append((rows, table, batch_size))
-        return SimpleNamespace(inserted=len(rows))
+        self.insert_only = insert_only
+        self.natural_key = natural_key
+        return SimpleNamespace(inserted=len(rows), duplicates=0)
 
 
 @pytest.mark.asyncio
@@ -120,3 +124,50 @@ def test_update_completeness_publishes_metric():
     assert update_completeness(Mysql(), "BTCUSDT", "1h", start, end) == pytest.approx(
         0.9
     )
+
+
+@pytest.mark.asyncio
+async def test_backfill_writes_insert_only_on_symbol_and_timestamp(tmp_path: Path):
+    from data_manager.db.repositories.kline_persistence import KLINE_NATURAL_KEY
+
+    mysql = FakeMySQL()
+    config = BackfillConfig(
+        symbols=["BTCUSDT"],
+        timeframes=["1h"],
+        start=datetime(2026, 9, 24, tzinfo=UTC),
+        end=datetime(2026, 9, 24, 1, tzinfo=UTC),
+        dry_run=False,
+    )
+
+    result = await run_backfill(FakeBinance(), mysql, config)
+
+    assert mysql.insert_only is True
+    assert mysql.natural_key == KLINE_NATURAL_KEY
+    assert result["duplicates"] == 0
+
+
+@pytest.mark.asyncio
+async def test_skip_early_daily_leaves_out_the_2021_range():
+    class Recording(FakeBinance):
+        def __init__(self):
+            self.starts = []
+
+        async def get_klines(self, symbol, timeframe, start, end, limit):
+            self.starts.append(start)
+            return []
+
+    async def starts(skip):
+        client = Recording()
+        config = BackfillConfig(
+            symbols=["BCHUSDT"],
+            timeframes=["1d"],
+            start=datetime(2026, 7, 8, tzinfo=UTC),
+            end=datetime(2026, 7, 9, tzinfo=UTC),
+            skip_early_daily=skip,
+        )
+        await run_backfill(client, FakeMySQL(), config)
+        return client.starts
+
+    assert any(start.year == 2021 for start in await starts(False))
+    assert all(start.year == 2026 for start in await starts(True))
+    assert _parse_args(["--skip-early-daily"]).skip_early_daily is True

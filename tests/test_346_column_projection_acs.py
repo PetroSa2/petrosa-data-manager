@@ -38,7 +38,7 @@ from sqlalchemy.pool import StaticPool
 import data_manager.api.app as api_module
 import data_manager.db.repositories.candle_repository as candle_repository_module
 import data_manager.maintenance.candle_warmup_backfill as warmup_module
-from data_manager.api.routes.data import get_candles
+from data_manager.api.routes.data import get_historic_candles
 from data_manager.api.routes.generic import _execute_query_internal
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import MySQLAdapter
@@ -438,7 +438,7 @@ async def _call_get_candles(adapter) -> dict:
             candle_repository_module.constants, "CANDLE_READ_FALLBACK_ENABLED", False
         ),
     ):
-        return await get_candles(
+        return await get_historic_candles(
             pair="BTCUSDT",
             period="1h",
             start=datetime(2026, 1, 1),
@@ -691,7 +691,7 @@ def test_ac12_mysql_read_methods_sync_and_mongo_async():
 
 @pytest.mark.parametrize(
     ("module", "expected_sites"),
-    [(candle_repository_module, 4), (warmup_module, 1)],
+    [(candle_repository_module, 5), (warmup_module, 1)],
 )
 def test_ac12_every_klines_mysql_read_passes_columns(module, expected_sites):
     calls = _mysql_read_calls(module)

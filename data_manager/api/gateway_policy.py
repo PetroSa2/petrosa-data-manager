@@ -18,6 +18,7 @@ GENERIC_POLICY: dict[str, dict[str, set[str]]] = {
         "klines_*": {"read", "insert"},
         "funding_*": {"read", "insert"},
         "heartbeat_state": {"read", "upsert"},
+        "risk_equity_peak": {"read", "upsert"},
         "strategy_configs_global": {"read", "insert", "upsert", "update", "delete"},
         "strategy_configs_symbol": {"read", "insert", "upsert", "update", "delete"},
         "strategy_config_audit": {"read", "insert", "upsert", "update", "delete"},

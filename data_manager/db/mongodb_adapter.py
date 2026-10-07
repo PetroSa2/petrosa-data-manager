@@ -560,7 +560,12 @@ class MongoDBAdapter(BaseAdapter):
         offset: int = 0,
         start: datetime | None = None,
         end: datetime | None = None,
-    ) -> tuple[list[dict[str, Any]], int]:
+        cursor: dict[str, Any] | None = None,
+        include_cursor: bool = False,
+    ) -> (
+        tuple[list[dict[str, Any]], int]
+        | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
+    ):
         """Query a collection with filter/sort/limit/offset pushed to the driver.
 
         Resolves petrosa-data-manager#282: the generic query API previously
@@ -598,22 +603,44 @@ class MongoDBAdapter(BaseAdapter):
             if end is not None:
                 timestamp_filter["$lt"] = end
             query["timestamp"] = timestamp_filter
+        if cursor:
+            value = cursor["value"]
+            if cursor["field"] == "timestamp" and isinstance(value, str):
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            query[cursor["field"]] = {
+                "$gt" if cursor["direction"] == 1 else "$lt": value
+            }
 
         try:
             coll = self.db[collection]
 
             total = await coll.count_documents(query)
 
-            cursor = coll.find(query)
+            db_cursor = coll.find(query)
             if sort_list:
-                cursor = cursor.sort(sort_list)
-            cursor = cursor.skip(offset).limit(limit)
-            documents = await cursor.to_list(length=limit)
+                db_cursor = db_cursor.sort(sort_list)
+            fetch_limit = limit + 1 if include_cursor and sort_list else limit
+            if not cursor:
+                db_cursor = db_cursor.skip(offset)
+            db_cursor = db_cursor.limit(fetch_limit)
+            documents = await db_cursor.to_list(length=fetch_limit)
+            has_next = len(documents) > limit
+            if has_next:
+                documents = documents[:limit]
 
             for doc in documents:
                 doc.pop("_id", None)
 
-            return documents, int(total)
+            next_data = None
+            if has_next and sort_list and documents:
+                field, direction = sort_list[0]
+                next_data = {
+                    "field": field,
+                    "direction": direction,
+                    "value": documents[-1].get(field),
+                }
+            result = (documents, int(total), next_data)
+            return result if include_cursor else result[:2]
 
         except PyMongoError as e:
             raise DatabaseError(
@@ -870,8 +897,9 @@ class MongoDBAdapter(BaseAdapter):
             elif collection.startswith("klines_"):
                 indexes = [
                     IndexModel(
-                        [("symbol", ASCENDING), ("timestamp", DESCENDING)],
-                        unique=False,
+                        [("symbol", ASCENDING), ("timestamp", ASCENDING)],
+                        unique=True,
+                        name="symbol_timestamp_unique",
                     )
                 ]
             elif collection.startswith("analytics_"):
@@ -913,8 +941,9 @@ class MongoDBAdapter(BaseAdapter):
 
             if collection.startswith("klines_"):
                 await coll.create_index(
-                    [("symbol", ASCENDING), ("timestamp", DESCENDING)],
-                    unique=False,
+                    [("symbol", ASCENDING), ("timestamp", ASCENDING)],
+                    unique=True,
+                    name="symbol_timestamp_unique",
                 )
             else:
                 await coll.create_indexes(indexes)
