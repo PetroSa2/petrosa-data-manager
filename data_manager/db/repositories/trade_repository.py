@@ -68,7 +68,14 @@ class TradeRepository(BaseRepository):
             return 0
 
     async def get_range(
-        self, symbol: str, start: datetime, end: datetime
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        descending: bool = False,
     ) -> list[dict]:
         """
         Get trades within time range.
@@ -83,7 +90,17 @@ class TradeRepository(BaseRepository):
         """
         try:
             collection = f"trades_{symbol}"
-            return await self.mongodb.query_range(collection, start, end, symbol)
+            if limit is None and offset == 0 and not descending:
+                return await self.mongodb.query_range(collection, start, end, symbol)
+            return await self.mongodb.query_range(
+                collection,
+                start,
+                end,
+                symbol,
+                limit=limit,
+                offset=offset,
+                descending=descending,
+            )
         except Exception as e:
             logger.error(f"Failed to query trades for {symbol}: {e}")
             return []

@@ -1235,7 +1235,12 @@ class MySQLAdapter(BaseAdapter):
         limit: int = 100,
         offset: int = 0,
         columns: Sequence[str] | None = None,
-    ) -> tuple[list[dict[str, Any]], int]:
+        cursor: dict[str, Any] | None = None,
+        include_cursor: bool = False,
+    ) -> (
+        tuple[list[dict[str, Any]], int]
+        | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
+    ):
         """Query a table with filter/sort/limit/offset pushed to the driver.
 
         Resolves petrosa-data-manager#282: the generic query API previously
@@ -1282,6 +1287,17 @@ class MySQLAdapter(BaseAdapter):
                 if key not in table.c:
                     return [], 0
                 conditions.append(table.c[key] == value)
+        if cursor:
+            value = cursor["value"]
+            if cursor["field"] == "timestamp" and isinstance(value, str):
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if cursor["field"] not in table.c:
+                raise DatabaseError("cursor field is not present in the table")
+            conditions.append(
+                table.c[cursor["field"]] > value
+                if cursor["direction"] == 1
+                else table.c[cursor["field"]] < value
+            )
 
         try:
 
@@ -1308,15 +1324,31 @@ class MySQLAdapter(BaseAdapter):
                         ]
                         if order_clauses:
                             query = query.order_by(*order_clauses)
-                    query = query.limit(limit).offset(offset)
+                    query = query.limit(
+                        limit + 1 if include_cursor and sort_list else limit
+                    )
+                    if not cursor:
+                        query = query.offset(offset)
 
                     result = conn.execute(query)
                     records = [dict(row._mapping) for row in result]
-                    return records, int(total or 0)
+                    has_next = len(records) > limit
+                    if has_next:
+                        records = records[:limit]
+                    next_data = None
+                    if has_next and sort_list and records:
+                        field, direction = sort_list[0]
+                        next_data = {
+                            "field": field,
+                            "direction": direction,
+                            "value": records[-1].get(field),
+                        }
+                    return records, int(total or 0), next_data
 
-            return self._read_with_resilience(
+            result = self._read_with_resilience(
                 collection, "query with pagination", read_attempt
             )
+            return result if include_cursor else result[:2]
         except DatabaseError:
             raise
         except Exception as e:

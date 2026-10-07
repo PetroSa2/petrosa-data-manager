@@ -453,16 +453,18 @@ async def get_trades(
         if not start:
             start = end - timedelta(hours=1)
 
-        trades = await trade_repo.get_range(pair, start, end)
-
-        # Apply sorting
-        if sort_order.lower() == "desc":
-            trades = list(reversed(trades))
-
-        total_count = len(trades)
-
-        # Apply pagination
-        paginated_trades = trades[offset : offset + limit]
+        paginated_trades = await trade_repo.get_range(
+            pair,
+            start,
+            end,
+            limit=limit + 1,
+            offset=offset,
+            descending=sort_order.lower() == "desc",
+        )
+        has_next = len(paginated_trades) > limit
+        paginated_trades = paginated_trades[:limit]
+        total_count = await trade_repo.count(pair, start, end)
+        has_next = offset + limit < total_count
 
         values = [
             {
@@ -488,7 +490,7 @@ async def get_trades(
                 "offset": offset,
                 "page": (offset // limit) + 1 if limit > 0 else 1,
                 "pages": (total_count + limit - 1) // limit if limit > 0 else 0,
-                "has_next": offset + limit < total_count,
+                "has_next": has_next,
                 "has_previous": offset > 0,
             },
             "sort": {
