@@ -15,6 +15,7 @@ import constants
 from data_manager.backfiller.binance_client import BinanceClient
 from data_manager.db.mysql_adapter import MySQLAdapter
 from data_manager.db.repositories.candle_repository import candle_to_mysql_kline
+from data_manager.db.repositories.kline_persistence import KLINE_NATURAL_KEY
 from data_manager.models.market_data import Candle
 from data_manager.utils.time_utils import parse_timeframe_to_minutes
 
@@ -35,6 +36,7 @@ class BackfillConfig:
     end: datetime | None = None
     daily_start: datetime = EARLY_DAILY_START
     daily_end: datetime = DAILY_GAP_END
+    skip_early_daily: bool = False
     batch_size: int = 1000
     dry_run: bool = True
     checkpoint: Path | None = None
@@ -81,7 +83,7 @@ def _ranges(config: BackfillConfig) -> list[tuple[str, str, datetime, datetime]]
         for symbol in config.symbols
         for timeframe in config.timeframes
     ]
-    if "1d" in config.timeframes:
+    if "1d" in config.timeframes and not config.skip_early_daily:
         ranges.extend(
             (symbol, "1d", config.daily_start, config.daily_end)
             for symbol in config.symbols
@@ -94,7 +96,7 @@ async def run_backfill(
 ) -> dict[str, int]:
     """Fetch and persist all ranges, returning fetched/inserted counters."""
     completed = _load_checkpoint(config.checkpoint)
-    fetched = inserted = 0
+    fetched = inserted = duplicates = 0
     for symbol, timeframe, start, end in _ranges(config):
         key = f"{symbol}:{timeframe}:{start.isoformat()}:{end.isoformat()}"
         if key in completed:
@@ -117,8 +119,11 @@ async def run_backfill(
                     [candle_to_mysql_kline(candle) for candle in candles],
                     f"klines_{timeframe[-1]}{timeframe[:-1]}",
                     config.batch_size,
+                    insert_only=True,
+                    natural_key=KLINE_NATURAL_KEY,
                 )
                 inserted += int(getattr(result, "inserted", result))
+                duplicates += int(getattr(result, "duplicates", 0))
             last = datetime.fromtimestamp(float(rows[-1][0]) / 1000, tz=UTC)
             cursor = max(
                 chunk_end,
@@ -126,7 +131,12 @@ async def run_backfill(
             )
         completed.add(key)
         _save_checkpoint(config.checkpoint, completed)
-    return {"fetched": fetched, "inserted": inserted, "dry_run": int(config.dry_run)}
+    return {
+        "fetched": fetched,
+        "inserted": inserted,
+        "duplicates": duplicates,
+        "dry_run": int(config.dry_run),
+    }
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -139,6 +149,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--checkpoint", type=Path, default=Path(".tmp/klines-backfill.json")
     )
     parser.add_argument("--batch-size", type=int, default=1000)
+    parser.add_argument(
+        "--skip-early-daily",
+        action="store_true",
+        help="do not also fetch the 2021 daily range (use it to fill recent daily gaps)",
+    )
     parser.add_argument("--apply", action="store_true")
     return parser.parse_args(argv)
 
@@ -152,6 +167,7 @@ async def _amain(args: argparse.Namespace) -> int:
         batch_size=max(1, args.batch_size),
         dry_run=not args.apply,
         checkpoint=args.checkpoint,
+        skip_early_daily=args.skip_early_daily,
     )
     client = BinanceClient()
     mysql = MySQLAdapter(connection_string=constants.MYSQL_URI)

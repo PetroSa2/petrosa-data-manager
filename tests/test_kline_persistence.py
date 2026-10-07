@@ -142,6 +142,8 @@ def test_no_other_module_writes_klines_to_mongo():
     allowed = {
         root / "db/repositories/kline_persistence.py",
         root / "db/repositories/candle_repository.py",
+        # Fills Mongo gaps FROM the MySQL rows: the data is already in MySQL, so nothing to copy back.
+        root / "maintenance/fill_mongo_klines_from_mysql.py",
     }
     offenders = [
         str(path.relative_to(root))
