@@ -203,6 +203,52 @@ class LedgerRepository(BaseRepository):
             )
         return {"as_of_ms": payload["as_of_ms"], "created": True}
 
+    def funding_by_symbol_day(
+        self, first: date, last: date
+    ) -> tuple[dict[tuple[str, date], Decimal], set[date]]:
+        """Exchange funding income per (symbol, UTC day) from the latest revision of each day (negative = paid),
+        and the days that have a revision at all (so a day without one is known to be missing)."""
+
+        def as_day(value: Any) -> date:
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, date):
+                return value
+            return date.fromisoformat(str(value)[:10])
+
+        params = {"first": first, "last": last}
+        present = {
+            as_day(row["day"])
+            for row in self._run(
+                "SELECT DISTINCT day FROM ledger_exchange_day_revision "
+                "WHERE day BETWEEN :first AND :last",
+                params,
+            )
+            .mappings()
+            .all()
+        }
+        rows = (
+            self._run(
+                "SELECT e.day AS day, e.symbol AS symbol, SUM(e.funding_fee) AS funding_fee "
+                "FROM ledger_exchange_daily e JOIN ("
+                "SELECT day, MAX(revision) AS revision FROM ledger_exchange_day_revision "
+                "WHERE day BETWEEN :first AND :last GROUP BY day) m "
+                "ON m.day = e.day AND m.revision = e.revision "
+                "GROUP BY e.day, e.symbol",
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        funding = {
+            (str(row["symbol"] or ""), as_day(row["day"])): Decimal(
+                str(row["funding_fee"])
+            )
+            for row in rows
+            if row["symbol"]
+        }
+        return funding, present
+
     def tieout(self, first: date, last: date) -> dict[str, Any]:
         """Build a bounded daily comparison from the latest exchange revisions."""
         days = (
