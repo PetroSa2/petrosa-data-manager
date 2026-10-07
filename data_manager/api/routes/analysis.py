@@ -246,6 +246,7 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
+                "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
             },
         }
     except Exception as e:

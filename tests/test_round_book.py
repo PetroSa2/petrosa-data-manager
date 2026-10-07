@@ -67,6 +67,7 @@ def test_exits_filed_under_another_strategy_id_are_not_lost_but_explained():
         "attributed_to_a_strategy": 1,
         "unattributed": 2,
         "position_side_unknown": 1,
+        "legacy_exit_side_mapped": 0,
     }
 
 

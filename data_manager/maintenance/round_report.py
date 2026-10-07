@@ -60,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
         "fills netted without a position side: "
         f"{report['totals']['position_side_unknown']}"
     )
+    print(
+        "legacy exit fills read as the closing order side: "
+        f"{report['totals']['legacy_exit_side_mapped']}"
+    )
     print(json.dumps(report, default=str, sort_keys=True))
     return 0 if report["accounted"] else 1
 

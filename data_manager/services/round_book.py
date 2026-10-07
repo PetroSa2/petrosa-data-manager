@@ -24,6 +24,8 @@ from datetime import UTC, datetime, timedelta
 from statistics import median
 from typing import Any
 
+from data_manager.services.fill_side import legacy_exit_side, order_side
+
 FILL_EVENT_TYPES = frozenset({"filled", "partial_fill"})
 NET = "NET"  # the leg of fills netted without a position side
 UNATTRIBUTED = "_unattributed"
@@ -131,6 +133,8 @@ class RoundBook:
         self.unattributed: dict[str, int] = defaultdict(int)
         # fills netted because they carry no position side (per strategy)
         self._side_unknown: dict[str, int] = defaultdict(int)
+        # legacy exit rows (side LONG/SHORT) read as the closing order side (petrosa-data-manager#550)
+        self._legacy_mapped: dict[str, int] = defaultdict(int)
 
     def apply(self, row: dict[str, Any]) -> None:
         """Account for one fill row (other event types are not fills and are ignored)."""
@@ -141,7 +145,9 @@ class RoundBook:
             reason = "no_strategy_id" if not strategy_id else "placeholder_strategy_id"
             self._unattributed(reason)
             return
-        side = str(row.get("side") or "").lower()
+        side, mapped = order_side(row)
+        if mapped:
+            self._legacy_mapped[strategy_id] += 1
         symbol = row.get("symbol")
         qty = _number(row.get("fill_qty") or row.get("fill_quantity") or row.get("qty"))
         price = _number(row.get("fill_price") or row.get("price"))
@@ -160,6 +166,13 @@ class RoundBook:
             return
 
         leg = position_side(row)
+        legacy = legacy_exit_side(row)
+        if leg == NET and legacy is not None:
+            # A legacy exit names the leg it closes; use that leg when it has open lots, else net it
+            # with the entries that carried no position side (every entry before petrosa-tradeengine#743).
+            candidate = self._books.get((strategy_id, symbol, legacy[1]))
+            if candidate is not None and (candidate.long or candidate.short):
+                leg = legacy[1]
         book = self._books[(strategy_id, symbol, leg)]
         if leg == NET:
             self._apply_netted(book, strategy_id, str(symbol), side, qty, price, when)
@@ -330,6 +343,7 @@ class RoundBook:
                 "realized_pnl_closed_rounds": sum(r.realized for r in rounds),
                 # fills netted BUY against SELL because they carry no position side
                 "position_side_unknown": self._side_unknown[strategy_id],
+                "legacy_exit_side_mapped": self._legacy_mapped[strategy_id],
             }
         attributed = sum(self._fills.values())
         unattributed = sum(self.unattributed.values())
@@ -341,6 +355,7 @@ class RoundBook:
                 "attributed_to_a_strategy": attributed,
                 "unattributed": unattributed,
                 "position_side_unknown": sum(self._side_unknown.values()),
+                "legacy_exit_side_mapped": sum(self._legacy_mapped.values()),
             },
             # Every fill is in a closed round, the open round of its strategy, or unattributed.
             "accounted": all(
