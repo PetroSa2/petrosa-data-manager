@@ -4,6 +4,7 @@ Analytics endpoints for computed metrics.
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 try:
     from datetime import UTC
@@ -18,6 +19,9 @@ from pydantic import BaseModel
 import data_manager.api.app as api_module
 
 logger = logging.getLogger(__name__)
+
+_SLIPPAGE_MAX_FILLS = 50_000
+_REGIME_MAX_DOCS = 20_000
 
 router = APIRouter()
 
@@ -245,6 +249,69 @@ async def get_strategy_performance(strategy_id: str):
             f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/slippage-by-regime")
+async def get_slippage_by_regime(
+    window_days: float = Query(
+        30.0, gt=0, le=365, description="Trailing window of fills"
+    ),
+    symbol: str | None = Query(None, description="One symbol; all when omitted"),
+    role: str | None = Query(
+        None, pattern="^(entry|exit)$", description="entry or exit fills only"
+    ),
+):
+    """Slippage per market regime from the per-fill cost telemetry (petrosa-data-manager#535).
+
+    Joins each fill's slippage with the regime in force for its symbol at fill time and reports the count, mean,
+    median and p90 in basis points per regime and per (regime, symbol), with the ratio to the overall median.
+    Read-only; fills without recorded slippage are counted and left out, fills before the first regime are
+    grouped under ``no_regime``.
+    """
+    from datetime import timedelta
+
+    from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
+
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
+        raise HTTPException(status_code=503, detail="MongoDB is unavailable")
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    query: dict[str, Any] = {
+        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
+        "timestamp": {"$gte": since},
+    }
+    if symbol:
+        query["symbol"] = symbol
+    mongodb = api_module.db_manager.mongodb_adapter
+    try:
+        fills = (
+            await mongodb.db["execution_events"]
+            .find(query)
+            .sort("timestamp", 1)
+            .to_list(length=_SLIPPAGE_MAX_FILLS)
+        )
+        regimes: dict[str, list[dict[str, Any]]] = {}
+        for pair in sorted(
+            {str(row.get("symbol")) for row in fills if row.get("symbol")}
+        ):
+            regimes[pair] = (
+                await mongodb.db[f"analytics_{pair}_regime"]
+                .find({})
+                .to_list(length=_REGIME_MAX_DOCS)
+            )
+    except Exception as exc:
+        logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    report = build_report(fills, regimes, role=role)
+    report["metadata"] = {
+        "calculated_at": datetime.now(UTC).isoformat(),
+        "window_days": window_days,
+        "fills_read": len(fills),
+        "truncated": len(fills) >= _SLIPPAGE_MAX_FILLS,
+        "source": "data-manager-slippage-by-regime",
+    }
+    return report
 
 
 @router.get("/volume")
