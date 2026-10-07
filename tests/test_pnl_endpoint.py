@@ -170,6 +170,9 @@ def test_performance_returns_real_win_rate_and_pnl():
         assert abs(body["stats"]["win_rate"] - 2 / 3) < 1e-9
         # Realized = 10 - 10 + 30 = 30 (positive)
         assert body["stats"]["realized_pnl"] == 30
+        # the closed rounds behind the win rate (the CIO net-EV gate's posterior)
+        assert body["stats"]["wins"] == 2
+        assert body["stats"]["losses"] == 1
         assert body["stats"]["recent_pnl_trend"] == "positive"
         assert body["metadata"]["source"] == "data-manager-pnl-calculator"
         assert body["metadata"]["fills_replayed"] == 6

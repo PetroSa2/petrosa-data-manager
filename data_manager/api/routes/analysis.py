@@ -232,6 +232,9 @@ async def get_strategy_performance(strategy_id: str):
             "stats": {
                 "win_rate": win_rate,
                 "win_rate_delta": win_rate_delta,
+                # The closed rounds behind the win rate: the posterior of the CIO net-EV gate needs them
+                "wins": wins,
+                "losses": losses,
                 "consecutive_losses": consecutive_losses,
                 "recent_pnl_trend": recent_trend,
                 "realized_pnl": breakdown.realized,
