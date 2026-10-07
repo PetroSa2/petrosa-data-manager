@@ -35,7 +35,7 @@ try:
     from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
     from sqlalchemy.engine import Engine
     from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-    from sqlalchemy.sql import and_, delete, func, select
+    from sqlalchemy.sql import and_, delete, func, or_, select
 
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
@@ -1287,17 +1287,44 @@ class MySQLAdapter(BaseAdapter):
                 if key not in table.c:
                     return [], 0
                 conditions.append(table.c[key] == value)
+        effective_sort = list(sort_list or [])
+        if effective_sort:
+            primary_keys = [column.name for column in table.primary_key.columns]
+            if primary_keys:
+                effective_sort.extend(
+                    (key, effective_sort[0][1])
+                    for key in primary_keys
+                    if key not in {field for field, _ in effective_sort}
+                )
         if cursor:
-            value = cursor["value"]
-            if cursor["field"] == "timestamp" and isinstance(value, str):
-                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            if cursor["field"] not in table.c:
-                raise DatabaseError("cursor field is not present in the table")
-            conditions.append(
-                table.c[cursor["field"]] > value
-                if cursor["direction"] == 1
-                else table.c[cursor["field"]] < value
-            )
+            cursor_sort = [tuple(item) for item in cursor.get("sort", [])]
+            cursor_values = cursor.get("values", [])
+            if not cursor_sort:
+                cursor_sort = [(cursor["field"], cursor["direction"])]
+                cursor_values = [cursor["value"]]
+            if (
+                not table.primary_key.columns
+                or cursor_sort != effective_sort
+                or len(cursor_values) != len(cursor_sort)
+            ):
+                raise DatabaseError("cursor does not match the unique sort")
+            normalized_values = []
+            for (field, _), value in zip(cursor_sort, cursor_values, strict=True):
+                if field == "timestamp" and isinstance(value, str):
+                    value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                normalized_values.append(value)
+            comparisons = []
+            for index, (field, direction) in enumerate(cursor_sort):
+                if field not in table.c:
+                    raise DatabaseError("cursor field is not present in the table")
+                value = normalized_values[index]
+                prefix = [
+                    table.c[name] == normalized_values[pos]
+                    for pos, (name, _) in enumerate(cursor_sort[:index])
+                ]
+                boundary = table.c[field] > value if direction == 1 else table.c[field] < value
+                comparisons.append(and_(*prefix, boundary))
+            conditions.append(or_(*comparisons))
 
         try:
 
@@ -1312,20 +1339,20 @@ class MySQLAdapter(BaseAdapter):
                     query = self._select_table_columns(table, columns)
                     if conditions:
                         query = query.where(and_(*conditions))
-                    if sort_list:
+                    if effective_sort:
                         order_clauses = [
                             (
                                 table.c[field].desc()
                                 if direction == -1
                                 else table.c[field].asc()
                             )
-                            for field, direction in sort_list
+                            for field, direction in effective_sort
                             if field in table.c
                         ]
                         if order_clauses:
                             query = query.order_by(*order_clauses)
                     query = query.limit(
-                        limit + 1 if include_cursor and sort_list else limit
+                        limit + 1 if include_cursor and effective_sort else limit
                     )
                     if not cursor:
                         query = query.offset(offset)
@@ -1336,12 +1363,11 @@ class MySQLAdapter(BaseAdapter):
                     if has_next:
                         records = records[:limit]
                     next_data = None
-                    if has_next and sort_list and records:
-                        field, direction = sort_list[0]
+                    if has_next and effective_sort and records:
+                        values = [records[-1].get(field) for field, _ in effective_sort]
                         next_data = {
-                            "field": field,
-                            "direction": direction,
-                            "value": records[-1].get(field),
+                            "sort": effective_sort,
+                            "values": values,
                         }
                     return records, int(total or 0), next_data
 

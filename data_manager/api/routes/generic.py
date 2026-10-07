@@ -22,6 +22,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from prometheus_client import Counter
 from pydantic import BaseModel, Field
 
+try:
+    from bson import ObjectId
+except ImportError:
+    ObjectId = None
+
 import constants
 import data_manager.api.app as api_module
 from data_manager.api.gateway_policy import authorize_generic
@@ -33,10 +38,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _encode_cursor(value: Any, field: str, direction: int) -> str:
-    if isinstance(value, datetime):
-        value = {"__datetime__": value.isoformat()}
-    payload = {"field": field, "direction": direction, "value": value}
+def _encode_cursor(
+    value: Any,
+    field: str | list[tuple[str, int]],
+    direction: int | None = None,
+) -> str:
+    if isinstance(field, list):
+        values = value if isinstance(value, list) else [value]
+        encoded = [
+            {"__datetime__": item.isoformat()}
+            if isinstance(item, datetime)
+            else {"__objectid__": str(item)}
+            if ObjectId is not None and isinstance(item, ObjectId)
+            else item
+            for item in values
+        ]
+        payload = {"sort": field, "values": encoded}
+    else:
+        if isinstance(value, datetime):
+            value = {"__datetime__": value.isoformat()}
+        payload = {"field": field, "direction": direction, "value": value}
     return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
 
 
@@ -45,14 +66,27 @@ def _decode_cursor(
 ) -> dict[str, Any]:
     try:
         payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
-        field, direction = payload["field"], int(payload["direction"])
-        if not sort_list or sort_list[0] != (field, direction):
-            raise ValueError("cursor does not match the requested sort")
-        value = payload["value"]
-        if isinstance(value, dict) and set(value) == {"__datetime__"}:
-            payload["value"] = datetime.fromisoformat(value["__datetime__"])
-        elif not isinstance(value, str | int | float | bool):
-            raise ValueError("cursor value must be scalar")
+        if "sort" in payload:
+            cursor_sort = [tuple(item) for item in payload["sort"]]
+            if len(cursor_sort) < 2:
+                raise ValueError("cursor sort must include a unique tiebreaker")
+            if not sort_list or sort_list != cursor_sort[: len(sort_list)]:
+                raise ValueError("cursor does not match the requested sort")
+            values = payload["values"]
+            if len(values) != len(cursor_sort):
+                raise ValueError("cursor values do not match its sort")
+            for index, value in enumerate(values):
+                if isinstance(value, dict) and set(value) == {"__datetime__"}:
+                    values[index] = datetime.fromisoformat(value["__datetime__"])
+                elif isinstance(value, dict) and set(value) == {"__objectid__"}:
+                    if ObjectId is None:
+                        raise ValueError("cursor ObjectId support is unavailable")
+                    values[index] = ObjectId(value["__objectid__"])
+                elif not isinstance(value, str | int | float | bool):
+                    raise ValueError("cursor value must be scalar")
+            payload["sort"] = cursor_sort
+        else:
+            raise ValueError("cursor sort must include a unique tiebreaker")
         return payload
     except (KeyError, TypeError, ValueError, json.JSONDecodeError, UnicodeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid cursor: {exc}") from exc
@@ -374,6 +408,8 @@ async def _execute_query_internal(
 
     sort_list = list(sort_dict.items()) if sort_dict else None
     cursor_data = _decode_cursor(cursor, sort_list) if cursor else None
+    if cursor_data and "sort" in cursor_data:
+        sort_list = cursor_data["sort"]
 
     try:
         if database == "mysql":
@@ -426,9 +462,13 @@ async def _execute_query_internal(
             "has_previous": offset > 0,
             "next_cursor": (
                 _encode_cursor(
-                    next_cursor_data["value"],
-                    next_cursor_data["field"],
-                    next_cursor_data["direction"],
+                    next_cursor_data["values"]
+                    if "values" in next_cursor_data
+                    else next_cursor_data["value"],
+                    next_cursor_data["sort"]
+                    if "sort" in next_cursor_data
+                    else next_cursor_data["field"],
+                    next_cursor_data.get("direction"),
                 )
                 if next_cursor_data
                 else None

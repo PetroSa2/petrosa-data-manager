@@ -603,13 +603,33 @@ class MongoDBAdapter(BaseAdapter):
             if end is not None:
                 timestamp_filter["$lt"] = end
             query["timestamp"] = timestamp_filter
+        effective_sort = list(sort_list or [])
+        if effective_sort and "_id" not in {field for field, _ in effective_sort}:
+            effective_sort.append(("_id", effective_sort[0][1]))
         if cursor:
-            value = cursor["value"]
-            if cursor["field"] == "timestamp" and isinstance(value, str):
-                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            query[cursor["field"]] = {
-                "$gt" if cursor["direction"] == 1 else "$lt": value
-            }
+            cursor_sort = [tuple(item) for item in cursor.get("sort", [])]
+            cursor_values = cursor.get("values", [])
+            if not cursor_sort:
+                cursor_sort = [(cursor["field"], cursor["direction"])]
+                cursor_values = [cursor["value"]]
+            if cursor_sort != effective_sort or len(cursor_values) != len(cursor_sort):
+                raise DatabaseError("cursor does not match the unique sort")
+            normalized_values = []
+            for (field, _), value in zip(cursor_sort, cursor_values, strict=True):
+                if field == "timestamp" and isinstance(value, str):
+                    value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                normalized_values.append(value)
+            comparisons = []
+            for index, (field, direction) in enumerate(cursor_sort):
+                value = normalized_values[index]
+                prefix = [
+                    {name: normalized_values[pos]}
+                    for pos, (name, _) in enumerate(cursor_sort[:index])
+                ]
+                boundary = {"$gt" if direction == 1 else "$lt": value}
+                comparisons.append({"$and": [*prefix, {field: boundary}]})
+            cursor_query = {"$or": comparisons}
+            query = {"$and": [query, cursor_query]} if query else cursor_query
 
         try:
             coll = self.db[collection]
@@ -617,9 +637,9 @@ class MongoDBAdapter(BaseAdapter):
             total = await coll.count_documents(query)
 
             db_cursor = coll.find(query)
-            if sort_list:
-                db_cursor = db_cursor.sort(sort_list)
-            fetch_limit = limit + 1 if include_cursor and sort_list else limit
+            if effective_sort:
+                db_cursor = db_cursor.sort(effective_sort)
+            fetch_limit = limit + 1 if include_cursor and effective_sort else limit
             if not cursor:
                 db_cursor = db_cursor.skip(offset)
             db_cursor = db_cursor.limit(fetch_limit)
@@ -628,16 +648,19 @@ class MongoDBAdapter(BaseAdapter):
             if has_next:
                 documents = documents[:limit]
 
+            next_values = (
+                [documents[-1].get(field) for field, _ in effective_sort]
+                if has_next and effective_sort and documents
+                else None
+            )
             for doc in documents:
                 doc.pop("_id", None)
 
             next_data = None
-            if has_next and sort_list and documents:
-                field, direction = sort_list[0]
+            if has_next and effective_sort and documents:
                 next_data = {
-                    "field": field,
-                    "direction": direction,
-                    "value": documents[-1].get(field),
+                    "sort": effective_sort,
+                    "values": next_values,
                 }
             result = (documents, int(total), next_data)
             return result if include_cursor else result[:2]

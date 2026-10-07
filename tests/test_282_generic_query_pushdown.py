@@ -83,7 +83,7 @@ class TestMongoFindPaginated:
         assert "_id" not in documents[0]
 
         coll.find.assert_called_once_with({"symbol": "BTCUSDT"})
-        cursor.sort.assert_called_once_with([("timestamp", -1)])
+        cursor.sort.assert_called_once_with([("timestamp", -1), ("_id", -1)])
         cursor.skip.assert_called_once_with(0)
         cursor.limit.assert_called_once_with(1)
         coll.count_documents.assert_awaited_once_with({"symbol": "BTCUSDT"})
@@ -158,6 +158,35 @@ class TestMongoFindPaginated:
         with pytest.raises(DatabaseError, match="Failed to query"):
             await mongo_adapter.find_paginated("x")
 
+    @pytest.mark.asyncio
+    async def test_cursor_keeps_timestamp_range(self, mongo_adapter):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=[])
+        coll = MagicMock()
+        coll.find.return_value = cursor
+        coll.count_documents = AsyncMock(return_value=0)
+        mongo_adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await mongo_adapter.find_paginated(
+            "trades_BTCUSDT",
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 3, tzinfo=UTC),
+            sort_list=[("timestamp", 1)],
+            cursor={
+                "sort": [("timestamp", 1), ("_id", 1)],
+                "values": [datetime(2026, 1, 1, tzinfo=UTC), "trade-1"],
+            },
+        )
+
+        query = coll.find.call_args.args[0]
+        assert query["$and"][0]["timestamp"] == {
+            "$gte": datetime(2026, 1, 1, tzinfo=UTC),
+            "$lt": datetime(2026, 1, 3, tzinfo=UTC),
+        }
+        assert "$or" in query["$and"][1]
+
 
 # ---------------------------------------------------------------------------
 # MySQLAdapter.find_paginated (real SQLite engine, like test_mysql_adapter_methods.py)
@@ -207,15 +236,17 @@ class TestMySQLFindPaginated:
             sort_list=[("updated_at", 1)],
             limit=1,
             cursor={
-                "field": "updated_at",
-                "direction": 1,
-                "value": datetime(2026, 1, 1, tzinfo=UTC),
+                "sort": [("updated_at", 1), ("dataset_id", 1)],
+                "values": [datetime(2026, 1, 1, tzinfo=UTC), "d0"],
             },
             include_cursor=True,
         )
         assert records[0]["dataset_id"] == "d1"
         assert total == 2
-        assert next_cursor["value"] == records[0]["updated_at"]
+        assert next_cursor["values"] == [
+            records[0]["updated_at"],
+            records[0]["dataset_id"],
+        ]
 
     def test_raises_when_not_connected(self, sqlite_adapter):
         sqlite_adapter._connected = False
@@ -245,6 +276,29 @@ class TestMySQLFindPaginated:
         assert len(records) == 2
         # Sorted descending by updated_at (monotonic with i): skip d8, take d6, d4.
         assert [r["dataset_id"] for r in records] == ["d6", "d4"]
+
+    def test_cursor_pages_duplicate_sort_values_without_skips(self, sqlite_adapter):
+        rows = [_dataset_row(i, "BTCUSDT") for i in range(3)]
+        for row in rows:
+            row["updated_at"] = datetime(2026, 1, 1, tzinfo=UTC)
+        _seed_datasets(sqlite_adapter, rows)
+
+        page, _, next_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=2,
+            include_cursor=True,
+        )
+        rest, _, end_cursor = sqlite_adapter.find_paginated(
+            "datasets",
+            sort_list=[("updated_at", 1)],
+            limit=2,
+            cursor=next_cursor,
+            include_cursor=True,
+        )
+
+        assert [row["dataset_id"] for row in page + rest] == ["d0", "d1", "d2"]
+        assert end_cursor is None
 
     def test_unknown_filter_column_returns_empty_not_error(self, sqlite_adapter):
         _seed_datasets(sqlite_adapter, [_dataset_row(1, "BTCUSDT")])
@@ -322,9 +376,8 @@ class TestGenericQueryDriverPushdown:
                 [{"timestamp": datetime(2026, 1, 1, tzinfo=UTC)}],
                 2,
                 {
-                    "field": "timestamp",
-                    "direction": 1,
-                    "value": datetime(2026, 1, 1, tzinfo=UTC),
+                    "sort": [("timestamp", 1), ("_id", 1)],
+                    "values": [datetime(2026, 1, 1, tzinfo=UTC), "trade-1"],
                 },
             )
         )
@@ -341,7 +394,10 @@ class TestGenericQueryDriverPushdown:
             params={"sort": '{"timestamp": 1}', "limit": 1, "cursor": cursor},
         )
         assert response.status_code == 200
-        assert adapter.find_paginated.call_args.kwargs["cursor"]["field"] == "timestamp"
+        assert adapter.find_paginated.call_args.kwargs["cursor"]["sort"] == [
+            ("timestamp", 1),
+            ("_id", 1),
+        ]
 
     def test_get_records_rejects_cursor_with_wrong_sort(self, client):
         response = client.get(
