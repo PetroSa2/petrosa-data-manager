@@ -106,6 +106,7 @@ class DataManagerApp:
         self.alert_dispatcher: AlertDispatcher | None = None  # #183 alert spine
         self.candle_warmup_scheduler = None  # #319 — set in start()
         self.klines_freshness_task: asyncio.Task | None = None
+        self.klines_daily_gaps_task: asyncio.Task | None = None
         self.running = False
         self._shutdown_event = asyncio.Event()
         self._db_retry_task: asyncio.Task | None = None
@@ -603,6 +604,19 @@ class DataManagerApp:
                 ),
             )
         )
+        from data_manager.maintenance.klines_daily_gaps import (
+            daily_completeness_loop,
+        )
+
+        self.klines_daily_gaps_task = asyncio.create_task(
+            daily_completeness_loop(
+                lambda: self.db_manager,
+                self._shutdown_event,
+                is_leader=lambda: (
+                    self.leader_election is None or self.leader_election.is_leader
+                ),
+            )
+        )
 
         # Wait for shutdown signal
         await self._shutdown_event.wait()
@@ -677,6 +691,13 @@ class DataManagerApp:
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
         await self._cancel_database_retry()
+        if self.klines_daily_gaps_task:
+            self.klines_daily_gaps_task.cancel()
+            try:
+                await self.klines_daily_gaps_task
+            except asyncio.CancelledError:
+                pass
+            self.klines_daily_gaps_task = None
         if self.klines_freshness_task:
             self.klines_freshness_task.cancel()
             try:
