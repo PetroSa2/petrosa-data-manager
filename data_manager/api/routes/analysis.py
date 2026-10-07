@@ -257,10 +257,15 @@ async def get_scorecard(
 ) -> dict:
     """Return a Decimal-string scorecard from immutable audit collections."""
     if group_by not in {"strategy", "strategy_symbol", "cio_mode"}:
-        raise HTTPException(status_code=422, detail="group_by must be strategy, strategy_symbol, or cio_mode")
+        raise HTTPException(
+            status_code=422,
+            detail="group_by must be strategy, strategy_symbol, or cio_mode",
+        )
     if from_ and to and from_ >= to:
         raise HTTPException(status_code=422, detail="from must be before to")
-    if not api_module.db_manager or not getattr(api_module.db_manager, "mongodb_adapter", None):
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
         raise HTTPException(status_code=503, detail="Database not available")
     from data_manager.services.scorecard_service import ScorecardService
 
@@ -270,7 +275,9 @@ async def get_scorecard(
         )
     except Exception as exc:
         logger.error("scorecard calculation failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=503, detail="Scorecard data unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Scorecard data unavailable"
+        ) from exc
 
 
 @router.get("/scorecard/evaluate")
@@ -280,7 +287,9 @@ async def evaluate_scorecard(
     minimum_trades: int | None = Query(None, ge=0),
 ) -> dict:
     """Report scorecard policy outcomes without changing strategy state."""
-    if not api_module.db_manager or not getattr(api_module.db_manager, "mongodb_adapter", None):
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
         raise HTTPException(status_code=503, detail="Database not available")
     config = None
     if getattr(api_module.db_manager, "configuration", None):
@@ -288,24 +297,43 @@ async def evaluate_scorecard(
     parameters = (config or {}).get("parameters", {})
     configured = all(
         parameters.get(name) is not None
-        for name in ("scorecard_min_trades", "scorecard_min_expectancy_net", "scorecard_max_dd_fraction")
+        for name in (
+            "scorecard_min_trades",
+            "scorecard_min_expectancy_net",
+            "scorecard_max_dd_fraction",
+        )
     )
     if not configured:
         return {"status": "unconfigured", "groups": [], "writes": 0}
-    minimum = minimum_trades if minimum_trades is not None else int(parameters["scorecard_min_trades"])
+    minimum = (
+        minimum_trades
+        if minimum_trades is not None
+        else int(parameters["scorecard_min_trades"])
+    )
     scorecard = await get_scorecard(from_, to, "strategy", minimum)
     evaluated = []
     for group in scorecard["groups"]:
         if not group["sample_ok"]:
             status = "watch"
-        elif Decimal(str(group["expectancy_per_trade"] or "0")) < Decimal(str(parameters["scorecard_min_expectancy_net"])):
+        elif Decimal(str(group["expectancy_per_trade"] or "0")) < Decimal(
+            str(parameters["scorecard_min_expectancy_net"])
+        ):
             status = "disable"
-        elif Decimal(str(group["max_drawdown"] or "0")) > Decimal(str(parameters["scorecard_max_dd_fraction"])):
+        elif Decimal(str(group["max_drawdown"] or "0")) > Decimal(
+            str(parameters["scorecard_max_dd_fraction"])
+        ):
             status = "disable"
         else:
             status = "keep"
-        evaluated.append({"strategy_id": group["group"], "status": status, "metrics": group})
-    return {"status": "configured", "thresholds": parameters, "groups": evaluated, "writes": 0}
+        evaluated.append(
+            {"strategy_id": group["group"], "status": status, "metrics": group}
+        )
+    return {
+        "status": "configured",
+        "thresholds": parameters,
+        "groups": evaluated,
+        "writes": 0,
+    }
 
 
 @router.get("/volume")
