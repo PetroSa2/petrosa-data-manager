@@ -38,6 +38,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from data_manager.services.fill_side import order_side
+
 # Event types that count as fills for the realized-P&L calculation.
 FILL_EVENT_TYPES = frozenset({"filled", "partial_fill"})
 SIDE_BUY = "buy"
@@ -94,6 +96,8 @@ class PnlCalculator:
         self._positions: dict[tuple[str, str], _Position] = defaultdict(_Position)
         # Latest known mark per symbol, updated by `set_mark`.
         self._marks: dict[str, float] = {}
+        # Legacy exit fills (side LONG/SHORT) read as the closing order side (petrosa-data-manager#550)
+        self.legacy_exit_side_mapped = 0
 
     # ------------------------------------------------------------------
     # Ingestion.
@@ -107,7 +111,7 @@ class PnlCalculator:
         """
         if fill.get("event_type") not in FILL_EVENT_TYPES:
             return None
-        side = (fill.get("side") or "").lower()
+        side, mapped = order_side(fill)
         if side not in (SIDE_BUY, SIDE_SELL):
             return None
         strategy_id = fill.get("strategy_id")
@@ -119,6 +123,8 @@ class PnlCalculator:
         if qty <= 0 or price <= 0:
             return None
 
+        if mapped:
+            self.legacy_exit_side_mapped += 1
         position = self._positions[(strategy_id, symbol)]
         self._marks[symbol] = price  # latest traded price doubles as a mark
         realized_delta = 0.0

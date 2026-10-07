@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
+_ROUND_MAX_FILLS = 50_000
 
 router = APIRouter()
 
@@ -245,6 +246,7 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
+                "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
             },
         }
     except Exception as e:
@@ -313,6 +315,46 @@ async def get_slippage_by_regime(
         "fills_read": len(fills),
         "truncated": len(fills) >= _SLIPPAGE_MAX_FILLS,
         "source": "data-manager-slippage-by-regime",
+    }
+    return report
+
+
+@router.get("/rounds")
+async def get_closed_rounds(
+    strategy_id: str | None = Query(None, description="One strategy; all when omitted"),
+    window_days: float = Query(
+        30.0, gt=0, le=365, description="Window of the rate and holding time"
+    ),
+):
+    """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
+
+    Every fill is accounted for: in a closed round, in the open round of its strategy, or unattributed with a
+    reason (petrosa-data-manager#537). ``n`` is the number of closed rounds behind the rate and the holding
+    time, so a consumer can tell when a figure is too thin to use.
+    """
+    import data_manager.api.app as api_module
+    from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
+
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
+        raise HTTPException(status_code=503, detail="MongoDB is unavailable")
+    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    if strategy_id:
+        query["strategy_id"] = strategy_id
+    mongodb = api_module.db_manager.mongodb_adapter
+    try:
+        cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
+        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+    except Exception as exc:
+        logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    report = build_report(rows, window_days=window_days)
+    report["metadata"] = {
+        "calculated_at": datetime.now(UTC).isoformat(),
+        "fills_read": len(rows),
+        "truncated": len(rows) >= _ROUND_MAX_FILLS,
+        "source": "data-manager-round-book",
     }
     return report
 
