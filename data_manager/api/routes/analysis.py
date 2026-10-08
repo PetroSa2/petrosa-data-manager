@@ -4,6 +4,7 @@ Analytics endpoints for computed metrics.
 
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 try:
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
+_ROUND_MAX_FILLS = 50_000
 
 router = APIRouter()
 
@@ -245,6 +247,7 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
+                "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
             },
         }
     except Exception as e:
@@ -252,6 +255,94 @@ async def get_strategy_performance(strategy_id: str):
             f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scorecard")
+async def get_scorecard(
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
+    group_by: str = Query("strategy"),
+    minimum_trades: int = Query(30, ge=0),
+) -> dict:
+    """Return a Decimal-string scorecard from immutable audit collections."""
+    if group_by not in {"strategy", "strategy_symbol", "cio_mode"}:
+        raise HTTPException(
+            status_code=422,
+            detail="group_by must be strategy, strategy_symbol, or cio_mode",
+        )
+    if from_ and to and from_ >= to:
+        raise HTTPException(status_code=422, detail="from must be before to")
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
+        raise HTTPException(status_code=503, detail="Database not available")
+    from data_manager.services.scorecard_service import ScorecardService
+
+    try:
+        return await ScorecardService(api_module.db_manager.mongodb_adapter).calculate(
+            start=from_, end=to, group_by=group_by, minimum_trades=minimum_trades
+        )
+    except Exception as exc:
+        logger.error("scorecard calculation failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="Scorecard data unavailable"
+        ) from exc
+
+
+@router.get("/scorecard/evaluate")
+async def evaluate_scorecard(
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
+    minimum_trades: int | None = Query(None, ge=0),
+) -> dict:
+    """Report scorecard policy outcomes without changing strategy state."""
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
+        raise HTTPException(status_code=503, detail="Database not available")
+    config = None
+    if getattr(api_module.db_manager, "configuration", None):
+        config = await api_module.db_manager.configuration.get_app_config()
+    parameters = (config or {}).get("parameters", {})
+    configured = all(
+        parameters.get(name) is not None
+        for name in (
+            "scorecard_min_trades",
+            "scorecard_min_expectancy_net",
+            "scorecard_max_dd_fraction",
+        )
+    )
+    if not configured:
+        return {"status": "unconfigured", "groups": [], "writes": 0}
+    minimum = (
+        minimum_trades
+        if minimum_trades is not None
+        else int(parameters["scorecard_min_trades"])
+    )
+    scorecard = await get_scorecard(from_, to, "strategy", minimum)
+    evaluated = []
+    for group in scorecard["groups"]:
+        if not group["sample_ok"]:
+            status = "watch"
+        elif Decimal(str(group["expectancy_per_trade"] or "0")) < Decimal(
+            str(parameters["scorecard_min_expectancy_net"])
+        ):
+            status = "disable"
+        elif Decimal(str(group["max_drawdown"] or "0")) > Decimal(
+            str(parameters["scorecard_max_dd_fraction"])
+        ):
+            status = "disable"
+        else:
+            status = "keep"
+        evaluated.append(
+            {"strategy_id": group["group"], "status": status, "metrics": group}
+        )
+    return {
+        "status": "configured",
+        "thresholds": parameters,
+        "groups": evaluated,
+        "writes": 0,
+    }
 
 
 @router.get("/slippage-by-regime")
@@ -313,6 +404,46 @@ async def get_slippage_by_regime(
         "fills_read": len(fills),
         "truncated": len(fills) >= _SLIPPAGE_MAX_FILLS,
         "source": "data-manager-slippage-by-regime",
+    }
+    return report
+
+
+@router.get("/rounds")
+async def get_closed_rounds(
+    strategy_id: str | None = Query(None, description="One strategy; all when omitted"),
+    window_days: float = Query(
+        30.0, gt=0, le=365, description="Window of the rate and holding time"
+    ),
+):
+    """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
+
+    Every fill is accounted for: in a closed round, in the open round of its strategy, or unattributed with a
+    reason (petrosa-data-manager#537). ``n`` is the number of closed rounds behind the rate and the holding
+    time, so a consumer can tell when a figure is too thin to use.
+    """
+    import data_manager.api.app as api_module
+    from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
+
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
+        raise HTTPException(status_code=503, detail="MongoDB is unavailable")
+    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    if strategy_id:
+        query["strategy_id"] = strategy_id
+    mongodb = api_module.db_manager.mongodb_adapter
+    try:
+        cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
+        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+    except Exception as exc:
+        logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    report = build_report(rows, window_days=window_days)
+    report["metadata"] = {
+        "calculated_at": datetime.now(UTC).isoformat(),
+        "fills_read": len(rows),
+        "truncated": len(rows) >= _ROUND_MAX_FILLS,
+        "source": "data-manager-round-book",
     }
     return report
 
