@@ -69,4 +69,4 @@ k8s/kubeconfig.yaml
 .DS_Store
 Thumbs.db
 
-.serena/cache/
+.serena/

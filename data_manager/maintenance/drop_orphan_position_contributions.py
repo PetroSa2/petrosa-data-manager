@@ -1,7 +1,7 @@
 """One-shot migration: drop the orphan `position_contributions` MySQL table.
 
 Targets AC2 of `PetroSa2/petrosa-data-manager#221`. The full AC1 evidence
-pack that justifies this drop is in `docs/audit-orphan-tables-2026-06-09.md`.
+pack that justifies this drop is recorded in the ticket's acceptance evidence.
 The TL;DR: the table's only Python writer (`strategy_position_manager.py`
 in tradeengine) is dead code not imported by any deployed service, and
 production tradeengine writes positions to the `positions` table via
@@ -143,7 +143,7 @@ def _build_argparser() -> argparse.ArgumentParser:
         prog="python -m data_manager.maintenance.drop_orphan_position_contributions",
         description=(
             "One-shot drop of the orphan `position_contributions` MySQL table. "
-            "See docs/audit-orphan-tables-2026-06-09.md for the AC1 evidence."
+            "See ticket #221 for the AC1 evidence."
         ),
     )
     mode = parser.add_mutually_exclusive_group(required=True)

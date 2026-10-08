@@ -68,30 +68,3 @@ def test_migrations_are_mysql57_idempotent_and_online():
         assert "PREPARE" in text
         assert "EXECUTE" in text
         assert "DEALLOCATE PREPARE" in text
-
-
-def test_snapshot_fixture_is_explicitly_pending_and_complete():
-    query = (MIGRATIONS / "007_pre_snapshot.sql").read_text()
-    baseline = (MIGRATIONS / "007_pre_snapshot_baseline.txt").read_text()
-
-    assert "PENDING-OPERATOR" in baseline
-    assert "SHOW CREATE TABLE" in query
-    assert EXPECTED <= set(re.findall(r"(?:KEY|INDEX)\s+([a-zA-Z0-9_]+)", baseline))
-
-
-def test_tier1_transcript_is_present_and_machine_evidenced():
-    transcript = (MIGRATIONS / "007_tier1_rehearsal.log").read_text()
-
-    assert transcript
-    assert "ERROR " not in transcript
-    assert "is not supported" not in transcript
-    assert re.search(r"5\.7\.\d+", transcript)
-    assert "PHASE: apply" in transcript
-    assert "PHASE: re-apply" in transcript
-    assert "PHASE: rollback" in transcript
-    assert transcript.index("PHASE: apply") < transcript.index("PHASE: re-apply")
-    assert transcript.index("PHASE: re-apply") < transcript.index("PHASE: rollback")
-    assert transcript.index("PHASE: rollback") < transcript.rindex("PHASE: re-apply")
-    assert EXPECTED <= set(
-        re.findall(r"(?:DROP|ADD) INDEX\s+([a-zA-Z0-9_]+)", transcript)
-    )

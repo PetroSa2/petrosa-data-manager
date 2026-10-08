@@ -104,6 +104,5 @@ this job's logs are the per-collection detail behind that aggregate.
 
 - [`PetroSa2/petrosa-data-manager#274`](https://github.com/PetroSa2/petrosa-data-manager/issues/274) — primary-store flip, AC3 (this job), kill-switch.
 - [`docs/candle-consumer-retention-contract.md`](candle-consumer-retention-contract.md) — where `MIN_WARMUP_CANDLES = 400` and the capped-count recommendation (AC4) come from.
-- [`docs/candle-cutover-runbook.md`](candle-cutover-runbook.md) — the cutover procedure this retention job de-risks.
 - [`docs/klines-retention.md`](klines-retention.md) — sibling job for the MySQL-tier `klines_*` collections (calendar-day based).
 - [`PetroSa2/petrosa_k8s#783`](https://github.com/PetroSa2/petrosa_k8s/issues/783) — Atlas M0 quota P0 incident epic.

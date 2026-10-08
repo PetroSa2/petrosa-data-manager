@@ -122,7 +122,7 @@ SIGNALS_TTL_INDEX_NAME = "_ttl_inserted_at_ttl"
 DEFAULT_SIGNALS_TTL_SECONDS = 3600  # 1 hour — tightened 2026-09-20. The prior
 # 7-day default let the collection grow silently (204 -> 132k+ docs in 4
 # days) because the TTL index itself had never actually been applied in
-# production (see docs/readerless-collections-audit-2026-09-15.md), pushing
+# production, pushing
 # the shared Atlas M0 to 83% of its 512 MB quota. MySQL `petrosa_crypto.signals`
 # is now the durable historic store (dual-written by generic.py's
 # `insert_records`, see `_build_mysql_signal_record`), so Mongo only needs to
@@ -183,8 +183,7 @@ DEFAULT_CIO_DECISIONS_TTL_SECONDS = 86400  # 1 day — bounded by the `intents`
 # `ConfigRateLimiter` wiring touches (`data_manager/main.py`). Wiring the same
 # self-heal into the other three repos, and/or actually running
 # `init-rate-limiting.js` against the live `petrosa` database, is a cross-repo
-# follow-up flagged for the operator (see docs/readerless-collections-audit-
-# 2026-09-15.md) — not resolved by this change alone.
+# follow-up flagged for the operator — not resolved by this change alone.
 CONFIG_RATE_LIMITS_COLLECTION = "config_rate_limits"
 CONFIG_RATE_LIMITS_TTL_FIELD = "timestamp"
 CONFIG_RATE_LIMITS_TTL_INDEX_NAME = "timestamp_ttl_1h"

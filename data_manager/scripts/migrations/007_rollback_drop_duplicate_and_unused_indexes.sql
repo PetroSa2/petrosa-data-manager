@@ -1,5 +1,5 @@
 -- Rollback for migration 007.
--- Recreates the exact pre-change non-unique indexes recorded in 007_pre_snapshot_baseline.txt.
+-- Recreates the exact pre-change non-unique indexes from the operator's snapshot.
 -- MySQL 5.7 compatible: INFORMATION_SCHEMA pre-checks make this script idempotent.
 
 SET @add_sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'klines_m5' AND INDEX_NAME = 'idx_klines_m5_symbol_timestamp') = 0, 'ADD INDEX idx_klines_m5_symbol_timestamp (symbol, timestamp)', NULL);
