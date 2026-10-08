@@ -12,6 +12,14 @@ from typing import Any
 from sqlalchemy import text
 
 from data_manager.db.repositories.base_repository import BaseRepository
+from data_manager.services.ledger_tolerance import (
+    FALLBACK_CUMULATIVE,
+    ExchangeInfoCache,
+    calculate_tolerance,
+    fallback_limits,
+)
+
+_exchange_info = ExchangeInfoCache()
 
 
 class LedgerRepository(BaseRepository):
@@ -227,7 +235,38 @@ class LedgerRepository(BaseRepository):
         pnl_by_day = {
             row["date"].isoformat(): Decimal(str(row["daily_pnl"])) for row in pnl
         }
+        fills_by_day: dict[str, list[dict[str, Any]]] = {}
+        try:
+            fills = (
+                self._run(
+                    "SELECT symbol, quantity, commission, commission_asset, trade_time "
+                    "FROM trades WHERE trade_time >= :first AND trade_time < :after",
+                    {
+                        "first": datetime.combine(first, datetime.min.time()),
+                        "after": datetime.combine(
+                            last + timedelta(days=1), datetime.min.time()
+                        ),
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        except IndexError:
+            fills_by_day = {}
+        else:
+            for fill in fills:
+                item = dict(fill)
+                symbol = item.get("symbol")
+                try:
+                    filters = _exchange_info.get(symbol) if symbol else None
+                except (OSError, ValueError):
+                    filters = None
+                if filters:
+                    item.update(filters)
+                fills_by_day.setdefault(item["trade_time"].date().isoformat(), []).append(item)
         result, cumulative = [], Decimal("0")
+        trailing_variances: list[Decimal] = []
+        fallback = fallback_limits()
         known = {row["day"].isoformat(): row for row in days}
         for offset in range((last - first).days + 1):
             day = first + timedelta(days=offset)
@@ -240,11 +279,41 @@ class LedgerRepository(BaseRepository):
             ledger = pnl_by_day.get(key)
             variance = ledger - exchange if ledger is not None else Decimal("0")
             cumulative += variance
+            tolerance = calculate_tolerance(
+                (row.get("fills", []) if row else []) + fills_by_day.get(key, []),
+                trailing_variances,
+                fallback=Decimal(fallback["daily"]),
+            )
+            day_fills = (row.get("fills", []) if row else []) + fills_by_day.get(key, [])
+            fills_by_symbol: dict[str, list[dict[str, Any]]] = {}
+            for fill in day_fills:
+                symbol = str(fill.get("symbol", "unknown"))
+                fills_by_symbol.setdefault(symbol, []).append(fill)
+            symbol_tolerances = {
+                symbol: calculate_tolerance(
+                    symbol_fills,
+                    trailing_variances,
+                    fallback=Decimal(fallback["daily"]),
+                )
+                for symbol, symbol_fills in fills_by_symbol.items()
+            }
+            cumulative_samples = (trailing_variances + [variance])[-30:]
+            cumulative_tolerance = max(
+                FALLBACK_CUMULATIVE,
+                Decimal(
+                    calculate_tolerance(
+                        [], cumulative_samples, fallback=FALLBACK_CUMULATIVE
+                    )["amount"]
+                ),
+            )
             status = (
                 "ledger_missing"
                 if ledger is None and exchange
                 else ("tied" if variance == 0 else "unconfigured")
             )
+            is_break = abs(variance) > Decimal(tolerance["amount"])
+            if is_break:
+                status = "break"
             result.append(
                 {
                     "day": key,
@@ -263,6 +332,23 @@ class LedgerRepository(BaseRepository):
                     else "0",
                     "unexplained": str(variance),
                     "cumulative_variance": str(cumulative),
+                    "tolerance": {
+                        "daily": tolerance,
+                        "symbol_days": symbol_tolerances,
+                        "cumulative": {
+                            "amount": str(cumulative_tolerance),
+                            "source": (
+                                "source: variance"
+                                if len(cumulative_samples) >= 30
+                                else "source: fallback"
+                            ),
+                        },
+                        "per_item": {
+                            "amount": fallback["per_item"],
+                            "source": "source: fallback",
+                        },
+                    },
+                    "break": is_break,
                     "status": status,
                     "roll_forward": {
                         "difference_class": "provisional"
@@ -271,6 +357,7 @@ class LedgerRepository(BaseRepository):
                     },
                 }
             )
+            trailing_variances.append(variance)
         return {
             "from": first.isoformat(),
             "to": last.isoformat(),
