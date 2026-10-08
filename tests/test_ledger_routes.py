@@ -1,6 +1,7 @@
 import hashlib
 import json
 from datetime import date, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
@@ -199,6 +200,24 @@ def test_tieout_returns_daily_components_and_cumulative_variance():
     assert day["realized_and_fees"]["exchange"] == "-42.92"
     assert day["realized_and_fees"]["variance"] == "42.92"
     assert day["funding"]["status"] == "unbooked_by_design"
+
+
+def test_tieout_rounding_only_difference_is_inside_tolerance():
+    from data_manager.services.ledger_tolerance import calculate_tolerance
+
+    tolerance = calculate_tolerance(
+        [{"quantity": "1", "commission_asset_precision": "0.01", "tick_size": "0.10"}],
+        [],
+    )
+    assert Decimal(tolerance["amount"]) == Decimal("0.055")
+    assert Decimal("0.05") < Decimal(tolerance["amount"])
+
+
+def test_tieout_real_break_exceeds_tolerance():
+    from data_manager.services.ledger_tolerance import calculate_tolerance
+
+    tolerance = calculate_tolerance([], [])
+    assert Decimal("1.01") > Decimal(tolerance["amount"])
 
 
 def test_positions_tieout_maps_sides_and_reports_phantoms():
