@@ -28,6 +28,29 @@ _ROUND_MAX_FILLS = 50_000
 router = APIRouter()
 
 
+@router.get("/calibration/confidence")
+async def get_calibration_confidence(
+    since: datetime | None = Query(None),
+    strategy_id: str | None = Query(None),
+) -> dict[str, Any]:
+    """Return closed, CIO-executed outcomes paired with point-in-time confidence."""
+    if not api_module.db_manager or not getattr(
+        api_module.db_manager, "mongodb_adapter", None
+    ):
+        raise HTTPException(status_code=503, detail="Database not available")
+    from data_manager.services.calibration_service import get_calibration_records
+
+    try:
+        return await get_calibration_records(
+            api_module.db_manager.mongodb_adapter,
+            since=since,
+            strategy_id=strategy_id,
+        )
+    except Exception as exc:
+        logger.error("confidence calibration failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="Calibration data unavailable") from exc
+
+
 class MetricResponse(BaseModel):
     """Generic metric response."""
 
