@@ -236,3 +236,60 @@ def test_positions_tieout_maps_sides_and_reports_phantoms():
     result = repo.positions_tieout()
     assert result["ledger_open_rows"][0]["position_side"] == "LONG"
     assert len(result["phantom_rows"]) == 1
+
+
+def test_positions_tieout_compares_open_quantity_with_the_exchange_quantity():
+    # ETH LONG: 17 open ledger rows of 0.01 against one exchange position of 0.05
+    eth_rows = [{"symbol": "ETHUSDT", "position_side": "BUY", "quantity": "0.01"}] * 17
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result(
+                [
+                    {"symbol": "ETHUSDT", "position_side": "LONG", "quantity": "0.05"},
+                    {"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "0.002"},
+                    {"symbol": "XRPUSDT", "position_side": "SHORT", "quantity": "-100"},
+                ]
+            ),
+            Result(
+                eth_rows
+                + [
+                    {"symbol": "BTCUSDT", "position_side": "BUY", "quantity": "0.001"},
+                    {"symbol": "BTCUSDT", "position_side": "BUY", "quantity": "0.001"},
+                    {"symbol": "XRPUSDT", "position_side": "SELL", "quantity": "100"},
+                ]
+            ),
+        ]
+    )
+    result = repo.positions_tieout()
+    by_key = {(r["symbol"], r["position_side"]): r for r in result["quantity_tieout"]}
+    eth = by_key[("ETHUSDT", "LONG")]
+    assert eth["ledger_open_rows"] == 17
+    assert eth["ledger_open_quantity"] == "0.17"
+    assert eth["exchange_quantity"] == "0.05"
+    assert eth["difference"] == "0.12"
+    assert eth["status"] == "ledger_exceeds_exchange"
+    # two rows that add up to the exchange quantity are tied, however many rows there are
+    assert by_key[("BTCUSDT", "LONG")]["status"] == "tied"
+    # a short exchange quantity is signed negative on the exchange; the comparison uses its size
+    assert by_key[("XRPUSDT", "SHORT")]["status"] == "tied"
+    assert [(r["symbol"], r["status"]) for r in result["quantity_mismatches"]] == [
+        ("ETHUSDT", "ledger_exceeds_exchange")
+    ]
+
+
+def test_positions_tieout_reports_missing_ledger_quantity_and_a_flat_exchange_side():
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result([{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+            Result([{"symbol": "ETHUSDT", "position_side": "BUY", "quantity": "2"}]),
+        ]
+    )
+    by_key = {
+        (r["symbol"], r["position_side"]): r
+        for r in repo.positions_tieout()["quantity_tieout"]
+    }
+    assert by_key[("BTCUSDT", "LONG")]["status"] == "exchange_exceeds_ledger"
+    assert by_key[("ETHUSDT", "LONG")]["status"] == "ledger_exceeds_exchange"
+    assert by_key[("ETHUSDT", "LONG")]["exchange_quantity"] == "0"
