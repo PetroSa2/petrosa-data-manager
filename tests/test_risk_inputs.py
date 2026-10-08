@@ -360,3 +360,98 @@ def test_endpoint_wallet_failure_is_labelled_unavailable(client, monkeypatch):
 def test_endpoint_503_without_a_database():
     api_module.db_manager = None
     assert TestClient(create_app()).get("/api/v1/risk/inputs").status_code == 503
+
+
+# --- the median holding time per strategy (rule 23's H) -------------------------------------------
+
+
+def _fill(strategy, side, price, minutes, **extra):
+    return {
+        "event_type": "filled",
+        "strategy_id": strategy,
+        "symbol": "BTCUSDT",
+        "side": side,
+        "fill_qty": 1.0,
+        "fill_price": price,
+        "fill_time": datetime(2026, 10, 1, tzinfo=UTC) + timedelta(minutes=minutes),
+        **extra,
+    }
+
+
+def _rounds(strategy, holds, start=0):
+    rows, at = [], start
+    for hold in holds:
+        rows += [
+            _fill(strategy, "buy", 100.0, at),
+            _fill(strategy, "sell", 101.0, at + hold),
+        ]
+        at += hold + 5
+    return rows
+
+
+def test_holding_times_are_the_median_over_closed_rounds():
+    fills = _rounds("a", [10, 30, 50]) + [_fill("b", "buy", 100.0, 0)]
+    out = risk_route.strategy_holding_times(
+        fills, datetime(2026, 10, 7, tzinfo=UTC), 30.0
+    )
+    assert out["a"]["median_holding_seconds"] == 30 * 60
+    assert (out["a"]["n"], out["a"]["closed_rounds"], out["a"]["source"]) == (
+        3,
+        3,
+        "round_book",
+    )
+    assert (
+        out["b"]["median_holding_seconds"] is None
+    )  # only an open round: no number is made up
+
+
+def test_holding_times_read_legacy_exit_sides_and_hedge_legs():
+    fills = [
+        _fill("a", "buy", 100.0, 0, position_side="LONG"),
+        _fill(
+            "a",
+            "LONG",
+            101.0,
+            20,
+            reason="oco_exit_take_profit",
+            close_reason="take_profit",
+        ),
+    ]
+    out = risk_route.strategy_holding_times(
+        fills, datetime(2026, 10, 7, tzinfo=UTC), 30.0
+    )
+    assert out["a"]["median_holding_seconds"] == 20 * 60
+
+
+def test_holding_times_only_count_rounds_in_the_window():
+    fills = _rounds("a", [10, 10])
+    old = datetime(2026, 12, 1, tzinfo=UTC)  # long after the rounds closed
+    out = risk_route.strategy_holding_times(fills, old, 30.0)
+    assert out["a"]["median_holding_seconds"] is None and out["a"]["n"] == 0
+    assert out["a"]["closed_rounds"] == 2
+
+
+def test_the_endpoint_serves_the_key_tradeengine_reads(client, monkeypatch):
+    async def fills(end):
+        return _rounds("iceberg_detector", [60, 120, 180])
+
+    monkeypatch.setattr(risk_route, "_load_fills", fills)
+    body = client.get(
+        "/api/v1/risk/inputs?symbols=BTCUSDT&strategies_window_days=365"
+    ).json()
+    # te#745's derived stop floor: strategies.<id>.median_holding_seconds
+    assert body["strategies"]["iceberg_detector"]["median_holding_seconds"] == 120 * 60
+    assert body["strategies_error"] is None
+
+
+def test_a_failed_fill_read_is_reported_not_invented(client, monkeypatch):
+    async def boom(end):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(risk_route, "_load_fills", boom)
+    body = client.get("/api/v1/risk/inputs?symbols=BTCUSDT").json()
+    assert body["strategies"] == {}
+    assert body["strategies_error"] == "strategy fills not readable"
+    assert (
+        "equity" in body and "symbols" in body
+    )  # the rest of the response is unaffected
