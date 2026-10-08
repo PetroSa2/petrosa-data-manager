@@ -156,7 +156,7 @@ canonical path is a one-shot `kind: Job` in the `petrosa-apps` namespace:
 2. Wait for completion: `kubectl wait --for=condition=complete job/storage-inventory -n petrosa-apps --timeout=20m`.
 3. Capture logs **before `ttlSecondsAfterFinished` reaps the pod**:
    `kubectl logs job/storage-inventory -n petrosa-apps > storage-inventory-$(date -u +%FT%H-%M-%SZ).log`.
-4. Commit the redacted findings to `docs/storage-inventory-report-YYYY-MM-DD.md`.
+4. Store redacted findings in the operator's approved evidence system; do not commit dated reports.
 
 Run it during a **low-trading window** — `collStats` across hundreds of
 live collections adds latency to a shared Atlas cluster serving live

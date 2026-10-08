@@ -53,19 +53,14 @@ API Layer (FastAPI) → Downstream consumers (dashboards, strategies, tradeengin
 Core documentation (kept up-to-date):
 - `README.md` - Project overview and quick start
 - `docs/persistence-architecture.md` - MongoDB operational store and MySQL historic-copy rule
-- `QUICK_REFERENCE.md` - Common commands and workflows
-- `DEPLOYMENT_GUIDE.md` - Production deployment
-- `docs/MANUAL_DEPLOYMENT_GUIDE.md` - **Manual deployments without code changes**
-- `CI_CD_PIPELINE.md` - CI/CD reference
-- `TESTING.md` - Testing procedures
-- `MAKEFILE.md` - Makefile commands
+- `docs/INDEX.md` - Documentation index
+- `docs/DEPLOYMENT_GUIDE.md` - Production deployment
+- `docs/CONTRACTS.md` - API and data contracts
+- `docs/NATS_TRACE_PROPAGATION.md` - Trace propagation
+- `docs/runbooks/mysql-klines-backfill.md` - Historic kline recovery
 
-Archive:
-- `docs/archive/` - Historical documentation for reference only
-  - `docs/archive/summaries/` - Implementation and feature summaries
-  - `docs/archive/fixes/` - Bug fix and resolution reports
-  - `docs/archive/investigations/` - Temporary analysis and diagnostic docs
-  - `docs/archive/migrations/` - Migration and upgrade documentation
+Use `make help` for commands, `AGENTS.md` for repository policy, and
+`docs/INDEX.md` for the maintained documentation set.
 
 ---
 

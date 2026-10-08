@@ -226,14 +226,5 @@ pipeline: validate-python ## Run complete CI/CD pipeline locally
 	@echo "✅ Pipeline completed successfully!"
 
 # Documentation Management
-cleanup-docs: ## Archive temporary documentation files
-	@echo "🗑️  Archiving temporary documentation..."
-	@bash -c 'mkdir -p docs/archive/{summaries,fixes,investigations,migrations}'
-	@bash -c 'find docs/ -maxdepth 1 -name "*SUMMARY*.md" -exec mv {} docs/archive/summaries/ \; 2>/dev/null || true'
-	@bash -c 'find docs/ -maxdepth 1 -name "*FIX*.md" -exec mv {} docs/archive/fixes/ \; 2>/dev/null || true'
-	@bash -c 'find docs/ -maxdepth 1 \( -name "*COMPLETE*.md" -o -name "*STATUS*.md" \) -exec mv {} docs/archive/summaries/ \; 2>/dev/null || true'
-	@bash -c 'find docs/ -maxdepth 1 -name "*INVESTIGATION*.md" -exec mv {} docs/archive/investigations/ \; 2>/dev/null || true'
-	@echo "✅ Review with: git status"
-
 validate-docs: ## Validate documentation naming standards
 	@bash -c 'temp_docs=$$(find docs/ -maxdepth 1 -type f -regex ".*_\(SUMMARY\|FIX\|COMPLETE\|STATUS\)\.md$$" || true) && if [ -n "$$temp_docs" ]; then echo "❌ Found temporary docs in root:" && echo "$$temp_docs" && exit 1; else echo "✅ Documentation standards OK"; fi'

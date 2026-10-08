@@ -27,7 +27,7 @@ Properties:
   ``CANDLE_WARMUP_MIN_CANDLES * CANDLE_WARMUP_TRIM_FACTOR`` documents. Disable
   with ``CANDLE_WARMUP_TRIM_ENABLED=false``.
 
-See ``docs/candle-cutover-runbook.md`` and the window contract in
+See ``docs/candle-consumer-retention-contract.md`` and the window contract in
 ``docs/candle-consumer-retention-contract.md`` (#276).
 """
 

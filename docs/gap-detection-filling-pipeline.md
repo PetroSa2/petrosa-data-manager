@@ -168,7 +168,7 @@ groups:
         annotations:
           summary: "Candle read fallback engaged"
           description: "data_manager_candle_read_fallbacks_total rate > 0.1/s for 5m. Primary backend unable to serve candle reads. Check MongoDB health and warm-up status."
-          runbook: "https://github.com/PetroSa2/petrosa-data-manager/blob/main/docs/candle-cutover-runbook.md"
+          runbook: "docs/candle-warmup-continuous-backfill.md"
 ```
 
 ### Gap Detection Alert
