@@ -312,12 +312,16 @@ class RoundBook:
         since = now - timedelta(days=window_days)
         open_rounds: dict[str, int] = defaultdict(int)
         open_fills: dict[str, int] = defaultdict(int)
+        oldest_open: dict[str, datetime] = {}
         for (strategy_id, _symbol, _leg), book in self._books.items():
             if book.cycle is not None and (
                 book.cycle.fills > 0 or book.long or book.short
             ):
                 open_rounds[strategy_id] += 1
                 open_fills[strategy_id] += book.cycle.fills
+                opened = book.cycle.opened_at
+                if strategy_id not in oldest_open or opened < oldest_open[strategy_id]:
+                    oldest_open[strategy_id] = opened
         closed_by: dict[str, list[ClosedRound]] = defaultdict(list)
         for closed in self.closed:
             closed_by[closed.strategy_id].append(closed)
@@ -327,6 +331,9 @@ class RoundBook:
             rounds = closed_by.get(strategy_id, [])
             recent = [r for r in rounds if r.closed_at >= since]
             holding = [r.holding_seconds for r in recent]
+            started = [r.opened_at for r in rounds]
+            if strategy_id in oldest_open:
+                started.append(oldest_open[strategy_id])
             strategies[strategy_id] = {
                 "fills": self._fills[strategy_id],
                 "entry_fills": self._entry[strategy_id],
@@ -341,6 +348,18 @@ class RoundBook:
                 "median_holding_seconds": median(holding) if holding else None,
                 "n": len(recent),
                 "realized_pnl_closed_rounds": sum(r.realized for r in rounds),
+                # What the CIO needs for the win-rate posterior and the cold-start rules (petrosa-cio#297)
+                "wins": sum(1 for r in rounds if r.realized > 0),
+                "losses": sum(1 for r in rounds if r.realized < 0),
+                "first_fill_at": min(started).isoformat() if started else None,
+                "last_closed_at": (
+                    max(r.closed_at for r in rounds).isoformat() if rounds else None
+                ),
+                "oldest_open_round_opened_at": (
+                    oldest_open[strategy_id].isoformat()
+                    if strategy_id in oldest_open
+                    else None
+                ),
                 # fills netted BUY against SELL because they carry no position side
                 "position_side_unknown": self._side_unknown[strategy_id],
                 "legacy_exit_side_mapped": self._legacy_mapped[strategy_id],
