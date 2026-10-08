@@ -34,9 +34,7 @@ def build_calibration_records(
         book.apply(row)
 
     decisions_by_id = {
-        str(row.get("decision_id")): row
-        for row in decisions
-        if row.get("decision_id")
+        str(row.get("decision_id")): row for row in decisions if row.get("decision_id")
     }
     records: list[dict[str, Any]] = []
     skipped = 0
@@ -52,7 +50,10 @@ def build_calibration_records(
             if not candidate or str(candidate.get("action", "")).lower() != "execute":
                 continue
             candidate_confidence = _decimal(candidate.get("confidence"))
-            if candidate_confidence is not None and ZERO <= candidate_confidence <= Decimal("1"):
+            if (
+                candidate_confidence is not None
+                and ZERO <= candidate_confidence <= Decimal("1")
+            ):
                 decision = candidate
                 confidence = candidate_confidence
                 break

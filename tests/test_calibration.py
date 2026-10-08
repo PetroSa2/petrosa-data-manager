@@ -28,8 +28,18 @@ def _fill(side: str, timestamp: str, decision_id: str) -> dict:
 
 def test_build_calibration_records_joins_and_preserves_decimal_values() -> None:
     result = build_calibration_records(
-        [_fill("buy", "2026-10-01T12:00:00Z", "d1"), _fill("sell", "2026-10-01T12:01:00Z", "d1")],
-        [{"decision_id": "d1", "strategy_id": "alpha", "action": "execute", "confidence": "0.875"}],
+        [
+            _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+            _fill("sell", "2026-10-01T12:01:00Z", "d1"),
+        ],
+        [
+            {
+                "decision_id": "d1",
+                "strategy_id": "alpha",
+                "action": "execute",
+                "confidence": "0.875",
+            }
+        ],
     )
 
     record = result["records"][0]
@@ -40,7 +50,9 @@ def test_build_calibration_records_joins_and_preserves_decimal_values() -> None:
     assert result["skipped"] == 0
 
 
-def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisions() -> None:
+def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisions() -> (
+    None
+):
     rows = [
         _fill("buy", "2026-10-01T12:00:00Z", "missing"),
         _fill("sell", "2026-10-01T12:01:00Z", "missing"),
@@ -56,7 +68,10 @@ def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisio
 
 
 def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:
-    rows = [_fill("buy", "2026-10-01T12:00:00Z", "d1"), _fill("sell", "2026-10-01T12:01:00Z", "d2")]
+    rows = [
+        _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+        _fill("sell", "2026-10-01T12:01:00Z", "d2"),
+    ]
     result = build_calibration_records(
         rows,
         [
@@ -69,7 +84,10 @@ def test_build_calibration_records_uses_later_valid_executed_confidence() -> Non
 
 
 def test_build_calibration_records_applies_since() -> None:
-    rows = [_fill("buy", "2026-10-01T12:00:00Z", "d1"), _fill("sell", "2026-10-01T12:01:00Z", "d1")]
+    rows = [
+        _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+        _fill("sell", "2026-10-01T12:01:00Z", "d1"),
+    ]
     result = build_calibration_records(
         rows,
         [{"decision_id": "d1", "action": "execute", "confidence": 0.5}],

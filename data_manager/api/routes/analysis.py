@@ -48,7 +48,9 @@ async def get_calibration_confidence(
         )
     except Exception as exc:
         logger.error("confidence calibration failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=503, detail="Calibration data unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Calibration data unavailable"
+        ) from exc
 
 
 class MetricResponse(BaseModel):
