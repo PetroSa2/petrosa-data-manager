@@ -101,4 +101,5 @@ async def get_pnl(
         "total": breakdown.total,
         "positions": calc.position_summary(),
         "fills_replayed": len(rows),
+        "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
     }

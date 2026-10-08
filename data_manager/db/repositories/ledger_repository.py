@@ -206,6 +206,39 @@ class LedgerRepository(BaseRepository):
             )
         return {"as_of_ms": payload["as_of_ms"], "created": True}
 
+    def wallet_series(self, first: date, last: date) -> list[dict[str, Any]]:
+        """The latest revision of each ledger day: wallet balance, the day's transfers and the balance time.
+
+        Read-only. ``transfer`` is the day's deposits and withdrawals, so a consumer can take them out of
+        the balance change.
+        """
+        rows = (
+            self._run(
+                "SELECT r.day, r.wallet_balance, r.balance_as_of_ms, r.is_final, "
+                "COALESCE(SUM(e.transfer), 0) AS transfer "
+                "FROM ledger_exchange_day_revision r "
+                "JOIN (SELECT day, MAX(revision) AS revision FROM ledger_exchange_day_revision "
+                "GROUP BY day) m ON m.day = r.day AND m.revision = r.revision "
+                "LEFT JOIN ledger_exchange_daily e ON e.day = r.day AND e.revision = r.revision "
+                "WHERE r.day BETWEEN :first AND :last "
+                "GROUP BY r.day, r.revision, r.wallet_balance, r.balance_as_of_ms, r.is_final "
+                "ORDER BY r.day",
+                {"first": first, "last": last},
+            )
+            .mappings()
+            .all()
+        )
+        return [
+            {
+                "day": row["day"],
+                "wallet_balance": str(row["wallet_balance"]),
+                "balance_as_of_ms": row["balance_as_of_ms"],
+                "is_final": bool(row["is_final"]),
+                "transfer": str(row["transfer"]),
+            }
+            for row in rows
+        ]
+
     def tieout(self, first: date, last: date) -> dict[str, Any]:
         """Build a bounded daily comparison from the latest exchange revisions."""
         days = (
