@@ -57,7 +57,11 @@ def calculate_tolerance(
     )
     mad_term = MAD_SCALE * mad if len(trailing) >= 30 else Decimal("0")
     calculated = rounding_bound + mad_term
-    source = "source: exchange-info+variance" if has_exchange_precision else "source: fallback"
+    source = (
+        "source: exchange-info+variance"
+        if has_exchange_precision
+        else "source: fallback"
+    )
     if not has_exchange_precision:
         calculated = max(calculated, _decimal(fallback))
     return {

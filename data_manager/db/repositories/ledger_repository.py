@@ -263,7 +263,9 @@ class LedgerRepository(BaseRepository):
                     filters = None
                 if filters:
                     item.update(filters)
-                fills_by_day.setdefault(item["trade_time"].date().isoformat(), []).append(item)
+                fills_by_day.setdefault(
+                    item["trade_time"].date().isoformat(), []
+                ).append(item)
         result, cumulative = [], Decimal("0")
         trailing_variances: list[Decimal] = []
         fallback = fallback_limits()
@@ -284,7 +286,9 @@ class LedgerRepository(BaseRepository):
                 trailing_variances,
                 fallback=Decimal(fallback["daily"]),
             )
-            day_fills = (row.get("fills", []) if row else []) + fills_by_day.get(key, [])
+            day_fills = (row.get("fills", []) if row else []) + fills_by_day.get(
+                key, []
+            )
             fills_by_symbol: dict[str, list[dict[str, Any]]] = {}
             for fill in day_fills:
                 symbol = str(fill.get("symbol", "unknown"))
