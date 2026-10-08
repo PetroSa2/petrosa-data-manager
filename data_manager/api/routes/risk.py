@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 import constants
 import data_manager.api.app as api_module
 from data_manager.services import risk_inputs as ri
+from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,48 @@ async def _load_wallet_rows(first: datetime, last: datetime) -> list[dict[str, A
     manager = api_module.db_manager
     repo = LedgerRepository(manager.mysql_adapter, None)
     return await asyncio.to_thread(repo.wallet_series, first.date(), last.date())
+
+
+_MAX_FILLS = 200_000
+
+
+async def _load_fills(end: datetime) -> list[dict[str, Any]]:
+    mongodb = api_module.db_manager.mongodb_adapter
+    query: dict[str, Any] = {
+        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
+        "timestamp": {"$lt": end},
+    }
+    return (
+        await mongodb.db["execution_events"]
+        .find(query)
+        .sort("timestamp", 1)
+        .to_list(length=_MAX_FILLS)
+    )
+
+
+def strategy_holding_times(
+    fills: list[dict[str, Any]], now: datetime, window_days: float
+) -> dict[str, Any]:
+    """Per strategy: the median holding time of its closed rounds (from the round book, hedge legs and legacy
+    exit sides handled), the rounds behind it (``n``) and the closed-round rate. The median is None without a
+    closed round in the window: no number is made up."""
+    book = RoundBook()
+    for row in sorted(
+        fills, key=lambda r: _when(r) or datetime.min.replace(tzinfo=UTC)
+    ):
+        book.apply(row)
+    report = book.report(now=now, window_days=window_days)
+    return {
+        strategy_id: {
+            "median_holding_seconds": stats["median_holding_seconds"],
+            "n": stats["n"],
+            "closed_rounds": stats["closed_rounds"],
+            "closed_round_rate_per_day": stats["closed_round_rate_per_day"],
+            "window_days": window_days,
+            "source": "round_book",
+        }
+        for strategy_id, stats in report["strategies"].items()
+    }
 
 
 async def _load_stored_peak() -> dict[str, Any] | None:
@@ -83,6 +126,7 @@ async def get_risk_inputs(
     symbols: str | None = Query(
         None, description="Comma-separated; default: the supported pairs"
     ),
+    strategies_window_days: float = Query(30.0, gt=0, le=365),
 ) -> dict[str, Any]:
     """Realized sigma (daily, 1h and at a horizon), daily-return correlation and the equity curve."""
     if not api_module.db_manager:
@@ -145,6 +189,17 @@ async def get_risk_inputs(
         logger.warning("risk inputs: stored equity peak not readable: %s", exc)
         equity["stored_peak"] = None
 
+    # The median holding time per strategy (rule 23's H, rule 7's integrity flag), from the round book
+    strategies: dict[str, Any] = {}
+    strategies_error: str | None = None
+    try:
+        strategies = strategy_holding_times(
+            await _load_fills(now), now, strategies_window_days
+        )
+    except Exception as exc:
+        logger.error("risk inputs: strategy fills not readable: %s", exc, exc_info=True)
+        strategies_error = "strategy fills not readable"
+
     return {
         "as_of": now.isoformat(),
         "params": {
@@ -159,4 +214,6 @@ async def get_risk_inputs(
         "symbols_unavailable": missing,
         "correlation": ri.correlation_matrix(returns_by_symbol),
         "equity": equity,
+        "strategies": strategies,
+        "strategies_error": strategies_error,
     }
