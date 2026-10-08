@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -236,3 +236,148 @@ def test_a_read_failure_is_a_500(monkeypatch):
     finally:
         api_module.db_manager = None
     assert response.status_code == 500 and "mongo down" in response.text
+
+
+# --- the loaders against the audit collections -----------------------------------------------------
+
+
+def _db(rows_by_collection):
+    """A mongodb adapter whose ``db[collection].find(q).sort(..).to_list(..)`` returns the given rows."""
+    seen = {}
+
+    def collection(name):
+        cursor = MagicMock()
+        cursor.sort.return_value = cursor
+        cursor.to_list = AsyncMock(return_value=list(rows_by_collection.get(name, [])))
+        coll = MagicMock()
+
+        def find(query):
+            seen[name] = query
+            return cursor
+
+        coll.find.side_effect = find
+        return coll
+
+    adapter = MagicMock()
+    adapter.db.__getitem__.side_effect = collection
+    manager = MagicMock()
+    manager.mongodb_adapter = adapter
+    return manager, seen
+
+
+@pytest.mark.asyncio
+async def test_the_fill_loader_reads_fill_events_before_the_end():
+    manager, seen = _db({"execution_events": [{"event_type": "filled"}]})
+    api_module.db_manager = manager
+    try:
+        rows = await route._load_fills(T0)
+        assert rows == [{"event_type": "filled"}]
+        assert seen["execution_events"]["event_type"] == {
+            "$in": ["filled", "partial_fill"]
+        }
+        assert seen["execution_events"]["timestamp"] == {"$lt": T0}
+        await route._load_fills(None)
+        assert "timestamp" not in seen["execution_events"]
+    finally:
+        api_module.db_manager = None
+
+
+@pytest.mark.asyncio
+async def test_the_stop_loader_reads_the_stop_a_position_carried():
+    manager, seen = _db(
+        {
+            "positions": [
+                {"position_id": "p1", "entry_price": 100, "stop_loss": 98},
+                {
+                    "position_id": "p2",
+                    "avg_price": 50,
+                    "stop_loss": 52,
+                },  # no entry_price: avg_price
+                {
+                    "position_id": "p3",
+                    "entry_price": 100,
+                    "stop_loss": None,
+                },  # no usable stop
+                {"entry_price": 100, "stop_loss": 98},  # no id
+            ]
+        }
+    )
+    api_module.db_manager = manager
+    try:
+        stops = await route._load_stops(["p1", "p2", "p3"])
+        assert await route._load_stops([]) == {}
+    finally:
+        api_module.db_manager = None
+    assert stops == {"p1": D("0.02"), "p2": D("0.04")}
+    assert seen["positions"] == {"position_id": {"$in": ["p1", "p2", "p3"]}}
+
+
+@pytest.mark.asyncio
+async def test_the_decision_loader_reads_the_stop_a_decision_carried():
+    manager, seen = _db(
+        {
+            "cio_decisions": [
+                {
+                    "decision_id": "d1",
+                    "source": "cio_llm",
+                    "payload": {"entry_price": 100, "stop_loss": 99},
+                },
+                {"decision_id": "d2", "payload": {"stop_loss_pct": "0.03"}},
+                {"decision_id": "d3", "payload": {"stop_loss_pct": "oops"}},
+                {"decision_id": "d4", "price": 200, "payload": {"stop_loss": 190}},
+                {"decision_id": "d5"},
+            ]
+        }
+    )
+    api_module.db_manager = manager
+    try:
+        decisions = await route._load_decisions(["d1", "d2", "d3", "d4", "d5"])
+        assert await route._load_decisions([]) == {}
+    finally:
+        api_module.db_manager = None
+    assert decisions["d1"] == {"source": "cio_llm", "stop_fraction": D("0.01")}
+    assert decisions["d2"]["stop_fraction"] == D("0.03")
+    assert decisions["d3"]["stop_fraction"] is None
+    assert decisions["d4"]["stop_fraction"] == D("0.05")
+    assert decisions["d5"] == {"source": None, "stop_fraction": None}
+    assert seen["cio_decisions"] == {
+        "decision_id": {"$in": ["d1", "d2", "d3", "d4", "d5"]}
+    }
+
+
+def test_an_http_error_from_a_loader_passes_through(monkeypatch):
+    from fastapi import HTTPException
+
+    async def teapot(end):
+        raise HTTPException(status_code=418, detail="teapot")
+
+    monkeypatch.setattr(route, "_load_fills", teapot)
+    api_module.db_manager = MagicMock()
+    try:
+        response = TestClient(create_app()).get("/analysis/strategy-net-r")
+    finally:
+        api_module.db_manager = None
+    assert response.status_code == 418
+
+
+def test_a_decision_without_a_stop_does_not_hide_the_next_one():
+    rows = _round_rows("A", 100, 110, 0, decision_id="d0")
+    book = RoundBook()
+    for row in rows:
+        book.apply(row)
+    closed = book.closed[0]
+    closed.decision_ids = ("dmissing", "d1")
+    scored = score_rounds(
+        [closed], decisions={"dmissing": None, "d1": {"stop_fraction": D("0.04")}}
+    )
+    assert scored[0].stop_fraction == D("0.04")
+
+
+def test_an_unreadable_number_in_a_fill_counts_as_zero():
+    from data_manager.services.round_book import _dec
+
+    assert (
+        _dec("not a number") == D("0")
+        and _dec(None) == D("0")
+        and _dec("1.5") == D("1.5")
+    )

@@ -360,15 +360,6 @@ class RoundBook:
             self._closed_fills[strategy_id] += cycle.fills
             book.cycle = None
 
-    def open_rounds(self) -> list[tuple[str, str]]:
-        """(strategy, symbol) of every round still open."""
-        return [
-            (strategy_id, symbol)
-            for (strategy_id, symbol, _leg), book in self._books.items()
-            if book.cycle is not None
-            and (book.cycle.fills > 0 or book.long or book.short)
-        ]
-
     def _tag(self, cycle: _Cycle) -> None:
         """Book the current fill's fee and identifiers on the round it belongs to."""
         row = getattr(self, "_row", None) or {}
