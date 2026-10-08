@@ -70,7 +70,7 @@ named, writer/reader in another repo (see correction #1 above):
   ``_TTL_HOURS``), leaving the collection itself and any recent doc intact.
 
 ## Explicitly NOT in scope for this module (see
-## `docs/atlas-hygiene-2026-09.md` for the full decision record)
+## the associated ticket for the full decision record)
 
 * `binance` DB — retained as the designated leader-election database per
   the issue's own 2026-09-14 correction comment (Option b). No migration,
@@ -80,7 +80,7 @@ named, writer/reader in another repo (see correction #1 above):
 * MySQL 0-row orphans, `datasets`, `lineage_records` — already covered /
   already correctly retained by `drop_orphan_petrosa_crypto_tables_2026_09.py`
   (#272/PR #288); `lineage_records` is a deliberate "latent feature, not
-  orphan schema" retain (see `docs/audit-orphan-tables-2026-09-13.md` AC5),
+  orphan schema" retain (see the associated ticket's AC5),
   not reopened here.
 * MySQL `klines_*` (all seven: `klines_m1`, `klines_m3`, `klines_h2`,
   `klines_h4`, `klines_h6`, `klines_h8`, `klines_h12`) — **new correction**:
@@ -417,7 +417,7 @@ def _build_argparser() -> argparse.ArgumentParser:
             "Guarded drop of confirmed-dead Atlas probe collections + "
             "opt-in TTL-guarded tradeengine_boot_probes backlog purge. "
             "See data-manager#301 for the AC1 evidence and "
-            "docs/atlas-hygiene-2026-09.md for the full decision record."
+            "the associated ticket for the full decision record."
         ),
     )
     mode = parser.add_mutually_exclusive_group(required=True)

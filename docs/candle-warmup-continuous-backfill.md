@@ -264,7 +264,6 @@ python -m data_manager.maintenance.candle_readiness --json
 
 ## Related
 
-- [`docs/candle-cutover-runbook.md`](candle-cutover-runbook.md) — the one-shot #275 procedure this automates
 - [`docs/candle-consumer-retention-contract.md`](candle-consumer-retention-contract.md) — where the 400-candle depth comes from
 - [`docs/candles-retention.md`](candles-retention.md) — the trimming counterpart; must stay ≥ warm-up depth
 - [`docs/gap-detection-filling-pipeline.md`](gap-detection-filling-pipeline.md) — the near-real-time half of #317
