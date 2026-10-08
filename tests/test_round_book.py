@@ -371,3 +371,35 @@ def test_hedge_and_netted_fills_stay_fully_accounted_under_random_input():
     report = _report(rows)
     assert report["accounted"] is True
     assert report["totals"]["fills"] == 400
+
+
+# --- the per-strategy fields the CIO's posterior and cold-start rules read (cio#297) -----------------
+
+
+def test_report_carries_wins_losses_and_the_round_timestamps():
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0),
+        _fill("s1", "sell", 1.0, 110.0, 10),  # win
+        _fill("s1", "buy", 1.0, 100.0, 20),
+        _fill("s1", "sell", 1.0, 90.0, 30),  # loss
+        _fill("s1", "buy", 1.0, 100.0, 40),
+        _fill("s1", "sell", 1.0, 100.0, 50),  # flat: neither
+        _fill("s1", "buy", 1.0, 100.0, 60),  # open round
+    ]
+    stats = _report(rows)["strategies"]["s1"]
+    assert (stats["wins"], stats["losses"], stats["closed_rounds"]) == (1, 1, 3)
+    assert stats["first_fill_at"] == (T0).isoformat()
+    assert stats["last_closed_at"] == (T0 + timedelta(minutes=50)).isoformat()
+    assert (
+        stats["oldest_open_round_opened_at"] == (T0 + timedelta(minutes=60)).isoformat()
+    )
+
+
+def test_a_strategy_with_only_entries_has_no_closed_timestamp_and_an_old_open_round():
+    rows = [_fill("s1", "buy", 1.0, 100.0, i) for i in range(5)]
+    stats = _report(rows)["strategies"]["s1"]
+    assert (stats["wins"], stats["losses"]) == (0, 0)
+    assert stats["last_closed_at"] is None
+    assert (
+        stats["first_fill_at"] == stats["oldest_open_round_opened_at"] == T0.isoformat()
+    )

@@ -13,6 +13,9 @@ from sqlalchemy import text
 
 from data_manager.db.repositories.base_repository import BaseRepository
 
+#: Open row quantity and exchange quantity are tied within this difference.
+QUANTITY_TOLERANCE = Decimal("0.000000001")
+
 
 class LedgerRepository(BaseRepository):
     """Persist ledger revisions without update or delete methods."""
@@ -203,6 +206,39 @@ class LedgerRepository(BaseRepository):
             )
         return {"as_of_ms": payload["as_of_ms"], "created": True}
 
+    def wallet_series(self, first: date, last: date) -> list[dict[str, Any]]:
+        """The latest revision of each ledger day: wallet balance, the day's transfers and the balance time.
+
+        Read-only. ``transfer`` is the day's deposits and withdrawals, so a consumer can take them out of
+        the balance change.
+        """
+        rows = (
+            self._run(
+                "SELECT r.day, r.wallet_balance, r.balance_as_of_ms, r.is_final, "
+                "COALESCE(SUM(e.transfer), 0) AS transfer "
+                "FROM ledger_exchange_day_revision r "
+                "JOIN (SELECT day, MAX(revision) AS revision FROM ledger_exchange_day_revision "
+                "GROUP BY day) m ON m.day = r.day AND m.revision = r.revision "
+                "LEFT JOIN ledger_exchange_daily e ON e.day = r.day AND e.revision = r.revision "
+                "WHERE r.day BETWEEN :first AND :last "
+                "GROUP BY r.day, r.revision, r.wallet_balance, r.balance_as_of_ms, r.is_final "
+                "ORDER BY r.day",
+                {"first": first, "last": last},
+            )
+            .mappings()
+            .all()
+        )
+        return [
+            {
+                "day": row["day"],
+                "wallet_balance": str(row["wallet_balance"]),
+                "balance_as_of_ms": row["balance_as_of_ms"],
+                "is_final": bool(row["is_final"]),
+                "transfer": str(row["transfer"]),
+            }
+            for row in rows
+        ]
+
     def tieout(self, first: date, last: date) -> dict[str, Any]:
         """Build a bounded daily comparison from the latest exchange revisions."""
         days = (
@@ -292,6 +328,8 @@ class LedgerRepository(BaseRepository):
                 "ledger_open_rows": [],
                 "exchange_positions": [],
                 "phantom_rows": [],
+                "quantity_tieout": [],
+                "quantity_mismatches": [],
             }
         exchange = (
             self._run(
@@ -310,11 +348,15 @@ class LedgerRepository(BaseRepository):
         )
         exchange_keys = {(r["symbol"], r["position_side"]): r for r in exchange}
         grouped: dict[tuple[str, str], int] = {}
+        ledger_quantity: dict[tuple[str, str], Decimal] = {}
         for row in ledger:
             side = {"BUY": "LONG", "SELL": "SHORT"}.get(
                 str(row["position_side"]).upper(), str(row["position_side"]).upper()
             )
             grouped[(row["symbol"], side)] = grouped.get((row["symbol"], side), 0) + 1
+            ledger_quantity[(row["symbol"], side)] = ledger_quantity.get(
+                (row["symbol"], side), Decimal("0")
+            ) + Decimal(str(row["quantity"] or 0))
         open_rows = [
             {"symbol": s, "position_side": side, "ledger_open_rows": count}
             for (s, side), count in grouped.items()
@@ -333,9 +375,42 @@ class LedgerRepository(BaseRepository):
             for row in open_rows
             if (row["symbol"], row["position_side"]) not in exchange_keys
         ]
+        # Quantities, not only row counts (petrosa-tradeengine#739): tradeengine writes one row per entry
+        # while the exchange holds one netted position per (symbol, side), so counts always differ; the
+        # open quantity of the rows has to equal the exchange quantity.
+        quantity_tieout = []
+        for key in sorted(set(ledger_quantity) | set(exchange_keys)):
+            ledger_qty = ledger_quantity.get(key, Decimal("0"))
+            exchange_qty = (
+                abs(Decimal(str(exchange_keys[key]["quantity"])))
+                if key in exchange_keys
+                else Decimal("0")
+            )
+            difference = ledger_qty - exchange_qty
+            if abs(difference) <= QUANTITY_TOLERANCE:
+                status = "tied"
+            elif difference > 0:
+                status = "ledger_exceeds_exchange"
+            else:
+                status = "exchange_exceeds_ledger"
+            quantity_tieout.append(
+                {
+                    "symbol": key[0],
+                    "position_side": key[1],
+                    "ledger_open_rows": grouped.get(key, 0),
+                    "ledger_open_quantity": str(ledger_qty),
+                    "exchange_quantity": str(exchange_qty),
+                    "difference": str(difference),
+                    "status": status,
+                }
+            )
         return {
             "as_of_ms": snapshot["as_of_ms"],
             "ledger_open_rows": open_rows,
             "exchange_positions": exchange_rows,
             "phantom_rows": phantom,
+            "quantity_tieout": quantity_tieout,
+            "quantity_mismatches": [
+                row for row in quantity_tieout if row["status"] != "tied"
+            ],
         }

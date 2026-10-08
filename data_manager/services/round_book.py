@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from statistics import median
 from typing import Any
 
@@ -39,6 +40,18 @@ class _Lot:
     price: float
 
 
+ZERO = Decimal("0")
+QUOTE_ASSETS = ("USDT", "USDC", "BUSD", "FDUSD", "USD")
+
+
+def _dec(value: Any) -> Decimal:
+    """A Decimal of a number as written (``str`` of a float), ZERO when unusable."""
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return ZERO
+
+
 @dataclass
 class _Cycle:
     opened_at: datetime
@@ -46,6 +59,13 @@ class _Cycle:
     fills: int = 0
     entry_fills: int = 0
     exit_fills: int = 0
+    # Decimal accounting of the round, for the cost-aware scorecard (petrosa-data-manager#468)
+    realized_dec: Decimal = ZERO
+    fees: Decimal = ZERO  # fees of the round's fills in the quote asset
+    fee_unknown_fills: int = 0  # fills whose fee is missing or not in the quote asset
+    entry_notional: Decimal = ZERO  # sum of entry quantity x price
+    position_ids: list[str] = field(default_factory=list)
+    decision_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -57,6 +77,12 @@ class ClosedRound:
     realized: float
     fills: int
     position_side: str = NET
+    realized_dec: Decimal = ZERO
+    fees: Decimal = ZERO
+    fee_unknown_fills: int = 0
+    entry_notional: Decimal = ZERO
+    position_ids: tuple[str, ...] = ()
+    decision_ids: tuple[str, ...] = ()
 
     @property
     def holding_seconds(self) -> float:
@@ -165,6 +191,7 @@ class RoundBook:
             self._unattributed("unusable_fill")
             return
 
+        self._row = row
         leg = position_side(row)
         legacy = legacy_exit_side(row)
         if leg == NET and legacy is not None:
@@ -197,6 +224,7 @@ class RoundBook:
             book.cycle = _Cycle(opened_at=when)
         cycle = book.cycle
         cycle.fills += 1
+        self._tag(cycle)
         opposite, same = (
             (book.short, book.long) if side == "buy" else (book.long, book.short)
         )
@@ -211,6 +239,11 @@ class RoundBook:
                 if side == "buy"
                 else (price - lot.price) * take
             )
+            cycle.realized_dec += (
+                (_dec(lot.price) - _dec(price)) * _dec(take)
+                if side == "buy"
+                else (_dec(price) - _dec(lot.price)) * _dec(take)
+            )
             lot.qty -= take
             remaining -= take
             matched += take
@@ -223,8 +256,11 @@ class RoundBook:
         else:
             cycle.entry_fills += 1
             self._entry[strategy_id] += 1
+        flipped = matched > 0 and not opposite and remaining > 0
         if remaining > 0:
             same.append(_Lot(qty=remaining, price=price))
+            if not flipped:
+                cycle.entry_notional += _dec(remaining) * _dec(price)
         if matched > 0 and not opposite:
             # The position went flat (or flipped): the round is closed at this fill.
             self.closed.append(
@@ -235,10 +271,20 @@ class RoundBook:
                     closed_at=when,
                     realized=cycle.realized,
                     fills=cycle.fills,
+                    realized_dec=cycle.realized_dec,
+                    fees=cycle.fees,
+                    fee_unknown_fills=cycle.fee_unknown_fills,
+                    entry_notional=cycle.entry_notional,
+                    position_ids=tuple(cycle.position_ids),
+                    decision_ids=tuple(cycle.decision_ids),
                 )
             )
             self._closed_fills[strategy_id] += cycle.fills
-            book.cycle = _Cycle(opened_at=when) if remaining > 0 else None
+            if remaining > 0:
+                book.cycle = _Cycle(opened_at=when)
+                book.cycle.entry_notional = _dec(remaining) * _dec(price)
+            else:
+                book.cycle = None
 
     def _apply_leg(
         self,
@@ -260,6 +306,8 @@ class RoundBook:
                 book.cycle = _Cycle(opened_at=when)
             book.cycle.fills += 1
             book.cycle.entry_fills += 1
+            self._tag(book.cycle)
+            book.cycle.entry_notional += _dec(qty) * _dec(price)
             self._entry[strategy_id] += 1
             lots.append(_Lot(qty=qty, price=price))
             return
@@ -271,6 +319,7 @@ class RoundBook:
         book.cycle = cycle
         cycle.fills += 1
         cycle.exit_fills += 1
+        self._tag(cycle)
         self._exit[strategy_id] += 1
         remaining = qty
         while remaining > 0 and lots:
@@ -280,6 +329,11 @@ class RoundBook:
                 (price - lot.price) * take
                 if leg == "LONG"
                 else (lot.price - price) * take
+            )
+            cycle.realized_dec += (
+                (_dec(price) - _dec(lot.price)) * _dec(take)
+                if leg == "LONG"
+                else (_dec(lot.price) - _dec(price)) * _dec(take)
             )
             lot.qty -= take
             remaining -= take
@@ -295,10 +349,44 @@ class RoundBook:
                     realized=cycle.realized,
                     fills=cycle.fills,
                     position_side=leg,
+                    realized_dec=cycle.realized_dec,
+                    fees=cycle.fees,
+                    fee_unknown_fills=cycle.fee_unknown_fills,
+                    entry_notional=cycle.entry_notional,
+                    position_ids=tuple(cycle.position_ids),
+                    decision_ids=tuple(cycle.decision_ids),
                 )
             )
             self._closed_fills[strategy_id] += cycle.fills
             book.cycle = None
+
+    def _tag(self, cycle: _Cycle) -> None:
+        """Book the current fill's fee and identifiers on the round it belongs to."""
+        row = getattr(self, "_row", None) or {}
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+
+        def field_of(name: str) -> Any:
+            return row.get(name) if row.get(name) is not None else payload.get(name)
+
+        fee = field_of("fee")
+        if fee is None:
+            fee = field_of("fees")
+        asset = str(field_of("fee_asset") or "").upper()
+        status = str(field_of("fee_status") or "").lower()
+        symbol = str(row.get("symbol") or "")
+        quote = next((q for q in QUOTE_ASSETS if symbol.endswith(q)), "")
+        in_quote = bool(asset) and asset == quote or (not asset and bool(quote))
+        if fee is None or status in ("unknown", "needs_conversion") or not in_quote:
+            cycle.fee_unknown_fills += 1
+        else:
+            cycle.fees += abs(_dec(fee))
+        for name, bucket in (
+            ("position_id", cycle.position_ids),
+            ("decision_id", cycle.decision_ids),
+        ):
+            value = field_of(name)
+            if value and str(value) not in bucket:
+                bucket.append(str(value))
 
     def _unattributed(self, reason: str) -> None:
         self.unattributed[reason] += 1
@@ -312,12 +400,16 @@ class RoundBook:
         since = now - timedelta(days=window_days)
         open_rounds: dict[str, int] = defaultdict(int)
         open_fills: dict[str, int] = defaultdict(int)
+        oldest_open: dict[str, datetime] = {}
         for (strategy_id, _symbol, _leg), book in self._books.items():
             if book.cycle is not None and (
                 book.cycle.fills > 0 or book.long or book.short
             ):
                 open_rounds[strategy_id] += 1
                 open_fills[strategy_id] += book.cycle.fills
+                opened = book.cycle.opened_at
+                if strategy_id not in oldest_open or opened < oldest_open[strategy_id]:
+                    oldest_open[strategy_id] = opened
         closed_by: dict[str, list[ClosedRound]] = defaultdict(list)
         for closed in self.closed:
             closed_by[closed.strategy_id].append(closed)
@@ -327,6 +419,9 @@ class RoundBook:
             rounds = closed_by.get(strategy_id, [])
             recent = [r for r in rounds if r.closed_at >= since]
             holding = [r.holding_seconds for r in recent]
+            started = [r.opened_at for r in rounds]
+            if strategy_id in oldest_open:
+                started.append(oldest_open[strategy_id])
             strategies[strategy_id] = {
                 "fills": self._fills[strategy_id],
                 "entry_fills": self._entry[strategy_id],
@@ -341,6 +436,18 @@ class RoundBook:
                 "median_holding_seconds": median(holding) if holding else None,
                 "n": len(recent),
                 "realized_pnl_closed_rounds": sum(r.realized for r in rounds),
+                # What the CIO needs for the win-rate posterior and the cold-start rules (petrosa-cio#297)
+                "wins": sum(1 for r in rounds if r.realized > 0),
+                "losses": sum(1 for r in rounds if r.realized < 0),
+                "first_fill_at": min(started).isoformat() if started else None,
+                "last_closed_at": (
+                    max(r.closed_at for r in rounds).isoformat() if rounds else None
+                ),
+                "oldest_open_round_opened_at": (
+                    oldest_open[strategy_id].isoformat()
+                    if strategy_id in oldest_open
+                    else None
+                ),
                 # fills netted BUY against SELL because they carry no position side
                 "position_side_unknown": self._side_unknown[strategy_id],
                 "legacy_exit_side_mapped": self._legacy_mapped[strategy_id],
