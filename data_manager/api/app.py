@@ -47,6 +47,7 @@ from data_manager.api.routes import (
     signals,
     strategies,
     strategy_lifecycle,
+    strategy_net_r,
     strategy_timeline,
     system_trades,
     trading_state,
@@ -166,6 +167,11 @@ def create_app() -> FastAPI:
     app.include_router(data.router, prefix="/data", tags=["Data"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
+    # The keep/kill input of the CIO (petrosa-data-manager#468): net R per closed round of each strategy
+    app.include_router(strategy_net_r.router, prefix="/analysis", tags=["Analysis"])
+    app.include_router(
+        strategy_net_r.router, prefix="/api/v1/analysis", tags=["Analysis"]
+    )
     app.include_router(catalog.router, prefix="/catalog", tags=["Catalog"])
     app.include_router(backfill.router, prefix="/backfill", tags=["Backfill"])
     app.include_router(anomalies.router, prefix="/anomalies", tags=["Anomalies"])
