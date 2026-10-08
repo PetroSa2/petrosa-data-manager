@@ -809,7 +809,9 @@ async def get_regime(
 
     Response shape (200 OK):
       {pair, metric="regime", data: {regime, volatility_level, volume_level,
-       trend_direction, confidence} | null, metadata: {timestamp, collection}}
+       trend_direction, confidence, inputs} | null, metadata: {timestamp, collection}}
+    ``inputs`` (null for observations stored before it existed): annualized_volatility, volume_spike_ratio,
+    rate_of_change, thresholds, clarity {volatility, volume}, confidence_basis, held_observations, held_since.
 
     When no regime has been computed yet for the pair, `data` is null and the
     status is still 200. Callers must treat null `data` as "regime unknown" —
@@ -850,6 +852,9 @@ async def get_regime(
                 "volume_level": r.get("volume_level", "unknown"),
                 "trend_direction": r.get("trend_direction", "neutral"),
                 "confidence": str(r.get("confidence", "0.5")),
+                # Classifier inputs (petrosa-data-manager#534): raw volatility and volume ratios, thresholds,
+                # clarity per input and how long the regime has held. None for observations stored before it.
+                "inputs": r.get("inputs"),
             },
             "metadata": {
                 "timestamp": (
