@@ -505,3 +505,42 @@ class LedgerRepository(BaseRepository):
                 row for row in quantity_tieout if row["status"] != "tied"
             ],
         }
+
+    def round_overlay_snapshot(self) -> dict[str, Any] | None:
+        """Read the latest full exchange position snapshot without changing ledger state."""
+        snapshot = (
+            self._run(
+                "SELECT as_of_ms FROM ledger_exchange_positions_snapshot "
+                "ORDER BY as_of_ms DESC LIMIT 1"
+            )
+            .mappings()
+            .first()
+        )
+        if not snapshot:
+            return {"as_of_ms": None, "rows": []}
+        rows = (
+            self._run(
+                "SELECT symbol, position_side, quantity FROM ledger_exchange_positions "
+                "WHERE as_of_ms=:as_of_ms",
+                {"as_of_ms": snapshot["as_of_ms"]},
+            )
+            .mappings()
+            .all()
+        )
+        return {"as_of_ms": int(snapshot["as_of_ms"]), "rows": [dict(row) for row in rows]}
+
+    def closed_entry_order_ids(self) -> set[str]:
+        """Return entry order ids already known to be closed by the position ledger."""
+        rows = (
+            self._run(
+                "SELECT entry_order_id FROM positions WHERE status IN "
+                "('closed','closed_externally','reconciled_to_exchange') "
+                "AND entry_order_id IS NOT NULL "
+                "UNION SELECT entry_order_id FROM strategy_positions WHERE status IN "
+                "('closed','closed_externally','reconciled_to_exchange') "
+                "AND entry_order_id IS NOT NULL"
+            )
+            .scalars()
+            .all()
+        )
+        return {str(value) for value in rows}

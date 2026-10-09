@@ -2,7 +2,9 @@
 Analytics endpoints for computed metrics.
 """
 
+import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -15,6 +17,7 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, HTTPException, Query
+from prometheus_client import Gauge
 from pydantic import BaseModel
 
 import data_manager.api.app as api_module
@@ -24,6 +27,13 @@ logger = logging.getLogger(__name__)
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
 _ROUND_MAX_FILLS = 50_000
+ROUND_BOOK_ORPHANED_LOTS = Gauge(
+    "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
+)
+ROUND_BOOK_SNAPSHOT_AGE = Gauge(
+    "data_manager_round_book_exchange_snapshot_age_seconds",
+    "Age of the exchange snapshot used by the round-book overlay",
+)
 
 router = APIRouter()
 calibration_router = APIRouter()
@@ -480,6 +490,7 @@ async def get_closed_rounds(
     ):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    filtered_overlay = strategy_id is not None
     if strategy_id:
         query["strategy_id"] = strategy_id
     mongodb = api_module.db_manager.mongodb_adapter
@@ -489,7 +500,45 @@ async def get_closed_rounds(
     except Exception as exc:
         logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    report = build_report(rows, window_days=window_days)
+    mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
+    if mode not in {"off", "report", "apply"}:
+        mode = "report"
+    exchange = None
+    closed_entry_orders: set[str] | None = None
+    truncated = len(rows) >= _ROUND_MAX_FILLS
+    if mode != "off" and not filtered_overlay and not truncated:
+        from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+        manager = api_module.db_manager
+        mysql = getattr(manager, "mysql_adapter", None) if manager else None
+        if mysql is not None:
+            repo = LedgerRepository(mysql, None)
+            try:
+                exchange, closed_entry_orders = await asyncio.gather(
+                    asyncio.to_thread(repo.round_overlay_snapshot),
+                    asyncio.to_thread(repo.closed_entry_order_ids),
+                )
+            except Exception as exc:
+                logger.warning("rounds: orphan overlay inputs unavailable: %s", exc)
+                exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+        else:
+            exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+    report = build_report(
+        rows,
+        window_days=window_days,
+        exchange=exchange,
+        closed_entry_orders=closed_entry_orders,
+        apply_overlay=mode == "apply",
+    )
+    if mode == "off":
+        report["orphan_overlay"] = "off"
+    elif filtered_overlay:
+        report["orphan_overlay"] = "disabled_filtered"
+    elif truncated:
+        report["orphan_overlay"] = "disabled_truncated"
+    for owner, strategy in report["strategies"].items():
+        ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=owner).set(strategy.get("orphaned_lots", 0))
+    ROUND_BOOK_SNAPSHOT_AGE.set(report.get("exchange_snapshot_age_seconds", -1))
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "fills_read": len(rows),
@@ -497,6 +546,23 @@ async def get_closed_rounds(
         "source": "data-manager-round-book",
     }
     return report
+
+
+@router.get("/rounds/orphaned")
+async def get_orphaned_rounds(
+    strategy_id: str | None = Query(None),
+    window_days: float = Query(30.0, gt=0, le=365),
+) -> dict[str, Any]:
+    """List read-only orphan and ledger-closed lots from the complete fill replay."""
+    report = await get_closed_rounds(strategy_id=strategy_id, window_days=window_days)
+    lots = []
+    for owner, strategy in report["strategies"].items():
+        for leg, data in strategy.get("legs", {}).items():
+            for lot in data.get("orphaned", []):
+                lots.append({"strategy_id": owner, "leg": leg, **lot})
+            for lot in data.get("ledger_closed", []):
+                lots.append({"strategy_id": owner, "leg": leg, **lot})
+    return {"lots": lots, "metadata": report.get("metadata", {}), "orphan_overlay": report.get("orphan_overlay")}
 
 
 @router.get("/volume")

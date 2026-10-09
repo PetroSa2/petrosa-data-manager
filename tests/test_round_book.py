@@ -31,6 +31,115 @@ def _report(rows, **kwargs):
     return build_report(rows, now=NOW, **kwargs)
 
 
+def _snapshot(at=NOW, rows=None):
+    return {
+        "as_of_ms": int(at.timestamp() * 1000),
+        "rows": rows or [],
+    }
+
+
+def test_orphan_overlay_allocates_exchange_quantity_newest_first_across_strategies():
+    rows = [
+        _fill("old", "buy", 1.0, 100.0, 0, symbol="BTCUSDT", order_id="old-order"),
+        _fill("new", "buy", 1.0, 101.0, 60, symbol="BTCUSDT", order_id="new-order"),
+    ]
+    report = _report(
+        rows,
+        exchange=_snapshot(rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+        closed_entry_orders=set(),
+    )
+
+    old_leg = report["strategies"]["old"]["legs"]["LONG"]
+    new_leg = report["strategies"]["new"]["legs"]["LONG"]
+    assert old_leg["orphaned_quantity"] == pytest.approx(1.0)
+    assert new_leg["held_quantity"] == pytest.approx(1.0)
+    assert old_leg["open_lot_quantity"] == pytest.approx(
+        old_leg["held_quantity"] + old_leg["orphaned_quantity"] + old_leg["ledger_closed_quantity"]
+    )
+
+
+def test_orphan_overlay_stale_snapshot_marks_nothing_and_preserves_statistics():
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, order_id="entry")]
+    before = _report(rows)
+    after = _report(
+        rows,
+        exchange=_snapshot(NOW - timedelta(seconds=1801), []),
+        closed_entry_orders=set(),
+    )
+    assert after["orphan_overlay"] == "disabled_stale"
+    assert after["strategies"]["s1"]["orphaned_quantity"] == 0
+    assert after["strategies"]["s1"]["closed_rounds"] == before["strategies"]["s1"]["closed_rounds"]
+
+
+def test_orphan_overlay_handles_flat_snapshot_and_ledger_closed_lots():
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, order_id="closed")]
+    report = _report(
+        rows,
+        exchange=_snapshot(rows=[]),
+        closed_entry_orders={"closed"},
+    )
+    leg = report["strategies"]["s1"]["legs"]["LONG"]
+    assert leg["ledger_closed_quantity"] == pytest.approx(1.0)
+    assert leg["orphaned_quantity"] == pytest.approx(0.0)
+
+
+def test_orphan_overlay_maps_both_signs_and_holds_lots_newer_than_snapshot():
+    snapshot_at = NOW - timedelta(minutes=5)
+    rows = [
+        _fill("long", "buy", 1.0, 100.0, 0, symbol="BTCUSDT", order_id="long"),
+        _fill("short", "sell", 1.0, 100.0, 1, symbol="ETHUSDT", order_id="short"),
+        _fill("fresh", "buy", 1.0, 100.0, (NOW - T0).total_seconds() / 60, symbol="BTCUSDT", order_id="fresh"),
+    ]
+    report = _report(
+        rows,
+        exchange=_snapshot(
+            snapshot_at,
+            [
+                {"symbol": "BTCUSDT", "position_side": "BOTH", "quantity": "1"},
+                {"symbol": "ETHUSDT", "position_side": "BOTH", "quantity": "-1"},
+            ],
+        ),
+        closed_entry_orders=set(),
+    )
+    assert report["strategies"]["short"]["legs"]["SHORT"]["exchange_quantity"] == 1
+    assert report["strategies"]["fresh"]["legs"]["LONG"]["held_quantity"] == 1
+
+
+def test_orphan_overlay_does_not_mutate_book_or_closed_rounds():
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0, order_id="entry"),
+        _fill("s1", "sell", 1.0, 101.0, 5, order_id="exit"),
+    ]
+    book = RoundBook()
+    for row in rows:
+        book.apply(row)
+    before = repr(book._books)
+    baseline = book.report(now=NOW)
+    with_overlay = book.report(
+        now=NOW,
+        exchange=_snapshot(rows=[]),
+        closed_entry_orders=set(),
+    )
+    assert repr(book._books) == before
+    assert with_overlay["strategies"]["s1"]["closed_rounds"] == baseline["strategies"]["s1"]["closed_rounds"]
+    assert with_overlay["strategies"]["s1"]["wins"] == baseline["strategies"]["s1"]["wins"]
+
+
+def test_orphan_overlay_reports_partial_lot_excess_without_mutating_quantity():
+    rows = [_fill("s1", "buy", 2.0, 100.0, 0, symbol="BTCUSDT", order_id="entry")]
+    report = _report(
+        rows,
+        exchange=_snapshot(
+            rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]
+        ),
+        closed_entry_orders=set(),
+    )
+    leg = report["strategies"]["s1"]["legs"]["LONG"]
+    assert leg["held_quantity"] == pytest.approx(1.0)
+    assert leg["orphaned_quantity"] == pytest.approx(1.0)
+    assert leg["open_lot_quantity"] == pytest.approx(2.0)
+
+
 def test_a_strategy_with_only_entries_shows_why_it_has_no_rounds():
     # bollinger_squeeze_alert: 225 fills, 0 closed rounds. Every fill is an entry; no exit is attributed to it.
     rows = [

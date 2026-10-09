@@ -32,12 +32,18 @@ NET = "NET"  # the leg of fills netted without a position side
 UNATTRIBUTED = "_unattributed"
 #: Strategy ids that are placeholders, not strategies.
 PLACEHOLDER_STRATEGIES = frozenset({"", "unknown", "none", "null"})
+ROUND_ORPHAN_AGE_FACTOR = 3.0
+ROUND_ORPHAN_FALLBACK_HOLD_SECONDS = 4.0 * 60 * 60
+ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS = 1800.0
 
 
 @dataclass
 class _Lot:
     qty: float
     price: float
+    opened_at: datetime
+    order_id: str | None = None
+    position_id: str | None = None
 
 
 ZERO = Decimal("0")
@@ -208,6 +214,23 @@ class RoundBook:
         else:
             self._apply_leg(book, strategy_id, str(symbol), leg, side, qty, price, when)
 
+    def _lot(self, qty: float, price: float, when: datetime) -> _Lot:
+        row = getattr(self, "_row", {})
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+
+        def field_of(name: str) -> Any:
+            return row.get(name) if row.get(name) is not None else payload.get(name)
+
+        order_id = field_of("order_id")
+        position_id = field_of("position_id")
+        return _Lot(
+            qty=qty,
+            price=price,
+            opened_at=when,
+            order_id=str(order_id) if order_id is not None else None,
+            position_id=str(position_id) if position_id is not None else None,
+        )
+
     def _apply_netted(
         self,
         book: _Book,
@@ -258,7 +281,7 @@ class RoundBook:
             self._entry[strategy_id] += 1
         flipped = matched > 0 and not opposite and remaining > 0
         if remaining > 0:
-            same.append(_Lot(qty=remaining, price=price))
+            same.append(self._lot(remaining, price, when))
             if not flipped:
                 cycle.entry_notional += _dec(remaining) * _dec(price)
         if matched > 0 and not opposite:
@@ -309,7 +332,7 @@ class RoundBook:
             self._tag(book.cycle)
             book.cycle.entry_notional += _dec(qty) * _dec(price)
             self._entry[strategy_id] += 1
-            lots.append(_Lot(qty=qty, price=price))
+            lots.append(self._lot(qty, price, when))
             return
         if not lots:
             self._unattributed("exit_without_entry")
@@ -392,22 +415,189 @@ class RoundBook:
         self.unattributed[reason] += 1
 
     # ------------------------------------------------------------------
+    def _orphan_overlay(
+        self,
+        *,
+        now: datetime,
+        window_days: float,
+        exchange: dict[str, Any] | None,
+        closed_entry_orders: set[str] | None,
+    ) -> tuple[dict[tuple[str, str, str], dict[str, Any]], dict[str, Any]]:
+        if exchange is None or closed_entry_orders is None:
+            return {}, {}
+        as_of_ms = exchange.get("as_of_ms")
+        if as_of_ms is None:
+            return {}, {"orphan_overlay": "missing", "exchange_snapshot": "missing"}
+        snapshot_at = datetime.fromtimestamp(float(as_of_ms) / 1000, tz=UTC)
+        age = max(0.0, (now - snapshot_at).total_seconds())
+        if age > ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS:
+            return {}, {
+                "orphan_overlay": "disabled_stale",
+                "exchange_snapshot": "stale",
+                "exchange_snapshot_age_seconds": age,
+                "as_of_ms": as_of_ms,
+            }
+        rows = exchange.get("rows") or []
+        exchange_by_leg: dict[tuple[str, str], float] = {}
+        for row in rows:
+            symbol = str(row.get("symbol") or "")
+            side = str(row.get("position_side") or "").upper()
+            quantity = _number(row.get("quantity")) or 0.0
+            if side == "BOTH":
+                side = "LONG" if quantity >= 0 else "SHORT"
+            if side in ("LONG", "SHORT"):
+                exchange_by_leg[(symbol, side)] = abs(quantity)
+
+        closed_by: dict[str, list[ClosedRound]] = defaultdict(list)
+        for closed in self.closed:
+            if closed.closed_at >= now - timedelta(days=window_days):
+                closed_by[closed.strategy_id].append(closed)
+        thresholds = {
+            strategy: (
+                ROUND_ORPHAN_AGE_FACTOR * median(r.holding_seconds for r in rounds),
+                "median",
+            )
+            if rounds
+            else (ROUND_ORPHAN_FALLBACK_HOLD_SECONDS, "fallback")
+            for strategy, rounds in closed_by.items()
+        }
+        for strategy in self._fills:
+            thresholds.setdefault(
+                strategy, (ROUND_ORPHAN_FALLBACK_HOLD_SECONDS, "fallback")
+            )
+
+        result: dict[tuple[str, str, str], dict[str, Any]] = {}
+        legs: dict[tuple[str, str], list[tuple[str, _Lot]]] = defaultdict(list)
+        for (strategy, symbol, book_leg), book in self._books.items():
+            candidates = []
+            if book_leg == NET:
+                if book.long:
+                    candidates.append(("LONG", book.long))
+                if book.short:
+                    candidates.append(("SHORT", book.short))
+            else:
+                candidates.append((book_leg, book.long if book_leg == "LONG" else book.short))
+            for leg, lots in candidates:
+                for lot in lots:
+                    legs[(symbol, leg)].append((strategy, lot))
+
+        for (symbol, leg), entries in legs.items():
+            exchange_quantity = exchange_by_leg.get((symbol, leg), 0.0)
+            remaining_exchange = exchange_quantity
+            leg_total = sum(lot.qty for _, lot in entries)
+            ordered = sorted(entries, key=lambda item: item[1].opened_at, reverse=True)
+            for strategy, lot in ordered:
+                key = (strategy, symbol, leg)
+                bucket = result.setdefault(key, {
+                    "orphaned": [],
+                    "ledger_closed": [],
+                    "open_lot_quantity": 0.0,
+                    "held_quantity": 0.0,
+                    "orphaned_quantity": 0.0,
+                    "ledger_closed_quantity": 0.0,
+                    "exchange_quantity": exchange_quantity,
+                    "unowned_exchange_quantity": max(exchange_quantity - leg_total, 0.0),
+                    "as_of_ms": as_of_ms,
+                    "exchange_snapshot_age_seconds": age,
+                    "orphan_threshold_seconds": thresholds[strategy][0],
+                    "holding_source": thresholds[strategy][1],
+                })
+                if lot.order_id in closed_entry_orders:
+                    bucket["ledger_closed"].append(self._lot_dict(lot, lot.qty, "ledger_closed"))
+                    bucket["ledger_closed_quantity"] += lot.qty
+                    bucket["open_lot_quantity"] += lot.qty
+                    continue
+                bucket["open_lot_quantity"] += lot.qty
+                if lot.opened_at.timestamp() * 1000 > float(as_of_ms):
+                    bucket["held_quantity"] += lot.qty
+                    continue
+                held = min(lot.qty, remaining_exchange)
+                remaining_exchange -= held
+                excess = lot.qty - held
+                threshold = thresholds[strategy][0]
+                eligible = (now - lot.opened_at).total_seconds() >= threshold
+                bucket["held_quantity"] += held
+                if excess and eligible:
+                    reason = "exchange_flat" if exchange_quantity == 0 else "exchange_quantity_excess"
+                    bucket["orphaned"].append(self._lot_dict(lot, excess, reason))
+                    bucket["orphaned_quantity"] += excess
+                else:
+                    bucket["held_quantity"] += excess
+            for strategy, lot in entries:
+                result.setdefault((strategy, symbol, leg), {
+                    "orphaned": [], "ledger_closed": [], "open_lot_quantity": 0.0,
+                    "held_quantity": 0.0, "orphaned_quantity": 0.0,
+                    "ledger_closed_quantity": 0.0, "exchange_quantity": exchange_quantity,
+                    "unowned_exchange_quantity": max(exchange_quantity - leg_total, 0.0),
+                    "as_of_ms": as_of_ms, "exchange_snapshot_age_seconds": age,
+                    "orphan_threshold_seconds": thresholds[strategy][0],
+                    "holding_source": thresholds[strategy][1],
+                })
+        return result, {
+            "orphan_overlay": "enabled",
+            "exchange_snapshot": "fresh",
+            "exchange_snapshot_age_seconds": age,
+            "as_of_ms": as_of_ms,
+        }
+
+    @staticmethod
+    def _lot_dict(lot: _Lot, quantity: float, reason: str) -> dict[str, Any]:
+        return {
+            "opened_at": lot.opened_at.isoformat(),
+            "quantity": quantity,
+            "price": lot.price,
+            "order_id": lot.order_id,
+            "position_id": lot.position_id,
+            "reason": reason,
+        }
+
     def report(
-        self, *, now: datetime | None = None, window_days: float = 30.0
+        self,
+        *,
+        now: datetime | None = None,
+        window_days: float = 30.0,
+        exchange: dict[str, Any] | None = None,
+        closed_entry_orders: set[str] | None = None,
+        apply_overlay: bool = False,
     ) -> dict[str, Any]:
         """Per-strategy fills, rounds, rate and holding time, plus the unattributed fills and a check."""
         now = now or datetime.now(UTC)
         since = now - timedelta(days=window_days)
+        overlay, overlay_meta = self._orphan_overlay(
+            now=now,
+            window_days=window_days,
+            exchange=exchange,
+            closed_entry_orders=closed_entry_orders,
+        )
+        overlay_enabled = exchange is not None and closed_entry_orders is not None
         open_rounds: dict[str, int] = defaultdict(int)
         open_fills: dict[str, int] = defaultdict(int)
         oldest_open: dict[str, datetime] = {}
         for (strategy_id, _symbol, _leg), book in self._books.items():
+            surviving = []
+            for leg, lots in (("LONG", book.long), ("SHORT", book.short)):
+                bucket = overlay.get((strategy_id, _symbol, leg))
+                orphaned = {
+                    item["order_id"]: item["quantity"]
+                    for item in bucket["orphaned"]
+                } if bucket else {}
+                if bucket:
+                    closed = {item["order_id"] for item in bucket["ledger_closed"]}
+                    surviving.extend(
+                        lot for lot in lots
+                        if lot.order_id not in closed and orphaned.get(lot.order_id, 0.0) < lot.qty
+                    )
+                else:
+                    surviving.extend(lots)
+            overlay_applied = any(
+                (strategy_id, _symbol, leg) in overlay for leg in ("LONG", "SHORT")
+            )
             if book.cycle is not None and (
-                book.cycle.fills > 0 or book.long or book.short
+                bool(surviving) if overlay_applied else book.cycle.fills > 0 or bool(surviving)
             ):
                 open_rounds[strategy_id] += 1
                 open_fills[strategy_id] += book.cycle.fills
-                opened = book.cycle.opened_at
+                opened = min((lot.opened_at for lot in surviving), default=book.cycle.opened_at)
                 if strategy_id not in oldest_open or opened < oldest_open[strategy_id]:
                     oldest_open[strategy_id] = opened
         closed_by: dict[str, list[ClosedRound]] = defaultdict(list)
@@ -422,7 +612,7 @@ class RoundBook:
             started = [r.opened_at for r in rounds]
             if strategy_id in oldest_open:
                 started.append(oldest_open[strategy_id])
-            strategies[strategy_id] = {
+            strategy = {
                 "fills": self._fills[strategy_id],
                 "entry_fills": self._entry[strategy_id],
                 "exit_fills": self._exit[strategy_id],
@@ -452,6 +642,36 @@ class RoundBook:
                 "position_side_unknown": self._side_unknown[strategy_id],
                 "legacy_exit_side_mapped": self._legacy_mapped[strategy_id],
             }
+            if overlay_enabled:
+                strategy_legs = {
+                    leg: data for (owner, _symbol, leg), data in overlay.items() if owner == strategy_id
+                }
+                strategy["orphaned_rounds"] = sum(bool(v["orphaned"]) for v in strategy_legs.values())
+                strategy["orphaned_lots"] = sum(len(v["orphaned"]) for v in strategy_legs.values())
+                strategy["orphaned_quantity"] = sum(v["orphaned_quantity"] for v in strategy_legs.values())
+                strategy["ledger_closed_rounds"] = sum(bool(v["ledger_closed"]) for v in strategy_legs.values())
+                strategy["oldest_orphaned_lot_opened_at"] = min(
+                    (item["opened_at"] for v in strategy_legs.values() for item in v["orphaned"]),
+                    default=None,
+                )
+                strategy["orphan_threshold_seconds"] = next(
+                    (v["orphan_threshold_seconds"] for v in strategy_legs.values()),
+                    ROUND_ORPHAN_FALLBACK_HOLD_SECONDS,
+                )
+                strategy["holding_source"] = next(
+                    (v["holding_source"] for v in strategy_legs.values()), "fallback"
+                )
+                strategy["legs"] = strategy_legs
+            if apply_overlay and overlay_enabled:
+                strategy["open_rounds"] = sum(
+                    1 for v in strategy_legs.values() if v["held_quantity"] > 0
+                )
+                strategy["oldest_open_round_opened_at"] = (
+                    oldest_open[strategy_id].isoformat()
+                    if strategy_id in oldest_open
+                    else None
+                )
+            strategies[strategy_id] = strategy
         attributed = sum(self._fills.values())
         unattributed = sum(self.unattributed.values())
         return {
@@ -469,6 +689,7 @@ class RoundBook:
                 s["fills"] == s["fills_in_closed_rounds"] + s["fills_in_open_rounds"]
                 for s in strategies.values()
             ),
+            **(overlay_meta if overlay_enabled else {}),
         }
 
 
@@ -477,6 +698,9 @@ def build_report(
     *,
     now: datetime | None = None,
     window_days: float = 30.0,
+    exchange: dict[str, Any] | None = None,
+    closed_entry_orders: set[str] | None = None,
+    apply_overlay: bool = False,
 ) -> dict[str, Any]:
     """Replay fill rows (any order) and return the per-strategy report."""
     book = RoundBook()
@@ -486,4 +710,10 @@ def build_report(
     )
     for row in ordered:
         book.apply(row)
-    return book.report(now=now, window_days=window_days)
+    return book.report(
+        now=now,
+        window_days=window_days,
+        exchange=exchange,
+        closed_entry_orders=closed_entry_orders,
+        apply_overlay=apply_overlay,
+    )
