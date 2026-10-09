@@ -496,15 +496,18 @@ async def get_closed_rounds(
     if strategy_id and mode == "off":
         query["strategy_id"] = strategy_id
     mongodb = api_module.db_manager.mongodb_adapter
+    exchange = None
+    closed_entry_orders: set[str] | None = None
+    read_limit = (
+        _ROUND_MAX_FILLS * 10 if strategy_id and mode != "off" else _ROUND_MAX_FILLS
+    )
     try:
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
-        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+        rows = await cursor.to_list(length=read_limit)
     except Exception as exc:
         logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    exchange = None
-    closed_entry_orders: set[str] | None = None
-    truncated = len(rows) >= _ROUND_MAX_FILLS
+    truncated = len(rows) >= read_limit
     if mode != "off" and not truncated:
         from data_manager.db.repositories.ledger_repository import LedgerRepository
 
@@ -549,7 +552,7 @@ async def get_closed_rounds(
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "fills_read": len(rows),
-        "truncated": len(rows) >= _ROUND_MAX_FILLS,
+        "truncated": truncated,
         "source": "data-manager-round-book",
     }
     return report

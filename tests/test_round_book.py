@@ -170,6 +170,79 @@ def test_report_mode_preserves_open_round_fields_until_apply():
     assert apply_mode["strategies"]["s1"]["open_rounds"] == 0
 
 
+def test_apply_mode_preserves_open_rounds_when_snapshot_is_not_usable():
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, order_id="entry")]
+    baseline = _report(rows)["strategies"]["s1"]
+    for snapshot in (
+        _snapshot(NOW - timedelta(seconds=1801)),
+        {"as_of_ms": None, "rows": []},
+    ):
+        applied = _report(
+            rows,
+            exchange=snapshot,
+            closed_entry_orders=set(),
+            apply_overlay=True,
+        )["strategies"]["s1"]
+        assert applied["open_rounds"] == baseline["open_rounds"]
+        assert (
+            applied["oldest_open_round_opened_at"]
+            == baseline["oldest_open_round_opened_at"]
+        )
+
+
+def test_apply_mode_keeps_a_partly_held_lot_in_the_open_round():
+    rows = [_fill("s1", "buy", 2.0, 100.0, 0, symbol="BTCUSDT", order_id="entry")]
+    report = _report(
+        rows,
+        exchange=_snapshot(
+            rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]
+        ),
+        closed_entry_orders=set(),
+        apply_overlay=True,
+    )
+    stats = report["strategies"]["s1"]
+    leg = stats["legs"]["BTCUSDT"]["LONG"]
+    assert stats["open_rounds"] == 1
+    assert stats["oldest_open_round_opened_at"] == (T0).isoformat()
+    assert leg["held_quantity"] == pytest.approx(1.0)
+    assert leg["orphaned_quantity"] == pytest.approx(1.0)
+
+
+def test_orphan_overlay_uses_relative_quantity_tolerance():
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, symbol="BTCUSDT")]
+    report = _report(
+        rows,
+        exchange=_snapshot(
+            rows=[
+                {
+                    "symbol": "BTCUSDT",
+                    "position_side": "LONG",
+                    "quantity": "0.99999999995",
+                }
+            ]
+        ),
+        closed_entry_orders=set(),
+    )
+    assert report["strategies"]["s1"]["orphaned_quantity"] == 0
+
+
+def test_late_exit_closes_a_book_even_when_the_overlay_would_have_orphaned_it():
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0, symbol="BTCUSDT"),
+        _fill("s1", "sell", 1.0, 101.0, 1, symbol="BTCUSDT"),
+    ]
+    report = _report(
+        rows,
+        exchange=_snapshot(
+            rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "0"}]
+        ),
+        closed_entry_orders=set(),
+        apply_overlay=True,
+    )
+    assert report["strategies"]["s1"]["closed_rounds"] == 1
+    assert report["strategies"]["s1"]["orphaned_lots"] == 0
+
+
 def test_overlay_keeps_same_leg_symbols_separate_and_matches_missing_order_ids_by_identity():
     rows = [
         _fill("s1", "buy", 1.0, 100.0, 0, symbol="BTCUSDT"),
@@ -412,6 +485,36 @@ async def test_the_endpoint_reports_the_rounds_and_says_when_it_was_truncated():
     assert report["metadata"]["truncated"] is False
     assert "strategy_id" not in collection.find.call_args.args[0]
     assert set(report["strategies"]) == {"s1"}
+
+
+@pytest.mark.asyncio
+async def test_filtered_overlay_read_disables_marking_when_the_replay_is_truncated(
+    monkeypatch,
+):
+    import data_manager.api.app as api_module
+    import data_manager.api.routes.analysis as analysis_route
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    rows = [_fill("s1", "buy", 1.0, 100.0, i) for i in range(10)]
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=rows)
+    collection = MagicMock()
+    collection.find.return_value = cursor
+    api_module.db_manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"execution_events": collection})
+    )
+    monkeypatch.setattr(analysis_route, "_ROUND_MAX_FILLS", 1)
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "report")
+    try:
+        report = await get_closed_rounds(strategy_id="s1", window_days=30.0)
+    finally:
+        api_module.db_manager = None
+
+    assert report["orphan_overlay"] == "disabled_truncated"
+    assert report["metadata"]["truncated"] is True
+    assert set(report["strategies"]) == {"s1"}
+    assert cursor.to_list.await_args.kwargs["length"] == 10
 
 
 @pytest.mark.asyncio

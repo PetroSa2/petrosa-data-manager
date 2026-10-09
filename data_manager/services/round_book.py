@@ -35,7 +35,7 @@ PLACEHOLDER_STRATEGIES = frozenset({"", "unknown", "none", "null"})
 ROUND_ORPHAN_AGE_FACTOR = 3.0
 ROUND_ORPHAN_FALLBACK_HOLD_SECONDS = 4.0 * 60 * 60
 ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS = 1800.0
-ROUND_ORPHAN_QUANTITY_TOLERANCE = 1e-12
+ROUND_ORPHAN_QUANTITY_TOLERANCE = 1e-9
 
 
 @dataclass
@@ -512,7 +512,7 @@ class RoundBook:
                         "_ledger_closed_lot_ids": set(),
                     },
                 )
-                if lot.order_id in closed_entry_orders:
+                if lot.order_id is not None and lot.order_id in closed_entry_orders:
                     bucket["ledger_closed"].append(
                         self._lot_dict(lot, lot.qty, "ledger_closed")
                     )
@@ -530,7 +530,10 @@ class RoundBook:
                 threshold = thresholds[strategy][0]
                 eligible = (now - lot.opened_at).total_seconds() >= threshold
                 bucket["held_quantity"] += held
-                if excess > ROUND_ORPHAN_QUANTITY_TOLERANCE and eligible:
+                tolerance = ROUND_ORPHAN_QUANTITY_TOLERANCE * max(
+                    1.0, abs(lot.qty), abs(exchange_quantity)
+                )
+                if excess > tolerance and eligible:
                     reason = (
                         "exchange_flat"
                         if exchange_quantity == 0
@@ -538,7 +541,8 @@ class RoundBook:
                     )
                     bucket["orphaned"].append(self._lot_dict(lot, excess, reason))
                     bucket["orphaned_quantity"] += excess
-                    bucket["_orphaned_lot_ids"].add(id(lot))
+                    if excess >= lot.qty - tolerance:
+                        bucket["_orphaned_lot_ids"].add(id(lot))
                 else:
                     bucket["held_quantity"] += excess
             for strategy, lot in entries:
@@ -600,6 +604,9 @@ class RoundBook:
             closed_entry_orders=closed_entry_orders,
         )
         overlay_enabled = exchange is not None and closed_entry_orders is not None
+        overlay_active = (
+            apply_overlay and overlay_meta.get("orphan_overlay") == "enabled"
+        )
         open_rounds: dict[str, int] = defaultdict(int)
         open_fills: dict[str, int] = defaultdict(int)
         oldest_open: dict[str, datetime] = {}
@@ -607,7 +614,7 @@ class RoundBook:
             surviving = []
             for leg, lots in (("LONG", book.long), ("SHORT", book.short)):
                 bucket = overlay.get((strategy_id, _symbol, leg))
-                if apply_overlay and bucket:
+                if overlay_active and bucket:
                     orphaned = bucket["_orphaned_lot_ids"]
                     closed = bucket["_ledger_closed_lot_ids"]
                     surviving.extend(
@@ -617,7 +624,7 @@ class RoundBook:
                     )
                 else:
                     surviving.extend(lots)
-            overlay_applied = apply_overlay and any(
+            overlay_applied = overlay_active and any(
                 (strategy_id, _symbol, leg) in overlay for leg in ("LONG", "SHORT")
             )
             if book.cycle is not None and (
@@ -716,7 +723,7 @@ class RoundBook:
                     (v["holding_source"] for v in leg_values), "fallback"
                 )
                 strategy["legs"] = strategy_legs
-            if apply_overlay and overlay_enabled:
+            if overlay_active and overlay_enabled:
                 strategy["open_rounds"] = sum(
                     1
                     for symbol_data in strategy_legs.values()
