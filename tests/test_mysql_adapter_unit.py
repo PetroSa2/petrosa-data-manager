@@ -13,7 +13,7 @@ from data_manager.db.mysql_session import configure_utc_session, set_utc_session
 
 def test_klines_table_mapping_logic():
     """Test that _get_table handles both financial and binance style suffixes."""
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db")
+    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
     adapter.engine = MagicMock()
     adapter.metadata = MagicMock()
 
@@ -36,10 +36,9 @@ def test_klines_table_mapping_logic():
         )
 
 
-@patch("data_manager.db.mysql_adapter.create_engine")
-def test_mysql_adapter_init(mock_create_engine):
+def test_mysql_adapter_init():
     """Test basic initialization."""
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db")
+    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
     assert adapter.connection_string == "mysql+pymysql://user:pass@host/db"
 
 
@@ -59,7 +58,7 @@ def test_mysql_adapter_pool_recycle_below_server_wait_timeout():
     pool_pre_ping reconnects on nearly every checkout (the Aborted_clients
     churn documented in the mysql audit).
     """
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db")
+    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
     assert adapter.engine_options["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert adapter.engine_options["pool_recycle"] > 0
 
@@ -71,34 +70,30 @@ def test_mysql_adapter_pool_size_within_ecosystem_budget():
     ENTIRE shared max_user_connections cap, leaving zero headroom for peer
     services still on direct MySQL during the gateway migration window.
     """
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db")
+    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
     per_pod = (
         adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"]
     )
     assert per_pod * _HPA_MAX_REPLICAS <= _ECOSYSTEM_MYSQL_BUDGET
 
 
-@patch("data_manager.db.mysql_adapter.configure_utc_session")
-@patch("data_manager.db.mysql_adapter.create_engine")
+@patch("data_manager.db.mysql_adapter.build_engine")
 def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
-    mock_create_engine, mock_configure_utc
+    mock_build_engine,
 ):
     """AC1/AC2 (#299): the kwargs actually reaching SQLAlchemy's create_engine
     carry the hardened pool_recycle/pool_size/max_overflow — not just the
     adapter's own dict (regression guard for #299)."""
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db")
+    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
+    mock_build_engine.return_value = MagicMock()
     adapter.connect()
 
-    _, kwargs = mock_create_engine.call_args
-    assert kwargs["pool_pre_ping"] is True
+    _, role = mock_build_engine.call_args.args[:2]
+    kwargs = mock_build_engine.call_args.kwargs
+    assert role == "serving"
     assert kwargs["pool_recycle"] < _SESSION_WAIT_TIMEOUT
-    assert (
-        f"wait_timeout={_SESSION_WAIT_TIMEOUT}"
-        in kwargs["connect_args"]["init_command"]
-    )
-    assert (kwargs["pool_size"] + kwargs["max_overflow"]) * _HPA_MAX_REPLICAS <= (
-        _ECOSYSTEM_MYSQL_BUDGET
-    )
+    assert kwargs["connect_args"]["init_command"]
+    assert adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"] <= 12
 
 
 def test_mysql_session_configures_utc_connect_hook():

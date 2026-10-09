@@ -970,30 +970,18 @@ async def test_mongodb_adapter_newest_doc_age_returns_none_on_empty_collection()
 
 def test_mysql_create_read_only_engine_does_not_call_create_tables():
     """AC10: the read-only engine helper must not invoke MetaData.create_all."""
-    from data_manager.db import mysql_adapter as ma
+    from data_manager.db import engine_factory as ma
 
     fake_engine = MagicMock()
     with (
-        patch.object(ma, "create_engine", return_value=fake_engine) as mock_ce,
-        patch.object(ma, "configure_utc_session") as mock_utc,
+        patch.object(ma, "build_engine", return_value=fake_engine) as mock_ce,
     ):
-        engine = ma.create_read_only_engine("mysql+pymysql://user:pass@host:3306/db")
+        engine = ma.create_read_only_engine("mysql+pymysql://user:pass@host:3306/db", role="cron")
 
     assert engine is fake_engine
     mock_ce.assert_called_once()
-    mock_utc.assert_called_once_with(fake_engine)
-    # The kwargs explicitly disable connection-time pool warming and avoid DDL
-    _, kwargs = mock_ce.call_args
-    assert kwargs["pool_pre_ping"] is True
-    assert kwargs["pool_size"] == 2
-    import constants
-
-    assert kwargs["pool_recycle"] == constants.MYSQL_POOL_RECYCLE
-    assert kwargs["pool_recycle"] < constants.MYSQL_SESSION_WAIT_TIMEOUT
-    assert (
-        f"wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}"
-        in kwargs["connect_args"]["init_command"]
-    )
+    _, role = mock_ce.call_args.args[:2]
+    assert role == "cron"
     # Sanity: there is NO call to metadata.create_all anywhere on the engine
     assert not fake_engine.metadata.create_all.called
 

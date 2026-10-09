@@ -247,7 +247,7 @@ async def _run_cli(
         constants.MONGODB_URL,
         database_name=constants.CANDLE_MONGO_DATABASE,
     )
-    mysql = MySQLAdapter(constants.MYSQL_URI)
+    mysql = MySQLAdapter(constants.MYSQL_URI, role="adhoc")
     mongo.connect()
     mysql.connect()
     try:

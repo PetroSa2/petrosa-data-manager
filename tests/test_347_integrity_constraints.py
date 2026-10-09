@@ -9,7 +9,7 @@ MIGRATIONS = Path(__file__).parents[1] / "data_manager" / "scripts" / "migration
 
 
 def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_unchanged():
-    mysql = MySQLAdapter("mysql+pymysql://u:p@h:3306/db")
+    mysql = MySQLAdapter("mysql+pymysql://u:p@h:3306/db", role="serving")
     args = mysql.engine_options["connect_args"]
     assert all(
         flag in args["init_command"]
@@ -25,7 +25,7 @@ def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_unchanged():
 
 
 def test_sqlite_does_not_receive_init_command_and_can_create_tables():
-    sqlite = MySQLAdapter("sqlite:///:memory:")
+    sqlite = MySQLAdapter("sqlite:///:memory:", role="serving")
     assert "init_command" not in sqlite.engine_options["connect_args"]
     sqlite._create_tables()
 

@@ -433,7 +433,7 @@ def audit_mysql(connection_string: str) -> tuple[list[MysqlSchemaStat], str | No
     """Enumerate every non-system MySQL schema and emit per-table size info."""
     engine = None
     try:
-        engine = create_read_only_engine(connection_string)
+        engine = create_read_only_engine(connection_string, role="adhoc")
         schemas = list_schemas(engine)
     except Exception as exc:  # noqa: BLE001
         logger.error("storage_inventory: MySQL schema enumeration failed: %s", exc)

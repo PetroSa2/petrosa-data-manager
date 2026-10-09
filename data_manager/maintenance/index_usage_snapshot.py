@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = None
     mongo = None
     try:
-        engine = create_read_only_engine(mysql_url)
+        engine = create_read_only_engine(mysql_url, role="cron")
         mongo = MongoDBAdapter(connection_string=mongo_url)
         mongo.connect()
         document = asyncio.run(

@@ -158,7 +158,7 @@ class TestMongoDeleteMany:
 @pytest.fixture
 def sqlite_adapter():
     """MySQLAdapter on a real in-memory SQLite engine (see test_282)."""
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.engine = sa.create_engine("sqlite:///:memory:")
     adapter._connected = True

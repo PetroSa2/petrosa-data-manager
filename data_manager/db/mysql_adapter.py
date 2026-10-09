@@ -30,7 +30,6 @@ try:
         Table,
         Text,
         UniqueConstraint,
-        create_engine,
     )
     from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
     from sqlalchemy.engine import Engine
@@ -43,7 +42,13 @@ except ImportError:
 
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError, TemporalValueError
-from data_manager.db.mysql_session import configure_utc_session
+from data_manager.db.engine_factory import (
+    build_engine,
+    create_read_only_engine,
+    mark_engine_closing,
+    record_connection_error,
+    role_options,
+)
 from data_manager.db.write_result import WriteResult
 from data_manager.utils.circuit_breaker import DatabaseCircuitBreaker
 from data_manager.utils.retry import retry_transient
@@ -61,13 +66,13 @@ class MySQLAdapter(BaseAdapter):
     Uses SQLAlchemy for database operations with circuit breaker for reliability.
     """
 
-    def __init__(self, connection_string: str | None = None, **kwargs):
+    def __init__(self, connection_string: str | None = None, *, role: str, **kwargs):
         """
         Initialize MySQL adapter.
 
         Args:
             connection_string: MySQL connection string
-            **kwargs: Additional SQLAlchemy engine options
+            role: Declared workload role controlling the connection budget
         """
         if not SQLALCHEMY_AVAILABLE:
             raise ImportError(
@@ -80,6 +85,7 @@ class MySQLAdapter(BaseAdapter):
             connection_string = self._build_connection_string()
 
         super().__init__(connection_string, **kwargs)
+        self.role = role
 
         # SQLAlchemy specific settings
         self.engine: Engine | None = None
@@ -109,15 +115,15 @@ class MySQLAdapter(BaseAdapter):
         self.engine_options = {
             "pool_pre_ping": True,
             "pool_recycle": constants.MYSQL_POOL_RECYCLE,
-            "pool_size": 5,  # Conservative for shared resources
-            "max_overflow": 7,  # Right-sized: (5+7)*maxReplicas(2)=24 ecosystem budget
-            "pool_timeout": 30,  # Timeout for connection acquisition
+            **role_options(role),
             "connect_args": {
                 "charset": "utf8mb4",
                 "autocommit": False,  # Explicit transaction control
             },
-            **kwargs,
         }
+        self.engine_options.update({key: value for key, value in kwargs.items() if key not in {
+            "pool_size", "max_overflow", "poolclass", "pool_timeout"
+        }})
         if connection_string.startswith("mysql"):
             self.engine_options["connect_args"].update(
                 {
@@ -150,9 +156,15 @@ class MySQLAdapter(BaseAdapter):
     def connect(self) -> None:
         """Establish connection to MySQL."""
         try:
-            self.engine = create_engine(self.connection_string, **self.engine_options)
-            if self.connection_string.startswith("mysql"):
-                configure_utc_session(self.engine)
+            old_engine = self.engine
+            self.engine = build_engine(
+                self.connection_string,
+                self.role,
+                connect_args=self.engine_options.get("connect_args", {}),
+                pool_recycle=self.engine_options.get("pool_recycle", constants.MYSQL_POOL_RECYCLE),
+            )
+            if old_engine is not None:
+                mark_engine_closing(old_engine)
             # Test connection
             if self.engine is not None:
                 with self.engine.connect() as conn:
@@ -164,14 +176,32 @@ class MySQLAdapter(BaseAdapter):
             self._create_tables()
 
         except SQLAlchemyError as e:
+            record_connection_error(e)
             raise DatabaseError(f"Failed to connect to MySQL: {e}") from e
 
     def disconnect(self) -> None:
         """Close MySQL connection."""
         if self.engine:
-            self.engine.dispose()
+            mark_engine_closing(self.engine)
             self._connected = False
             logger.info("Disconnected from MySQL")
+
+    def reconnect(self) -> None:
+        """Replace this adapter's engine without replacing the adapter object."""
+        old_engine = self.engine
+        try:
+            self.engine = build_engine(
+                self.connection_string,
+                self.role,
+                connect_args=self.engine_options.get("connect_args", {}),
+                pool_recycle=self.engine_options.get("pool_recycle", constants.MYSQL_POOL_RECYCLE),
+            )
+        except SQLAlchemyError as exc:
+            record_connection_error(exc)
+            raise
+        if old_engine is not None:
+            mark_engine_closing(old_engine)
+        self._connected = True
 
     def _create_tables(self) -> None:
         """Create database tables for metadata, audit, and catalog."""
@@ -1459,40 +1489,6 @@ class MySQLAdapter(BaseAdapter):
 _SYSTEM_SCHEMAS = frozenset(
     {"mysql", "information_schema", "performance_schema", "sys"}
 )
-
-
-def create_read_only_engine(connection_string: str) -> "Engine":
-    """Build a bare SQLAlchemy engine that issues NO DDL on creation.
-
-    Unlike :meth:`MySQLAdapter.connect`, this helper does NOT call
-    ``_create_tables`` / ``metadata.create_all``. It only constructs the
-    engine. The caller is responsible for using a ``SELECT``-only DB
-    credential — that is the real safety guarantee; this function is the
-    code-level half (no DDL emitted by the data-manager codebase).
-    """
-    if not SQLALCHEMY_AVAILABLE:
-        raise ImportError(
-            "SQLAlchemy and MySQL driver required. "
-            "Install: pip install sqlalchemy pymysql"
-        )
-    engine = create_engine(
-        connection_string,
-        pool_pre_ping=True,
-        pool_size=2,
-        max_overflow=2,
-        pool_timeout=30,
-        pool_recycle=constants.MYSQL_POOL_RECYCLE,
-        connect_args={
-            "charset": "utf8mb4",
-            "autocommit": True,
-            "init_command": (
-                f"SET SESSION wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}"
-            ),
-        },
-    )
-    if connection_string.startswith("mysql"):
-        configure_utc_session(engine)
-    return engine
 
 
 def list_schemas(engine: "Engine") -> list[str]:

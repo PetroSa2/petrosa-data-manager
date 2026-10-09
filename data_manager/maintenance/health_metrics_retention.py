@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.retention_days is not None:
         config.retention_days = max(1, args.retention_days)
 
-    adapter = MySQLAdapter(connection_string=os.getenv("MYSQL_URL"))
+    adapter = MySQLAdapter(connection_string=os.getenv("MYSQL_URL"), role="cron")
     adapter.connect()
     try:
         result = prune_health_metrics(adapter, config)
