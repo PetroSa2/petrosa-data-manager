@@ -189,12 +189,14 @@ def build_engine(
     if connection_string.startswith("mysql"):
         engine_kwargs.update(options)
     engine = sa.create_engine(connection_string, **engine_kwargs)
+    if connection_string.startswith("mysql") and isinstance(engine, Engine):
+        configure_utc_session(engine)
+    if not isinstance(engine, Engine):
+        return engine
     try:
         engine._petrosa_pool_state = state
     except AttributeError:
         pass
-    if connection_string.startswith("mysql"):
-        configure_utc_session(engine)
     pool_cap.labels(role=role).set(options["pool_size"] + options["max_overflow"])
 
     @event.listens_for(engine, "connect")
