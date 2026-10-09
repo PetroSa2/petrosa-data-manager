@@ -167,6 +167,9 @@ def create_app() -> FastAPI:
     app.include_router(data.router, prefix="/data", tags=["Data"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
+    app.include_router(
+        analysis.calibration_router, prefix="/api/v1", tags=["Calibration"]
+    )
     # The keep/kill input of the CIO (petrosa-data-manager#468): net R per closed round of each strategy
     app.include_router(strategy_net_r.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(
