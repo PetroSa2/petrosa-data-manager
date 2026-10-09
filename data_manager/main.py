@@ -604,8 +604,15 @@ class DataManagerApp:
                 ),
             )
         )
+        from data_manager.auditor.gap_detector import GapDetector
         from data_manager.maintenance.klines_daily_gaps import (
             daily_completeness_loop,
+        )
+
+        daily_gap_detector = GapDetector(
+            self.db_manager,
+            backfill_orchestrator=self.backfill_orchestrator,
+            backfill_queue=self.backfill_queue,
         )
 
         self.klines_daily_gaps_task = asyncio.create_task(
@@ -615,6 +622,7 @@ class DataManagerApp:
                 is_leader=lambda: (
                     self.leader_election is None or self.leader_election.is_leader
                 ),
+                backfill_gap=daily_gap_detector.request_backfill,
             )
         )
 

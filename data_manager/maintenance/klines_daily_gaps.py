@@ -15,6 +15,8 @@ from typing import Any
 from prometheus_client import Gauge
 
 import constants
+from data_manager.models.health import GapInfo
+from data_manager.utils.time_utils import as_aware_utc
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +40,7 @@ KLINES_1D_COMPLETENESS = Gauge(
 
 def day_of(value: Any) -> date:
     """The UTC date of a candle timestamp (naive values are UTC, as MySQL returns them)."""
-    parsed = (
-        value
-        if isinstance(value, datetime)
-        else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    )
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(UTC)
-    return parsed.date()
+    return as_aware_utc(value).astimezone(UTC).date()
 
 
 def expected_days(today: date, days: int = DAYS) -> list[date]:
@@ -90,6 +85,7 @@ async def check_daily_completeness(
     *,
     today: date | None = None,
     days: int = DAYS,
+    backfill_gap: Callable[..., Any] | None = None,
 ) -> dict[tuple[str, str], list[date]]:
     """Missing days per ``(symbol, store)``; also publishes the two gauges. A failed read is skipped."""
     today = today or datetime.now(UTC).date()
@@ -119,6 +115,25 @@ async def check_daily_completeness(
             KLINES_1D_COMPLETENESS.labels(symbol=symbol, store=store).set(
                 (len(expected) - len(missing)) / len(expected)
             )
+            if (
+                store == "mongodb"
+                and missing
+                and constants.ENABLE_AUTO_BACKFILL
+                and backfill_gap is not None
+            ):
+                for day in missing:
+                    start_day = datetime(day.year, day.month, day.day, tzinfo=UTC)
+                    await backfill_gap(
+                        symbol,
+                        "1d",
+                        GapInfo(
+                            start_time=start_day,
+                            end_time=start_day + timedelta(days=1),
+                            duration_seconds=86400,
+                            expected_records=1,
+                        ),
+                        "high",
+                    )
             if missing:
                 logger.warning(
                     "klines_1d_gap symbol=%s store=%s missing=%d first=%s last=%s",
@@ -137,6 +152,7 @@ async def daily_completeness_loop(
     *,
     interval_seconds: int = INTERVAL_SECONDS,
     is_leader: Callable[[], bool] | None = None,
+    backfill_gap: Callable[..., Any] | None = None,
 ) -> None:
     """Run the check hourly, on the leader replica only, until the application stops."""
     while not stop_event.is_set():
@@ -149,7 +165,12 @@ async def daily_completeness_loop(
             mongo = getattr(manager, "mongodb_adapter", None)
             mysql = getattr(manager, "mysql_adapter", None)
             if mongo is not None or mysql is not None:
-                await check_daily_completeness(mongo, mysql, constants.SUPPORTED_PAIRS)
+                await check_daily_completeness(
+                    mongo,
+                    mysql,
+                    constants.SUPPORTED_PAIRS,
+                    backfill_gap=backfill_gap,
+                )
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:

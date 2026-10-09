@@ -32,7 +32,12 @@ def as_aware_utc(value: datetime | str) -> datetime:
         matching how MongoDB stores BSON dates internally.
     """
     if isinstance(value, str):
-        value = datetime.fromisoformat(value)
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1]
+            if not normalized.endswith("+00:00"):
+                normalized += "+00:00"
+        value = datetime.fromisoformat(normalized)
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value

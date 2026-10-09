@@ -286,3 +286,9 @@ class GapDetector:
                 f"Failed to trigger auto-backfill for {symbol} {timeframe}: {e}",
                 exc_info=True,
             )
+
+    async def request_backfill(
+        self, symbol: str, timeframe: str, gap: GapInfo, severity: str
+    ) -> None:
+        """Request a detected gap through the configured backfill path."""
+        await self._trigger_backfill(symbol, timeframe, gap, severity)
