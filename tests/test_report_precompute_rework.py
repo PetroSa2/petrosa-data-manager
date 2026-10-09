@@ -91,7 +91,9 @@ async def test_precomputer_refreshes_each_report_with_explicit_defaults(monkeypa
     import data_manager.api.routes.analysis as analysis
     import data_manager.api.routes.risk as risk
 
-    monkeypatch.setattr(analysis, "compute_slippage_by_regime", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        analysis, "compute_slippage_by_regime", AsyncMock(return_value={})
+    )
     monkeypatch.setattr(analysis, "compute_closed_rounds", AsyncMock(return_value={}))
     monkeypatch.setattr(risk, "compute_risk_inputs", AsyncMock(return_value={}))
 
