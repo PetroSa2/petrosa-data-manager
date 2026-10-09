@@ -369,6 +369,7 @@ class TestDatabaseManagerMySQLOffLoop:
 
         previous = _mysql_adapter_double()
         previous.is_connected.return_value = False
+        previous.reconnect.side_effect = RuntimeError("still down")
         with (
             patch(
                 "data_manager.db.database_manager.get_adapter",

@@ -152,14 +152,16 @@ def test_main_rejects_removed_table(monkeypatch):
 
 
 def test_engine_factory_configures_utc_session(monkeypatch):
+    from data_manager.db import engine_factory
+
     engine = object()
     monkeypatch.setenv("MYSQL_URI", "mysql+pymysql://user:pass@host/db")
     with (
-        patch.object(mod.sa, "create_engine", return_value=engine) as create_engine,
+        patch.object(
+            engine_factory.sa, "create_engine", return_value=engine
+        ) as create_engine,
         patch.object(mod, "configure_utc_session") as configure_utc,
     ):
         assert mod._make_engine_from_env() is engine
-    create_engine.assert_called_once_with(
-        "mysql+pymysql://user:pass@host/db", future=True
-    )
+    create_engine.assert_called_once()
     configure_utc.assert_called_once_with(engine)

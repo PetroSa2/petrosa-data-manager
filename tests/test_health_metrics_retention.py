@@ -180,5 +180,5 @@ def test_main_retention_days_cli_override(monkeypatch):
         hmr.main(["--retention-days", "30"])
         # verify adapter was constructed with the MYSQL_URL
         MockAdapter.assert_called_once_with(
-            connection_string="mysql+pymysql://user:pass@host/db"
+            connection_string="mysql+pymysql://user:pass@host/db", role="cron"
         )

@@ -16,13 +16,13 @@ def _index_names(adapter, table_name):
 
 
 def test_daily_pnl_table_is_registered_on_create_tables():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     assert "daily_pnl" in adapter.tables
 
 
 def test_daily_pnl_has_expected_columns():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     table = adapter.tables["daily_pnl"]
     col_names = {c.name for c in table.columns}
@@ -34,7 +34,7 @@ def test_daily_pnl_has_expected_columns():
 
 
 def test_daily_pnl_date_column_has_unique_index():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     names = _index_names(adapter, "daily_pnl")
     assert "idx_daily_pnl_date" in names, (
@@ -51,7 +51,7 @@ def test_daily_pnl_has_a_recognized_time_column():
     # _time_column() (query_range/query_latest/get_record_count) requires
     # one of timestamp/entry_time/created_at — daily_pnl relies on
     # created_at, so this must not raise.
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     table = adapter.tables["daily_pnl"]
     col = adapter._time_column(table)
@@ -59,7 +59,7 @@ def test_daily_pnl_has_a_recognized_time_column():
 
 
 def test_get_table_returns_daily_pnl_without_reflecting():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     table = adapter._get_table("daily_pnl")
     assert table.name == "daily_pnl"

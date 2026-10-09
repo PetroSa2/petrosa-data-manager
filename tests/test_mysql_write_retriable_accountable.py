@@ -214,7 +214,7 @@ def test_write_result_is_int_compatible_for_legacy_callers():
 
 def _build_sqlite_adapter():
     """Mirror the pattern used by tests/test_mysql_adapter_methods.py."""
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}  # SQLite doesn't like the MySQL connect_args
     adapter.connect()
     return adapter
@@ -270,7 +270,7 @@ def test_write_computes_duplicates_from_rowcount_gap():
     syntax), so we mock the engine to return a controlled rowcount and
     assert the adapter's arithmetic is correct.
     """
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:
@@ -301,7 +301,7 @@ def test_write_computes_duplicates_from_rowcount_gap():
 def test_write_all_duplicates_yields_explicit_count_not_ambiguous_zero():
     """AC2.3 — never an ambiguous bare ``0``: when every record is a duplicate
     (``rowcount == 0``), the caller still sees ``duplicates == N``."""
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:
@@ -330,7 +330,7 @@ def test_write_all_duplicates_yields_explicit_count_not_ambiguous_zero():
 
 
 def test_write_increments_ignored_insert_counter():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:
@@ -470,7 +470,7 @@ def test_klines_write_uses_on_duplicate_key_not_insert_ignore():
     """AC8: klines write path emits ON DUPLICATE KEY UPDATE, not INSERT IGNORE."""
     from sqlalchemy.dialects import mysql as mysql_dialect
 
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:
@@ -525,7 +525,7 @@ def _insert_only_write(records, existing=0, natural_key="trade_id"):
     """Run an insert-only trades write on a fake connection; the first execute is the pre-count."""
     from sqlalchemy.dialects import mysql as mysql_dialect
 
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:
@@ -594,7 +594,7 @@ def test_insert_only_counts_keys_repeated_inside_the_batch_as_duplicates():
 
 
 def test_insert_only_requires_a_known_natural_key():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:
@@ -614,7 +614,7 @@ def test_klines_write_duplicate_does_not_raise_and_counts_correctly():
     duplicate.  For a batch of 2 rows where 1 is new and 1 is a duplicate:
       rowcount = 1*1 + 1*2 = 3; duplicates = rowcount - total = 3 - 2 = 1.
     """
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:

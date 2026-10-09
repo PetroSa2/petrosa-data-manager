@@ -9,7 +9,7 @@ def _index_names(adapter, table_name):
 
 
 def test_audit_logs_has_symbol_timestamp_composite_index():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     names = _index_names(adapter, "audit_logs")
     assert "idx_audit_logs_symbol_timestamp" in names, (
@@ -18,7 +18,7 @@ def test_audit_logs_has_symbol_timestamp_composite_index():
 
 
 def test_health_metrics_has_symbol_timestamp_composite_index():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     names = _index_names(adapter, "health_metrics")
     assert "idx_health_metrics_symbol_timestamp" in names, (
@@ -27,7 +27,7 @@ def test_health_metrics_has_symbol_timestamp_composite_index():
 
 
 def test_audit_logs_composite_index_columns():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     table = adapter.tables["audit_logs"]
     idx = next(i for i in table.indexes if i.name == "idx_audit_logs_symbol_timestamp")
@@ -38,7 +38,7 @@ def test_audit_logs_composite_index_columns():
 
 
 def test_health_metrics_composite_index_columns():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
     table = adapter.tables["health_metrics"]
     idx = next(
@@ -67,7 +67,7 @@ def test_migration_sql_file_exists():
 
 
 def test_data_manager_does_not_redeclare_unused_indexes():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter._create_tables()
 
     assert {
@@ -89,7 +89,7 @@ def test_data_manager_does_not_redeclare_unused_indexes():
 
 
 def test_klines_do_not_redeclare_extractor_owned_indexes():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     table = adapter._create_klines_table("5m")
     names = {idx.name for idx in table.indexes}
 
