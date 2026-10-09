@@ -145,12 +145,14 @@ class ReportPrecomputer:
                         lambda: compute_slippage_by_regime(self.db_manager, 30),
                     )
                     await self._refresh(
-                        "rounds", lambda: compute_closed_rounds(self.db_manager, None, 30)
+                        "rounds",
+                        lambda: compute_closed_rounds(self.db_manager, None, 30),
                     )
                     next_slippage = now + constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
                 if now >= next_risk:
                     await self._refresh(
-                        "risk_inputs", lambda: compute_risk_inputs(self.db_manager, window_days=30)
+                        "risk_inputs",
+                        lambda: compute_risk_inputs(self.db_manager, window_days=30),
                     )
                     next_risk = now + constants.REPORT_RISK_INTERVAL_SECONDS
                 await asyncio.sleep(1)

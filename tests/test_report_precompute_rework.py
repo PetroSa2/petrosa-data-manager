@@ -98,7 +98,12 @@ async def test_fill_regime_stamp_is_present_on_the_event_sent_to_mysql(monkeypat
     consumer = ExecutionEventsConsumer(db_manager=manager)
     consumer._regime_cache["BTCUSDT"] = (
         datetime.now(UTC),
-        [{"regime": "balanced_market", "computed_at": datetime(2026, 1, 1, tzinfo=UTC)}],
+        [
+            {
+                "regime": "balanced_market",
+                "computed_at": datetime(2026, 1, 1, tzinfo=UTC),
+            }
+        ],
     )
     event = ExecutionEvent(
         decision_id="decision",
