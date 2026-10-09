@@ -698,7 +698,9 @@ async def _amain(argv: list[str] | None = None) -> int:
             logger.warning("MYSQL_URI is not set; skipping MySQL retention backend")
         else:
             try:
-                mysql_adapter_instance = MySQLAdapter(connection_string=mysql_uri, role="cron")
+                mysql_adapter_instance = MySQLAdapter(
+                    connection_string=mysql_uri, role="cron"
+                )
                 mysql_adapter_instance.connect()
                 backends.append(MySQLRetentionBackend(mysql_adapter_instance))
             except Exception as exc:

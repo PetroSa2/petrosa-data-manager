@@ -149,7 +149,9 @@ def test_engine_factory_configures_utc_session(monkeypatch):
     engine = object()
     monkeypatch.setenv("MYSQL_URI", "mysql+pymysql://user:pass@host/db")
     with (
-        patch.object(engine_factory.sa, "create_engine", return_value=engine) as create_engine,
+        patch.object(
+            engine_factory.sa, "create_engine", return_value=engine
+        ) as create_engine,
         patch.object(mod, "configure_utc_session") as configure_utc,
     ):
         assert mod._make_engine_from_env() is engine

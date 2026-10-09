@@ -121,9 +121,13 @@ class MySQLAdapter(BaseAdapter):
                 "autocommit": False,  # Explicit transaction control
             },
         }
-        self.engine_options.update({key: value for key, value in kwargs.items() if key not in {
-            "pool_size", "max_overflow", "poolclass", "pool_timeout"
-        }})
+        self.engine_options.update(
+            {
+                key: value
+                for key, value in kwargs.items()
+                if key not in {"pool_size", "max_overflow", "poolclass", "pool_timeout"}
+            }
+        )
         if connection_string.startswith("mysql"):
             self.engine_options["connect_args"].update(
                 {
@@ -161,7 +165,9 @@ class MySQLAdapter(BaseAdapter):
                 self.connection_string,
                 self.role,
                 connect_args=self.engine_options.get("connect_args", {}),
-                pool_recycle=self.engine_options.get("pool_recycle", constants.MYSQL_POOL_RECYCLE),
+                pool_recycle=self.engine_options.get(
+                    "pool_recycle", constants.MYSQL_POOL_RECYCLE
+                ),
             )
             if old_engine is not None:
                 mark_engine_closing(old_engine)
@@ -194,7 +200,9 @@ class MySQLAdapter(BaseAdapter):
                 self.connection_string,
                 self.role,
                 connect_args=self.engine_options.get("connect_args", {}),
-                pool_recycle=self.engine_options.get("pool_recycle", constants.MYSQL_POOL_RECYCLE),
+                pool_recycle=self.engine_options.get(
+                    "pool_recycle", constants.MYSQL_POOL_RECYCLE
+                ),
             )
         except SQLAlchemyError as exc:
             record_connection_error(exc)

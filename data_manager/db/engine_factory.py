@@ -40,10 +40,14 @@ pool_in_use_at_checkout = Histogram(
     buckets=tuple(range(16)),
 )
 checkout_wait_seconds = Histogram(
-    "data_manager_mysql_checkout_wait_seconds", "Time spent acquiring a connection", ["role"]
+    "data_manager_mysql_checkout_wait_seconds",
+    "Time spent acquiring a connection",
+    ["role"],
 )
 executor_queue_seconds = Histogram(
-    "data_manager_mysql_executor_queue_seconds", "Synchronous executor queue time", ["role"]
+    "data_manager_mysql_executor_queue_seconds",
+    "Synchronous executor queue time",
+    ["role"],
 )
 connection_errors_total = Counter(
     "data_manager_mysql_connection_errors_total",
@@ -84,7 +88,11 @@ def classify_connection_error(exc: BaseException) -> str | None:
         return "max_user_connections"
     if "1040" in text or "too many connections" in text:
         return "too_many_connections"
-    if isinstance(exc, SQLAlchemyTimeoutError) or "queuepool" in text or "pool timeout" in text:
+    if (
+        isinstance(exc, SQLAlchemyTimeoutError)
+        or "queuepool" in text
+        or "pool timeout" in text
+    ):
         return "pool_timeout"
     return None
 
@@ -165,7 +173,9 @@ def build_engine(
         pool_in_use.labels(role=role).dec()
         started = state.get("checkout_started", 0.0)
         if started:
-            checkout_wait_seconds.labels(role=role).observe(max(0.0, time.monotonic() - started))
+            checkout_wait_seconds.labels(role=role).observe(
+                max(0.0, time.monotonic() - started)
+            )
 
     return engine
 

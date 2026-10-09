@@ -976,7 +976,9 @@ def test_mysql_create_read_only_engine_does_not_call_create_tables():
     with (
         patch.object(ma, "build_engine", return_value=fake_engine) as mock_ce,
     ):
-        engine = ma.create_read_only_engine("mysql+pymysql://user:pass@host:3306/db", role="cron")
+        engine = ma.create_read_only_engine(
+            "mysql+pymysql://user:pass@host:3306/db", role="cron"
+        )
 
     assert engine is fake_engine
     mock_ce.assert_called_once()

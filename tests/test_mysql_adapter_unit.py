@@ -13,7 +13,9 @@ from data_manager.db.mysql_session import configure_utc_session, set_utc_session
 
 def test_klines_table_mapping_logic():
     """Test that _get_table handles both financial and binance style suffixes."""
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
     adapter.engine = MagicMock()
     adapter.metadata = MagicMock()
 
@@ -38,7 +40,9 @@ def test_klines_table_mapping_logic():
 
 def test_mysql_adapter_init():
     """Test basic initialization."""
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
     assert adapter.connection_string == "mysql+pymysql://user:pass@host/db"
 
 
@@ -58,7 +62,9 @@ def test_mysql_adapter_pool_recycle_below_server_wait_timeout():
     pool_pre_ping reconnects on nearly every checkout (the Aborted_clients
     churn documented in the mysql audit).
     """
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
     assert adapter.engine_options["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert adapter.engine_options["pool_recycle"] > 0
 
@@ -70,7 +76,9 @@ def test_mysql_adapter_pool_size_within_ecosystem_budget():
     ENTIRE shared max_user_connections cap, leaving zero headroom for peer
     services still on direct MySQL during the gateway migration window.
     """
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
     per_pod = (
         adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"]
     )
@@ -84,7 +92,9 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     """AC1/AC2 (#299): the kwargs actually reaching SQLAlchemy's create_engine
     carry the hardened pool_recycle/pool_size/max_overflow — not just the
     adapter's own dict (regression guard for #299)."""
-    adapter = MySQLAdapter(connection_string="mysql+pymysql://user:pass@host/db", role="serving")
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
     mock_build_engine.return_value = MagicMock()
     adapter.connect()
 
@@ -93,7 +103,10 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     assert role == "serving"
     assert kwargs["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert kwargs["connect_args"]["init_command"]
-    assert adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"] <= 12
+    assert (
+        adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"]
+        <= 12
+    )
 
 
 def test_mysql_session_configures_utc_connect_hook():

@@ -412,7 +412,11 @@ async def _amain(argv: list[str] | None = None) -> int:
     min_age_days = _resolve_min_age_days(args.min_age_days)
 
     adapter = MongoDBAdapter(connection_string=connection_string)
-    mysql = MySQLAdapter(constants.MYSQL_URI, role="adhoc") if args.allow_plain_trades else None
+    mysql = (
+        MySQLAdapter(constants.MYSQL_URI, role="adhoc")
+        if args.allow_plain_trades
+        else None
+    )
     adapter.connect()
     if mysql is not None:
         mysql.connect()
