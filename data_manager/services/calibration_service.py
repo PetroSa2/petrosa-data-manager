@@ -122,8 +122,7 @@ def calibration_freshness(
     )
     return {
         "latest_at": latest_at.isoformat() if latest_at else None,
-        "fresh": age_minutes is not None
-        and age_minutes <= FRESHNESS_MAX_AGE_MINUTES,
+        "fresh": age_minutes is not None and age_minutes <= FRESHNESS_MAX_AGE_MINUTES,
         "max_age_minutes": FRESHNESS_MAX_AGE_MINUTES,
         "age_minutes": age_minutes,
     }
