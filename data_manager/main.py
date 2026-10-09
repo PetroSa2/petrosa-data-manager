@@ -107,6 +107,7 @@ class DataManagerApp:
         self.candle_warmup_scheduler = None  # #319 — set in start()
         self.klines_freshness_task: asyncio.Task | None = None
         self.klines_daily_gaps_task: asyncio.Task | None = None
+        self.report_precomputer = None
         self.running = False
         self._shutdown_event = asyncio.Event()
         self._db_retry_task: asyncio.Task | None = None
@@ -319,6 +320,17 @@ class DataManagerApp:
                     f"Failed to initialize leader election: {e}", exc_info=True
                 )
                 self.leader_election = None
+
+        if self.db_manager is not None and constants.ENABLE_REPORT_PRECOMPUTE:
+            from data_manager.services.report_precompute import ReportPrecomputer
+
+            self.report_precomputer = ReportPrecomputer(
+                self.db_manager, self.leader_election
+            )
+            from data_manager import api
+
+            api.app.report_precomputer = self.report_precomputer
+            await self.report_precomputer.start()
 
         # Initialize and start NATS consumer.
         # Per #593 (P2.2): wire the consumer to the ingest evaluator
@@ -748,6 +760,13 @@ class DataManagerApp:
                 logger.info("Candle warm-up scheduler stopped")
             except Exception as e:
                 logger.warning(f"Error stopping candle warm-up scheduler: {e}")
+
+        if self.report_precomputer:
+            await self.report_precomputer.stop()
+            self.report_precomputer = None
+            from data_manager import api
+
+            api.app.report_precomputer = None
 
         # Stop leader election
         if self.leader_election:

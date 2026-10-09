@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from opentelemetry import trace
@@ -158,6 +158,7 @@ class ExecutionEventsConsumer:
         # metrics so redelivery does not double-count PnL/fees.
         self._last_persist_was_insert = False
         self._mysql_persist_tasks: set[asyncio.Task[Any]] = set()
+        self._regime_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
 
     async def start(self) -> bool:
         try:
@@ -378,6 +379,17 @@ class ExecutionEventsConsumer:
             return False
         try:
             doc = event.model_dump(exclude_none=True)
+            if event.event_type in _FILL_EVENT_TYPES and event.symbol:
+                try:
+                    regime = await self._regime_at_fill(
+                        event.symbol, event.fill_time or event.timestamp
+                    )
+                    if regime and regime != "no_regime":
+                        payload = doc.setdefault("payload", {})
+                        if isinstance(payload, dict):
+                            payload.setdefault("regime_at_fill", regime)
+                except Exception:
+                    logger.warning("Could not stamp regime on fill", exc_info=True)
             doc["_id"] = f"{event.order_id}:{event.event_type}"
             doc = adapter._prepare_for_bson(doc)
             try:
@@ -403,6 +415,26 @@ class ExecutionEventsConsumer:
                 f"{event.order_id}:{event.event_type}: {e}"
             )
             return False
+
+    async def _regime_at_fill(self, symbol: str, when: Any) -> str | None:
+        """Stamp the regime without querying Mongo for every fill."""
+        adapter = getattr(self.db_manager, "mongodb_adapter", None)
+        if adapter is None:
+            return None
+        now = datetime.now(UTC)
+        cached = self._regime_cache.get(symbol)
+        if cached is None or now - cached[0] > timedelta(minutes=15):
+            docs = (
+                await adapter.db[f"analytics_{symbol}_regime"]
+                .find({})
+                .to_list(length=2000)
+            )
+            self._regime_cache[symbol] = (now, docs)
+            cached = (now, docs)
+        from data_manager.services.slippage_report import RegimeTimeline, _when
+
+        timestamp = _when(when) or now
+        return RegimeTimeline(cached[1]).at(timestamp)
 
     def _schedule_mysql_persist(self, event: ExecutionEvent) -> None:
         if (

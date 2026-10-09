@@ -415,6 +415,25 @@ async def get_slippage_by_regime(
     """
     from datetime import timedelta
 
+    precomputer = getattr(api_module, "report_precomputer", None)
+    if (
+        precomputer is not None
+        and not __import__(
+            "data_manager.services.report_precompute", fromlist=["refreshing"]
+        ).refreshing()
+        and symbol is None
+        and role is None
+        and window_days == 30
+    ):
+        cached = await precomputer.get("slippage_by_regime", window_days=30)
+        if cached is not None:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail="report_warming",
+            headers={"Retry-After": "15"},
+        )
+
     from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
 
     if not api_module.db_manager or not getattr(
@@ -474,6 +493,24 @@ async def get_closed_rounds(
     """
     import data_manager.api.app as api_module
     from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
+
+    precomputer = getattr(api_module, "report_precomputer", None)
+    if (
+        precomputer is not None
+        and not __import__(
+            "data_manager.services.report_precompute", fromlist=["refreshing"]
+        ).refreshing()
+        and strategy_id is None
+        and window_days == 30
+    ):
+        cached = await precomputer.get("rounds", window_days=30)
+        if cached is not None:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail="report_warming",
+            headers={"Retry-After": "15"},
+        )
 
     if not api_module.db_manager or not getattr(
         api_module.db_manager, "mongodb_adapter", None

@@ -129,6 +129,30 @@ async def get_risk_inputs(
     strategies_window_days: float = Query(30.0, gt=0, le=365),
 ) -> dict[str, Any]:
     """Realized sigma (daily, 1h and at a horizon), daily-return correlation and the equity curve."""
+    precomputer = getattr(api_module, "report_precomputer", None)
+    default_request = (
+        symbols is None
+        and window_days == ri.DEFAULT_WINDOW_DAYS
+        and sigma_1h_days == ri.DEFAULT_SIGMA_1H_DAYS
+        and sigma_1h_floor_days == ri.DEFAULT_SIGMA_1H_FLOOR_DAYS
+        and horizon_hours == ri.DEFAULT_HORIZON_HOURS
+        and strategies_window_days == 30
+    )
+    if (
+        precomputer is not None
+        and not __import__(
+            "data_manager.services.report_precompute", fromlist=["refreshing"]
+        ).refreshing()
+        and default_request
+    ):
+        cached = await precomputer.get("risk_inputs", window_days=30)
+        if cached is not None:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail="report_warming",
+            headers={"Retry-After": "15"},
+        )
     if not api_module.db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
     pairs = (
