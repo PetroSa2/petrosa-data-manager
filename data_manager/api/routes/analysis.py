@@ -26,6 +26,37 @@ _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
 _ROUND_MAX_FILLS = 50_000
 
+#: Fields ``slippage_report.build_report`` reads from an ``execution_events`` fill: the event type, symbol and
+#: times, and the telemetry (``role``, ``reduce_only``, ``slippage_bp``, ``intended_price``, ``regime_at_fill``)
+#: that may sit on the event or inside its ``payload``. The golden test applies this projection to
+#: production-shaped documents and requires an identical report.
+SLIPPAGE_FILL_PROJECTION: dict[str, int] = {
+    "event_type": 1,
+    "symbol": 1,
+    "timestamp": 1,
+    "fill_time": 1,
+    "role": 1,
+    "reduce_only": 1,
+    "slippage_bp": 1,
+    "intended_price": 1,
+    "regime_at_fill": 1,
+    "payload.role": 1,
+    "payload.reduce_only": 1,
+    "payload.slippage_bp": 1,
+    "payload.intended_price": 1,
+    "payload.regime_at_fill": 1,
+}
+#: Fields ``slippage_report.regime_time`` and ``RegimeTimeline`` read from an ``analytics_<pair>_regime`` doc.
+REGIME_DOC_PROJECTION: dict[str, int] = {
+    "regime": 1,
+    "computed_at": 1,
+    "metadata.computed_at": 1,
+    "timestamp": 1,
+}
+# The round book (``compute_closed_rounds``) and the risk-inputs fills and candles are read WITHOUT a
+# projection on purpose: the round book reads many event and payload fields (fees, position ids, sides,
+# reasons) and a projection there would need its own golden test first.
+
 router = APIRouter()
 calibration_router = APIRouter()
 
@@ -425,24 +456,9 @@ async def compute_slippage_by_regime(
         query["symbol"] = symbol
     mongodb = db_manager.mongodb_adapter
     try:
-        fill_projection = {
-            "event_type": 1,
-            "symbol": 1,
-            "timestamp": 1,
-            "fill_time": 1,
-            "role": 1,
-            "reduce_only": 1,
-            "slippage_bp": 1,
-            "intended_price": 1,
-            "payload.role": 1,
-            "payload.reduce_only": 1,
-            "payload.slippage_bp": 1,
-            "payload.intended_price": 1,
-            "payload.regime_at_fill": 1,
-        }
         fills = (
             await mongodb.db["execution_events"]
-            .find(query, fill_projection)
+            .find(query, SLIPPAGE_FILL_PROJECTION)
             .sort("timestamp", 1)
             .to_list(length=_SLIPPAGE_MAX_FILLS)
         )
@@ -452,15 +468,7 @@ async def compute_slippage_by_regime(
         ):
             regimes[pair] = (
                 await mongodb.db[f"analytics_{pair}_regime"]
-                .find(
-                    {},
-                    {
-                        "regime": 1,
-                        "computed_at": 1,
-                        "metadata.computed_at": 1,
-                        "timestamp": 1,
-                    },
-                )
+                .find({}, REGIME_DOC_PROJECTION)
                 .to_list(length=_REGIME_MAX_DOCS)
             )
     except Exception as exc:

@@ -6,11 +6,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from data_manager.api.routes.analysis import compute_slippage_by_regime
+from data_manager.api.routes.analysis import (
+    REGIME_DOC_PROJECTION,
+    SLIPPAGE_FILL_PROJECTION,
+    compute_closed_rounds,
+    compute_slippage_by_regime,
+)
 from data_manager.consumer.execution_events_consumer import ExecutionEventsConsumer
 from data_manager.models.execution_event import ExecutionEvent
 from data_manager.services.report_precompute import ReportPrecomputer
-from data_manager.services.round_book import build_report as build_round_report
 from data_manager.services.slippage_report import build_report as build_slippage_report
 
 
@@ -242,8 +246,51 @@ async def test_slippage_projection_preserves_telemetry_and_regime_time_fields():
 
     await compute_slippage_by_regime(manager)
 
+    assert projections[0] == SLIPPAGE_FILL_PROJECTION
     assert "payload.slippage_bp" in projections[0]
     assert "payload.intended_price" in projections[0]
+    # slippage_report falls back to a top-level regime_at_fill, so it must be fetched too
+    assert "regime_at_fill" in projections[0]
+    assert "payload.regime_at_fill" in projections[0]
+
+
+@pytest.mark.asyncio
+async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected():
+    seen: dict[str, object] = {}
+
+    class Cursor:
+        def sort(self, *args):
+            return self
+
+        async def to_list(self, length=None):
+            return [
+                {
+                    "event_type": "filled",
+                    "symbol": "BTCUSDT",
+                    "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+                    "payload": {"slippage_bp": 1.0},
+                }
+            ]
+
+    class Collection:
+        def __init__(self, name):
+            self.name = name
+
+        def find(self, *args):
+            seen[self.name] = args
+            return Cursor()
+
+    class Database(dict):
+        def __getitem__(self, name):
+            return Collection(name)
+
+    manager = SimpleNamespace(mongodb_adapter=SimpleNamespace(db=Database()))
+    await compute_slippage_by_regime(manager)
+    await compute_closed_rounds(manager)
+
+    assert seen["analytics_BTCUSDT_regime"] == ({}, REGIME_DOC_PROJECTION)
+    # rounds reads whole events (see the note above SLIPPAGE_FILL_PROJECTION): no projection argument
+    assert len(seen["execution_events"]) == 1
 
 
 @pytest.mark.asyncio
@@ -293,6 +340,144 @@ async def test_cold_miss_single_flight_computes_once():
     release.set()
     assert (await first)["overall"]["count"] == 1
     assert calls == 1
+
+
+def _seed_candles(monkeypatch, symbol: str = "BTCUSDT") -> None:
+    """Seed one pair with daily and hourly candles so the risk inputs are non-empty."""
+    import math
+    from datetime import timedelta
+
+    from data_manager.db.repositories import CandleRepository
+
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    midnight = now.replace(hour=0)
+    candles = {
+        "1d": [
+            {
+                "timestamp": midnight - timedelta(days=day),
+                "close": 100 * (1 + 0.02 * math.sin(day)),
+            }
+            for day in range(40)
+        ],
+        "1h": [
+            {
+                "timestamp": now - timedelta(hours=hour),
+                "close": 100 * (1 + 0.01 * math.sin(hour / 3)),
+            }
+            for hour in range(24 * 20)
+        ],
+    }
+
+    async def get_range(self, pair, timeframe, start, end, **kwargs):
+        assert pair == symbol
+        return [c for c in candles[timeframe] if start <= c["timestamp"] <= end]
+
+    monkeypatch.setattr(CandleRepository, "get_range", get_range)
+
+
+@pytest.mark.asyncio
+async def test_leader_run_refreshes_every_report_without_mocked_compute(monkeypatch):
+    """One non-mocked leader iteration: the real compute functions fill the cache."""
+    import data_manager.api.app as api_module
+    from data_manager.api.routes import risk as risk_route
+    from data_manager.services import report_precompute
+
+    now = datetime.now(UTC)
+    fills = [
+        {
+            "event_type": "filled",
+            "symbol": "BTCUSDT",
+            "strategy_id": "strategy",
+            "timestamp": now,
+            "fill_time": now,
+            "side": side,
+            "position_side": "LONG",
+            "fill_qty": 1,
+            "fill_price": price,
+            "payload": {"slippage_bp": bp},
+        }
+        for side, price, bp in (("BUY", 100, 2.0), ("SELL", 101, 4.0))
+    ]
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def sort(self, *args):
+            return self
+
+        async def to_list(self, length=None):
+            return self.rows
+
+    class Collection:
+        def __init__(self, rows=None):
+            self.rows = rows or []
+
+        def find(self, query=None, projection=None):
+            return Cursor(self.rows)
+
+        async def find_one(self, query, sort=None):
+            return None
+
+    class Database(dict):
+        def __getitem__(self, name):
+            if name == "execution_events":
+                return Collection(fills)
+            if name.startswith("analytics_"):
+                return Collection([{"regime": "balanced_market", "computed_at": now}])
+            return super().__getitem__(name)
+
+    cache = FakeCollection()
+    manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db=Database(report_cache=cache)),
+        mysql_adapter=None,
+    )
+    monkeypatch.setattr(api_module, "db_manager", manager)
+    monkeypatch.setattr(risk_route, "_load_wallet_rows", AsyncMock(return_value=[]))
+    monkeypatch.setattr("constants.SUPPORTED_PAIRS", ("BTCUSDT",))
+    _seed_candles(monkeypatch)
+    precomputer = ReportPrecomputer(manager, SimpleNamespace(is_leader=True))
+    precomputer.running = True
+
+    async def stop_after_the_first_iteration(_seconds):
+        precomputer.running = False
+
+    monkeypatch.setattr(
+        report_precompute.asyncio, "sleep", stop_after_the_first_iteration
+    )
+    await precomputer._run()
+
+    assert set(cache.rows) == {
+        "slippage_by_regime:window_days=30",
+        "rounds:window_days=30",
+        "risk_inputs:window_days=30",
+    }
+    bodies = {key: row["body"] for key, row in cache.rows.items()}
+    assert bodies["slippage_by_regime:window_days=30"]["overall"]["count"] == 2
+    assert (
+        bodies["rounds:window_days=30"]["strategies"]["strategy"]["closed_rounds"] == 1
+    )
+    risk = bodies["risk_inputs:window_days=30"]
+    assert risk["symbols"]["BTCUSDT"]["sufficient"] is True
+    assert risk["symbols_unavailable"] == []
+
+
+@pytest.mark.asyncio
+async def test_non_leader_does_not_refresh(monkeypatch):
+    from data_manager.services import report_precompute
+
+    cache = FakeCollection()
+    manager = SimpleNamespace(mongodb_adapter=FakeMongo(cache))
+    precomputer = ReportPrecomputer(manager, SimpleNamespace(is_leader=False))
+    precomputer.running = True
+
+    async def stop(_seconds):
+        precomputer.running = False
+
+    monkeypatch.setattr(report_precompute.asyncio, "sleep", stop)
+    await precomputer._run()
+
+    assert cache.rows == {}
 
 
 @pytest.mark.asyncio
@@ -369,18 +554,23 @@ async def test_real_refresh_is_served_by_each_default_route(monkeypatch):
 
     cache = FakeCollection()
     database = Database(report_cache=cache)
-    manager = SimpleNamespace(mongodb_adapter=SimpleNamespace(db=database))
+    manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db=database), mysql_adapter=None
+    )
     precomputer = ReportPrecomputer(manager)
     monkeypatch.setattr(api_module, "db_manager", manager)
     monkeypatch.setattr(api_module, "report_precomputer", precomputer)
     monkeypatch.setattr(risk_route, "_load_wallet_rows", AsyncMock(return_value=[]))
-    monkeypatch.setattr("constants.SUPPORTED_PAIRS", ())
+    monkeypatch.setattr("constants.SUPPORTED_PAIRS", ("BTCUSDT",))
+    _seed_candles(monkeypatch)
 
     assert (await get_slippage_by_regime(30.0, None, None))["overall"]["count"] == 2
     rounds = await get_closed_rounds(None, 30.0)
     assert rounds["strategies"]["strategy"]["closed_rounds"] == 1
     risk = await get_risk_inputs(30, 14, 60, 4.0, None, 30.0)
-    assert risk["symbols"] == {}
+    assert risk["symbols_unavailable"] == []
+    assert risk["symbols"]["BTCUSDT"]["daily"]["n_returns"] >= 20
+    assert risk["symbols"]["BTCUSDT"]["sufficient"] is True
     assert set(cache.rows) == {
         "slippage_by_regime:window_days=30",
         "rounds:window_days=30",
@@ -388,89 +578,123 @@ async def test_real_refresh_is_served_by_each_default_route(monkeypatch):
     }
 
 
-def test_slippage_and_round_reports_match_for_full_and_projected_rows():
-    regime_time = datetime(2026, 10, 6, tzinfo=UTC)
-    fills = [
-        {
+def apply_projection(document: dict, projection: dict) -> dict:
+    """What MongoDB returns for an inclusion projection (dotted paths, no ``_id``)."""
+    out: dict = {}
+    for path in projection:
+        parts = path.split(".")
+        source, target = document, out
+        for part in parts[:-1]:
+            if not isinstance(source, dict) or part not in source:
+                break
+            source = source[part]
+            target = target.setdefault(part, {})
+        else:
+            if isinstance(source, dict) and parts[-1] in source:
+                target[parts[-1]] = deepcopy(source[parts[-1]])
+    return out
+
+
+def _production_fills() -> list[dict]:
+    day = datetime(2026, 10, 6, tzinfo=UTC)
+
+    def fill(hour, side, price, **extra):
+        row = {
+            "_id": f"id-{hour}-{side}",
             "event_type": "filled",
             "symbol": "BTCUSDT",
             "strategy_id": "strategy",
-            "timestamp": regime_time,
-            "fill_time": regime_time,
-            "side": "BUY",
+            "decision_id": "decision",
+            "order_id": f"order-{hour}",
+            "timestamp": day.replace(hour=hour),
+            "fill_time": day.replace(hour=hour),
+            "side": side,
             "position_side": "LONG",
             "fill_qty": 1,
-            "fill_price": 100,
+            "fill_price": price,
             "fee": 0.1,
-            "fees": [{"amount": 0.1, "asset": "USDT"}],
             "fee_asset": "USDT",
-            "fee_status": "confirmed",
-            "position_id": "position",
-            "decision_id": "decision",
-            "reason": "entry",
-            "payload": {"slippage_bp": 2.0, "role": "entry"},
-        },
-        {
-            "event_type": "filled",
-            "symbol": "BTCUSDT",
-            "strategy_id": "strategy",
-            "timestamp": regime_time,
-            "fill_time": regime_time.replace(hour=1),
-            "side": "SELL",
-            "position_side": "LONG",
-            "fill_qty": 1,
-            "fill_price": 101,
-            "fee": 0.1,
-            "fees": [{"amount": 0.1, "asset": "USDT"}],
-            "fee_asset": "USDT",
-            "fee_status": "confirmed",
-            "position_id": "position",
-            "decision_id": "decision",
-            "reason": "oco_exit_1",
-            "payload": {"slippage_bp": 4.0, "role": "exit"},
-        },
-    ]
-    regimes = {
-        "BTCUSDT": [
-            {"regime": "balanced_market", "metadata": {"computed_at": regime_time}}
-        ]
-    }
-    slippage_projected = [
-        {
-            key: deepcopy(row[key])
-            for key in ("event_type", "symbol", "timestamp", "fill_time", "payload")
+            "payload": {
+                "client_order_id": f"c-{hour}",
+                "venue_trade_id": 12345 + hour,
+                "raw": {"a": 1, "nested": {"b": [1, 2, 3]}},
+            },
         }
-        for row in fills
-    ]
-    rounds_projected = [
-        {
-            key: deepcopy(row[key])
-            for key in (
-                "event_type",
-                "symbol",
-                "strategy_id",
-                "timestamp",
-                "fill_time",
-                "side",
-                "position_side",
-                "fill_qty",
-                "fill_price",
-                "fee",
-                "fees",
-                "fee_asset",
-                "fee_status",
-                "position_id",
-                "decision_id",
-                "reason",
-                "payload",
-            )
-        }
-        for row in fills
+        payload_extra = extra.pop("payload", {})
+        row.update(extra)
+        row["payload"].update(payload_extra)
+        return row
+
+    return [
+        # telemetry in the payload, regime from the timeline
+        fill(0, "BUY", 100, payload={"slippage_bp": 2.0, "role": "entry"}),
+        # telemetry on the event itself (legacy rows), role from reduce_only
+        fill(1, "SELL", 101, slippage_bp=4.0, reduce_only=True),
+        # a stamped regime in the payload and one on the event
+        fill(2, "BUY", 100, payload={"slippage_bp": 1.0, "regime_at_fill": "stamped"}),
+        fill(3, "SELL", 99, slippage_bp=6.0, regime_at_fill="top_level_stamp"),
+        # emitted null for want of an intended price, and no telemetry at all
+        fill(4, "BUY", 100, payload={"slippage_bp": None, "intended_price": None}),
+        fill(5, "SELL", 100),
+        # a partial fill and an other-event row that must be ignored
+        fill(6, "BUY", 100, event_type="partial_fill", payload={"slippage_bp": 3.0}),
+        fill(7, "BUY", 100, event_type="placed", payload={"slippage_bp": 9.0}),
     ]
 
-    assert build_slippage_report(fills, regimes) == build_slippage_report(
-        slippage_projected, regimes
-    )
-    assert build_round_report(fills, window_days=30) == build_round_report(
-        rounds_projected, window_days=30
+
+def _production_regimes() -> dict[str, list[dict]]:
+    day = datetime(2026, 10, 6, tzinfo=UTC)
+    return {
+        "BTCUSDT": [
+            {
+                "_id": "r1",
+                "regime": "balanced_market",
+                "metadata": {"computed_at": day, "extra": {"x": 1}},
+                "confidence": 0.9,
+                "features": {"adx": 20.0},
+            },
+            {
+                "_id": "r2",
+                "regime": "turbulent_illiquidity",
+                "computed_at": day.replace(hour=3),
+                "metadata": {"source": "x"},
+            },
+            {"_id": "r3", "regime": "trend", "timestamp": day.replace(hour=5)},
+        ]
+    }
+
+
+def test_slippage_report_is_identical_for_the_real_projections():
+    fills, regimes = _production_fills(), _production_regimes()
+    projected_fills = [apply_projection(row, SLIPPAGE_FILL_PROJECTION) for row in fills]
+    projected_regimes = {
+        symbol: [apply_projection(doc, REGIME_DOC_PROJECTION) for doc in docs]
+        for symbol, docs in regimes.items()
+    }
+
+    full = build_slippage_report(fills, regimes)
+    projected = build_slippage_report(projected_fills, projected_regimes)
+
+    assert projected == full
+    # the fixture exercises every path the projection has to keep
+    assert {"balanced_market", "stamped", "top_level_stamp"} <= set(full["by_regime"])
+    assert full["fills_without_cost_telemetry"] == 1
+    assert full["fills_without_intended_price"] == 1
+    assert full["fills_with_slippage"] == 5
+    for role in ("entry", "exit"):
+        assert build_slippage_report(
+            projected_fills, projected_regimes, role=role
+        ) == build_slippage_report(fills, regimes, role=role)
+
+
+def test_a_projection_without_the_top_level_regime_stamp_would_change_the_report():
+    """The golden test is sensitive: dropping ``regime_at_fill`` from the projection is caught."""
+    fills, regimes = _production_fills(), _production_regimes()
+    narrower = {
+        k: v for k, v in SLIPPAGE_FILL_PROJECTION.items() if k != "regime_at_fill"
+    }
+    projected = [apply_projection(row, narrower) for row in fills]
+
+    assert build_slippage_report(projected, regimes) != build_slippage_report(
+        fills, regimes
     )
