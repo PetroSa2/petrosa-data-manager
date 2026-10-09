@@ -1,5 +1,7 @@
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -59,6 +61,78 @@ async def test_cache_hit_normalizes_naive_mongodb_datetime():
 
     assert served["metadata"]["age_seconds"] >= 0
     assert served["metadata"]["computed_at"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_precomputer_start_and_stop_manage_the_refresh_task(monkeypatch):
+    collection = FakeCollection()
+    manager = SimpleNamespace(mongodb_adapter=FakeMongo(collection))
+    precomputer = ReportPrecomputer(manager)
+    monkeypatch.setattr("constants.ENABLE_REPORT_PRECOMPUTE", True)
+    precomputer._run = AsyncMock()
+
+    await precomputer.start()
+    await asyncio.sleep(0)
+    await precomputer.stop()
+
+    assert precomputer.task is None
+    precomputer._run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_precomputer_refreshes_each_report_with_explicit_defaults(monkeypatch):
+    collection = FakeCollection()
+    manager = SimpleNamespace(mongodb_adapter=FakeMongo(collection))
+    precomputer = ReportPrecomputer(manager)
+    precomputer.running = True
+    monkeypatch.setattr("constants.REPORT_SLIPPAGE_INTERVAL_SECONDS", 900)
+    monkeypatch.setattr("constants.REPORT_RISK_INTERVAL_SECONDS", 300)
+
+    import data_manager.api.routes.analysis as analysis
+    import data_manager.api.routes.risk as risk
+
+    monkeypatch.setattr(analysis, "compute_slippage_by_regime", AsyncMock(return_value={}))
+    monkeypatch.setattr(analysis, "compute_closed_rounds", AsyncMock(return_value={}))
+    monkeypatch.setattr(risk, "compute_risk_inputs", AsyncMock(return_value={}))
+
+    task = asyncio.create_task(precomputer._run())
+    await asyncio.sleep(0)
+    precomputer.running = False
+    task.cancel()
+    await __import__("asyncio").gather(task, return_exceptions=True)
+
+    assert set(collection.rows) == {
+        "slippage_by_regime:window_days=30",
+        "rounds:window_days=30",
+        "risk_inputs:window_days=30",
+    }
+
+
+@pytest.mark.asyncio
+async def test_regime_refresh_populates_cache_off_the_fill_path(monkeypatch):
+    class Cursor:
+        async def to_list(self, length=None):
+            return [{"regime": "balanced_market"}]
+
+    class Collection:
+        def find(self, query):
+            return Cursor()
+
+    class Database(dict):
+        def __getitem__(self, name):
+            return Collection()
+
+    manager = SimpleNamespace(mongodb_adapter=SimpleNamespace(db=Database()))
+    consumer = ExecutionEventsConsumer(db_manager=manager)
+    consumer.running = True
+
+    async def stop_after_first_sleep(_seconds):
+        consumer.running = False
+
+    monkeypatch.setattr(asyncio, "sleep", stop_after_first_sleep)
+    await consumer._refresh_regimes()
+
+    assert "BTCUSDT" in consumer._regime_cache
 
 
 def _report_body():
@@ -149,3 +223,21 @@ async def test_slippage_projection_preserves_telemetry_and_regime_time_fields():
 
     assert "payload.slippage_bp" in projections[0]
     assert "payload.intended_price" in projections[0]
+
+
+@pytest.mark.asyncio
+async def test_default_routes_serve_cached_reports_without_computing(monkeypatch):
+    import data_manager.api.app as api_module
+    from data_manager.api.routes.analysis import (
+        get_closed_rounds,
+        get_slippage_by_regime,
+    )
+    from data_manager.api.routes.risk import get_risk_inputs
+
+    precomputer = SimpleNamespace(get=AsyncMock(return_value={"cached": True}))
+    monkeypatch.setattr(api_module, "report_precomputer", precomputer)
+
+    assert (await get_slippage_by_regime(30.0, None, None)) == {"cached": True}
+    assert (await get_closed_rounds(None, 30.0)) == {"cached": True}
+    assert (await get_risk_inputs(30, 14, 60, 4.0, None, 30.0)) == {"cached": True}
+    assert precomputer.get.await_count == 3
