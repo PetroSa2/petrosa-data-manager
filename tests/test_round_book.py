@@ -51,8 +51,8 @@ def test_orphan_overlay_allocates_exchange_quantity_newest_first_across_strategi
         closed_entry_orders=set(),
     )
 
-    old_leg = report["strategies"]["old"]["legs"]["LONG"]
-    new_leg = report["strategies"]["new"]["legs"]["LONG"]
+    old_leg = report["strategies"]["old"]["legs"]["BTCUSDT"]["LONG"]
+    new_leg = report["strategies"]["new"]["legs"]["BTCUSDT"]["LONG"]
     assert old_leg["orphaned_quantity"] == pytest.approx(1.0)
     assert new_leg["held_quantity"] == pytest.approx(1.0)
     assert old_leg["open_lot_quantity"] == pytest.approx(
@@ -85,7 +85,7 @@ def test_orphan_overlay_handles_flat_snapshot_and_ledger_closed_lots():
         exchange=_snapshot(rows=[]),
         closed_entry_orders={"closed"},
     )
-    leg = report["strategies"]["s1"]["legs"]["LONG"]
+    leg = report["strategies"]["s1"]["legs"]["ETHUSDT"]["LONG"]
     assert leg["ledger_closed_quantity"] == pytest.approx(1.0)
     assert leg["orphaned_quantity"] == pytest.approx(0.0)
 
@@ -116,8 +116,13 @@ def test_orphan_overlay_maps_both_signs_and_holds_lots_newer_than_snapshot():
         ),
         closed_entry_orders=set(),
     )
-    assert report["strategies"]["short"]["legs"]["SHORT"]["exchange_quantity"] == 1
-    assert report["strategies"]["fresh"]["legs"]["LONG"]["held_quantity"] == 1
+    assert (
+        report["strategies"]["short"]["legs"]["ETHUSDT"]["SHORT"]["exchange_quantity"]
+        == 1
+    )
+    assert (
+        report["strategies"]["fresh"]["legs"]["BTCUSDT"]["LONG"]["held_quantity"] == 1
+    )
 
 
 def test_orphan_overlay_does_not_mutate_book_or_closed_rounds():
@@ -145,6 +150,44 @@ def test_orphan_overlay_does_not_mutate_book_or_closed_rounds():
     )
 
 
+def test_report_mode_preserves_open_round_fields_until_apply():
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, order_id="entry")]
+    baseline = _report(rows)
+    report_mode = _report(
+        rows,
+        exchange=_snapshot(rows=[]),
+        closed_entry_orders=set(),
+    )
+    apply_mode = _report(
+        rows,
+        exchange=_snapshot(rows=[]),
+        closed_entry_orders=set(),
+        apply_overlay=True,
+    )
+    base_stats = baseline["strategies"]["s1"]
+    report_stats = report_mode["strategies"]["s1"]
+    assert {key: report_stats[key] for key in base_stats} == base_stats
+    assert apply_mode["strategies"]["s1"]["open_rounds"] == 0
+
+
+def test_overlay_keeps_same_leg_symbols_separate_and_matches_missing_order_ids_by_identity():
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0, symbol="BTCUSDT"),
+        _fill("s1", "buy", 1.0, 100.0, 1, symbol="ETHUSDT"),
+    ]
+    report = _report(
+        rows,
+        exchange=_snapshot(rows=[]),
+        closed_entry_orders=set(),
+    )
+    assert (
+        report["strategies"]["s1"]["legs"]["BTCUSDT"]["LONG"]["orphaned_quantity"] == 1
+    )
+    assert (
+        report["strategies"]["s1"]["legs"]["ETHUSDT"]["LONG"]["orphaned_quantity"] == 1
+    )
+
+
 def test_orphan_overlay_reports_partial_lot_excess_without_mutating_quantity():
     rows = [_fill("s1", "buy", 2.0, 100.0, 0, symbol="BTCUSDT", order_id="entry")]
     report = _report(
@@ -154,7 +197,7 @@ def test_orphan_overlay_reports_partial_lot_excess_without_mutating_quantity():
         ),
         closed_entry_orders=set(),
     )
-    leg = report["strategies"]["s1"]["legs"]["LONG"]
+    leg = report["strategies"]["s1"]["legs"]["BTCUSDT"]["LONG"]
     assert leg["held_quantity"] == pytest.approx(1.0)
     assert leg["orphaned_quantity"] == pytest.approx(1.0)
     assert leg["open_lot_quantity"] == pytest.approx(2.0)
@@ -367,7 +410,8 @@ async def test_the_endpoint_reports_the_rounds_and_says_when_it_was_truncated():
     assert report["strategies"]["s1"]["closed_rounds"] == 1
     assert report["metadata"]["fills_read"] == 2
     assert report["metadata"]["truncated"] is False
-    assert collection.find.call_args.args[0]["strategy_id"] == "s1"
+    assert "strategy_id" not in collection.find.call_args.args[0]
+    assert set(report["strategies"]) == {"s1"}
 
 
 @pytest.mark.asyncio

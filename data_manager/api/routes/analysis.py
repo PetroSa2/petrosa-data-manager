@@ -489,9 +489,11 @@ async def get_closed_rounds(
         api_module.db_manager, "mongodb_adapter", None
     ):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
+    mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
+    if mode not in {"off", "report", "apply"}:
+        mode = "report"
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    filtered_overlay = strategy_id is not None
-    if strategy_id:
+    if strategy_id and mode == "off":
         query["strategy_id"] = strategy_id
     mongodb = api_module.db_manager.mongodb_adapter
     try:
@@ -500,13 +502,10 @@ async def get_closed_rounds(
     except Exception as exc:
         logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
-    if mode not in {"off", "report", "apply"}:
-        mode = "report"
     exchange = None
     closed_entry_orders: set[str] | None = None
     truncated = len(rows) >= _ROUND_MAX_FILLS
-    if mode != "off" and not filtered_overlay and not truncated:
+    if mode != "off" and not truncated:
         from data_manager.db.repositories.ledger_repository import LedgerRepository
 
         manager = api_module.db_manager
@@ -532,14 +531,20 @@ async def get_closed_rounds(
     )
     if mode == "off":
         report["orphan_overlay"] = "off"
-    elif filtered_overlay:
-        report["orphan_overlay"] = "disabled_filtered"
     elif truncated:
         report["orphan_overlay"] = "disabled_truncated"
+    if strategy_id:
+        report["strategies"] = (
+            {strategy_id: report["strategies"][strategy_id]}
+            if strategy_id in report["strategies"]
+            else {}
+        )
     for owner, strategy in report["strategies"].items():
         ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=owner).set(
             strategy.get("orphaned_lots", 0)
         )
+    if strategy_id and strategy_id not in report["strategies"]:
+        ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=strategy_id).set(0)
     ROUND_BOOK_SNAPSHOT_AGE.set(report.get("exchange_snapshot_age_seconds", -1))
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
@@ -559,11 +564,16 @@ async def get_orphaned_rounds(
     report = await get_closed_rounds(strategy_id=strategy_id, window_days=window_days)
     lots = []
     for owner, strategy in report["strategies"].items():
-        for leg, data in strategy.get("legs", {}).items():
-            for lot in data.get("orphaned", []):
-                lots.append({"strategy_id": owner, "leg": leg, **lot})
-            for lot in data.get("ledger_closed", []):
-                lots.append({"strategy_id": owner, "leg": leg, **lot})
+        for symbol, symbol_legs in strategy.get("legs", {}).items():
+            for leg, data in symbol_legs.items():
+                for lot in data.get("orphaned", []):
+                    lots.append(
+                        {"strategy_id": owner, "symbol": symbol, "leg": leg, **lot}
+                    )
+                for lot in data.get("ledger_closed", []):
+                    lots.append(
+                        {"strategy_id": owner, "symbol": symbol, "leg": leg, **lot}
+                    )
     return {
         "lots": lots,
         "metadata": report.get("metadata", {}),
