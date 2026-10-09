@@ -15,6 +15,7 @@ except ImportError:
 from fastapi import APIRouter, HTTPException, Query
 
 import data_manager.api.app as api_module
+from data_manager.utils.time_utils import as_aware_utc
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,10 @@ async def get_anomalies(
             or "outlier" in log.get("details", "").lower()
         ]
 
+        # The Mongo client returns timezone-aware datetimes; a naive ``from``/``to`` is UTC.
+        from_bound = as_aware_utc(from_time) if from_time else None
+        to_bound = as_aware_utc(to_time) if to_time else None
+
         # Apply filters
         if severity:
             anomalies = [a for a in anomalies if a.get("severity") == severity]
@@ -81,30 +86,18 @@ async def get_anomalies(
         if status:
             anomalies = [a for a in anomalies if a.get("status") == status]
 
-        if from_time:
+        if from_bound:
             anomalies = [
                 a
                 for a in anomalies
-                if a.get("timestamp")
-                and (
-                    isinstance(a["timestamp"], datetime)
-                    and a["timestamp"] >= from_time
-                    or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"]) >= from_time
-                )
+                if a.get("timestamp") and as_aware_utc(a["timestamp"]) >= from_bound
             ]
 
-        if to_time:
+        if to_bound:
             anomalies = [
                 a
                 for a in anomalies
-                if a.get("timestamp")
-                and (
-                    isinstance(a["timestamp"], datetime)
-                    and a["timestamp"] <= to_time
-                    or isinstance(a["timestamp"], str)
-                    and datetime.fromisoformat(a["timestamp"]) <= to_time
-                )
+                if a.get("timestamp") and as_aware_utc(a["timestamp"]) <= to_bound
             ]
 
         total_count = len(anomalies)
@@ -114,11 +107,7 @@ async def get_anomalies(
         try:
             if sort_by == "timestamp":
                 anomalies.sort(
-                    key=lambda x: (
-                        x.get("timestamp", datetime.min)
-                        if isinstance(x.get("timestamp"), datetime)
-                        else datetime.fromisoformat(x.get("timestamp", "1970-01-01"))
-                    ),
+                    key=lambda x: as_aware_utc(x.get("timestamp") or "1970-01-01"),
                     reverse=reverse,
                 )
             elif sort_by == "severity":

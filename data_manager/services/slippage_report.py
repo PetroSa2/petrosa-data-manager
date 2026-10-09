@@ -141,6 +141,7 @@ def build_report(
     without_telemetry = 0
     without_intended = 0
     without_time = 0
+    without_regime = 0
     considered = 0
     for row in fills:
         if row.get("event_type") not in FILL_EVENT_TYPES:
@@ -165,13 +166,29 @@ def build_report(
         if when is None or not symbol:
             without_time += 1
             continue
-        timeline = timelines.get(symbol)
-        regime = timeline.at(when) if timeline else NO_REGIME
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        regime = payload.get("regime_at_fill") or row.get("regime_at_fill")
+        if not regime:
+            timeline = timelines.get(symbol)
+            regime = timeline.at(when) if timeline else NO_REGIME
+            if regime == NO_REGIME:
+                without_regime += 1
         by_regime[regime].append(slippage)
         by_pair[(regime, symbol)].append(slippage)
         overall.append(slippage)
 
     overall_median = median(overall) if overall else None
+    regime_times = [
+        timestamp
+        for docs in regimes.values()
+        for doc in docs
+        if (timestamp := regime_time(doc)) is not None
+    ]
+    regime_window_days = (
+        min(30, int((max(regime_times) - min(regime_times)).total_seconds() // 86400))
+        if regime_times
+        else 0
+    )
     return {
         "role": role or "all",
         "fills_considered": considered,
@@ -181,6 +198,8 @@ def build_report(
         "fills_without_cost_telemetry": without_telemetry,
         "fills_without_intended_price": without_intended,
         "fills_without_time_or_symbol": without_time,
+        "fills_without_regime": without_regime,
+        "regime_window_days": regime_window_days,
         "overall": _stats(overall, overall_median) if overall else None,
         "by_regime": {
             regime: _stats(values, overall_median)

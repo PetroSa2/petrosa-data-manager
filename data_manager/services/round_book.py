@@ -609,6 +609,7 @@ class RoundBook:
         )
         open_rounds: dict[str, int] = defaultdict(int)
         open_fills: dict[str, int] = defaultdict(int)
+        orphaned_fills: dict[str, int] = defaultdict(int)
         oldest_open: dict[str, datetime] = {}
         for (strategy_id, _symbol, _leg), book in self._books.items():
             surviving = []
@@ -644,6 +645,10 @@ class RoundBook:
                 )
                 if strategy_id not in oldest_open or opened < oldest_open[strategy_id]:
                     oldest_open[strategy_id] = opened
+            elif overlay_applied and book.cycle is not None and book.cycle.fills > 0:
+                # Every lot of the round is orphaned or ledger-closed: its fills are no longer in an open
+                # round, so they are counted here and the accounting check still balances.
+                orphaned_fills[strategy_id] += book.cycle.fills
         closed_by: dict[str, list[ClosedRound]] = defaultdict(list)
         for closed in self.closed:
             closed_by[closed.strategy_id].append(closed)
@@ -728,8 +733,11 @@ class RoundBook:
                     1
                     for symbol_data in strategy_legs.values()
                     for v in symbol_data.values()
-                    if v["held_quantity"] > 0
+                    if v["held_quantity"]
+                    > ROUND_ORPHAN_QUANTITY_TOLERANCE
+                    * max(1.0, abs(v["open_lot_quantity"]), abs(v["exchange_quantity"]))
                 )
+                strategy["fills_in_orphaned_rounds"] = orphaned_fills[strategy_id]
                 strategy["oldest_open_round_opened_at"] = (
                     oldest_open[strategy_id].isoformat()
                     if strategy_id in oldest_open
@@ -750,7 +758,10 @@ class RoundBook:
             },
             # Every fill is in a closed round, the open round of its strategy, or unattributed.
             "accounted": all(
-                s["fills"] == s["fills_in_closed_rounds"] + s["fills_in_open_rounds"]
+                s["fills"]
+                == s["fills_in_closed_rounds"]
+                + s["fills_in_open_rounds"]
+                + s.get("fills_in_orphaned_rounds", 0)
                 for s in strategies.values()
             ),
             **(overlay_meta if overlay_enabled else {}),

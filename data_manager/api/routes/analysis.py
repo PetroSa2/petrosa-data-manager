@@ -35,6 +35,37 @@ ROUND_BOOK_SNAPSHOT_AGE = Gauge(
     "Age of the exchange snapshot used by the round-book overlay",
 )
 
+#: Fields ``slippage_report.build_report`` reads from an ``execution_events`` fill: the event type, symbol and
+#: times, and the telemetry (``role``, ``reduce_only``, ``slippage_bp``, ``intended_price``, ``regime_at_fill``)
+#: that may sit on the event or inside its ``payload``. The golden test applies this projection to
+#: production-shaped documents and requires an identical report.
+SLIPPAGE_FILL_PROJECTION: dict[str, int] = {
+    "event_type": 1,
+    "symbol": 1,
+    "timestamp": 1,
+    "fill_time": 1,
+    "role": 1,
+    "reduce_only": 1,
+    "slippage_bp": 1,
+    "intended_price": 1,
+    "regime_at_fill": 1,
+    "payload.role": 1,
+    "payload.reduce_only": 1,
+    "payload.slippage_bp": 1,
+    "payload.intended_price": 1,
+    "payload.regime_at_fill": 1,
+}
+#: Fields ``slippage_report.regime_time`` and ``RegimeTimeline`` read from an ``analytics_<pair>_regime`` doc.
+REGIME_DOC_PROJECTION: dict[str, int] = {
+    "regime": 1,
+    "computed_at": 1,
+    "metadata.computed_at": 1,
+    "timestamp": 1,
+}
+# The round book (``compute_closed_rounds``) and the risk-inputs fills and candles are read WITHOUT a
+# projection on purpose: the round book reads many event and payload fields (fees, position ids, sides,
+# reasons) and a projection there would need its own golden test first.
+
 router = APIRouter()
 calibration_router = APIRouter()
 
@@ -406,16 +437,12 @@ async def evaluate_scorecard(
     }
 
 
-@router.get("/slippage-by-regime")
-async def get_slippage_by_regime(
-    window_days: float = Query(
-        30.0, gt=0, le=365, description="Trailing window of fills"
-    ),
-    symbol: str | None = Query(None, description="One symbol; all when omitted"),
-    role: str | None = Query(
-        None, pattern="^(entry|exit)$", description="entry or exit fills only"
-    ),
-):
+async def compute_slippage_by_regime(
+    db_manager: Any,
+    window_days: float = 30.0,
+    symbol: str | None = None,
+    role: str | None = None,
+) -> dict[str, Any]:
     """Slippage per market regime from the per-fill cost telemetry (petrosa-data-manager#535).
 
     Joins each fill's slippage with the regime in force for its symbol at fill time and reports the count, mean,
@@ -427,9 +454,7 @@ async def get_slippage_by_regime(
 
     from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
 
-    if not api_module.db_manager or not getattr(
-        api_module.db_manager, "mongodb_adapter", None
-    ):
+    if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
     since = datetime.now(UTC) - timedelta(days=window_days)
     query: dict[str, Any] = {
@@ -438,11 +463,11 @@ async def get_slippage_by_regime(
     }
     if symbol:
         query["symbol"] = symbol
-    mongodb = api_module.db_manager.mongodb_adapter
+    mongodb = db_manager.mongodb_adapter
     try:
         fills = (
             await mongodb.db["execution_events"]
-            .find(query)
+            .find(query, SLIPPAGE_FILL_PROJECTION)
             .sort("timestamp", 1)
             .to_list(length=_SLIPPAGE_MAX_FILLS)
         )
@@ -452,13 +477,13 @@ async def get_slippage_by_regime(
         ):
             regimes[pair] = (
                 await mongodb.db[f"analytics_{pair}_regime"]
-                .find({})
+                .find({}, REGIME_DOC_PROJECTION)
                 .to_list(length=_REGIME_MAX_DOCS)
             )
     except Exception as exc:
         logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    report = build_report(fills, regimes, role=role)
+    report = await asyncio.to_thread(build_report, fills, regimes, role=role)
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "window_days": window_days,
@@ -469,50 +494,114 @@ async def get_slippage_by_regime(
     return report
 
 
-@router.get("/rounds")
-async def get_closed_rounds(
-    strategy_id: str | None = Query(None, description="One strategy; all when omitted"),
+@router.get("/slippage-by-regime")
+async def get_slippage_by_regime(
     window_days: float = Query(
-        30.0, gt=0, le=365, description="Window of the rate and holding time"
+        30.0, gt=0, le=365, description="Trailing window of fills"
+    ),
+    symbol: str | None = Query(None, description="One symbol; all when omitted"),
+    role: str | None = Query(
+        None, pattern="^(entry|exit)$", description="entry or exit fills only"
     ),
 ):
+    precomputer = getattr(api_module, "report_precomputer", None)
+    if (
+        precomputer is not None
+        and symbol is None
+        and role is None
+        and window_days == 30
+    ):
+        cached = await precomputer.get_or_compute(
+            "slippage_by_regime",
+            lambda: compute_slippage_by_regime(api_module.db_manager, 30),
+            window_days=30,
+        )
+        if cached is not None:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail="report_warming",
+            headers={"Retry-After": "15"},
+        )
+    return await compute_slippage_by_regime(
+        api_module.db_manager, window_days, symbol, role
+    )
+
+
+def _round_overlay_mode() -> str:
+    mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
+    return mode if mode in {"off", "report", "apply"} else "report"
+
+
+def _slice_round_report(report: dict[str, Any], strategy_id: str) -> dict[str, Any]:
+    """One strategy's part of a full replay, with the totals and the check of that strategy alone."""
+    strategy = report["strategies"].get(strategy_id)
+    report["strategies"] = {strategy_id: strategy} if strategy else {}
+    fills = strategy["fills"] if strategy else 0
+    report["unattributed"] = {}
+    report["totals"] = {
+        "fills": fills,
+        "attributed_to_a_strategy": fills,
+        "unattributed": 0,
+        "position_side_unknown": strategy["position_side_unknown"] if strategy else 0,
+        "legacy_exit_side_mapped": strategy["legacy_exit_side_mapped"]
+        if strategy
+        else 0,
+    }
+    report["accounted"] = strategy is None or strategy["fills"] == strategy[
+        "fills_in_closed_rounds"
+    ] + strategy["fills_in_open_rounds"] + strategy.get("fills_in_orphaned_rounds", 0)
+    return report
+
+
+async def compute_closed_rounds(
+    db_manager: Any,
+    strategy_id: str | None = None,
+    window_days: float = 30.0,
+) -> dict[str, Any]:
     """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
 
     Every fill is accounted for: in a closed round, in the open round of its strategy, or unattributed with a
     reason (petrosa-data-manager#537). ``n`` is the number of closed rounds behind the rate and the holding
     time, so a consumer can tell when a figure is too thin to use.
+
+    The orphan overlay (petrosa-data-manager#576) allocates the exchange quantity across ALL strategies, so it
+    is built from the replay of every fill. A call for one strategy takes its figures from that replay when it
+    is complete; when the read of all fills is cut at the cap, the strategy's figures come from a read of its own
+    fills (never from the cut data) and the overlay is reported ``disabled_truncated``.
     """
-    import data_manager.api.app as api_module
     from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
 
-    if not api_module.db_manager or not getattr(
-        api_module.db_manager, "mongodb_adapter", None
-    ):
+    if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
-    mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
-    if mode not in {"off", "report", "apply"}:
-        mode = "report"
-    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    if strategy_id and mode == "off":
-        query["strategy_id"] = strategy_id
-    mongodb = api_module.db_manager.mongodb_adapter
-    exchange = None
-    closed_entry_orders: set[str] | None = None
-    read_limit = (
-        _ROUND_MAX_FILLS * 10 if strategy_id and mode != "off" else _ROUND_MAX_FILLS
-    )
-    try:
+    mode = _round_overlay_mode()
+    mongodb = db_manager.mongodb_adapter
+    base_query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+
+    async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
-        rows = await cursor.to_list(length=read_limit)
+        return await cursor.to_list(length=_ROUND_MAX_FILLS)
+
+    own_query = {**base_query, "strategy_id": strategy_id} if strategy_id else None
+    try:
+        rows = await read(own_query if own_query and mode == "off" else base_query)
+        truncated = len(rows) >= _ROUND_MAX_FILLS
+        overlay_cut = False
+        if own_query and mode != "off" and truncated:
+            # The read of all fills is cut: this strategy's figures must not come from it.
+            overlay_cut = True
+            rows = await read(own_query)
+            truncated = len(rows) >= _ROUND_MAX_FILLS
     except Exception as exc:
         logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    truncated = len(rows) >= read_limit
-    if mode != "off" and not truncated:
+    overlay_possible = mode != "off" and not overlay_cut and not truncated
+    exchange = None
+    closed_entry_orders: set[str] | None = None
+    if overlay_possible:
         from data_manager.db.repositories.ledger_repository import LedgerRepository
 
-        manager = api_module.db_manager
-        mysql = getattr(manager, "mysql_adapter", None) if manager else None
+        mysql = getattr(db_manager, "mysql_adapter", None)
         if mysql is not None:
             repo = LedgerRepository(mysql, None)
             try:
@@ -525,7 +614,8 @@ async def get_closed_rounds(
                 exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
         else:
             exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
-    report = build_report(
+    report = await asyncio.to_thread(
+        build_report,
         rows,
         window_days=window_days,
         exchange=exchange,
@@ -534,14 +624,10 @@ async def get_closed_rounds(
     )
     if mode == "off":
         report["orphan_overlay"] = "off"
-    elif truncated:
+    elif overlay_cut or truncated:
         report["orphan_overlay"] = "disabled_truncated"
-    if strategy_id:
-        report["strategies"] = (
-            {strategy_id: report["strategies"][strategy_id]}
-            if strategy_id in report["strategies"]
-            else {}
-        )
+    if strategy_id and not (mode == "off" or overlay_cut):
+        report = _slice_round_report(report, strategy_id)
     for owner, strategy in report["strategies"].items():
         ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=owner).set(
             strategy.get("orphaned_lots", 0)
@@ -558,13 +644,39 @@ async def get_closed_rounds(
     return report
 
 
+@router.get("/rounds")
+async def get_closed_rounds(
+    strategy_id: str | None = Query(None, description="One strategy; all when omitted"),
+    window_days: float = Query(
+        30.0, gt=0, le=365, description="Window of the rate and holding time"
+    ),
+):
+    precomputer = getattr(api_module, "report_precomputer", None)
+    if precomputer is not None and strategy_id is None and window_days == 30:
+        cached = await precomputer.get_or_compute(
+            "rounds",
+            lambda: compute_closed_rounds(api_module.db_manager, None, 30),
+            window_days=30,
+        )
+        if cached is not None:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail="report_warming",
+            headers={"Retry-After": "15"},
+        )
+    return await compute_closed_rounds(api_module.db_manager, strategy_id, window_days)
+
+
 @router.get("/rounds/orphaned")
 async def get_orphaned_rounds(
     strategy_id: str | None = Query(None),
     window_days: float = Query(30.0, gt=0, le=365),
 ) -> dict[str, Any]:
     """List read-only orphan and ledger-closed lots from the complete fill replay."""
-    report = await get_closed_rounds(strategy_id=strategy_id, window_days=window_days)
+    report = await compute_closed_rounds(
+        api_module.db_manager, strategy_id, window_days
+    )
     lots = []
     for owner, strategy in report["strategies"].items():
         for symbol, symbol_legs in strategy.get("legs", {}).items():
