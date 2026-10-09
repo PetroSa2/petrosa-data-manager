@@ -112,7 +112,9 @@ class MongoDBAdapter(BaseAdapter):
     def connect(self) -> None:
         """Establish connection to MongoDB."""
         try:
-            self.client = motor_asyncio.AsyncIOMotorClient(self.connection_string)
+            self.client = motor_asyncio.AsyncIOMotorClient(
+                self.connection_string, tz_aware=True
+            )
             self.db = self.client[self.db_name]
             self._connected = True
             logger.info(f"Connected to MongoDB database: {self.db_name}")

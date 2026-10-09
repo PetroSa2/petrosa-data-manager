@@ -54,6 +54,7 @@ def operational(
 
 
 REGISTRY: dict[str, PersistenceSpec] = {
+    "report_cache": transient_only(reason="recomputable CIO report response cache"),
     "signals": durable(
         mysql_table="signals",
         key="signal_key",

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from opentelemetry import trace
@@ -158,6 +158,8 @@ class ExecutionEventsConsumer:
         # metrics so redelivery does not double-count PnL/fees.
         self._last_persist_was_insert = False
         self._mysql_persist_tasks: set[asyncio.Task[Any]] = set()
+        self._regime_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
+        self._regime_refresh_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> bool:
         try:
@@ -183,6 +185,7 @@ class ExecutionEventsConsumer:
                 return False
 
             self.running = True
+            self._regime_refresh_task = asyncio.create_task(self._refresh_regimes())
             workers = min(constants.MAX_CONCURRENT_TASKS, 5)
             for i in range(workers):
                 self._processing_tasks.append(asyncio.create_task(self._worker(i)))
@@ -201,6 +204,11 @@ class ExecutionEventsConsumer:
     async def stop(self) -> None:
         logger.info("Stopping execution events consumer")
         self.running = False
+
+        if self._regime_refresh_task:
+            self._regime_refresh_task.cancel()
+            await asyncio.gather(self._regime_refresh_task, return_exceptions=True)
+            self._regime_refresh_task = None
 
         if self._processing_tasks:
             for task in self._processing_tasks:
@@ -378,6 +386,16 @@ class ExecutionEventsConsumer:
             return False
         try:
             doc = event.model_dump(exclude_none=True)
+            if event.event_type in _FILL_EVENT_TYPES and event.symbol:
+                try:
+                    regime = await self._regime_at_fill(
+                        event.symbol, event.fill_time or event.timestamp
+                    )
+                    if regime and regime != "no_regime":
+                        event.payload.setdefault("regime_at_fill", regime)
+                        doc = event.model_dump(exclude_none=True)
+                except Exception:
+                    logger.warning("Could not stamp regime on fill", exc_info=True)
             doc["_id"] = f"{event.order_id}:{event.event_type}"
             doc = adapter._prepare_for_bson(doc)
             try:
@@ -403,6 +421,38 @@ class ExecutionEventsConsumer:
                 f"{event.order_id}:{event.event_type}: {e}"
             )
             return False
+
+    async def _regime_at_fill(self, symbol: str, when: Any) -> str | None:
+        """Stamp the regime without querying Mongo for every fill."""
+        cached = self._regime_cache.get(symbol)
+        if cached is None:
+            return None
+        from data_manager.services.slippage_report import RegimeTimeline, _when
+
+        timestamp = _when(when) or datetime.now(UTC)
+        return RegimeTimeline(cached[1]).at(timestamp)
+
+    async def _refresh_regimes(self) -> None:
+        """Refresh all regime timelines away from the fill consumer path."""
+        while self.running:
+            adapter = getattr(self.db_manager, "mongodb_adapter", None)
+            if adapter is not None and getattr(adapter, "db", None) is not None:
+                now = datetime.now(UTC)
+                for symbol in constants.SUPPORTED_PAIRS:
+                    try:
+                        docs = await (
+                            adapter.db[f"analytics_{symbol.strip()}_regime"]
+                            .find({})
+                            .to_list(length=2000)
+                        )
+                        self._regime_cache[symbol.strip()] = (now, docs)
+                    except Exception:
+                        logger.warning(
+                            "Could not refresh regime cache for %s",
+                            symbol,
+                            exc_info=True,
+                        )
+            await asyncio.sleep(900)
 
     def _schedule_mysql_persist(self, event: ExecutionEvent) -> None:
         if (

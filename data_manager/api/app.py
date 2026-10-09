@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 db_manager = None
 leader_election = None
 audit_scheduler = None
+report_precomputer = None
 
 _RATE_LIMIT_BOOKKEEPING_PATHS = frozenset(
     {
