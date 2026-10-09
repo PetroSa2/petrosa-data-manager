@@ -117,43 +117,17 @@ def _daily_best(daily: dict[str, Any], hourly: dict[str, Any]) -> dict[str, Any]
     return {"value": None, "source": None, "sufficient": False}
 
 
-@router.get("/inputs")
-async def get_risk_inputs(
-    window_days: int = Query(ri.DEFAULT_WINDOW_DAYS, ge=5, le=365),
-    sigma_1h_days: int = Query(ri.DEFAULT_SIGMA_1H_DAYS, ge=2, le=90),
-    sigma_1h_floor_days: int = Query(ri.DEFAULT_SIGMA_1H_FLOOR_DAYS, ge=2, le=365),
-    horizon_hours: float = Query(ri.DEFAULT_HORIZON_HOURS, gt=0, le=24 * 30),
-    symbols: str | None = Query(
-        None, description="Comma-separated; default: the supported pairs"
-    ),
-    strategies_window_days: float = Query(30.0, gt=0, le=365),
+async def compute_risk_inputs(
+    db_manager: Any,
+    window_days: int = ri.DEFAULT_WINDOW_DAYS,
+    sigma_1h_days: int = ri.DEFAULT_SIGMA_1H_DAYS,
+    sigma_1h_floor_days: int = ri.DEFAULT_SIGMA_1H_FLOOR_DAYS,
+    horizon_hours: float = ri.DEFAULT_HORIZON_HOURS,
+    symbols: str | None = None,
+    strategies_window_days: float = 30.0,
 ) -> dict[str, Any]:
     """Realized sigma (daily, 1h and at a horizon), daily-return correlation and the equity curve."""
-    precomputer = getattr(api_module, "report_precomputer", None)
-    default_request = (
-        symbols is None
-        and window_days == ri.DEFAULT_WINDOW_DAYS
-        and sigma_1h_days == ri.DEFAULT_SIGMA_1H_DAYS
-        and sigma_1h_floor_days == ri.DEFAULT_SIGMA_1H_FLOOR_DAYS
-        and horizon_hours == ri.DEFAULT_HORIZON_HOURS
-        and strategies_window_days == 30
-    )
-    if (
-        precomputer is not None
-        and not __import__(
-            "data_manager.services.report_precompute", fromlist=["refreshing"]
-        ).refreshing()
-        and default_request
-    ):
-        cached = await precomputer.get("risk_inputs", window_days=30)
-        if cached is not None:
-            return cached
-        raise HTTPException(
-            status_code=503,
-            detail="report_warming",
-            headers={"Retry-After": "15"},
-        )
-    if not api_module.db_manager:
+    if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
     pairs = (
         [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -179,8 +153,11 @@ async def get_risk_inputs(
             logger.error("risk inputs: candle read failed: %s", item, exc_info=item)
             continue
         symbol, daily_candles, hourly_candles = item
-        daily, returns = ri.daily_sigma(daily_candles, window_days=window_days, now=now)
-        hourly = ri.hourly_sigma(
+        daily, returns = await asyncio.to_thread(
+            ri.daily_sigma, daily_candles, window_days=window_days, now=now
+        )
+        hourly = await asyncio.to_thread(
+            ri.hourly_sigma,
             hourly_candles,
             window_days=sigma_1h_days,
             floor_days=sigma_1h_floor_days,
@@ -199,7 +176,9 @@ async def get_risk_inputs(
     equity: dict[str, Any]
     try:
         rows = await _load_wallet_rows(now - timedelta(days=window_days + 400), now)
-        equity = ri.equity_curve(rows, window_days=window_days, now=now)
+        equity = await asyncio.to_thread(
+            ri.equity_curve, rows, window_days=window_days, now=now
+        )
     except Exception as exc:
         logger.error("risk inputs: wallet balance read failed: %s", exc, exc_info=True)
         equity = {
@@ -217,8 +196,11 @@ async def get_risk_inputs(
     strategies: dict[str, Any] = {}
     strategies_error: str | None = None
     try:
-        strategies = strategy_holding_times(
-            await _load_fills(now), now, strategies_window_days
+        strategies = await asyncio.to_thread(
+            strategy_holding_times,
+            await _load_fills(now),
+            now,
+            strategies_window_days,
         )
     except Exception as exc:
         logger.error("risk inputs: strategy fills not readable: %s", exc, exc_info=True)
@@ -236,8 +218,50 @@ async def get_risk_inputs(
         },
         "symbols": per_symbol,
         "symbols_unavailable": missing,
-        "correlation": ri.correlation_matrix(returns_by_symbol),
+        "correlation": await asyncio.to_thread(
+            ri.correlation_matrix, returns_by_symbol
+        ),
         "equity": equity,
         "strategies": strategies,
         "strategies_error": strategies_error,
     }
+
+
+@router.get("/inputs")
+async def get_risk_inputs(
+    window_days: int = Query(ri.DEFAULT_WINDOW_DAYS, ge=5, le=365),
+    sigma_1h_days: int = Query(ri.DEFAULT_SIGMA_1H_DAYS, ge=2, le=90),
+    sigma_1h_floor_days: int = Query(ri.DEFAULT_SIGMA_1H_FLOOR_DAYS, ge=2, le=365),
+    horizon_hours: float = Query(ri.DEFAULT_HORIZON_HOURS, gt=0, le=24 * 30),
+    symbols: str | None = Query(
+        None, description="Comma-separated; default: the supported pairs"
+    ),
+    strategies_window_days: float = Query(30.0, gt=0, le=365),
+) -> dict[str, Any]:
+    precomputer = getattr(api_module, "report_precomputer", None)
+    default_request = (
+        symbols is None
+        and window_days == ri.DEFAULT_WINDOW_DAYS
+        and sigma_1h_days == ri.DEFAULT_SIGMA_1H_DAYS
+        and sigma_1h_floor_days == ri.DEFAULT_SIGMA_1H_FLOOR_DAYS
+        and horizon_hours == ri.DEFAULT_HORIZON_HOURS
+        and strategies_window_days == 30
+    )
+    if precomputer is not None and default_request:
+        cached = await precomputer.get("risk_inputs", window_days=30)
+        if cached is not None:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail="report_warming",
+            headers={"Retry-After": "15"},
+        )
+    return await compute_risk_inputs(
+        api_module.db_manager,
+        window_days,
+        sigma_1h_days,
+        sigma_1h_floor_days,
+        horizon_hours,
+        symbols,
+        strategies_window_days,
+    )

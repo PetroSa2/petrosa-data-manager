@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
@@ -16,9 +14,6 @@ import constants
 
 logger = logging.getLogger(__name__)
 REPORT_CACHE = "report_cache"
-_refreshing: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "report_refreshing", default=False
-)
 report_age_seconds = Gauge(
     "data_manager_report_age_seconds",
     "Age of the latest precomputed report",
@@ -29,10 +24,6 @@ report_stage_seconds = Histogram(
     "Report refresh stage duration",
     ["report", "stage"],
 )
-
-
-def refreshing() -> bool:
-    return _refreshing.get()
 
 
 def cache_key(report: str, **params: Any) -> str:
@@ -76,6 +67,10 @@ class ReportPrecomputer:
         body = dict(row.get("body", {}))
         computed_at = row.get("computed_at")
         if isinstance(computed_at, datetime):
+            if computed_at.tzinfo is None:
+                computed_at = computed_at.replace(tzinfo=UTC)
+            else:
+                computed_at = computed_at.astimezone(UTC)
             age = max(0.0, (datetime.now(UTC) - computed_at).total_seconds())
             report_age_seconds.labels(report=report).set(age)
             metadata = body.setdefault("metadata", {})
@@ -115,26 +110,23 @@ class ReportPrecomputer:
             else constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
         )
 
-    async def _refresh(
-        self, report: str, callback: Callable[[], Awaitable[dict[str, Any]]]
-    ) -> None:
-        token = _refreshing.set(True)
+    async def _refresh(self, report: str, callback: Any) -> None:
         started = monotonic()
         try:
             body = await callback()
-            await self._put(
-                report, body, window_days=30 if report != "risk_inputs" else 30
-            )
+            await self._put(report, body, window_days=30)
             report_stage_seconds.labels(report=report, stage="compute").observe(
                 monotonic() - started
             )
         except Exception:
             logger.exception("report refresh failed", extra={"report": report})
-        finally:
-            _refreshing.reset(token)
 
     async def _run(self) -> None:
-        from data_manager.api.routes import analysis, risk
+        from data_manager.api.routes.analysis import (
+            compute_closed_rounds,
+            compute_slippage_by_regime,
+        )
+        from data_manager.api.routes.risk import compute_risk_inputs
 
         next_slippage = 0.0
         next_risk = 0.0
@@ -150,15 +142,15 @@ class ReportPrecomputer:
                 if now >= next_slippage:
                     await self._refresh(
                         "slippage_by_regime",
-                        lambda: analysis.get_slippage_by_regime(window_days=30),
+                        lambda: compute_slippage_by_regime(self.db_manager, 30),
                     )
                     await self._refresh(
-                        "rounds", lambda: analysis.get_closed_rounds(window_days=30)
+                        "rounds", lambda: compute_closed_rounds(self.db_manager, None, 30)
                     )
                     next_slippage = now + constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
                 if now >= next_risk:
                     await self._refresh(
-                        "risk_inputs", lambda: risk.get_risk_inputs(window_days=30)
+                        "risk_inputs", lambda: compute_risk_inputs(self.db_manager, window_days=30)
                     )
                     next_risk = now + constants.REPORT_RISK_INTERVAL_SECONDS
                 await asyncio.sleep(1)

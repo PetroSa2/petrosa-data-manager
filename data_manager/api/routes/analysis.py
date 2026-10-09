@@ -2,6 +2,7 @@
 Analytics endpoints for computed metrics.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -396,6 +397,86 @@ async def evaluate_scorecard(
     }
 
 
+async def compute_slippage_by_regime(
+    db_manager: Any,
+    window_days: float = 30.0,
+    symbol: str | None = None,
+    role: str | None = None,
+) -> dict[str, Any]:
+    """Slippage per market regime from the per-fill cost telemetry (petrosa-data-manager#535).
+
+    Joins each fill's slippage with the regime in force for its symbol at fill time and reports the count, mean,
+    median and p90 in basis points per regime and per (regime, symbol), with the ratio to the overall median.
+    Read-only; fills without recorded slippage are counted and left out, fills before the first regime are
+    grouped under ``no_regime``.
+    """
+    from datetime import timedelta
+
+    from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
+
+    if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
+        raise HTTPException(status_code=503, detail="MongoDB is unavailable")
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    query: dict[str, Any] = {
+        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
+        "timestamp": {"$gte": since},
+    }
+    if symbol:
+        query["symbol"] = symbol
+    mongodb = db_manager.mongodb_adapter
+    try:
+        fill_projection = {
+            "event_type": 1,
+            "symbol": 1,
+            "timestamp": 1,
+            "fill_time": 1,
+            "role": 1,
+            "reduce_only": 1,
+            "slippage_bp": 1,
+            "intended_price": 1,
+            "payload.role": 1,
+            "payload.reduce_only": 1,
+            "payload.slippage_bp": 1,
+            "payload.intended_price": 1,
+            "payload.regime_at_fill": 1,
+        }
+        fills = (
+            await mongodb.db["execution_events"]
+            .find(query, fill_projection)
+            .sort("timestamp", 1)
+            .to_list(length=_SLIPPAGE_MAX_FILLS)
+        )
+        regimes: dict[str, list[dict[str, Any]]] = {}
+        for pair in sorted(
+            {str(row.get("symbol")) for row in fills if row.get("symbol")}
+        ):
+            regimes[pair] = (
+                await mongodb.db[f"analytics_{pair}_regime"]
+                .find(
+                    {},
+                    {
+                        "regime": 1,
+                        "computed_at": 1,
+                        "metadata.computed_at": 1,
+                        "timestamp": 1,
+                    },
+                )
+                .to_list(length=_REGIME_MAX_DOCS)
+            )
+    except Exception as exc:
+        logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    report = await asyncio.to_thread(build_report, fills, regimes, role=role)
+    report["metadata"] = {
+        "calculated_at": datetime.now(UTC).isoformat(),
+        "window_days": window_days,
+        "fills_read": len(fills),
+        "truncated": len(fills) >= _SLIPPAGE_MAX_FILLS,
+        "source": "data-manager-slippage-by-regime",
+    }
+    return report
+
+
 @router.get("/slippage-by-regime")
 async def get_slippage_by_regime(
     window_days: float = Query(
@@ -406,21 +487,9 @@ async def get_slippage_by_regime(
         None, pattern="^(entry|exit)$", description="entry or exit fills only"
     ),
 ):
-    """Slippage per market regime from the per-fill cost telemetry (petrosa-data-manager#535).
-
-    Joins each fill's slippage with the regime in force for its symbol at fill time and reports the count, mean,
-    median and p90 in basis points per regime and per (regime, symbol), with the ratio to the overall median.
-    Read-only; fills without recorded slippage are counted and left out, fills before the first regime are
-    grouped under ``no_regime``.
-    """
-    from datetime import timedelta
-
     precomputer = getattr(api_module, "report_precomputer", None)
     if (
         precomputer is not None
-        and not __import__(
-            "data_manager.services.report_precompute", fromlist=["refreshing"]
-        ).refreshing()
         and symbol is None
         and role is None
         and window_days == 30
@@ -433,47 +502,42 @@ async def get_slippage_by_regime(
             detail="report_warming",
             headers={"Retry-After": "15"},
         )
+    return await compute_slippage_by_regime(
+        api_module.db_manager, window_days, symbol, role
+    )
 
-    from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
 
-    if not api_module.db_manager or not getattr(
-        api_module.db_manager, "mongodb_adapter", None
-    ):
+async def compute_closed_rounds(
+    db_manager: Any,
+    strategy_id: str | None = None,
+    window_days: float = 30.0,
+) -> dict[str, Any]:
+    """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
+
+    Every fill is accounted for: in a closed round, in the open round of its strategy, or unattributed with a
+    reason (petrosa-data-manager#537). ``n`` is the number of closed rounds behind the rate and the holding
+    time, so a consumer can tell when a figure is too thin to use.
+    """
+    from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
+
+    if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
-    since = datetime.now(UTC) - timedelta(days=window_days)
-    query: dict[str, Any] = {
-        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
-        "timestamp": {"$gte": since},
-    }
-    if symbol:
-        query["symbol"] = symbol
-    mongodb = api_module.db_manager.mongodb_adapter
+    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    if strategy_id:
+        query["strategy_id"] = strategy_id
+    mongodb = db_manager.mongodb_adapter
     try:
-        fills = (
-            await mongodb.db["execution_events"]
-            .find(query)
-            .sort("timestamp", 1)
-            .to_list(length=_SLIPPAGE_MAX_FILLS)
-        )
-        regimes: dict[str, list[dict[str, Any]]] = {}
-        for pair in sorted(
-            {str(row.get("symbol")) for row in fills if row.get("symbol")}
-        ):
-            regimes[pair] = (
-                await mongodb.db[f"analytics_{pair}_regime"]
-                .find({})
-                .to_list(length=_REGIME_MAX_DOCS)
-            )
+        cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
+        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
     except Exception as exc:
-        logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
+        logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    report = build_report(fills, regimes, role=role)
+    report = await asyncio.to_thread(build_report, rows, window_days=window_days)
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
-        "window_days": window_days,
-        "fills_read": len(fills),
-        "truncated": len(fills) >= _SLIPPAGE_MAX_FILLS,
-        "source": "data-manager-slippage-by-regime",
+        "fills_read": len(rows),
+        "truncated": len(rows) >= _ROUND_MAX_FILLS,
+        "source": "data-manager-round-book",
     }
     return report
 
@@ -485,24 +549,8 @@ async def get_closed_rounds(
         30.0, gt=0, le=365, description="Window of the rate and holding time"
     ),
 ):
-    """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
-
-    Every fill is accounted for: in a closed round, in the open round of its strategy, or unattributed with a
-    reason (petrosa-data-manager#537). ``n`` is the number of closed rounds behind the rate and the holding
-    time, so a consumer can tell when a figure is too thin to use.
-    """
-    import data_manager.api.app as api_module
-    from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
-
     precomputer = getattr(api_module, "report_precomputer", None)
-    if (
-        precomputer is not None
-        and not __import__(
-            "data_manager.services.report_precompute", fromlist=["refreshing"]
-        ).refreshing()
-        and strategy_id is None
-        and window_days == 30
-    ):
+    if precomputer is not None and strategy_id is None and window_days == 30:
         cached = await precomputer.get("rounds", window_days=30)
         if cached is not None:
             return cached
@@ -511,29 +559,7 @@ async def get_closed_rounds(
             detail="report_warming",
             headers={"Retry-After": "15"},
         )
-
-    if not api_module.db_manager or not getattr(
-        api_module.db_manager, "mongodb_adapter", None
-    ):
-        raise HTTPException(status_code=503, detail="MongoDB is unavailable")
-    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    if strategy_id:
-        query["strategy_id"] = strategy_id
-    mongodb = api_module.db_manager.mongodb_adapter
-    try:
-        cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
-        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
-    except Exception as exc:
-        logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    report = build_report(rows, window_days=window_days)
-    report["metadata"] = {
-        "calculated_at": datetime.now(UTC).isoformat(),
-        "fills_read": len(rows),
-        "truncated": len(rows) >= _ROUND_MAX_FILLS,
-        "source": "data-manager-round-book",
-    }
-    return report
+    return await compute_closed_rounds(api_module.db_manager, strategy_id, window_days)
 
 
 @router.get("/volume")
