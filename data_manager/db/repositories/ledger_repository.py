@@ -527,7 +527,10 @@ class LedgerRepository(BaseRepository):
             .mappings()
             .all()
         )
-        return {"as_of_ms": int(snapshot["as_of_ms"]), "rows": [dict(row) for row in rows]}
+        return {
+            "as_of_ms": int(snapshot["as_of_ms"]),
+            "rows": [dict(row) for row in rows],
+        }
 
     def closed_entry_order_ids(self) -> set[str]:
         """Return entry order ids already known to be closed by the position ledger."""

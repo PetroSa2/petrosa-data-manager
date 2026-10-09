@@ -537,7 +537,9 @@ async def get_closed_rounds(
     elif truncated:
         report["orphan_overlay"] = "disabled_truncated"
     for owner, strategy in report["strategies"].items():
-        ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=owner).set(strategy.get("orphaned_lots", 0))
+        ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=owner).set(
+            strategy.get("orphaned_lots", 0)
+        )
     ROUND_BOOK_SNAPSHOT_AGE.set(report.get("exchange_snapshot_age_seconds", -1))
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
@@ -562,7 +564,11 @@ async def get_orphaned_rounds(
                 lots.append({"strategy_id": owner, "leg": leg, **lot})
             for lot in data.get("ledger_closed", []):
                 lots.append({"strategy_id": owner, "leg": leg, **lot})
-    return {"lots": lots, "metadata": report.get("metadata", {}), "orphan_overlay": report.get("orphan_overlay")}
+    return {
+        "lots": lots,
+        "metadata": report.get("metadata", {}),
+        "orphan_overlay": report.get("orphan_overlay"),
+    }
 
 
 @router.get("/volume")

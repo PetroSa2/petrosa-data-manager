@@ -45,7 +45,9 @@ def test_orphan_overlay_allocates_exchange_quantity_newest_first_across_strategi
     ]
     report = _report(
         rows,
-        exchange=_snapshot(rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+        exchange=_snapshot(
+            rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]
+        ),
         closed_entry_orders=set(),
     )
 
@@ -54,7 +56,9 @@ def test_orphan_overlay_allocates_exchange_quantity_newest_first_across_strategi
     assert old_leg["orphaned_quantity"] == pytest.approx(1.0)
     assert new_leg["held_quantity"] == pytest.approx(1.0)
     assert old_leg["open_lot_quantity"] == pytest.approx(
-        old_leg["held_quantity"] + old_leg["orphaned_quantity"] + old_leg["ledger_closed_quantity"]
+        old_leg["held_quantity"]
+        + old_leg["orphaned_quantity"]
+        + old_leg["ledger_closed_quantity"]
     )
 
 
@@ -68,7 +72,10 @@ def test_orphan_overlay_stale_snapshot_marks_nothing_and_preserves_statistics():
     )
     assert after["orphan_overlay"] == "disabled_stale"
     assert after["strategies"]["s1"]["orphaned_quantity"] == 0
-    assert after["strategies"]["s1"]["closed_rounds"] == before["strategies"]["s1"]["closed_rounds"]
+    assert (
+        after["strategies"]["s1"]["closed_rounds"]
+        == before["strategies"]["s1"]["closed_rounds"]
+    )
 
 
 def test_orphan_overlay_handles_flat_snapshot_and_ledger_closed_lots():
@@ -88,7 +95,15 @@ def test_orphan_overlay_maps_both_signs_and_holds_lots_newer_than_snapshot():
     rows = [
         _fill("long", "buy", 1.0, 100.0, 0, symbol="BTCUSDT", order_id="long"),
         _fill("short", "sell", 1.0, 100.0, 1, symbol="ETHUSDT", order_id="short"),
-        _fill("fresh", "buy", 1.0, 100.0, (NOW - T0).total_seconds() / 60, symbol="BTCUSDT", order_id="fresh"),
+        _fill(
+            "fresh",
+            "buy",
+            1.0,
+            100.0,
+            (NOW - T0).total_seconds() / 60,
+            symbol="BTCUSDT",
+            order_id="fresh",
+        ),
     ]
     report = _report(
         rows,
@@ -121,8 +136,13 @@ def test_orphan_overlay_does_not_mutate_book_or_closed_rounds():
         closed_entry_orders=set(),
     )
     assert repr(book._books) == before
-    assert with_overlay["strategies"]["s1"]["closed_rounds"] == baseline["strategies"]["s1"]["closed_rounds"]
-    assert with_overlay["strategies"]["s1"]["wins"] == baseline["strategies"]["s1"]["wins"]
+    assert (
+        with_overlay["strategies"]["s1"]["closed_rounds"]
+        == baseline["strategies"]["s1"]["closed_rounds"]
+    )
+    assert (
+        with_overlay["strategies"]["s1"]["wins"] == baseline["strategies"]["s1"]["wins"]
+    )
 
 
 def test_orphan_overlay_reports_partial_lot_excess_without_mutating_quantity():
