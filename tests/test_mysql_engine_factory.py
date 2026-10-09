@@ -26,11 +26,33 @@ def test_role_defaults_and_suffix_overrides(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_invalid_role_env_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MYSQL_POOL_SIZE_ADHOC", "0")
+    monkeypatch.setenv("MYSQL_POOL_TIMEOUT_ADHOC", "invalid")
     assert role_options("adhoc") == {
         "pool_size": 1,
         "max_overflow": 1,
         "pool_timeout": 5,
     }
+
+
+def test_closing_engine_calls_error_callback() -> None:
+    errors: list[str] = []
+    engine = build_engine(
+        "sqlite+pysqlite:///:memory:", "adhoc", on_error=errors.append
+    )
+    mark_engine_closing(engine)
+    with pytest.raises(RuntimeError, match="closing"):
+        engine.connect()
+    assert errors == ["pool_timeout"]
+
+
+def test_handle_error_classifies_query_errors() -> None:
+    import sqlalchemy as sa
+
+    engine = build_engine("sqlite+pysqlite:///:memory:", "adhoc")
+    with pytest.raises(Exception) as error:
+        with engine.connect() as connection:
+            connection.execute(sa.text("select * from missing"))
+    assert "missing" in str(error.value)
 
 
 def test_unknown_role_is_rejected() -> None:

@@ -106,6 +106,40 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     )
 
 
+def test_reconnect_tests_new_engine_and_preserves_adapter_identity():
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    old_engine = MagicMock()
+    new_engine = MagicMock()
+    new_engine.connect.return_value.__enter__.return_value = MagicMock()
+    adapter.engine = old_engine
+    with (
+        patch("data_manager.db.mysql_adapter.build_engine", return_value=new_engine),
+        patch("data_manager.db.mysql_adapter.mark_engine_closing") as close_engine,
+    ):
+        holder = adapter
+        adapter.reconnect()
+    assert holder is adapter
+    assert adapter.engine is new_engine
+    new_engine.connect.return_value.__enter__.return_value.execute.assert_called_once()
+    close_engine.assert_called_once_with(old_engine)
+
+
+def test_reconnect_keeps_old_engine_when_select_one_fails():
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    old_engine = MagicMock()
+    new_engine = MagicMock()
+    new_engine.connect.side_effect = RuntimeError("MySQL down")
+    adapter.engine = old_engine
+    with patch("data_manager.db.mysql_adapter.build_engine", return_value=new_engine):
+        with pytest.raises(RuntimeError, match="MySQL down"):
+            adapter.reconnect()
+    assert adapter.engine is old_engine
+
+
 def test_mysql_session_configures_utc_connect_hook():
     """Every DB-API connection must set the session timezone to UTC."""
     engine = MagicMock()
