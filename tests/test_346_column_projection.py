@@ -20,7 +20,7 @@ from data_manager.maintenance.candle_warmup_backfill import row_to_candle
 
 @pytest.fixture
 def sqlite_adapter():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.engine = sa.create_engine("sqlite:///:memory:")
     adapter._connected = True

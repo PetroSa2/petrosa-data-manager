@@ -309,7 +309,7 @@ class _FakeMongo:
 class _FakeMySQL:
     instances: list["_FakeMySQL"] = []
 
-    def __init__(self, uri):
+    def __init__(self, uri, **kwargs):
         self.connected = self.disconnected = False
         _FakeMySQL.instances.append(self)
 

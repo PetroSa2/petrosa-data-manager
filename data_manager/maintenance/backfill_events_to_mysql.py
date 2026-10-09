@@ -124,7 +124,7 @@ async def _amain(args: argparse.Namespace) -> int:
     if args.batch_size < 1:
         raise ValueError("--batch-size must be positive")
     mongo = MongoDBAdapter(connection_string=constants.MONGODB_URL)
-    mysql = MySQLAdapter(connection_string=constants.MYSQL_URI)
+    mysql = MySQLAdapter(connection_string=constants.MYSQL_URI, role="adhoc")
     mongo.connect()
     mysql.connect()
     try:

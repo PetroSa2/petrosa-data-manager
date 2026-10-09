@@ -163,7 +163,7 @@ def test_no_other_module_writes_klines_to_mongo():
 
 
 def test_the_klines_copy_is_insert_only_on_symbol_and_timestamp():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.connect()
     try:

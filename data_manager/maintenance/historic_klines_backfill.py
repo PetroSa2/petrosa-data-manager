@@ -170,7 +170,7 @@ async def _amain(args: argparse.Namespace) -> int:
         skip_early_daily=args.skip_early_daily,
     )
     client = BinanceClient()
-    mysql = MySQLAdapter(connection_string=constants.MYSQL_URI)
+    mysql = MySQLAdapter(connection_string=constants.MYSQL_URI, role="adhoc")
     mysql.connect()
     try:
         print(await run_backfill(client, mysql, config))

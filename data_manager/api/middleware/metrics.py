@@ -85,18 +85,6 @@ DATABASE_OPERATION_DURATION = Histogram(
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
 )
 
-CONNECTION_POOL_SIZE = Gauge(
-    "data_manager_connection_pool_size",
-    "Database connection pool size",
-    ["database", "state"],  # state: active, idle, waiting
-)
-
-ACTIVE_CONNECTIONS = Gauge(
-    "data_manager_active_connections",
-    "Number of active database connections",
-    ["database"],
-)
-
 
 class MetricsMiddleware(BaseHTTPMiddleware):
     """
@@ -238,17 +226,3 @@ def record_database_operation(
     DATABASE_OPERATION_DURATION.labels(database=database, operation=operation).observe(
         duration
     )
-
-
-def update_connection_pool_metrics(
-    database: str, active: int, idle: int, waiting: int
-) -> None:
-    """Update connection pool metrics."""
-    CONNECTION_POOL_SIZE.labels(database=database, state="active").set(active)
-    CONNECTION_POOL_SIZE.labels(database=database, state="idle").set(idle)
-    CONNECTION_POOL_SIZE.labels(database=database, state="waiting").set(waiting)
-
-
-def update_active_connections(database: str, count: int) -> None:
-    """Update active connections metric."""
-    ACTIVE_CONNECTIONS.labels(database=database).set(count)

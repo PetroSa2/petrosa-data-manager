@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply the UPDATE; without this flag only report the count.",
     )
     args = parser.parse_args(argv)
-    mysql = MySQLAdapter(connection_string=os.getenv("MYSQL_URL"))
+    mysql = MySQLAdapter(connection_string=os.getenv("MYSQL_URL"), role="adhoc")
     mysql.connect()
     try:
         count = cleanup_legacy_jobs(mysql, dry_run=not args.apply)

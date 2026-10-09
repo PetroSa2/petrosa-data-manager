@@ -149,7 +149,7 @@ def recording_adapter():
     ``StaticPool`` keeps a single connection so ``asyncio.to_thread`` reads
     (``CandleRepository``) see the same in-memory database.
     """
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     adapter.engine_options = {}
     adapter.engine = sa.create_engine(
         "sqlite://",

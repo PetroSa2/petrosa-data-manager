@@ -14,7 +14,7 @@ from data_manager.db.mysql_adapter import MySQLAdapter
 
 
 def _adapter_with_fake_connection() -> tuple[MySQLAdapter, MagicMock]:
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     table = sa.Table(
         "klines_h1",
         adapter.metadata,

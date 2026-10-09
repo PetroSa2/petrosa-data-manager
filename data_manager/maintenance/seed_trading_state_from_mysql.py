@@ -11,7 +11,7 @@ from data_manager.db.mysql_adapter import MySQLAdapter
 
 
 async def seed(*, apply: bool) -> dict[str, int]:
-    mysql = MySQLAdapter(constants.MYSQL_URI)
+    mysql = MySQLAdapter(constants.MYSQL_URI, role="adhoc")
     mysql.connect()
     mongo = MongoDBAdapter(
         constants.MONGODB_URL, database_name=constants.CANDLE_MONGO_DATABASE
