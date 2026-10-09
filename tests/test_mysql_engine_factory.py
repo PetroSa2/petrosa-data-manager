@@ -256,11 +256,12 @@ def test_stop_rule_caps_are_unchanged() -> None:
 
 
 def test_adapter_rejects_unknown_kwargs() -> None:
-    with pytest.raises(
-        TypeError, match="Unknown MySQL adapter options: max_overflow, pool_size"
-    ):
+    with pytest.raises(TypeError) as error:
         MySQLAdapter(MYSQL, role="serving", pool_size=3, max_overflow=1)
-    MySQLAdapter(MYSQL, role="serving", pool_recycle=10, pool_pre_ping=False)
+    assert str(error.value) == "Unknown MySQL adapter options: max_overflow, pool_size"
+    adapter = MySQLAdapter(MYSQL, role="serving", pool_recycle=10, pool_pre_ping=False)
+    assert adapter.engine_options["pool_recycle"] == 10
+    assert adapter.engine_options["pool_pre_ping"] is False
 
 
 POOL_KEYS = {"pool_size", "max_overflow", "poolclass"}
