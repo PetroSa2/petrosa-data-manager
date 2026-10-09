@@ -22,7 +22,7 @@ from data_manager.db.mysql_adapter import MySQLAdapter
 @pytest.fixture
 def positions_adapter():
     """MySQLAdapter backed by SQLite with a positions-shaped table pre-seeded."""
-    a = MySQLAdapter("sqlite:///:memory:")
+    a = MySQLAdapter("sqlite:///:memory:", role="serving")
     a.engine_options = {}
     a.engine = sa.create_engine("sqlite:///:memory:")
     a._connected = True

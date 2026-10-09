@@ -417,7 +417,7 @@ async def _amain(argv: list[str] | None = None) -> int:
         logger.error("MONGODB_URL is not set; cannot connect to MongoDB")
         return 2
 
-    mysql = MySQLAdapter(connection_string=constants.MYSQL_URI)
+    mysql = MySQLAdapter(connection_string=constants.MYSQL_URI, role="adhoc")
     mongo = MongoDBAdapter(connection_string=mongodb_url)
     mysql.connect()
     mongo.connect()

@@ -36,7 +36,7 @@ def make_candle(timeframe: str = "1h", **overrides) -> Candle:
 
 @pytest.mark.parametrize("timeframe", ["1m", "5m", "15m", "1h", "4h", "1d"])
 def test_mysql_row_has_exact_klines_column_parity(timeframe):
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     table = adapter._create_klines_table(timeframe)
 
     assert set(candle_to_mysql_kline(make_candle(timeframe)).model_dump()) == set(
@@ -45,7 +45,7 @@ def test_mysql_row_has_exact_klines_column_parity(timeframe):
 
 
 def test_klines_table_keeps_all_historic_columns_and_uses_natural_primary_key():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     table = adapter._create_klines_table("1h")
 
     assert sorted(table.c.keys()) == sorted(
@@ -81,7 +81,7 @@ def test_klines_table_keeps_all_historic_columns_and_uses_natural_primary_key():
 
 @pytest.mark.parametrize("timeframe", ["1m", "5m", "15m", "1h", "4h", "1d"])
 def test_mysql_row_is_complete_for_strict_mode(timeframe):
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     table = adapter._create_klines_table(timeframe)
     row = candle_to_mysql_kline(make_candle(timeframe)).model_dump()
 
@@ -101,7 +101,7 @@ def test_mysql_row_is_complete_for_strict_mode(timeframe):
 
 
 def test_compiled_mysql_insert_contains_complete_row_columns():
-    adapter = MySQLAdapter("sqlite:///:memory:")
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
     table = adapter._create_klines_table("15m")
     candle = make_candle("15m")
     row = candle_to_mysql_kline(candle)

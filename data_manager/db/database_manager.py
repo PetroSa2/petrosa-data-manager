@@ -140,9 +140,11 @@ class DatabaseManager:
                 pass
             logger.info("Health monitoring stopped")
 
-        if self.mysql_adapter:
+        mysql_adapter = self.mysql_adapter
+        self.mysql_adapter = None
+        if mysql_adapter:
             try:
-                await asyncio.to_thread(self.mysql_adapter.disconnect)
+                await asyncio.to_thread(mysql_adapter.disconnect)
                 self._stats["mysql"]["last_disconnected"] = datetime.now(UTC)
                 logger.info("MySQL disconnected")
             except Exception as e:
@@ -264,7 +266,9 @@ class DatabaseManager:
         the previous ``mysql_adapter`` (or None) instead of a half-initialized
         one whose tables are still being defined.
         """
-        adapter = cast(MySQLAdapter, get_adapter("mysql", constants.MYSQL_URI))
+        adapter = cast(
+            MySQLAdapter, get_adapter("mysql", constants.MYSQL_URI, role="serving")
+        )
         await asyncio.to_thread(adapter.connect)
         return adapter
 
@@ -284,8 +288,11 @@ class DatabaseManager:
             )
             await asyncio.sleep(backoff_delay)
 
-            # Attempt reconnection
-            self.mysql_adapter = await self._connect_mysql_adapter()
+            # Preserve the adapter object so long-lived holders see the new engine.
+            if self.mysql_adapter is None:
+                self.mysql_adapter = await self._connect_mysql_adapter()
+            else:
+                await asyncio.to_thread(self.mysql_adapter.reconnect)
 
             self._stats["mysql"]["connection_count"] += 1
             self._stats["mysql"]["last_connected"] = datetime.now(UTC)

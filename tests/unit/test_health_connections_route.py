@@ -39,7 +39,7 @@ def test_connections_reports_live_mysql_adapter_pool_config(client):
     hardcoded snapshot (#299 regression guard)."""
     fake_manager = MagicMock()
     fake_manager.mysql_adapter = MySQLAdapter(
-        connection_string="mysql+pymysql://user:pass@host/db"
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
     )
     fake_manager.get_connection_stats.return_value = {
         "overall": {"initialized": True},
@@ -54,7 +54,7 @@ def test_connections_reports_live_mysql_adapter_pool_config(client):
     assert mysql_pool == {
         "pool_size": 5,
         "max_overflow": 7,
-        "pool_timeout": 30,
+        "pool_timeout": 5,
         "pool_recycle": constants.MYSQL_POOL_RECYCLE,
     }
     # Ecosystem budget (#299 AC2): (pool_size + max_overflow) * maxReplicas(2) <= ~24

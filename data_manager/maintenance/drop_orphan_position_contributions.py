@@ -40,6 +40,7 @@ import sys
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 
+from data_manager.db.engine_factory import build_engine, mark_engine_closing
 from data_manager.db.mysql_session import configure_utc_session
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ def _make_engine_from_env() -> Engine:
     uri = os.getenv("MYSQL_URI")
     if not uri:
         raise RuntimeError("MYSQL_URI is not set; cannot connect to MySQL")
-    engine = sa.create_engine(uri, future=True)
+    engine = build_engine(uri, role="adhoc")
     configure_utc_session(engine)
     return engine
 
@@ -198,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("database error during migration: %s", exc)
         return 4
     finally:
-        engine.dispose()
+        mark_engine_closing(engine)
 
     return 0
 

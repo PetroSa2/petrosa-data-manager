@@ -53,7 +53,7 @@ def _fake_write_engine(captured: dict):
 @pytest.fixture
 def sqlite_adapter():
     """Build an adapter backed by an in-memory SQLite engine."""
-    a = MySQLAdapter("sqlite:///:memory:")
+    a = MySQLAdapter("sqlite:///:memory:", role="serving")
     # Replace engine_options with SQLite-compatible ones.
     a.engine_options = {}
     a.engine = sa.create_engine("sqlite:///:memory:")
@@ -78,7 +78,7 @@ class TestBuildConnectionString:
                 if hasattr(const, attr):
                     delattr(const, attr)
             # Need to call the build method directly.
-            a = MySQLAdapter("mysql://user:pass@host:3306/db")
+            a = MySQLAdapter("mysql://user:pass@host:3306/db", role="serving")
             result = a._build_connection_string()
             # When constants are absent, defaults are used.
             assert "mysql+pymysql://" in result
@@ -90,7 +90,7 @@ class TestBuildConnectionString:
             const.MYSQL_HOST = "db.example.com"
             const.MYSQL_PORT = 13306
             const.MYSQL_DB = "petrosa"
-            a = MySQLAdapter("mysql://x")
+            a = MySQLAdapter("mysql://x", role="serving")
             result = a._build_connection_string()
             assert result == "mysql+pymysql://admin:secret@db.example.com:13306/petrosa"
 
@@ -99,15 +99,15 @@ class TestConnect:
     def test_connect_wraps_sqlalchemy_error(self):
         from sqlalchemy.exc import SQLAlchemyError
 
-        with patch("data_manager.db.mysql_adapter.create_engine") as ce:
+        with patch("data_manager.db.mysql_adapter.build_engine") as ce:
             ce.side_effect = SQLAlchemyError("conn refused")
-            a = MySQLAdapter("mysql://x:y@h:3306/db")
+            a = MySQLAdapter("mysql://x:y@h:3306/db", role="serving")
             with pytest.raises(DatabaseError, match="Failed to connect") as exc_info:
                 a.connect()
             assert "Failed to connect" in str(exc_info.value)
 
     def test_disconnect_calls_dispose(self):
-        a = MySQLAdapter("mysql://x")
+        a = MySQLAdapter("mysql://x", role="serving")
         a.engine = MagicMock()
         a._connected = True
         a.disconnect()
@@ -115,7 +115,7 @@ class TestConnect:
         a.engine.dispose.assert_called_once()
 
     def test_disconnect_no_engine_is_safe(self):
-        a = MySQLAdapter("mysql://x")
+        a = MySQLAdapter("mysql://x", role="serving")
         a.engine = None
         # Must not raise.
         a.disconnect()
@@ -124,7 +124,7 @@ class TestConnect:
 
 class TestCreateTablesViaConnect:
     def test_connect_creates_tables_in_sqlite(self):
-        a = MySQLAdapter("sqlite:///:memory:")
+        a = MySQLAdapter("sqlite:///:memory:", role="serving")
         a.engine_options = {}
         # Hand-roll connect: SQLAlchemy SELECT 1 works on SQLite too.
         a.engine = sa.create_engine("sqlite:///:memory:")
@@ -676,7 +676,7 @@ class TestTimeColumnFallback:
 
 class TestEnsureConnected:
     def test_raises_when_no_engine(self):
-        a = MySQLAdapter("mysql://x")
+        a = MySQLAdapter("mysql://x", role="serving")
         a.engine = None
         with pytest.raises(DatabaseError) as exc_info:
             a._ensure_connected()

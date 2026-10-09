@@ -293,7 +293,7 @@ class TestMongoFindPaginated:
 
 @pytest.fixture
 def sqlite_adapter():
-    a = MySQLAdapter("sqlite:///:memory:")
+    a = MySQLAdapter("sqlite:///:memory:", role="serving")
     a.engine_options = {}
     a.engine = sa.create_engine("sqlite:///:memory:")
     a._connected = True

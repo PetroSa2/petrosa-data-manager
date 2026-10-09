@@ -165,19 +165,15 @@ async def connection_stats():
 
     stats = api_module.db_manager.get_connection_stats()
 
-    # Add connection pool information.
-    # petrosa-data-manager#299: read the live engine_options off the MySQL
-    # adapter instead of hardcoding stale values here — hardcoding drifted
-    # from reality once (this endpoint reported pool_recycle=1800 while the
-    # adapter had already been right-sized), so the endpoint is now the
-    # single source of truth's mirror, not a second source.
+    # Add connection pool information from the role-aware factory settings.
     mysql_adapter = getattr(api_module.db_manager, "mysql_adapter", None)
+    pool_options = getattr(mysql_adapter, "pool_options", None) or {}
     mysql_engine_options = getattr(mysql_adapter, "engine_options", None) or {}
     connection_info = {
         "mysql": {
-            "pool_size": mysql_engine_options.get("pool_size", 5),
-            "max_overflow": mysql_engine_options.get("max_overflow", 7),
-            "pool_timeout": mysql_engine_options.get("pool_timeout", 30),
+            "pool_size": pool_options.get("pool_size", 5),
+            "max_overflow": pool_options.get("max_overflow", 7),
+            "pool_timeout": pool_options.get("pool_timeout", 5),
             "pool_recycle": mysql_engine_options.get(
                 "pool_recycle", constants.MYSQL_POOL_RECYCLE
             ),
