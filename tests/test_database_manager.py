@@ -82,6 +82,20 @@ class TestInitialize:
 
 class TestShutdown:
     @pytest.mark.asyncio
+    async def test_shutdown_closes_mysql_before_other_components(self):
+        order: list[str] = []
+        mysql_a = make_adapter()
+        mongo_a = make_adapter()
+        mysql_a.disconnect.side_effect = lambda: order.append("mysql")
+        mongo_a.disconnect.side_effect = lambda: order.append("mongo")
+        with patch("data_manager.db.database_manager.get_adapter") as get_adp:
+            get_adp.side_effect = [mongo_a, mysql_a]
+            dm = DatabaseManager()
+            await dm.initialize()
+            await dm.shutdown()
+        assert order[:2] == ["mysql", "mongo"]
+
+    @pytest.mark.asyncio
     async def test_shutdown_disconnects_both_adapters(self):
         with patch("data_manager.db.database_manager.get_adapter") as get_adp:
             mysql_a = make_adapter()

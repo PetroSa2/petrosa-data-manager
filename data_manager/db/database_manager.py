@@ -140,9 +140,11 @@ class DatabaseManager:
                 pass
             logger.info("Health monitoring stopped")
 
-        if self.mysql_adapter:
+        mysql_adapter = self.mysql_adapter
+        self.mysql_adapter = None
+        if mysql_adapter:
             try:
-                await asyncio.to_thread(self.mysql_adapter.disconnect)
+                await asyncio.to_thread(mysql_adapter.disconnect)
                 self._stats["mysql"]["last_disconnected"] = datetime.now(UTC)
                 logger.info("MySQL disconnected")
             except Exception as e:

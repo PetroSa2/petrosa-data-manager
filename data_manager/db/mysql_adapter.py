@@ -46,7 +46,6 @@ from data_manager.db.engine_factory import (
     build_engine,
     create_read_only_engine,
     mark_engine_closing,
-    record_connection_error,
     role_options,
 )
 from data_manager.db.write_result import WriteResult
@@ -112,11 +111,11 @@ class MySQLAdapter(BaseAdapter):
         #   than the previous 30 = the ENTIRE user cap, leaving zero headroom
         #   for peer services still on direct MySQL during the migration
         #   window). 5 + 7 = 12/pod * 2 pods = 24.
-        forbidden = {"pool_size", "max_overflow", "poolclass", "pool_timeout"}
-        forbidden_kwargs = forbidden.intersection(kwargs)
-        if forbidden_kwargs:
-            names = ", ".join(sorted(forbidden_kwargs))
-            raise ValueError(f"Pool settings must be selected by role: {names}")
+        allowed_kwargs = {"pool_pre_ping", "pool_recycle", "connect_args"}
+        unknown_kwargs = set(kwargs) - allowed_kwargs
+        if unknown_kwargs:
+            names = ", ".join(sorted(unknown_kwargs))
+            raise TypeError(f"Unknown MySQL adapter options: {names}")
         self.pool_options = role_options(role)
         self.engine_options = {
             "pool_pre_ping": True,
@@ -180,10 +179,9 @@ class MySQLAdapter(BaseAdapter):
             # Create tables if they don't exist
             self._create_tables()
 
-        except SQLAlchemyError as e:
+        except Exception as e:
             if new_engine is not None:
                 mark_engine_closing(new_engine)
-            record_connection_error(e)
             raise DatabaseError(f"Failed to connect to MySQL: {e}") from e
 
     def disconnect(self) -> None:
@@ -208,10 +206,9 @@ class MySQLAdapter(BaseAdapter):
             )
             with new_engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
-        except SQLAlchemyError as exc:
+        except Exception:
             if new_engine is not None:
                 mark_engine_closing(new_engine)
-            record_connection_error(exc)
             raise
         self.engine = new_engine
         if old_engine is not None:

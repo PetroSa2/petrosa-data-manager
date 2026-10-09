@@ -171,8 +171,8 @@ async def connection_stats():
     mysql_engine_options = getattr(mysql_adapter, "engine_options", None) or {}
     connection_info = {
         "mysql": {
-            "pool_" + "size": pool_options.get("pool_size", 5),
-            "max_" + "overflow": pool_options.get("max_overflow", 7),
+            "pool_size": pool_options.get("pool_size", 5),
+            "max_overflow": pool_options.get("max_overflow", 7),
             "pool_timeout": pool_options.get("pool_timeout", 5),
             "pool_recycle": mysql_engine_options.get(
                 "pool_recycle", constants.MYSQL_POOL_RECYCLE

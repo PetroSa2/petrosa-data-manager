@@ -127,9 +127,14 @@ def mark_engine_closing(engine: Engine) -> None:
 def _instrumented_pool_class(
     wait_observer: Callable[[float], None],
     error_observer: Callable[[BaseException], None],
+    closing: Callable[[], bool],
 ) -> type[QueuePool]:
     class InstrumentedQueuePool(QueuePool):
         def _do_get(self) -> Any:
+            if closing():
+                error = RuntimeError("MySQL engine is closing (QueuePool)")
+                error_observer(error)
+                raise error
             started = time.monotonic()
             try:
                 return super()._do_get()
@@ -170,6 +175,8 @@ def build_engine(
         kind = classify_connection_error(exc)
         if kind:
             state["errors"][kind] += 1
+            if on_error:
+                on_error(kind)
 
     engine_kwargs: dict[str, Any] = {
         "pool_pre_ping": pool_pre_ping,
@@ -183,6 +190,7 @@ def build_engine(
                     elapsed
                 ),
                 record_pool_error,
+                lambda: state["closing"],
             ),
         }
     )
@@ -212,13 +220,6 @@ def build_engine(
     @event.listens_for(engine, "checkout")
     def _checkout(dbapi_connection: Any, connection_record: Any, proxy: Any) -> None:
         del dbapi_connection, connection_record, proxy
-        if state["closing"]:
-            error = RuntimeError("MySQL engine is closing")
-            state["errors"]["pool_timeout"] += 1
-            connection_errors_total.labels(kind="pool_timeout").inc()
-            if on_error:
-                on_error("pool_timeout")
-            raise error
         with state_lock:
             current = state["in_use"]
             state["in_use"] += 1
@@ -240,9 +241,6 @@ def build_engine(
             or exception_context.sqlalchemy_exception
         )
         record_pool_error(exc)
-        kind = classify_connection_error(exc)
-        if kind and on_error:
-            on_error(kind)
 
     return engine
 

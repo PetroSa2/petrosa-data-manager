@@ -40,7 +40,7 @@ import sys
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 
-from data_manager.db.engine_factory import build_engine
+from data_manager.db.engine_factory import build_engine, mark_engine_closing
 from data_manager.db.mysql_session import configure_utc_session
 
 logger = logging.getLogger(__name__)
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("database error during migration: %s", exc)
         return 4
     finally:
-        engine.dispose()
+        mark_engine_closing(engine)
 
     return 0
 

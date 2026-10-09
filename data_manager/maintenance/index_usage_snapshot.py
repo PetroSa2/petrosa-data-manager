@@ -19,6 +19,7 @@ from typing import Any
 import sqlalchemy as sa
 from opentelemetry import metrics
 
+from data_manager.db.engine_factory import mark_engine_closing
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import create_read_only_engine
 
@@ -247,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         if mongo is not None:
             mongo.disconnect()
         if engine is not None:
-            engine.dispose()
+            mark_engine_closing(engine)
 
 
 if __name__ == "__main__":

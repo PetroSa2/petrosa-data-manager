@@ -49,6 +49,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
+from data_manager.db.engine_factory import mark_engine_closing
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.mysql_adapter import (
     create_read_only_engine,
@@ -438,7 +439,7 @@ def audit_mysql(connection_string: str) -> tuple[list[MysqlSchemaStat], str | No
     except Exception as exc:  # noqa: BLE001
         logger.error("storage_inventory: MySQL schema enumeration failed: %s", exc)
         if engine is not None:
-            engine.dispose()
+            mark_engine_closing(engine)
         return [], str(exc)
 
     out: list[MysqlSchemaStat] = []
@@ -469,7 +470,7 @@ def audit_mysql(connection_string: str) -> tuple[list[MysqlSchemaStat], str | No
             )
         out.append(schema_stat)
 
-    engine.dispose()
+    mark_engine_closing(engine)
     return out, None
 
 
