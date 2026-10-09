@@ -494,7 +494,11 @@ async def get_slippage_by_regime(
         and role is None
         and window_days == 30
     ):
-        cached = await precomputer.get("slippage_by_regime", window_days=30)
+        cached = await precomputer.get_or_compute(
+            "slippage_by_regime",
+            lambda: compute_slippage_by_regime(api_module.db_manager, 30),
+            window_days=30,
+        )
         if cached is not None:
             return cached
         raise HTTPException(
@@ -551,7 +555,11 @@ async def get_closed_rounds(
 ):
     precomputer = getattr(api_module, "report_precomputer", None)
     if precomputer is not None and strategy_id is None and window_days == 30:
-        cached = await precomputer.get("rounds", window_days=30)
+        cached = await precomputer.get_or_compute(
+            "rounds",
+            lambda: compute_closed_rounds(api_module.db_manager, None, 30),
+            window_days=30,
+        )
         if cached is not None:
             return cached
         raise HTTPException(

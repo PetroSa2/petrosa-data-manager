@@ -39,6 +39,7 @@ class ReportPrecomputer:
         self.leader_election = leader_election
         self.task: asyncio.Task[None] | None = None
         self.running = False
+        self._cold_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def collection(self) -> Any:
@@ -79,6 +80,26 @@ class ReportPrecomputer:
             metadata["age_seconds"] = age
             metadata["stale"] = age > self._interval(report) * 3
         return body
+
+    async def get_or_compute(
+        self, report: str, callback: Any, **params: Any
+    ) -> dict[str, Any] | None:
+        """Serve a cache row or compute one cold row behind a local single-flight lock."""
+        cached = await self.get(report, **params)
+        if cached is not None:
+            return cached
+
+        key = cache_key(report, **params)
+        lock = self._cold_locks.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            return None
+        async with lock:
+            cached = await self.get(report, **params)
+            if cached is not None:
+                return cached
+            body = await callback()
+            await self._put(report, body, **params)
+            return await self.get(report, **params)
 
     async def _put(self, report: str, body: dict[str, Any], **params: Any) -> None:
         computed_at = datetime.now(UTC)

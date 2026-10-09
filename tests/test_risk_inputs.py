@@ -246,7 +246,7 @@ def client(monkeypatch):
         "ETHUSDT": [2 * x for x in _alternating(n, 0.01)],
     }
 
-    async def candles(symbol, timeframe, start, end):
+    async def candles(symbol, timeframe, start, end, db_manager=None):
         if timeframe == "1d":
             series = _candles(
                 rets[symbol],
@@ -262,12 +262,12 @@ def client(monkeypatch):
             step=timedelta(hours=1),
         )
 
-    async def wallet(first, last):
+    async def wallet(first, last, db_manager=None):
         return _wallet_rows(
             [1000.0, 1010.0, 1005.0], start=date.today() - timedelta(days=3)
         )
 
-    async def stored_peak():
+    async def stored_peak(db_manager=None):
         return {"peak": 1234.5, "peak_at": "2026-10-06T00:00:00+00:00"}
 
     monkeypatch.setattr(risk_route, "_load_candles", candles)
@@ -304,10 +304,10 @@ def test_endpoint_falls_back_to_1h_sigma_when_daily_candles_are_insufficient(
 ):
     original = risk_route._load_candles
 
-    async def sparse_daily(symbol, timeframe, start, end):
+    async def sparse_daily(symbol, timeframe, start, end, db_manager=None):
         if timeframe == "1d":
             return []
-        return await original(symbol, timeframe, start, end)
+        return await original(symbol, timeframe, start, end, db_manager)
 
     monkeypatch.setattr(risk_route, "_load_candles", sparse_daily)
     body = client.get("/api/v1/risk/inputs?symbols=BTCUSDT").json()
@@ -319,7 +319,7 @@ def test_endpoint_falls_back_to_1h_sigma_when_daily_candles_are_insufficient(
 
 
 def test_endpoint_never_fills_in_a_number_when_nothing_suffices(client, monkeypatch):
-    async def empty(symbol, timeframe, start, end):
+    async def empty(symbol, timeframe, start, end, db_manager=None):
         return []
 
     monkeypatch.setattr(risk_route, "_load_candles", empty)
@@ -337,7 +337,7 @@ def test_endpoint_never_fills_in_a_number_when_nothing_suffices(client, monkeypa
 def test_endpoint_reports_a_failed_candle_read_instead_of_inventing_data(
     client, monkeypatch
 ):
-    async def boom(symbol, timeframe, start, end):
+    async def boom(symbol, timeframe, start, end, db_manager=None):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(risk_route, "_load_candles", boom)
@@ -432,7 +432,7 @@ def test_holding_times_only_count_rounds_in_the_window():
 
 
 def test_the_endpoint_serves_the_key_tradeengine_reads(client, monkeypatch):
-    async def fills(end):
+    async def fills(end, db_manager=None):
         return _rounds("iceberg_detector", [60, 120, 180])
 
     monkeypatch.setattr(risk_route, "_load_fills", fills)
@@ -445,7 +445,7 @@ def test_the_endpoint_serves_the_key_tradeengine_reads(client, monkeypatch):
 
 
 def test_a_failed_fill_read_is_reported_not_invented(client, monkeypatch):
-    async def boom(end):
+    async def boom(end, db_manager=None):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(risk_route, "_load_fills", boom)

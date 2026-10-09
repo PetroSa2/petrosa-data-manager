@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,6 +10,8 @@ from data_manager.api.routes.analysis import compute_slippage_by_regime
 from data_manager.consumer.execution_events_consumer import ExecutionEventsConsumer
 from data_manager.models.execution_event import ExecutionEvent
 from data_manager.services.report_precompute import ReportPrecomputer
+from data_manager.services.round_book import build_report as build_round_report
+from data_manager.services.slippage_report import build_report as build_slippage_report
 
 
 class FakeCollection:
@@ -64,6 +67,22 @@ async def test_cache_hit_normalizes_naive_mongodb_datetime():
 
 
 @pytest.mark.asyncio
+async def test_cache_hit_keeps_timezone_aware_mongodb_datetime():
+    collection = FakeCollection()
+    computed_at = datetime.now(UTC)
+    collection.rows["risk_inputs:window_days=30"] = {
+        "body": {"metadata": {}},
+        "computed_at": computed_at,
+    }
+
+    served = await ReportPrecomputer(
+        SimpleNamespace(mongodb_adapter=FakeMongo(collection))
+    ).get("risk_inputs", window_days=30)
+
+    assert served["metadata"]["computed_at"] == computed_at.isoformat()
+
+
+@pytest.mark.asyncio
 async def test_precomputer_start_and_stop_manage_the_refresh_task(monkeypatch):
     collection = FakeCollection()
     manager = SimpleNamespace(mongodb_adapter=FakeMongo(collection))
@@ -101,7 +120,7 @@ async def test_precomputer_refreshes_each_report_with_explicit_defaults(monkeypa
     await asyncio.sleep(0)
     precomputer.running = False
     task.cancel()
-    await __import__("asyncio").gather(task, return_exceptions=True)
+    await asyncio.gather(task, return_exceptions=True)
 
     assert set(collection.rows) == {
         "slippage_by_regime:window_days=30",
@@ -236,10 +255,224 @@ async def test_default_routes_serve_cached_reports_without_computing(monkeypatch
     )
     from data_manager.api.routes.risk import get_risk_inputs
 
-    precomputer = SimpleNamespace(get=AsyncMock(return_value={"cached": True}))
+    precomputer = SimpleNamespace(
+        get_or_compute=AsyncMock(return_value={"cached": True})
+    )
     monkeypatch.setattr(api_module, "report_precomputer", precomputer)
 
     assert (await get_slippage_by_regime(30.0, None, None)) == {"cached": True}
     assert (await get_closed_rounds(None, 30.0)) == {"cached": True}
     assert (await get_risk_inputs(30, 14, 60, 4.0, None, 30.0)) == {"cached": True}
-    assert precomputer.get.await_count == 3
+    assert precomputer.get_or_compute.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_cold_miss_single_flight_computes_once():
+    collection = FakeCollection()
+    precomputer = ReportPrecomputer(
+        SimpleNamespace(mongodb_adapter=FakeMongo(collection))
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def compute():
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return _report_body()
+
+    first = asyncio.create_task(
+        precomputer.get_or_compute("slippage_by_regime", compute, window_days=30)
+    )
+    await started.wait()
+    assert (
+        await precomputer.get_or_compute("slippage_by_regime", compute, window_days=30)
+    ) is None
+    release.set()
+    assert (await first)["overall"]["count"] == 1
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_real_refresh_is_served_by_each_default_route(monkeypatch):
+    import data_manager.api.app as api_module
+    from data_manager.api.routes import risk as risk_route
+    from data_manager.api.routes.analysis import (
+        get_closed_rounds,
+        get_slippage_by_regime,
+    )
+    from data_manager.api.routes.risk import get_risk_inputs
+
+    now = datetime.now(UTC)
+    fills = [
+        {
+            "event_type": "filled",
+            "symbol": "BTCUSDT",
+            "strategy_id": "strategy",
+            "timestamp": now,
+            "fill_time": now,
+            "side": "BUY",
+            "position_side": "LONG",
+            "fill_qty": 1,
+            "fill_price": 100,
+            "payload": {"slippage_bp": 2.0},
+        },
+        {
+            "event_type": "filled",
+            "symbol": "BTCUSDT",
+            "strategy_id": "strategy",
+            "timestamp": now,
+            "fill_time": now,
+            "side": "SELL",
+            "position_side": "LONG",
+            "fill_qty": 1,
+            "fill_price": 101,
+            "payload": {"slippage_bp": 4.0},
+        },
+    ]
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def sort(self, *args):
+            return self
+
+        async def to_list(self, length=None):
+            return self.rows[:length] if length else self.rows
+
+    class Collection:
+        def __init__(self, rows=None):
+            self.rows = rows or []
+
+        def find(self, query=None, projection=None):
+            return Cursor(self.rows)
+
+        async def find_one(self, query, sort=None):
+            return None
+
+        async def create_index(self, *args, **kwargs):
+            return "computed_at_ttl"
+
+        async def replace_one(self, query, document, upsert=False):
+            self.rows = [document]
+
+    class Database(dict):
+        def __getitem__(self, name):
+            if name == "execution_events":
+                return Collection(fills)
+            if name.startswith("analytics_"):
+                return Collection(
+                    [{"regime": "balanced_market", "computed_at": now}]
+                )
+            return super().__getitem__(name)
+
+    cache = FakeCollection()
+    database = Database(report_cache=cache)
+    manager = SimpleNamespace(mongodb_adapter=SimpleNamespace(db=database))
+    precomputer = ReportPrecomputer(manager)
+    monkeypatch.setattr(api_module, "db_manager", manager)
+    monkeypatch.setattr(api_module, "report_precomputer", precomputer)
+    monkeypatch.setattr(risk_route, "_load_wallet_rows", AsyncMock(return_value=[]))
+    monkeypatch.setattr("constants.SUPPORTED_PAIRS", ())
+
+    assert (await get_slippage_by_regime(30.0, None, None))["overall"]["count"] == 2
+    rounds = await get_closed_rounds(None, 30.0)
+    assert rounds["strategies"]["strategy"]["closed_rounds"] == 1
+    risk = await get_risk_inputs(30, 14, 60, 4.0, None, 30.0)
+    assert risk["symbols"] == {}
+    assert set(cache.rows) == {
+        "slippage_by_regime:window_days=30",
+        "rounds:window_days=30",
+        "risk_inputs:window_days=30",
+    }
+
+
+def test_slippage_and_round_reports_match_for_full_and_projected_rows():
+    regime_time = datetime(2026, 10, 6, tzinfo=UTC)
+    fills = [
+        {
+            "event_type": "filled",
+            "symbol": "BTCUSDT",
+            "strategy_id": "strategy",
+            "timestamp": regime_time,
+            "fill_time": regime_time,
+            "side": "BUY",
+            "position_side": "LONG",
+            "fill_qty": 1,
+            "fill_price": 100,
+            "fee": 0.1,
+            "fees": [{"amount": 0.1, "asset": "USDT"}],
+            "fee_asset": "USDT",
+            "fee_status": "confirmed",
+            "position_id": "position",
+            "decision_id": "decision",
+            "reason": "entry",
+            "payload": {"slippage_bp": 2.0, "role": "entry"},
+        },
+        {
+            "event_type": "filled",
+            "symbol": "BTCUSDT",
+            "strategy_id": "strategy",
+            "timestamp": regime_time,
+            "fill_time": regime_time.replace(hour=1),
+            "side": "SELL",
+            "position_side": "LONG",
+            "fill_qty": 1,
+            "fill_price": 101,
+            "fee": 0.1,
+            "fees": [{"amount": 0.1, "asset": "USDT"}],
+            "fee_asset": "USDT",
+            "fee_status": "confirmed",
+            "position_id": "position",
+            "decision_id": "decision",
+            "reason": "oco_exit_1",
+            "payload": {"slippage_bp": 4.0, "role": "exit"},
+        },
+    ]
+    regimes = {
+        "BTCUSDT": [
+            {"regime": "balanced_market", "metadata": {"computed_at": regime_time}}
+        ]
+    }
+    slippage_projected = [
+        {
+            key: deepcopy(row[key])
+            for key in ("event_type", "symbol", "timestamp", "fill_time", "payload")
+        }
+        for row in fills
+    ]
+    rounds_projected = [
+        {
+            key: deepcopy(row[key])
+            for key in (
+                "event_type",
+                "symbol",
+                "strategy_id",
+                "timestamp",
+                "fill_time",
+                "side",
+                "position_side",
+                "fill_qty",
+                "fill_price",
+                "fee",
+                "fees",
+                "fee_asset",
+                "fee_status",
+                "position_id",
+                "decision_id",
+                "reason",
+                "payload",
+            )
+        }
+        for row in fills
+    ]
+
+    assert build_slippage_report(fills, regimes) == build_slippage_report(
+        slippage_projected, regimes
+    )
+    assert build_round_report(fills, window_days=30) == build_round_report(
+        rounds_projected, window_days=30
+    )

@@ -28,19 +28,25 @@ STORED_PEAK_COLLECTION = "risk_equity_peak"
 
 
 async def _load_candles(
-    symbol: str, timeframe: str, start: datetime, end: datetime
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    db_manager: Any | None = None,
 ) -> list[dict[str, Any]]:
     from data_manager.db.repositories import CandleRepository
 
-    manager = api_module.db_manager
+    manager = db_manager or api_module.db_manager
     repo = CandleRepository(manager.mysql_adapter, manager.mongodb_adapter)
     return await repo.get_range(symbol, timeframe, start, end)
 
 
-async def _load_wallet_rows(first: datetime, last: datetime) -> list[dict[str, Any]]:
+async def _load_wallet_rows(
+    first: datetime, last: datetime, db_manager: Any | None = None
+) -> list[dict[str, Any]]:
     from data_manager.db.repositories.ledger_repository import LedgerRepository
 
-    manager = api_module.db_manager
+    manager = db_manager or api_module.db_manager
     repo = LedgerRepository(manager.mysql_adapter, None)
     return await asyncio.to_thread(repo.wallet_series, first.date(), last.date())
 
@@ -48,8 +54,11 @@ async def _load_wallet_rows(first: datetime, last: datetime) -> list[dict[str, A
 _MAX_FILLS = 200_000
 
 
-async def _load_fills(end: datetime) -> list[dict[str, Any]]:
-    mongodb = api_module.db_manager.mongodb_adapter
+async def _load_fills(
+    end: datetime, db_manager: Any | None = None
+) -> list[dict[str, Any]]:
+    manager = db_manager or api_module.db_manager
+    mongodb = manager.mongodb_adapter
     query: dict[str, Any] = {
         "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
         "timestamp": {"$lt": end},
@@ -87,8 +96,8 @@ def strategy_holding_times(
     }
 
 
-async def _load_stored_peak() -> dict[str, Any] | None:
-    manager = api_module.db_manager
+async def _load_stored_peak(db_manager: Any | None = None) -> dict[str, Any] | None:
+    manager = db_manager or api_module.db_manager
     adapter = getattr(manager, "mongodb_adapter", None)
     if adapter is None:
         return None
@@ -140,8 +149,8 @@ async def compute_risk_inputs(
 
     async def one(symbol: str):
         daily_candles, hourly_candles = await asyncio.gather(
-            _load_candles(symbol, "1d", daily_start, now),
-            _load_candles(symbol, "1h", hourly_start, now),
+            _load_candles(symbol, "1d", daily_start, now, db_manager),
+            _load_candles(symbol, "1h", hourly_start, now, db_manager),
         )
         return symbol, daily_candles, hourly_candles
 
@@ -175,7 +184,9 @@ async def compute_risk_inputs(
 
     equity: dict[str, Any]
     try:
-        rows = await _load_wallet_rows(now - timedelta(days=window_days + 400), now)
+        rows = await _load_wallet_rows(
+            now - timedelta(days=window_days + 400), now, db_manager
+        )
         equity = await asyncio.to_thread(
             ri.equity_curve, rows, window_days=window_days, now=now
         )
@@ -187,7 +198,7 @@ async def compute_risk_inputs(
             "error": "wallet balance read failed",
         }
     try:
-        equity["stored_peak"] = await _load_stored_peak()
+        equity["stored_peak"] = await _load_stored_peak(db_manager)
     except Exception as exc:
         logger.warning("risk inputs: stored equity peak not readable: %s", exc)
         equity["stored_peak"] = None
@@ -198,7 +209,7 @@ async def compute_risk_inputs(
     try:
         strategies = await asyncio.to_thread(
             strategy_holding_times,
-            await _load_fills(now),
+            await _load_fills(now, db_manager),
             now,
             strategies_window_days,
         )
@@ -248,7 +259,11 @@ async def get_risk_inputs(
         and strategies_window_days == 30
     )
     if precomputer is not None and default_request:
-        cached = await precomputer.get("risk_inputs", window_days=30)
+        cached = await precomputer.get_or_compute(
+            "risk_inputs",
+            lambda: compute_risk_inputs(api_module.db_manager, window_days=30),
+            window_days=30,
+        )
         if cached is not None:
             return cached
         raise HTTPException(
