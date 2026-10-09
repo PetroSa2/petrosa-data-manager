@@ -120,6 +120,10 @@ def test_calibration_freshness_requires_recent_report() -> None:
     assert calibration_freshness(recent, now=now)["fresh"] is True
     assert calibration_freshness(stale, now=now)["fresh"] is False
     assert calibration_freshness([], now=now)["fresh"] is False
+    assert (
+        calibration_freshness([{"closed_at": "2026-10-09T11:45:00"}], now=now)["fresh"]
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -172,6 +176,48 @@ async def test_latest_calibration_route_adds_freshness() -> None:
 
 
 @pytest.mark.asyncio
+async def test_latest_calibration_route_returns_fresh_report(monkeypatch) -> None:
+    async def fake_latest(*args, **kwargs):
+        return {
+            "records": [{"closed_at": "2026-10-09T11:45:00+00:00"}],
+            "skipped": 0,
+            "latest_at": "2026-10-09T11:45:00+00:00",
+            "fresh": True,
+            "max_age_minutes": 30,
+            "age_minutes": 15.0,
+        }
+
+    monkeypatch.setattr(
+        "data_manager.services.calibration_service.get_latest_calibration",
+        fake_latest,
+    )
+    api_module.db_manager = SimpleNamespace(mongodb_adapter=object())
+    try:
+        result = await get_latest_calibration_report()
+    finally:
+        api_module.db_manager = None
+
+    assert result["fresh"] is True
+    assert result["latest_at"] == "2026-10-09T11:45:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_latest_calibration_route_maps_query_failure_to_503() -> None:
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            raise RuntimeError("database unavailable")
+
+    api_module.db_manager = SimpleNamespace(mongodb_adapter=Mongo())
+    try:
+        with pytest.raises(HTTPException) as error:
+            await get_latest_calibration_report()
+    finally:
+        api_module.db_manager = None
+
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_calibration_health_reports_unavailable_without_database() -> None:
     api_module.db_manager = None
     response = await calibration_health()
@@ -193,3 +239,18 @@ async def test_calibration_health_reports_empty_data_as_degraded() -> None:
 
     assert response["status"] == "degraded"
     assert response["fresh"] is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_health_reports_query_failure_as_unavailable() -> None:
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            raise RuntimeError("database unavailable")
+
+    api_module.db_manager = SimpleNamespace(mongodb_adapter=Mongo())
+    try:
+        response = await calibration_health()
+    finally:
+        api_module.db_manager = None
+
+    assert response.status_code == 503
