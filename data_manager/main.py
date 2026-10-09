@@ -698,6 +698,9 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
+        if self.db_manager:
+            await self.db_manager.shutdown()
+            logger.info("Database connections closed")
         await self._cancel_database_retry()
         if self.klines_daily_gaps_task:
             self.klines_daily_gaps_task.cancel()
@@ -798,11 +801,6 @@ class DataManagerApp:
             except asyncio.CancelledError:
                 pass
             logger.info("API server stopped")
-
-        # Shutdown database connections
-        if self.db_manager:
-            await self.db_manager.shutdown()
-            logger.info("Database connections closed")
 
         logger.info("Petrosa Data Manager stopped")
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from data_manager.db.engine_factory import (
@@ -21,7 +24,8 @@ def test_role_defaults_and_suffix_overrides(monkeypatch: pytest.MonkeyPatch) -> 
     }
 
 
-def test_invalid_role_env_uses_default() -> None:
+def test_invalid_role_env_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MYSQL_POOL_SIZE_ADHOC", "0")
     assert role_options("adhoc") == {
         "pool_size": 1,
         "max_overflow": 1,
@@ -53,3 +57,40 @@ def test_closing_engine_refuses_new_checkouts() -> None:
 )
 def test_connection_error_classification(message: str, kind: str) -> None:
     assert classify_connection_error(RuntimeError(message)) == kind
+
+
+def test_connection_construction_is_centralized() -> None:
+    root = Path(__file__).parents[1] / "data_manager"
+    violations: list[str] = []
+    for path in root.rglob("*.py"):
+        if path.name == "engine_factory.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = (
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else getattr(node.func, "id", "")
+                )
+                if name == "create_engine" or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "connect"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "pymysql"
+                ):
+                    violations.append(f"{path}:{node.lineno}: {name}")
+                if any(
+                    keyword.arg in {"pool_size", "max_overflow", "poolclass"}
+                    for keyword in node.keywords
+                ):
+                    violations.append(f"{path}:{node.lineno}: pool keyword")
+            if isinstance(node, ast.Dict):
+                for key in node.keys:
+                    if isinstance(key, ast.Constant) and key.value in {
+                        "pool_size",
+                        "max_overflow",
+                        "poolclass",
+                    }:
+                        violations.append(f"{path}:{node.lineno}: pool key")
+    assert violations == []

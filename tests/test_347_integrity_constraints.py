@@ -19,8 +19,8 @@ def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_unchanged():
     assert (
         f"wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}" in args["init_command"]
     )
-    assert mysql.engine_options["pool_size"] == 5
-    assert mysql.engine_options["max_overflow"] == 7
+    assert mysql.pool_options["pool_size"] == 5
+    assert mysql.pool_options["max_overflow"] == 7
     assert mysql.engine_options["pool_pre_ping"] is True
 
 

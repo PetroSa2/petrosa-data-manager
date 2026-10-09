@@ -112,22 +112,21 @@ class MySQLAdapter(BaseAdapter):
         #   than the previous 30 = the ENTIRE user cap, leaving zero headroom
         #   for peer services still on direct MySQL during the migration
         #   window). 5 + 7 = 12/pod * 2 pods = 24.
+        forbidden = {"pool_size", "max_overflow", "poolclass", "pool_timeout"}
+        forbidden_kwargs = forbidden.intersection(kwargs)
+        if forbidden_kwargs:
+            names = ", ".join(sorted(forbidden_kwargs))
+            raise ValueError(f"Pool settings must be selected by role: {names}")
+        self.pool_options = role_options(role)
         self.engine_options = {
             "pool_pre_ping": True,
             "pool_recycle": constants.MYSQL_POOL_RECYCLE,
-            **role_options(role),
             "connect_args": {
                 "charset": "utf8mb4",
                 "autocommit": False,  # Explicit transaction control
             },
         }
-        self.engine_options.update(
-            {
-                key: value
-                for key, value in kwargs.items()
-                if key not in {"pool_size", "max_overflow", "poolclass", "pool_timeout"}
-            }
-        )
+        self.engine_options.update({key: value for key, value in kwargs.items()})
         if connection_string.startswith("mysql"):
             self.engine_options["connect_args"].update(
                 {
@@ -159,9 +158,10 @@ class MySQLAdapter(BaseAdapter):
 
     def connect(self) -> None:
         """Establish connection to MySQL."""
+        new_engine: Engine | None = None
         try:
             old_engine = self.engine
-            self.engine = build_engine(
+            new_engine = build_engine(
                 self.connection_string,
                 self.role,
                 connect_args=self.engine_options.get("connect_args", {}),
@@ -169,12 +169,11 @@ class MySQLAdapter(BaseAdapter):
                     "pool_recycle", constants.MYSQL_POOL_RECYCLE
                 ),
             )
+            with new_engine.connect() as conn:
+                conn.execute(sa.text("SELECT 1"))
+            self.engine = new_engine
             if old_engine is not None:
                 mark_engine_closing(old_engine)
-            # Test connection
-            if self.engine is not None:
-                with self.engine.connect() as conn:
-                    conn.execute(sa.text("SELECT 1"))
             self._connected = True
             logger.info("Connected to MySQL database")
 
@@ -182,6 +181,8 @@ class MySQLAdapter(BaseAdapter):
             self._create_tables()
 
         except SQLAlchemyError as e:
+            if new_engine is not None:
+                mark_engine_closing(new_engine)
             record_connection_error(e)
             raise DatabaseError(f"Failed to connect to MySQL: {e}") from e
 
@@ -195,8 +196,9 @@ class MySQLAdapter(BaseAdapter):
     def reconnect(self) -> None:
         """Replace this adapter's engine without replacing the adapter object."""
         old_engine = self.engine
+        new_engine: Engine | None = None
         try:
-            self.engine = build_engine(
+            new_engine = build_engine(
                 self.connection_string,
                 self.role,
                 connect_args=self.engine_options.get("connect_args", {}),
@@ -204,9 +206,14 @@ class MySQLAdapter(BaseAdapter):
                     "pool_recycle", constants.MYSQL_POOL_RECYCLE
                 ),
             )
+            with new_engine.connect() as conn:
+                conn.execute(sa.text("SELECT 1"))
         except SQLAlchemyError as exc:
+            if new_engine is not None:
+                mark_engine_closing(new_engine)
             record_connection_error(exc)
             raise
+        self.engine = new_engine
         if old_engine is not None:
             mark_engine_closing(old_engine)
         self._connected = True

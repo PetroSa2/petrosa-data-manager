@@ -79,9 +79,7 @@ def test_mysql_adapter_pool_size_within_ecosystem_budget():
     adapter = MySQLAdapter(
         connection_string="mysql+pymysql://user:pass@host/db", role="serving"
     )
-    per_pod = (
-        adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"]
-    )
+    per_pod = adapter.pool_options["pool_size"] + adapter.pool_options["max_overflow"]
     assert per_pod * _HPA_MAX_REPLICAS <= _ECOSYSTEM_MYSQL_BUDGET
 
 
@@ -104,8 +102,7 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     assert kwargs["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert kwargs["connect_args"]["init_command"]
     assert (
-        adapter.engine_options["pool_size"] + adapter.engine_options["max_overflow"]
-        <= 12
+        adapter.pool_options["pool_size"] + adapter.pool_options["max_overflow"] <= 12
     )
 
 

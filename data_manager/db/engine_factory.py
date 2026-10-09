@@ -1,9 +1,14 @@
-"""Role-aware SQLAlchemy engine construction and pool instrumentation."""
+"""Role-aware SQLAlchemy engine construction and pool instrumentation.
+
+Executor queue timing is deferred until the planned adapter-level executor
+wrapper replaces the shared asyncio executor.
+"""
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -13,6 +18,7 @@ from prometheus_client import Counter, Gauge, Histogram
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.pool import QueuePool
 
 from data_manager.db.mysql_session import configure_utc_session
 
@@ -58,7 +64,7 @@ for _kind in ERROR_KINDS:
     connection_errors_total.labels(kind=_kind)
 
 
-def _setting(role: str, name: str, default: int) -> int:
+def _setting(role: str, name: str, default: int, minimum: int = 0) -> int:
     raw = os.getenv(f"MYSQL_{name}_{role.upper()}")
     if raw is None:
         return default
@@ -66,7 +72,7 @@ def _setting(role: str, name: str, default: int) -> int:
         value = int(raw)
     except ValueError:
         return default
-    return value if value >= 0 else default
+    return value if value >= minimum else default
 
 
 def role_options(role: str) -> dict[str, int]:
@@ -75,7 +81,7 @@ def role_options(role: str) -> dict[str, int]:
         raise ValueError(f"Unknown MySQL pool role: {role}")
     size, overflow, timeout = ROLE_DEFAULTS[role]
     return {
-        "pool_size": _setting(role, "POOL_SIZE", size),
+        "pool_size": _setting(role, "POOL_SIZE", size, minimum=1),
         "max_overflow": _setting(role, "MAX_OVERFLOW", overflow),
         "pool_timeout": _setting(role, "POOL_TIMEOUT", timeout),
     }
@@ -109,7 +115,31 @@ def mark_engine_closing(engine: Engine) -> None:
     state = getattr(engine, "_petrosa_pool_state", None)
     if state is not None:
         state["closing"] = True
+        logger.info(
+            "MYSQL_POOL_SUMMARY role=%s peak_in_use=%s errors=%s",
+            state["role"],
+            state["peak_in_use"],
+            state["errors"],
+        )
     engine.dispose()
+
+
+def _instrumented_pool_class(
+    wait_observer: Callable[[float], None],
+    error_observer: Callable[[BaseException], None],
+) -> type[QueuePool]:
+    class InstrumentedQueuePool(QueuePool):
+        def _do_get(self) -> Any:
+            started = time.monotonic()
+            try:
+                return super()._do_get()
+            except BaseException as exc:
+                error_observer(exc)
+                raise
+            finally:
+                wait_observer(max(0.0, time.monotonic() - started))
+
+    return InstrumentedQueuePool
 
 
 def build_engine(
@@ -126,19 +156,43 @@ def build_engine(
     args = dict(connect_args or {})
     if connection_string.startswith("mysql"):
         args.setdefault("charset", "utf8mb4")
+    state = {
+        "closing": False,
+        "in_use": 0,
+        "peak_in_use": 0,
+        "role": role,
+        "errors": dict.fromkeys(ERROR_KINDS, 0),
+    }
+    state_lock = threading.Lock()
+
+    def record_pool_error(exc: BaseException) -> None:
+        record_connection_error(exc)
+        kind = classify_connection_error(exc)
+        if kind:
+            state["errors"][kind] += 1
+
     engine_kwargs: dict[str, Any] = {
         "pool_pre_ping": pool_pre_ping,
         "pool_recycle": pool_recycle,
         "connect_args": args,
     }
+    engine_kwargs.update(
+        {
+            "poolclass": _instrumented_pool_class(
+                lambda elapsed: checkout_wait_seconds.labels(role=role).observe(
+                    elapsed
+                ),
+                record_pool_error,
+            ),
+        }
+    )
     if connection_string.startswith("mysql"):
         engine_kwargs.update(options)
     engine = sa.create_engine(connection_string, **engine_kwargs)
-    state = {"closing": False, "checkout_started": 0.0}
     try:
         engine._petrosa_pool_state = state
     except AttributeError:
-        return engine
+        pass
     if connection_string.startswith("mysql"):
         configure_utc_session(engine)
     pool_cap.labels(role=role).set(options["pool_size"] + options["max_overflow"])
@@ -158,24 +212,35 @@ def build_engine(
         del dbapi_connection, connection_record, proxy
         if state["closing"]:
             error = RuntimeError("MySQL engine is closing")
+            state["errors"]["pool_timeout"] += 1
             connection_errors_total.labels(kind="pool_timeout").inc()
             if on_error:
                 on_error("pool_timeout")
             raise error
-        state["checkout_started"] = time.monotonic()
-        current = pool_in_use.labels(role=role)._value.get()
+        with state_lock:
+            current = state["in_use"]
+            state["in_use"] += 1
+            state["peak_in_use"] = max(state["peak_in_use"], state["in_use"])
         pool_in_use_at_checkout.labels(role=role).observe(current)
         pool_in_use.labels(role=role).inc()
 
     @event.listens_for(engine, "checkin")
     def _checkin(dbapi_connection: Any, connection_record: Any) -> None:
         del dbapi_connection, connection_record
+        with state_lock:
+            state["in_use"] = max(0, state["in_use"] - 1)
         pool_in_use.labels(role=role).dec()
-        started = state.get("checkout_started", 0.0)
-        if started:
-            checkout_wait_seconds.labels(role=role).observe(
-                max(0.0, time.monotonic() - started)
-            )
+
+    @event.listens_for(engine, "handle_error")
+    def _handle_error(exception_context: Any) -> None:
+        exc = (
+            exception_context.original_exception
+            or exception_context.sqlalchemy_exception
+        )
+        record_pool_error(exc)
+        kind = classify_connection_error(exc)
+        if kind and on_error:
+            on_error(kind)
 
     return engine
 
