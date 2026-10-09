@@ -42,6 +42,10 @@ class TestAsAwareUtc:
         assert result.tzinfo is not None
         assert result == datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
+    def test_exchange_double_suffix_is_parsed_and_normalized(self):
+        result = as_aware_utc("2026-01-01T12:00:00+00:00Z")
+        assert result == datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
 
 def _make_db_manager():
     manager = MagicMock()

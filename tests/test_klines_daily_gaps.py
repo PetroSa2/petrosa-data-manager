@@ -55,6 +55,7 @@ def test_day_of_reads_utc_dates_from_aware_naive_and_text_timestamps():
     assert day_of(datetime(2026, 10, 6, 23, 59, tzinfo=UTC)) == date(2026, 10, 6)
     assert day_of(datetime(2026, 10, 6)) == date(2026, 10, 6)  # MySQL: naive means UTC
     assert day_of("2026-10-06T00:00:00Z") == date(2026, 10, 6)
+    assert day_of("2026-10-06T00:00:00+00:00Z") == date(2026, 10, 6)
 
 
 def test_missing_days_are_the_expected_ones_not_present():
@@ -116,6 +117,47 @@ async def test_a_complete_series_reports_no_gaps():
         KLINES_1D_COMPLETENESS.labels(symbol="ETHUSDT", store="mongodb")._value.get()
         == 1.0
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_mongo_days_request_daily_backfill_when_enabled(monkeypatch):
+    mongo, mysql = _stores(mongo_missing={date(2026, 8, 1)})
+    backfill_gap = AsyncMock()
+    monkeypatch.setattr(
+        "data_manager.maintenance.klines_daily_gaps.constants.ENABLE_AUTO_BACKFILL",
+        True,
+    )
+
+    await check_daily_completeness(
+        mongo,
+        mysql,
+        ["BTCUSDT"],
+        today=TODAY,
+        backfill_gap=backfill_gap,
+    )
+
+    backfill_gap.assert_awaited_once()
+    assert backfill_gap.await_args.args[:2] == ("BTCUSDT", "1d")
+
+
+@pytest.mark.asyncio
+async def test_missing_mongo_days_do_not_backfill_when_disabled(monkeypatch):
+    mongo, mysql = _stores(mongo_missing={date(2026, 8, 1)})
+    backfill_gap = AsyncMock()
+    monkeypatch.setattr(
+        "data_manager.maintenance.klines_daily_gaps.constants.ENABLE_AUTO_BACKFILL",
+        False,
+    )
+
+    await check_daily_completeness(
+        mongo,
+        mysql,
+        ["BTCUSDT"],
+        today=TODAY,
+        backfill_gap=backfill_gap,
+    )
+
+    backfill_gap.assert_not_awaited()
 
 
 @pytest.mark.asyncio
