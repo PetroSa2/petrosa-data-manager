@@ -532,3 +532,79 @@ def test_a_strategy_with_only_entries_has_no_closed_timestamp_and_an_old_open_ro
     assert (
         stats["first_fill_at"] == stats["oldest_open_round_opened_at"] == T0.isoformat()
     )
+
+
+def test_ledger_repository_reads_overlay_inputs_without_writes():
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+        def all(self):
+            return self.rows
+
+        def scalars(self):
+            return self
+
+    repo = LedgerRepository(object(), None)
+
+    def run(statement, _params=None):
+        if "snapshot" in statement:
+            return Result([{"as_of_ms": 1_000}])
+        if "ledger_exchange_positions" in statement:
+            return Result(
+                [{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]
+            )
+        return Result(["entry-order"])
+
+    repo._run = run
+    assert repo.round_overlay_snapshot() == {
+        "as_of_ms": 1_000,
+        "rows": [{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}],
+    }
+    assert repo.closed_entry_order_ids() == {"entry-order"}
+
+
+@pytest.mark.asyncio
+async def test_endpoint_loads_overlay_inputs_and_reports_fresh_mode(monkeypatch):
+    import data_manager.api.app as api_module
+    import data_manager.db.repositories.ledger_repository as ledger_module
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, symbol="BTCUSDT", order_id="entry")]
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=rows)
+    collection = MagicMock()
+    collection.find.return_value = cursor
+
+    class FakeRepository:
+        def __init__(self, *_args):
+            pass
+
+        def round_overlay_snapshot(self):
+            return {"as_of_ms": int(datetime.now(UTC).timestamp() * 1000), "rows": []}
+
+        def closed_entry_order_ids(self):
+            return set()
+
+    monkeypatch.setattr(ledger_module, "LedgerRepository", FakeRepository)
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "report")
+    api_module.db_manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"execution_events": collection}),
+        mysql_adapter=object(),
+    )
+    try:
+        report = await get_closed_rounds(strategy_id=None, window_days=30.0)
+    finally:
+        api_module.db_manager = None
+    assert report["orphan_overlay"] == "enabled"
+    assert report["exchange_snapshot"] == "fresh"
+    assert report["strategies"]["s1"]["orphaned_lots"] == 1
