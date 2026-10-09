@@ -118,12 +118,35 @@ def test_reconnect_tests_new_engine_and_preserves_adapter_identity():
         patch("data_manager.db.mysql_adapter.build_engine", return_value=new_engine),
         patch("data_manager.db.mysql_adapter.mark_engine_closing") as close_engine,
     ):
-        holder = adapter
         adapter.reconnect()
-    assert holder is adapter
     assert adapter.engine is new_engine
     new_engine.connect.return_value.__enter__.return_value.execute.assert_called_once()
     close_engine.assert_called_once_with(old_engine)
+
+
+def test_long_lived_holder_queries_the_new_engine_after_reconnect():
+    """A consumer that captured the adapter before reconnect() must use the new engine."""
+    import sqlalchemy as sa
+
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    old_engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    new_engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    adapter.engine = old_engine
+    adapter._connected = True
+    holder = adapter  # captured BEFORE the reconnect, as the repositories do
+    with patch("data_manager.db.mysql_adapter.build_engine", return_value=new_engine):
+        adapter.reconnect()
+    used: list[object] = []
+    for engine in (old_engine, new_engine):
+        sa.event.listen(engine, "checkout", lambda *_a, e=engine: used.append(e))
+    engine = holder._ensure_connected()
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT 1")).scalar() == 1
+    assert holder is adapter
+    assert engine is new_engine
+    assert used == [new_engine]
 
 
 def test_reconnect_keeps_old_engine_when_select_one_fails():

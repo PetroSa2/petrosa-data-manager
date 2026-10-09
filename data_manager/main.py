@@ -658,6 +658,7 @@ class DataManagerApp:
         """Retry startup database initialization until it succeeds or shuts down."""
         delay = self._db_retry_base_seconds
         while not self._shutdown_event.is_set() and self.db_manager is None:
+            manager: DatabaseManager | None = None
             try:
                 await asyncio.sleep(delay)
                 if self._shutdown_event.is_set():
@@ -679,11 +680,22 @@ class DataManagerApp:
                 logger.info("Database connections initialized successfully after retry")
                 return
             except asyncio.CancelledError:
+                # stop() cancelled us mid-initialize: close the manager the
+                # cancel leaves behind, or its pool outlives the shutdown.
+                if manager is not None and self.db_manager is not manager:
+                    await self._close_unpublished_manager(manager)
                 raise
             except Exception as exc:
                 db_init_attempts_total.labels(result="failure").inc()
                 logger.warning("Database initialization retry failed: %s", exc)
                 delay = min(delay * 2, self._db_retry_cap_seconds)
+
+    @staticmethod
+    async def _close_unpublished_manager(manager: DatabaseManager) -> None:
+        try:
+            await asyncio.shield(manager.shutdown())
+        except Exception as exc:
+            logger.warning("Closing the unpublished database manager failed: %s", exc)
 
     async def _cancel_database_retry(self) -> None:
         if self._db_retry_task:
@@ -698,10 +710,12 @@ class DataManagerApp:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
         self.running = False
+        # Cancel the startup retry first: it may publish or leave behind a
+        # manager, and the shutdown below must see the final one.
+        await self._cancel_database_retry()
         if self.db_manager:
             await self.db_manager.shutdown()
             logger.info("Database connections closed")
-        await self._cancel_database_retry()
         if self.klines_daily_gaps_task:
             self.klines_daily_gaps_task.cancel()
             try:

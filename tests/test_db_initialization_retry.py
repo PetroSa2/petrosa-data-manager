@@ -62,3 +62,37 @@ async def test_retry_backoff_is_capped_and_shutdown_cancels_task():
     await app._cancel_database_retry()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_the_manager_a_cancelled_retry_leaves_behind():
+    """stop() with no published manager cancels the retry mid-initialize; the
+    half-initialized manager must still be shut down."""
+    app = DataManagerApp()
+    app._db_retry_base_seconds = 0
+    started = asyncio.Event()
+    manager = MagicMock()
+    manager.shutdown = AsyncMock()
+
+    async def initialize() -> None:
+        started.set()
+        await asyncio.sleep(60)
+
+    manager.initialize = initialize
+    with patch("data_manager.main.DatabaseManager", return_value=manager):
+        app._db_retry_task = asyncio.create_task(app._retry_database_initialization())
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert app.db_manager is None
+        await app.stop()
+    manager.shutdown.assert_awaited_once()
+    assert app._db_retry_task is None
+
+
+@pytest.mark.asyncio
+async def test_stop_shuts_down_a_published_manager_after_cancelling_the_retry():
+    app = DataManagerApp()
+    manager = MagicMock()
+    manager.shutdown = AsyncMock()
+    app.db_manager = manager
+    await app.stop()
+    manager.shutdown.assert_awaited_once()

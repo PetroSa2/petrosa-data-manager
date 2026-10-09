@@ -82,6 +82,46 @@ class TestInitialize:
 
 class TestShutdown:
     @pytest.mark.asyncio
+    async def test_shutdown_leaves_zero_open_connections(self):
+        """Real adapter, real engine, real gauge: nothing stays open after shutdown."""
+        from prometheus_client import REGISTRY
+
+        from data_manager.db.engine_factory import (
+            EngineClosingError,
+            build_engine,
+        )
+        from data_manager.db.mysql_adapter import MySQLAdapter
+
+        def open_connections() -> float:
+            return (
+                REGISTRY.get_sample_value(
+                    "data_manager_mysql_connections_open", {"role": "serving"}
+                )
+                or 0.0
+            )
+
+        baseline = open_connections()
+        engine = build_engine("sqlite+pysqlite:///:memory:", "serving")
+        mysql_a = MySQLAdapter("sqlite+pysqlite:///:memory:", role="serving")
+        mysql_a.engine = engine
+        mysql_a._connected = True
+        mysql_a.connect = MagicMock()  # the engine above is already built
+        with engine.connect():
+            pass
+        assert open_connections() == baseline + 1  # one pooled connection is open
+        mongo_a = make_adapter()
+        with patch("data_manager.db.database_manager.get_adapter") as get_adp:
+            get_adp.side_effect = [mongo_a, mysql_a]
+            dm = DatabaseManager()
+            await dm.initialize()
+            await dm.shutdown()
+        assert open_connections() == baseline
+        assert engine.pool.checkedout() == 0
+        assert engine.pool.checkedin() == 0
+        with pytest.raises(EngineClosingError):
+            engine.connect()
+
+    @pytest.mark.asyncio
     async def test_shutdown_closes_mysql_before_other_components(self):
         order: list[str] = []
         mysql_a = make_adapter()

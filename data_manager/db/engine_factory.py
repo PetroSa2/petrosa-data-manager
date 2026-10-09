@@ -87,8 +87,14 @@ def role_options(role: str) -> dict[str, int]:
     }
 
 
+class EngineClosingError(RuntimeError):
+    """Raised by a pool whose engine is shutting down; it is not a budget event."""
+
+
 def classify_connection_error(exc: BaseException) -> str | None:
     """Map provider and SQLAlchemy pool errors to the bounded metric labels."""
+    if isinstance(exc, EngineClosingError):
+        return None
     text = str(exc).lower()
     if "1226" in text or "max_user_connections" in text:
         return "max_user_connections"
@@ -132,13 +138,15 @@ def _instrumented_pool_class(
     class InstrumentedQueuePool(QueuePool):
         def _do_get(self) -> Any:
             if closing():
-                error = RuntimeError("MySQL engine is closing (QueuePool)")
-                error_observer(error)
-                raise error
+                # Rejected before any DBAPI connect; counted nowhere, so a
+                # shutdown race cannot inflate the budget counters.
+                raise EngineClosingError("MySQL engine is closing")
             started = time.monotonic()
             try:
                 return super()._do_get()
-            except BaseException as exc:
+            except SQLAlchemyTimeoutError as exc:
+                # Only pool timeouts are counted here. Connect failures (1226,
+                # 1040) reach the ``handle_error`` hook and are counted there.
                 error_observer(exc)
                 raise
             finally:
