@@ -364,9 +364,7 @@ async def test_real_refresh_is_served_by_each_default_route(monkeypatch):
             if name == "execution_events":
                 return Collection(fills)
             if name.startswith("analytics_"):
-                return Collection(
-                    [{"regime": "balanced_market", "computed_at": now}]
-                )
+                return Collection([{"regime": "balanced_market", "computed_at": now}])
             return super().__getitem__(name)
 
     cache = FakeCollection()
