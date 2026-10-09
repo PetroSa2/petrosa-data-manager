@@ -218,6 +218,35 @@ async def health_summary():
     }
 
 
+@router.get("/calibration")
+async def calibration_health():
+    """Report whether the latest confidence calibration data is fresh."""
+    manager = api_module.db_manager
+    mongodb = getattr(manager, "mongodb_adapter", None) if manager else None
+    if mongodb is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "fresh": False},
+        )
+    from data_manager.services.calibration_service import get_latest_calibration
+
+    try:
+        report = await get_latest_calibration(mongodb)
+    except Exception:
+        logger.warning("calibration health query failed", exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "fresh": False},
+        )
+    return {
+        "status": "healthy" if report["fresh"] else "degraded",
+        "fresh": report["fresh"],
+        "latest_at": report["latest_at"],
+        "max_age_minutes": report["max_age_minutes"],
+        "age_minutes": report["age_minutes"],
+    }
+
+
 @router.get("/leader")
 async def leader_status():
     """

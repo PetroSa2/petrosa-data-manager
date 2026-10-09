@@ -7,6 +7,7 @@ from typing import Any
 from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 MAX_ROWS = 50_000
+FRESHNESS_MAX_AGE_MINUTES = 30
 ZERO = Decimal("0")
 
 
@@ -99,3 +100,44 @@ async def get_calibration_records(
         sort_order=1,
     )
     return build_calibration_records(execution_events, decisions, since=since)
+
+
+def calibration_freshness(
+    records: list[dict[str, Any]], *, now: datetime | None = None
+) -> dict[str, Any]:
+    """Return the bounded freshness state for a calibration report."""
+    timestamps = [
+        datetime.fromisoformat(str(record["closed_at"]))
+        for record in records
+        if record.get("closed_at")
+    ]
+    latest_at = max(timestamps) if timestamps else None
+    current = now or datetime.now(UTC)
+    if latest_at is not None and latest_at.tzinfo is None:
+        latest_at = latest_at.replace(tzinfo=UTC)
+    age_minutes = (
+        max(0.0, (current - latest_at).total_seconds() / 60)
+        if latest_at is not None
+        else None
+    )
+    return {
+        "latest_at": latest_at.isoformat() if latest_at else None,
+        "fresh": age_minutes is not None
+        and age_minutes <= FRESHNESS_MAX_AGE_MINUTES,
+        "max_age_minutes": FRESHNESS_MAX_AGE_MINUTES,
+        "age_minutes": age_minutes,
+    }
+
+
+async def get_latest_calibration(
+    mongodb: Any,
+    *,
+    since: datetime | None = None,
+    strategy_id: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read the calibration report and add its operational freshness signal."""
+    report = await get_calibration_records(
+        mongodb, since=since, strategy_id=strategy_id
+    )
+    return {**report, **calibration_freshness(report["records"], now=now)}
