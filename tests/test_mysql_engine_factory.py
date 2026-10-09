@@ -30,15 +30,17 @@ def test_invalid_role_env_uses_default() -> None:
 
 
 def test_unknown_role_is_rejected() -> None:
-    with pytest.raises(ValueError, match="Unknown MySQL pool role"):
+    with pytest.raises(ValueError, match="Unknown MySQL pool role") as error:
         role_options("unknown")
+    assert "unknown" in str(error.value)
 
 
 def test_closing_engine_refuses_new_checkouts() -> None:
     engine = build_engine("sqlite+pysqlite:///:memory:", "adhoc")
     mark_engine_closing(engine)
-    with pytest.raises(RuntimeError, match="closing"):
+    with pytest.raises(RuntimeError, match="closing") as error:
         engine.connect()
+    assert "closing" in str(error.value)
 
 
 @pytest.mark.parametrize(
