@@ -22,8 +22,17 @@ report_age_seconds = Gauge(
 report_stage_seconds = Histogram(
     "data_manager_report_stage_seconds",
     "Report refresh stage duration",
-    ["report", "stage"],
+    ["report", "stage", "source"],
 )
+
+
+def record_report_stage(
+    report: str, stage: str, duration: float, *, source: str = "on_demand"
+) -> None:
+    """Record one report pipeline stage."""
+    report_stage_seconds.labels(report=report, stage=stage, source=source).observe(
+        max(0.0, duration)
+    )
 
 
 def cache_key(report: str, **params: Any) -> str:
@@ -106,7 +115,16 @@ class ReportPrecomputer:
             await self._put(report, body, **params)
             return await self.get(report, **params)
 
-    async def _put(self, report: str, body: dict[str, Any], **params: Any) -> None:
+    async def _put(
+        self,
+        report: str,
+        body: dict[str, Any],
+        *,
+        source: str = "on_demand",
+        **params: Any,
+    ) -> None:
+        from data_manager.db.mongodb_adapter import MongoDBAdapter
+
         computed_at = datetime.now(UTC)
         body = dict(body)
         metadata = body.setdefault("metadata", {})
@@ -118,11 +136,16 @@ class ReportPrecomputer:
         )
         if report == "risk_inputs":
             body["as_of"] = computed_at.isoformat()
+        serialize_started = monotonic()
+        prepared_body = MongoDBAdapter._prepare_for_bson(body)
+        record_report_stage(
+            report, "serialize", monotonic() - serialize_started, source=source
+        )
         await self.collection.replace_one(
             {"_id": cache_key(report, **params)},
             {
                 "_id": cache_key(report, **params),
-                "body": body,
+                "body": prepared_body,
                 "computed_at": computed_at,
             },
             upsert=True,
@@ -130,25 +153,24 @@ class ReportPrecomputer:
         report_age_seconds.labels(report=report).set(0)
 
     def _interval(self, report: str) -> int:
-        return (
-            constants.REPORT_RISK_INTERVAL_SECONDS
-            if report == "risk_inputs"
-            else constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
-        )
+        return {
+            "risk_inputs": constants.REPORT_RISK_INTERVAL_SECONDS,
+            "calibration": constants.REPORT_CALIBRATION_INTERVAL_SECONDS,
+        }.get(report, constants.REPORT_SLIPPAGE_INTERVAL_SECONDS)
 
-    async def _refresh(self, report: str, callback: Any) -> None:
-        started = monotonic()
+    async def _refresh(self, report: str, callback: Any, **params: Any) -> None:
         try:
             body = await callback()
-            await self._put(report, body, window_days=30)
-            report_stage_seconds.labels(report=report, stage="compute").observe(
-                monotonic() - started
-            )
+            source = params.pop("source", "refresh")
+            if not params and report != "calibration":
+                params = {"window_days": 30}
+            await self._put(report, body, source=source, **params)
         except Exception:
             logger.exception("report refresh failed", extra={"report": report})
 
     async def _run(self) -> None:
         from data_manager.api.routes.analysis import (
+            compute_calibration_confidence,
             compute_closed_rounds,
             compute_slippage_by_regime,
         )
@@ -156,6 +178,8 @@ class ReportPrecomputer:
 
         next_slippage = 0.0
         next_risk = 0.0
+        next_calibration = 0.0
+        calibration_task: asyncio.Task[None] | None = None
         try:
             while self.running:
                 if (
@@ -168,19 +192,42 @@ class ReportPrecomputer:
                 if now >= next_slippage:
                     await self._refresh(
                         "slippage_by_regime",
-                        lambda: compute_slippage_by_regime(self.db_manager, 30),
+                        lambda: compute_slippage_by_regime(
+                            self.db_manager, 30, source="refresh"
+                        ),
                     )
                     await self._refresh(
                         "rounds",
-                        lambda: compute_closed_rounds(self.db_manager, None, 30),
+                        lambda: compute_closed_rounds(
+                            self.db_manager, None, 30, source="refresh"
+                        ),
                     )
                     next_slippage = now + constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
                 if now >= next_risk:
                     await self._refresh(
                         "risk_inputs",
-                        lambda: compute_risk_inputs(self.db_manager, window_days=30),
+                        lambda: compute_risk_inputs(
+                            self.db_manager, window_days=30, source="refresh"
+                        ),
                     )
                     next_risk = now + constants.REPORT_RISK_INTERVAL_SECONDS
+                if now >= next_calibration:
+                    if calibration_task is None or calibration_task.done():
+                        calibration_task = asyncio.create_task(
+                            self._refresh(
+                                "calibration",
+                                lambda: compute_calibration_confidence(
+                                    self.db_manager, source="refresh"
+                                ),
+                            )
+                        )
+                    next_calibration = (
+                        now + constants.REPORT_CALIBRATION_INTERVAL_SECONDS
+                    )
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             return
+        finally:
+            if calibration_task is not None and not calibration_task.done():
+                calibration_task.cancel()
+                await asyncio.gather(calibration_task, return_exceptions=True)

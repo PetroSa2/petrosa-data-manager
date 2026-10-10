@@ -6,8 +6,9 @@ import asyncio
 import logging
 import math
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from time import monotonic
 from typing import Any
 
 try:
@@ -21,7 +22,9 @@ from fastapi import APIRouter, HTTPException, Query
 from prometheus_client import Gauge
 from pydantic import BaseModel
 
+import constants
 import data_manager.api.app as api_module
+from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
 
@@ -71,24 +74,51 @@ router = APIRouter()
 calibration_router = APIRouter()
 
 
+async def compute_calibration_confidence(
+    db_manager: Any,
+    since: datetime | None = None,
+    strategy_id: str | None = None,
+    source: str = "on_demand",
+) -> dict[str, Any]:
+    """Compute the confidence calibration report without route or cache concerns."""
+    from data_manager.services.calibration_service import get_calibration_records
+
+    if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
+        raise HTTPException(status_code=503, detail="Database not available")
+    return await get_calibration_records(
+        db_manager.mongodb_adapter, since=since, strategy_id=strategy_id, source=source
+    )
+
+
 @router.get("/calibration/confidence")
 async def get_calibration_confidence(
-    since: datetime | None = Query(None),
-    strategy_id: str | None = Query(None),
+    since: datetime | None = None,
+    strategy_id: str | None = None,
 ) -> dict[str, Any]:
     """Return closed, CIO-executed outcomes paired with point-in-time confidence."""
     if not api_module.db_manager or not getattr(
         api_module.db_manager, "mongodb_adapter", None
     ):
         raise HTTPException(status_code=503, detail="Database not available")
-    from data_manager.services.calibration_service import get_calibration_records
-
     try:
-        return await get_calibration_records(
-            api_module.db_manager.mongodb_adapter,
-            since=since,
-            strategy_id=strategy_id,
+        precomputer = getattr(api_module, "report_precomputer", None)
+        if precomputer is not None and since is None and strategy_id is None:
+            cached = await precomputer.get_or_compute(
+                "calibration",
+                lambda: compute_calibration_confidence(api_module.db_manager),
+            )
+            if cached is not None:
+                return cached
+            raise HTTPException(
+                status_code=503,
+                detail="report_warming",
+                headers={"Retry-After": "15"},
+            )
+        return await compute_calibration_confidence(
+            api_module.db_manager, since=since, strategy_id=strategy_id
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("confidence calibration failed: %s", exc, exc_info=True)
         raise HTTPException(
@@ -640,6 +670,7 @@ async def compute_slippage_by_regime(
     window_days: float = 30.0,
     symbol: str | None = None,
     role: str | None = None,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Slippage per market regime from the per-fill cost telemetry (petrosa-data-manager#535).
 
@@ -648,8 +679,6 @@ async def compute_slippage_by_regime(
     Read-only; fills without recorded slippage are counted and left out, fills before the first regime are
     grouped under ``no_regime``.
     """
-    from datetime import timedelta
-
     from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
 
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
@@ -662,6 +691,7 @@ async def compute_slippage_by_regime(
     if symbol:
         query["symbol"] = symbol
     mongodb = db_manager.mongodb_adapter
+    read_started = monotonic()
     try:
         fills = (
             await mongodb.db["execution_events"]
@@ -670,18 +700,52 @@ async def compute_slippage_by_regime(
             .to_list(length=_SLIPPAGE_MAX_FILLS)
         )
         regimes: dict[str, list[dict[str, Any]]] = {}
-        for pair in sorted(
-            {str(row.get("symbol")) for row in fills if row.get("symbol")}
-        ):
-            regimes[pair] = (
-                await mongodb.db[f"analytics_{pair}_regime"]
-                .find({}, REGIME_DOC_PROJECTION)
-                .to_list(length=_REGIME_MAX_DOCS)
+        from data_manager.services.slippage_report import _when
+
+        unstamped_oldest: dict[str, datetime] = {}
+        for row in fills:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if payload.get("regime_at_fill") or row.get("regime_at_fill"):
+                continue
+            pair = str(row.get("symbol") or "")
+            fill_when = _when(row.get("fill_time") or row.get("timestamp"))
+            if pair and fill_when is not None:
+                previous = unstamped_oldest.get(pair)
+                if previous is None or fill_when < previous:
+                    unstamped_oldest[pair] = fill_when
+
+        for pair in sorted(unstamped_oldest):
+            regime_since = unstamped_oldest[pair] - timedelta(
+                seconds=constants.ANALYTICS_INTERVAL
             )
+            collection = mongodb.db[f"analytics_{pair}_regime"]
+            anchor = (
+                await collection.find(
+                    {"timestamp": {"$lt": regime_since}}, REGIME_DOC_PROJECTION
+                )
+                .sort("timestamp", -1)
+                .to_list(length=1)
+            )
+            bounded = await collection.find(
+                {"timestamp": {"$gte": regime_since}}, REGIME_DOC_PROJECTION
+            ).to_list(length=_REGIME_MAX_DOCS)
+            regimes[pair] = anchor + bounded
+        record_report_stage(
+            "slippage_by_regime",
+            "read+decode",
+            monotonic() - read_started,
+            source=source,
+        )
+        fills = list(fills)
+        regimes = {pair: list(rows) for pair, rows in regimes.items()}
     except Exception as exc:
         logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    compute_started = monotonic()
     report = await asyncio.to_thread(build_report, fills, regimes, role=role)
+    record_report_stage(
+        "slippage_by_regime", "compute", monotonic() - compute_started, source=source
+    )
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "window_days": window_days,
@@ -756,6 +820,7 @@ async def compute_closed_rounds(
     db_manager: Any,
     strategy_id: str | None = None,
     window_days: float = 30.0,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
 
@@ -777,8 +842,13 @@ async def compute_closed_rounds(
     base_query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
 
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
+        read_started = monotonic()
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
-        return await cursor.to_list(length=_ROUND_MAX_FILLS)
+        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+        record_report_stage(
+            "rounds", "read+decode", monotonic() - read_started, source=source
+        )
+        return rows
 
     own_query = {**base_query, "strategy_id": strategy_id} if strategy_id else None
     try:
@@ -812,6 +882,7 @@ async def compute_closed_rounds(
                 exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
         else:
             exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+    compute_started = monotonic()
     report = await asyncio.to_thread(
         build_report,
         rows,
@@ -819,6 +890,9 @@ async def compute_closed_rounds(
         exchange=exchange,
         closed_entry_orders=closed_entry_orders,
         apply_overlay=mode == "apply",
+    )
+    record_report_stage(
+        "rounds", "compute", monotonic() - compute_started, source=source
     )
     if mode == "off":
         report["orphan_overlay"] = "off"

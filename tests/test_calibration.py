@@ -1,12 +1,15 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from bson import BSON
 from fastapi import HTTPException
 
 import data_manager.api.app as api_module
 from data_manager.api.app import create_app
+from data_manager.api.middleware.metrics import REQUEST_DURATION
 from data_manager.api.routes.analysis import (
     get_calibration_confidence,
     get_latest_calibration_report,
@@ -16,6 +19,7 @@ from data_manager.services.calibration_service import (
     build_calibration_records,
     calibration_freshness,
 )
+from data_manager.services.report_precompute import ReportPrecomputer
 
 
 def _fill(side: str, timestamp: str, decision_id: str) -> dict:
@@ -55,6 +59,36 @@ def test_build_calibration_records_joins_and_preserves_decimal_values() -> None:
     assert record["costs"] == Decimal("0.20")
     assert record["net_pnl"] == Decimal("0.80")
     assert result["skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_calibration_report_is_bson_safe_when_cached() -> None:
+    class Collection:
+        def __init__(self) -> None:
+            self.document = None
+
+        async def replace_one(self, query, document, upsert=False) -> None:
+            self.document = document
+
+    collection = Collection()
+    manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"report_cache": collection})
+    )
+    body = build_calibration_records(
+        [
+            _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+            _fill("sell", "2026-10-01T12:01:00Z", "d1"),
+        ],
+        [{"decision_id": "d1", "action": "execute", "confidence": "0.875"}],
+    )
+
+    await ReportPrecomputer(manager)._put("calibration", body)
+
+    assert collection.document is not None
+    BSON.encode(collection.document["body"])
+    record = collection.document["body"]["records"][0]
+    assert isinstance(record["confidence"], float)
+    assert isinstance(record["net_pnl"], float)
 
 
 def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisions() -> (
@@ -144,7 +178,10 @@ async def test_calibration_route_reads_gateway_and_filters() -> None:
         api_module.db_manager = None
 
     assert result == {"records": [], "skipped": 0}
-    assert calls[0][1]["filters"] == {"strategy_id": "alpha"}
+    assert calls[0][1]["filters"] == {
+        "event_type": {"$in": ["filled", "partial_fill"]},
+        "strategy_id": "alpha",
+    }
     assert calls[1][1]["filters"] == {"strategy_id": "alpha", "action": "execute"}
 
 
@@ -154,6 +191,68 @@ async def test_calibration_route_requires_database() -> None:
     with pytest.raises(HTTPException) as error:
         await get_calibration_confidence()
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_default_calibration_route_serves_cached_report() -> None:
+    precomputer = SimpleNamespace(
+        get_or_compute=AsyncMock(return_value={"records": [], "skipped": 0})
+    )
+    api_module.db_manager = SimpleNamespace(mongodb_adapter=object())
+    api_module.report_precomputer = precomputer
+    try:
+        result = await get_calibration_confidence()
+    finally:
+        api_module.db_manager = None
+        api_module.report_precomputer = None
+
+    assert result == {"records": [], "skipped": 0}
+    precomputer.get_or_compute.assert_awaited_once()
+    assert precomputer.get_or_compute.await_args.args[0] == "calibration"
+
+
+@pytest.mark.asyncio
+async def test_default_calibration_route_reads_back_real_cached_body() -> None:
+    class Collection:
+        def __init__(self) -> None:
+            self.rows = {}
+
+        async def find_one(self, query):
+            return self.rows.get(query["_id"])
+
+        async def replace_one(self, query, document, upsert=False):
+            self.rows[query["_id"]] = document
+
+    collection = Collection()
+    manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"report_cache": collection})
+    )
+    body = build_calibration_records(
+        [
+            _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+            _fill("sell", "2026-10-01T12:01:00Z", "d1"),
+        ],
+        [{"decision_id": "d1", "action": "execute", "confidence": "0.875"}],
+    )
+    await ReportPrecomputer(manager)._put("calibration", body)
+
+    api_module.db_manager = manager
+    api_module.report_precomputer = ReportPrecomputer(manager)
+    try:
+        result = await get_calibration_confidence()
+    finally:
+        api_module.db_manager = None
+        api_module.report_precomputer = None
+
+    record = result["records"][0]
+    assert isinstance(record["confidence"], float)
+    assert isinstance(record["net_pnl"], float)
+    assert record["strategy_id"] == "alpha"
+
+
+def test_request_duration_has_long_report_buckets() -> None:
+    assert 30.0 in REQUEST_DURATION._upper_bounds
+    assert 60.0 in REQUEST_DURATION._upper_bounds
 
 
 @pytest.mark.asyncio

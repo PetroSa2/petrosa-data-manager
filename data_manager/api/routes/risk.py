@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -17,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 import constants
 import data_manager.api.app as api_module
 from data_manager.services import risk_inputs as ri
+from data_manager.services.report_precompute import record_report_stage
 from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 logger = logging.getLogger(__name__)
@@ -134,6 +136,7 @@ async def compute_risk_inputs(
     horizon_hours: float = ri.DEFAULT_HORIZON_HOURS,
     symbols: str | None = None,
     strategies_window_days: float = 30.0,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Realized sigma (daily, 1h and at a horizon), daily-return correlation and the equity curve."""
     if not db_manager:
@@ -146,6 +149,7 @@ async def compute_risk_inputs(
     now = datetime.now(UTC)
     daily_start = now - timedelta(days=window_days + 2)
     hourly_start = now - timedelta(days=max(sigma_1h_days, sigma_1h_floor_days) + 1)
+    read_started = monotonic()
 
     async def one(symbol: str):
         daily_candles, hourly_candles = await asyncio.gather(
@@ -155,6 +159,11 @@ async def compute_risk_inputs(
         return symbol, daily_candles, hourly_candles
 
     loaded = await asyncio.gather(*(one(s) for s in pairs), return_exceptions=True)
+    record_report_stage(
+        "risk_inputs", "read+decode", monotonic() - read_started, source=source
+    )
+    loaded = list(loaded)
+    compute_started = monotonic()
     per_symbol: dict[str, Any] = {}
     returns_by_symbol: dict[str, list] = {}
     for item in loaded:
@@ -181,14 +190,31 @@ async def compute_risk_inputs(
             "sufficient": daily["sufficient"] or hourly["sufficient"],
         }
     missing = [s for s in pairs if s not in per_symbol]
+    record_report_stage(
+        "risk_inputs", "compute", monotonic() - compute_started, source=source
+    )
 
     equity: dict[str, Any]
+    wallet_read_started = monotonic()
     try:
         rows = await _load_wallet_rows(
             now - timedelta(days=window_days + 400), now, db_manager
         )
+        record_report_stage(
+            "risk_inputs",
+            "read+decode",
+            monotonic() - wallet_read_started,
+            source=source,
+        )
+        equity_compute_started = monotonic()
         equity = await asyncio.to_thread(
             ri.equity_curve, rows, window_days=window_days, now=now
+        )
+        record_report_stage(
+            "risk_inputs",
+            "compute",
+            monotonic() - equity_compute_started,
+            source=source,
         )
     except Exception as exc:
         logger.error("risk inputs: wallet balance read failed: %s", exc, exc_info=True)
@@ -198,7 +224,11 @@ async def compute_risk_inputs(
             "error": "wallet balance read failed",
         }
     try:
+        peak_read_started = monotonic()
         equity["stored_peak"] = await _load_stored_peak(db_manager)
+        record_report_stage(
+            "risk_inputs", "read+decode", monotonic() - peak_read_started, source=source
+        )
     except Exception as exc:
         logger.warning("risk inputs: stored equity peak not readable: %s", exc)
         equity["stored_peak"] = None
@@ -207,17 +237,32 @@ async def compute_risk_inputs(
     strategies: dict[str, Any] = {}
     strategies_error: str | None = None
     try:
+        fills_read_started = monotonic()
+        fills = await _load_fills(now, db_manager)
+        record_report_stage(
+            "risk_inputs",
+            "read+decode",
+            monotonic() - fills_read_started,
+            source=source,
+        )
+        strategies_compute_started = monotonic()
         strategies = await asyncio.to_thread(
             strategy_holding_times,
-            await _load_fills(now, db_manager),
+            fills,
             now,
             strategies_window_days,
+        )
+        record_report_stage(
+            "risk_inputs",
+            "compute",
+            monotonic() - strategies_compute_started,
+            source=source,
         )
     except Exception as exc:
         logger.error("risk inputs: strategy fills not readable: %s", exc, exc_info=True)
         strategies_error = "strategy fills not readable"
 
-    return {
+    report = {
         "as_of": now.isoformat(),
         "params": {
             "window_days": window_days,
@@ -236,6 +281,7 @@ async def compute_risk_inputs(
         "strategies": strategies,
         "strategies_error": strategies_error,
     }
+    return report
 
 
 @router.get("/inputs")

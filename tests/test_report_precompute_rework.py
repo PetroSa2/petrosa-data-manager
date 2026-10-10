@@ -256,7 +256,7 @@ async def test_slippage_projection_preserves_telemetry_and_regime_time_fields():
 
 @pytest.mark.asyncio
 async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected():
-    seen: dict[str, object] = {}
+    seen: dict[str, list[object]] = {}
 
     class Cursor:
         def sort(self, *args):
@@ -277,7 +277,7 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
             self.name = name
 
         def find(self, *args):
-            seen[self.name] = args
+            seen.setdefault(self.name, []).append(args)
             return Cursor()
 
     class Database(dict):
@@ -288,9 +288,71 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
     await compute_slippage_by_regime(manager)
     await compute_closed_rounds(manager)
 
-    assert seen["analytics_BTCUSDT_regime"] == ({}, REGIME_DOC_PROJECTION)
+    regime_queries = seen["analytics_BTCUSDT_regime"]
+    anchor_query, projection = regime_queries[0]
+    bounded_query, bounded_projection = regime_queries[1]
+    assert anchor_query["timestamp"]["$lt"] == datetime(
+        2025, 12, 31, 23, 45, tzinfo=UTC
+    )
+    assert projection == REGIME_DOC_PROJECTION
+    assert bounded_query["timestamp"]["$gte"] == datetime(
+        2025, 12, 31, 23, 45, tzinfo=UTC
+    )
+    assert bounded_projection == REGIME_DOC_PROJECTION
     # rounds reads whole events (see the note above SLIPPAGE_FILL_PROJECTION): no projection argument
-    assert len(seen["execution_events"]) == 1
+    assert len(seen["execution_events"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_regime_bound_keeps_latest_anchor_before_oldest_unstamped_fill():
+    fill_time = datetime(2026, 1, 1, tzinfo=UTC)
+    anchor = {
+        "regime": "calm",
+        "timestamp": datetime(2025, 12, 31, 23, tzinfo=UTC),
+    }
+    future = {
+        "regime": "volatile",
+        "timestamp": datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
+    }
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def sort(self, *args):
+            return self
+
+        async def to_list(self, length=None):
+            return self.rows
+
+    class Collection:
+        def __init__(self, name):
+            self.name = name
+
+        def find(self, query, projection=None):
+            if self.name == "execution_events":
+                return Cursor(
+                    [
+                        {
+                            "event_type": "filled",
+                            "symbol": "BTCUSDT",
+                            "timestamp": fill_time,
+                            "slippage_bp": 1.0,
+                        }
+                    ]
+                )
+            return Cursor([anchor] if "$lt" in query["timestamp"] else [future])
+
+    class Database(dict):
+        def __getitem__(self, name):
+            return Collection(name)
+
+    report = await compute_slippage_by_regime(
+        SimpleNamespace(mongodb_adapter=SimpleNamespace(db=Database()))
+    )
+
+    assert report["by_regime"]["calm"]["count"] == 1
+    assert "volatile" not in report["by_regime"]
 
 
 @pytest.mark.asyncio
@@ -460,6 +522,69 @@ async def test_leader_run_refreshes_every_report_without_mocked_compute(monkeypa
     risk = bodies["risk_inputs:window_days=30"]
     assert risk["symbols"]["BTCUSDT"]["sufficient"] is True
     assert risk["symbols_unavailable"] == []
+
+
+@pytest.mark.asyncio
+async def test_leader_refreshes_calibration_under_the_default_cache_key(monkeypatch):
+    import data_manager.api.app as api_module
+    from data_manager.api.routes import analysis
+    from data_manager.services import report_precompute
+
+    now = datetime.now(UTC)
+    fills = [
+        {
+            "event_type": "filled",
+            "strategy_id": "strategy",
+            "symbol": "BTCUSDT",
+            "side": side,
+            "fill_qty": "1",
+            "fill_price": price,
+            "fee": "0.10",
+            "fee_asset": "USDT",
+            "decision_id": "decision-1",
+            "fill_time": now,
+        }
+        for side, price in (("buy", "100"), ("sell", "101"))
+    ]
+    decisions = [
+        {
+            "decision_id": "decision-1",
+            "strategy_id": "strategy",
+            "action": "execute",
+            "confidence": "0.75",
+        }
+    ]
+
+    class Adapter(FakeMongo):
+        async def find_filtered(self, collection, **kwargs):
+            return fills if collection == "execution_events" else decisions
+
+    cache = FakeCollection()
+    manager = SimpleNamespace(mongodb_adapter=Adapter(cache))
+    monkeypatch.setattr(api_module, "db_manager", manager)
+    monkeypatch.setattr(
+        analysis, "compute_slippage_by_regime", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(analysis, "compute_closed_rounds", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        "data_manager.api.routes.risk.compute_risk_inputs",
+        AsyncMock(return_value={}),
+    )
+    precomputer = ReportPrecomputer(manager, SimpleNamespace(is_leader=True))
+    precomputer.running = True
+    real_sleep = asyncio.sleep
+
+    async def stop_after_calibration(_seconds):
+        await real_sleep(0.01)
+        precomputer.running = False
+
+    monkeypatch.setattr(report_precompute.asyncio, "sleep", stop_after_calibration)
+    await precomputer._run()
+
+    assert "calibration" in cache.rows
+    record = cache.rows["calibration"]["body"]["records"][0]
+    assert isinstance(record["confidence"], float)
+    assert isinstance(record["net_pnl"], float)
 
 
 @pytest.mark.asyncio
