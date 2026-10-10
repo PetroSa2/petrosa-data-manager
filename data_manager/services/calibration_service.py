@@ -224,7 +224,10 @@ async def get_calibration_records(
     }
     read_started = monotonic()
     execution_events = await mongodb.find_filtered(
-        "execution_events", filters=filters, limit=MAX_ROWS, sort_order=-1
+        "execution_events",
+        filters=filters,
+        limit=MAX_ROWS,
+        sort_order=-1,
     )
     decisions = await mongodb.find_filtered(
         "cio_decisions",
@@ -236,6 +239,8 @@ async def get_calibration_records(
         logger.warning("calibration execution_events read reached cap: %d", MAX_ROWS)
     if len(decisions) >= MAX_ROWS:
         logger.warning("calibration cio_decisions read reached cap: %d", MAX_ROWS)
+    # Keep this single-key sort index-backed. Mongo uses insertion order for timestamp ties;
+    # these collection IDs are not insertion-ordered and must not be used as a tiebreaker.
     # Read newest first so the cap keeps the newest rows, then back to oldest first: fills with an equal
     # ``fill_time`` (a close and a reopen in the same ms) must reach the round book in ingestion order.
     execution_events = list(reversed(execution_events))

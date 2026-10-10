@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import sqlalchemy as sa
@@ -355,3 +356,63 @@ async def test_a_decimal_confidence_from_mysql_is_a_bson_float_in_the_cache(serv
     assert isinstance(stored["confidence"], float)
     assert isinstance(stored["net_pnl"], float)
     BSON.encode({"body": row["body"]})  # the stored document is plain BSON
+
+
+@pytest.mark.asyncio
+async def test_the_production_refresh_loop_keeps_the_last_good_cache_when_mysql_is_down(
+    served, monkeypatch
+):
+    """The wiring in ReportPrecomputer._run (not a test-local lambda) must pass strict_history=True."""
+    import asyncio
+
+    import data_manager.api.routes.analysis as analysis
+    import data_manager.api.routes.risk as risk
+    from data_manager.services import report_precompute
+
+    mongo, manager, precomputer = served
+    await _seed(mongo, _fills("d1", T0), [_mongo_decision("d1")])
+    assert (
+        len((await get_calibration_confidence())["records"]) == 1
+    )  # the good cache row
+    # a new closed round whose decision is only in MySQL, and MySQL is down
+    await mongo.db["execution_events"].insert_many(_fills("d2", T0 + timedelta(days=1)))
+    manager.mysql_adapter = SimpleNamespace(engine=_BrokenEngine())
+    # the other reports are not under test
+    for module, name in (
+        (analysis, "compute_slippage_by_regime"),
+        (analysis, "compute_closed_rounds"),
+        (risk, "compute_risk_inputs"),
+    ):
+        monkeypatch.setattr(module, name, AsyncMock(return_value={}))
+    precomputer.running = True
+
+    # The loop cancels an unfinished calibration task when it exits, so let it run until the refresh is done.
+    real_sleep = asyncio.sleep
+    refreshed: list[str] = []
+    original_refresh = precomputer._refresh
+
+    async def tracked_refresh(report, callback, **params):
+        await original_refresh(report, callback, **params)
+        refreshed.append(report)
+
+    precomputer._refresh = tracked_refresh
+    ticks = 0
+
+    async def sleep_until_the_calibration_refresh_is_done(_seconds):
+        nonlocal ticks
+        ticks += 1
+        if "calibration" in refreshed or ticks > 500:
+            precomputer.running = False
+        await real_sleep(0.005)
+
+    monkeypatch.setattr(
+        report_precompute.asyncio, "sleep", sleep_until_the_calibration_refresh_is_done
+    )
+    await precomputer._run()
+    assert "calibration" in refreshed  # the production loop really ran the refresh
+
+    row = await mongo.db["report_cache"].find_one({"_id": "calibration"})
+    assert (
+        len(row["body"]["records"]) == 1
+    )  # not replaced by a report missing the MySQL decisions
+    assert "history_unavailable" not in row["body"]
