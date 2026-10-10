@@ -4,10 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import sqlalchemy as sa
 from bson import BSON
 from fastapi import HTTPException
 
 import data_manager.api.app as api_module
+import data_manager.services.calibration_service as calibration
 from data_manager.api.app import create_app
 from data_manager.api.middleware.metrics import REQUEST_DURATION
 from data_manager.api.routes.analysis import (
@@ -113,6 +115,68 @@ def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisio
             "non_execute_decision": 1,
         },
     }
+
+
+def test_build_calibration_records_distinguishes_missing_history() -> None:
+    rows = [
+        _fill("buy", "2026-10-01T12:00:00Z", "missing"),
+        _fill("sell", "2026-10-01T12:01:00Z", "missing"),
+    ]
+
+    result = build_calibration_records(rows, [], history_checked=True)
+
+    assert result["skipped_reasons"] == {"decision_not_in_history": 1}
+
+
+def test_historic_decisions_use_batched_read_only_role_factory(monkeypatch) -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    table = sa.Table(
+        "cio_decisions",
+        sa.MetaData(),
+        sa.Column("decision_id", sa.String(128), primary_key=True),
+        sa.Column("strategy_id", sa.String(128)),
+        sa.Column("timestamp", sa.DateTime),
+        sa.Column("action", sa.String(20)),
+        sa.Column("confidence", sa.Numeric(6, 5)),
+    )
+    table.create(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            table.insert(),
+            [
+                {
+                    "decision_id": "d1",
+                    "strategy_id": "alpha",
+                    "timestamp": datetime(2026, 10, 1),
+                    "action": "execute",
+                    "confidence": 0.7,
+                },
+                {
+                    "decision_id": "d2",
+                    "strategy_id": "alpha",
+                    "timestamp": datetime(2026, 10, 2),
+                    "action": "execute",
+                    "confidence": 0.8,
+                },
+            ],
+        )
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        calibration,
+        "create_read_only_engine",
+        lambda uri, role: calls.append((uri, role)) or engine,
+    )
+    monkeypatch.setattr(calibration, "mark_engine_closing", lambda candidate: None)
+    monkeypatch.setattr(calibration, "MYSQL_DECISION_BATCH_SIZE", 1)
+
+    rows, checked = calibration._read_historic_decisions(
+        {"d1", "d2"}, "mysql://history"
+    )
+
+    assert checked is True
+    assert {row["decision_id"] for row in rows} == {"d1", "d2"}
+    assert calls == [("mysql://history", "adhoc")]
 
 
 def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:

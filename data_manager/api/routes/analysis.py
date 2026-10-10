@@ -125,7 +125,15 @@ async def compute_calibration_confidence(
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="Database not available")
     return await get_calibration_records(
-        db_manager.mongodb_adapter, since=since, strategy_id=strategy_id, source=source
+        db_manager.mongodb_adapter,
+        since=since,
+        strategy_id=strategy_id,
+        source=source,
+        mysql_uri=(
+            constants.MYSQL_URI
+            if getattr(db_manager, "mysql_adapter", None)
+            else None
+        ),
     )
 
 
@@ -182,6 +190,11 @@ async def get_latest_calibration_report(
             api_module.db_manager.mongodb_adapter,
             since=since,
             strategy_id=strategy_id,
+            mysql_uri=(
+                constants.MYSQL_URI
+                if getattr(api_module.db_manager, "mysql_adapter", None)
+                else None
+            ),
         )
     except Exception as exc:
         logger.error("latest confidence calibration failed: %s", exc, exc_info=True)

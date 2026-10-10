@@ -8,10 +8,14 @@ from decimal import Decimal, InvalidOperation
 from time import monotonic
 from typing import Any
 
+from sqlalchemy import Column, DateTime, MetaData, Numeric, String, Table, select
+
+from data_manager.db.engine_factory import create_read_only_engine, mark_engine_closing
 from data_manager.services.report_precompute import record_report_stage
 from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 MAX_ROWS = 50_000
+MYSQL_DECISION_BATCH_SIZE = 1_000
 FRESHNESS_MAX_AGE_MINUTES = 30
 ZERO = Decimal("0")
 logger = logging.getLogger(__name__)
@@ -30,6 +34,7 @@ def build_calibration_records(
     decisions: list[dict[str, Any]],
     *,
     since: datetime | None = None,
+    history_checked: bool = False,
 ) -> dict[str, Any]:
     """Join closed round-book entries to executed CIO decisions."""
     book = RoundBook()
@@ -80,13 +85,19 @@ def build_calibration_records(
             if not closed.decision_ids:
                 skipped_reasons["no_decision_id_on_fill"] += 1
             elif matched_decisions == 0:
-                skipped_reasons["no_matching_cio_decision"] += 1
+                skipped_reasons[
+                    "decision_not_in_history"
+                    if history_checked
+                    else "no_matching_cio_decision"
+                ] += 1
             elif execute_decisions == 0:
                 skipped_reasons["non_execute_decision"] += 1
             elif invalid_confidence and not missing_confidence:
                 skipped_reasons["invalid_confidence"] += 1
             else:
                 skipped_reasons["missing_confidence"] += 1
+            continue
+        if decision is None:
             continue
         gross = closed.realized_dec
         costs = closed.fees
@@ -110,12 +121,43 @@ def build_calibration_records(
     }
 
 
+def _read_historic_decisions(
+    decision_ids: set[str], mysql_uri: str | None
+) -> tuple[list[dict[str, Any]], bool]:
+    """Read missing decision IDs from permanent history through a read-only engine."""
+    if not decision_ids or not mysql_uri:
+        return [], False
+
+    engine = create_read_only_engine(mysql_uri, role="adhoc")
+    try:
+        table = Table(
+            "cio_decisions",
+            MetaData(),
+            Column("decision_id", String(128)),
+            Column("strategy_id", String(128)),
+            Column("timestamp", DateTime),
+            Column("action", String(20)),
+            Column("confidence", Numeric(6, 5)),
+        )
+        historic: list[dict[str, Any]] = []
+        ordered_ids = sorted(decision_ids)
+        with engine.connect() as connection:
+            for start in range(0, len(ordered_ids), MYSQL_DECISION_BATCH_SIZE):
+                batch = ordered_ids[start : start + MYSQL_DECISION_BATCH_SIZE]
+                query = select(table).where(table.c.decision_id.in_(batch))
+                historic.extend(dict(row._mapping) for row in connection.execute(query))
+        return historic, True
+    finally:
+        mark_engine_closing(engine)
+
+
 async def get_calibration_records(
     mongodb: Any,
     *,
     since: datetime | None = None,
     strategy_id: str | None = None,
     source: str = "on_demand",
+    mysql_uri: str | None = None,
 ) -> dict[str, Any]:
     """Read bounded audit data through the database gateway and build records."""
     filters = {
@@ -140,12 +182,35 @@ async def get_calibration_records(
     # ``fill_time`` (a close and a reopen in the same ms) must reach the round book in ingestion order.
     execution_events = list(reversed(execution_events))
     decisions = list(reversed(decisions))
+    event_decision_ids = {
+        str(row["decision_id"])
+        for row in execution_events
+        if row.get("event_type") in FILL_EVENT_TYPES and row.get("decision_id")
+    }
+    mongo_decision_ids = {
+        str(row["decision_id"]) for row in decisions if row.get("decision_id")
+    }
+    missing_decision_ids = event_decision_ids - mongo_decision_ids
+    historic_decisions: list[dict[str, Any]] = []
+    history_checked = False
+    if missing_decision_ids and mysql_uri:
+        try:
+            historic_decisions, history_checked = await asyncio.to_thread(
+                _read_historic_decisions, missing_decision_ids, mysql_uri
+            )
+        except Exception as exc:
+            logger.warning("calibration historic cio_decisions read failed: %s", exc)
+    decisions = historic_decisions + decisions
     record_report_stage(
         "calibration", "read+decode", monotonic() - read_started, source=source
     )
     compute_started = monotonic()
     report = await asyncio.to_thread(
-        build_calibration_records, execution_events, decisions, since=since
+        build_calibration_records,
+        execution_events,
+        decisions,
+        since=since,
+        history_checked=history_checked,
     )
     record_report_stage(
         "calibration", "compute", monotonic() - compute_started, source=source
@@ -185,9 +250,10 @@ async def get_latest_calibration(
     since: datetime | None = None,
     strategy_id: str | None = None,
     now: datetime | None = None,
+    mysql_uri: str | None = None,
 ) -> dict[str, Any]:
     """Read the calibration report and add its operational freshness signal."""
     report = await get_calibration_records(
-        mongodb, since=since, strategy_id=strategy_id
+        mongodb, since=since, strategy_id=strategy_id, mysql_uri=mysql_uri
     )
     return {**report, **calibration_freshness(report["records"], now=now)}
