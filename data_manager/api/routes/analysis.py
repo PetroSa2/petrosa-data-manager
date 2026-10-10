@@ -4,6 +4,7 @@ Analytics endpoints for computed metrics.
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -16,6 +17,7 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, HTTPException, Query
+from prometheus_client import Gauge
 from pydantic import BaseModel
 
 import data_manager.api.app as api_module
@@ -25,6 +27,13 @@ logger = logging.getLogger(__name__)
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
 _ROUND_MAX_FILLS = 50_000
+ROUND_BOOK_ORPHANED_LOTS = Gauge(
+    "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
+)
+ROUND_BOOK_SNAPSHOT_AGE = Gauge(
+    "data_manager_round_book_exchange_snapshot_age_seconds",
+    "Age of the exchange snapshot used by the round-book overlay",
+)
 
 #: Fields ``slippage_report.build_report`` reads from an ``execution_events`` fill: the event type, symbol and
 #: times, and the telemetry (``role``, ``reduce_only``, ``slippage_bp``, ``intended_price``, ``regime_at_fill``)
@@ -519,6 +528,32 @@ async def get_slippage_by_regime(
     )
 
 
+def _round_overlay_mode() -> str:
+    mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
+    return mode if mode in {"off", "report", "apply"} else "report"
+
+
+def _slice_round_report(report: dict[str, Any], strategy_id: str) -> dict[str, Any]:
+    """One strategy's part of a full replay, with the totals and the check of that strategy alone."""
+    strategy = report["strategies"].get(strategy_id)
+    report["strategies"] = {strategy_id: strategy} if strategy else {}
+    fills = strategy["fills"] if strategy else 0
+    report["unattributed"] = {}
+    report["totals"] = {
+        "fills": fills,
+        "attributed_to_a_strategy": fills,
+        "unattributed": 0,
+        "position_side_unknown": strategy["position_side_unknown"] if strategy else 0,
+        "legacy_exit_side_mapped": strategy["legacy_exit_side_mapped"]
+        if strategy
+        else 0,
+    }
+    report["accounted"] = strategy is None or strategy["fills"] == strategy[
+        "fills_in_closed_rounds"
+    ] + strategy["fills_in_open_rounds"] + strategy.get("fills_in_orphaned_rounds", 0)
+    return report
+
+
 async def compute_closed_rounds(
     db_manager: Any,
     strategy_id: str | None = None,
@@ -529,26 +564,81 @@ async def compute_closed_rounds(
     Every fill is accounted for: in a closed round, in the open round of its strategy, or unattributed with a
     reason (petrosa-data-manager#537). ``n`` is the number of closed rounds behind the rate and the holding
     time, so a consumer can tell when a figure is too thin to use.
+
+    The orphan overlay (petrosa-data-manager#576) allocates the exchange quantity across ALL strategies, so it
+    is built from the replay of every fill. A call for one strategy takes its figures from that replay when it
+    is complete; when the read of all fills is cut at the cap, the strategy's figures come from a read of its own
+    fills (never from the cut data) and the overlay is reported ``disabled_truncated``.
     """
     from data_manager.services.round_book import FILL_EVENT_TYPES, build_report
 
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
-    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    if strategy_id:
-        query["strategy_id"] = strategy_id
+    mode = _round_overlay_mode()
     mongodb = db_manager.mongodb_adapter
-    try:
+    base_query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+
+    async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
-        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+        return await cursor.to_list(length=_ROUND_MAX_FILLS)
+
+    own_query = {**base_query, "strategy_id": strategy_id} if strategy_id else None
+    try:
+        rows = await read(own_query if own_query and mode == "off" else base_query)
+        truncated = len(rows) >= _ROUND_MAX_FILLS
+        overlay_cut = False
+        if own_query and mode != "off" and truncated:
+            # The read of all fills is cut: this strategy's figures must not come from it.
+            overlay_cut = True
+            rows = await read(own_query)
+            truncated = len(rows) >= _ROUND_MAX_FILLS
     except Exception as exc:
         logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    report = await asyncio.to_thread(build_report, rows, window_days=window_days)
+    overlay_possible = mode != "off" and not overlay_cut and not truncated
+    exchange = None
+    closed_entry_orders: set[str] | None = None
+    if overlay_possible:
+        from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+        mysql = getattr(db_manager, "mysql_adapter", None)
+        if mysql is not None:
+            repo = LedgerRepository(mysql, None)
+            try:
+                exchange, closed_entry_orders = await asyncio.gather(
+                    asyncio.to_thread(repo.round_overlay_snapshot),
+                    asyncio.to_thread(repo.closed_entry_order_ids),
+                )
+            except Exception as exc:
+                logger.warning("rounds: orphan overlay inputs unavailable: %s", exc)
+                exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+        else:
+            exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+    report = await asyncio.to_thread(
+        build_report,
+        rows,
+        window_days=window_days,
+        exchange=exchange,
+        closed_entry_orders=closed_entry_orders,
+        apply_overlay=mode == "apply",
+    )
+    if mode == "off":
+        report["orphan_overlay"] = "off"
+    elif overlay_cut or truncated:
+        report["orphan_overlay"] = "disabled_truncated"
+    if strategy_id and not (mode == "off" or overlay_cut):
+        report = _slice_round_report(report, strategy_id)
+    for owner, strategy in report["strategies"].items():
+        ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=owner).set(
+            strategy.get("orphaned_lots", 0)
+        )
+    if strategy_id and strategy_id not in report["strategies"]:
+        ROUND_BOOK_ORPHANED_LOTS.labels(strategy_id=strategy_id).set(0)
+    ROUND_BOOK_SNAPSHOT_AGE.set(report.get("exchange_snapshot_age_seconds", -1))
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "fills_read": len(rows),
-        "truncated": len(rows) >= _ROUND_MAX_FILLS,
+        "truncated": truncated,
         "source": "data-manager-round-book",
     }
     return report
@@ -576,6 +666,34 @@ async def get_closed_rounds(
             headers={"Retry-After": "15"},
         )
     return await compute_closed_rounds(api_module.db_manager, strategy_id, window_days)
+
+
+@router.get("/rounds/orphaned")
+async def get_orphaned_rounds(
+    strategy_id: str | None = Query(None),
+    window_days: float = Query(30.0, gt=0, le=365),
+) -> dict[str, Any]:
+    """List read-only orphan and ledger-closed lots from the complete fill replay."""
+    report = await compute_closed_rounds(
+        api_module.db_manager, strategy_id, window_days
+    )
+    lots = []
+    for owner, strategy in report["strategies"].items():
+        for symbol, symbol_legs in strategy.get("legs", {}).items():
+            for leg, data in symbol_legs.items():
+                for lot in data.get("orphaned", []):
+                    lots.append(
+                        {"strategy_id": owner, "symbol": symbol, "leg": leg, **lot}
+                    )
+                for lot in data.get("ledger_closed", []):
+                    lots.append(
+                        {"strategy_id": owner, "symbol": symbol, "leg": leg, **lot}
+                    )
+    return {
+        "lots": lots,
+        "metadata": report.get("metadata", {}),
+        "orphan_overlay": report.get("orphan_overlay"),
+    }
 
 
 @router.get("/volume")
