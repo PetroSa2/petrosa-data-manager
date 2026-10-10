@@ -38,6 +38,15 @@ ROUND_BOOK_SNAPSHOT_AGE = Gauge(
     "data_manager_round_book_exchange_snapshot_age_seconds",
     "Age of the exchange snapshot used by the round-book overlay",
 )
+ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY = Gauge(
+    "data_manager_round_book_orphan_overlay_unmatched_quantity",
+    "Cached orphan quantity without a matching live lot",
+    ["strategy_id"],
+)
+
+_REPLAY_SECONDS_PER_FILL = 0.004
+_CIO_TIMEOUT_SECONDS = 10.0
+_REPLAY_WARNING_FILL_COUNT = int(_CIO_TIMEOUT_SECONDS / _REPLAY_SECONDS_PER_FILL)
 
 #: Fields ``slippage_report.build_report`` reads from an ``execution_events`` fill: the event type, symbol and
 #: times, and the telemetry (``role``, ``reduce_only``, ``slippage_bp``, ``intended_price``, ``regime_at_fill``)
@@ -234,6 +243,18 @@ def _unavailable_exposure(status: str) -> dict[str, Any]:
     return {"status": status, "entries": None}
 
 
+def _normalise_overlay_timestamp(value: Any) -> str:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise ValueError("overlay timestamp is not a datetime or ISO string")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
 async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
     """The orphaned lots of a strategy per the round-book overlay (#577), from the precomputed rounds report.
 
@@ -277,13 +298,15 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
             (
                 str(symbol),
                 str(leg),
-                str(lot["opened_at"]),
+                _normalise_overlay_timestamp(lot["opened_at"]),
                 lot["order_id"],
                 float(lot["quantity"]),
+                kind,
             )
             for symbol, by_leg in (strategies[strategy_id].get("legs") or {}).items()
             for leg, data in by_leg.items()
-            for lot in data["orphaned"]
+            for kind in ("orphaned", "ledger_closed")
+            for lot in (data["orphaned"] if kind == "orphaned" else data.get("ledger_closed", []))
         ]
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("performance: rounds report not usable: %s", exc)
@@ -293,14 +316,14 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
 
 def _leg_aware_pnl(
     rows: list[dict[str, Any]],
-    orphaned: list[tuple[str, str, str, Any, float]],
+    overlay_lots: list[tuple[str, str, str, Any, float, str]],
     strategy_id: str,
 ) -> dict[str, Any] | None:
     """Realized and unrealized P&L of one strategy from ONE leg-aware replay of its own fills (#581).
 
     The replay is the round book's: hedge legs stay apart, so realized and unrealized describe the same lots at
     the same time (``PnlCalculator`` nets BUY against SELL on a symbol whatever the position side). The cached
-    orphan list is matched to the still-open lots by identity (symbol, leg, order id, opened at); a lot closed
+    overlay list is matched to the still-open lots by identity (symbol, leg, order id, opened at); a lot closed
     since the cache was computed is simply not open here, and a lot opened since is held by default. Returns
     ``None`` when an open lot has no mark price (nothing is guessed).
     """
@@ -328,32 +351,60 @@ def _leg_aware_pnl(
             marks[str(symbol)] = (
                 price  # the latest fill price, in the price the lots are valued at
             )
-    excluded: dict[tuple[str, str, Any, str], float] = {}
-    for symbol, leg, opened_at, order_id, quantity in orphaned:
+    excluded: dict[tuple[str, str, Any, str], dict[str, float]] = {}
+    for symbol, leg, opened_at, order_id, quantity, kind in overlay_lots:
         key = (symbol, leg, order_id, opened_at)
-        excluded[key] = excluded.get(key, 0.0) + quantity
+        by_kind = excluded.setdefault(key, {})
+        by_kind[kind] = by_kind.get(kind, 0.0) + quantity
     held_pnl = 0.0
     orphaned_pnl = 0.0
     orphaned_lots = 0
+    ledger_closed_pnl = 0.0
+    ledger_closed_lots = 0
     for symbol, leg, lot in book.open_lots(strategy_id):
         mark = marks.get(symbol)
         if mark is None:
             return None
-        key = (symbol, leg, lot.order_id, lot.opened_at.isoformat())
-        taken = min(lot.qty, excluded.get(key, 0.0))
-        if key in excluded:
-            excluded[key] -= taken
+        key = (symbol, leg, lot.order_id, _normalise_overlay_timestamp(lot.opened_at))
+        by_kind = excluded.get(key, {})
+        orphaned_taken = min(lot.qty, by_kind.get("orphaned", 0.0))
+        remaining = lot.qty - orphaned_taken
+        ledger_closed_taken = min(remaining, by_kind.get("ledger_closed", 0.0))
+        remaining -= ledger_closed_taken
+        if "orphaned" in by_kind:
+            by_kind["orphaned"] -= orphaned_taken
+        if "ledger_closed" in by_kind:
+            by_kind["ledger_closed"] -= ledger_closed_taken
         sign = 1.0 if leg == "LONG" else -1.0
         per_unit = sign * (mark - lot.price)
-        held_pnl += per_unit * (lot.qty - taken)
-        orphaned_pnl += per_unit * taken
-        if taken > ROUND_ORPHAN_QUANTITY_TOLERANCE * max(1.0, lot.qty):
+        held_pnl += per_unit * remaining
+        orphaned_pnl += per_unit * orphaned_taken
+        ledger_closed_pnl += per_unit * ledger_closed_taken
+        if orphaned_taken > ROUND_ORPHAN_QUANTITY_TOLERANCE * max(1.0, lot.qty):
             orphaned_lots += 1
+        if ledger_closed_taken > ROUND_ORPHAN_QUANTITY_TOLERANCE * max(1.0, lot.qty):
+            ledger_closed_lots += 1
+    unmatched_quantity = sum(
+        quantity
+        for by_kind in excluded.values()
+        for kind, quantity in by_kind.items()
+        if kind == "orphaned" and quantity > ROUND_ORPHAN_QUANTITY_TOLERANCE
+    )
+    unmatched_lots = sum(
+        quantity > ROUND_ORPHAN_QUANTITY_TOLERANCE
+        for by_kind in excluded.values()
+        for kind, quantity in by_kind.items()
+        if kind == "orphaned"
+    )
     return {
         "realized": book.realized_total(strategy_id),
         "held_unrealized": held_pnl,
         "orphaned_unrealized": orphaned_pnl,
         "orphaned_lots": orphaned_lots,
+        "ledger_closed_unrealized": ledger_closed_pnl,
+        "ledger_closed_lots": ledger_closed_lots,
+        "unmatched_quantity": unmatched_quantity,
+        "unmatched_lots": unmatched_lots,
     }
 
 
@@ -504,9 +555,20 @@ async def get_strategy_performance(strategy_id: str):
         if orphan_mode != "off":
             exposure = await _orphaned_lots_from_the_cache(strategy_id)
             if exposure["entries"] is not None:
-                leg_pnl = _leg_aware_pnl(rows, exposure["entries"], strategy_id)
+                if len(rows) > _REPLAY_WARNING_FILL_COUNT:
+                    logger.warning(
+                        "performance: replay has %s fills; warning threshold is %s",
+                        len(rows),
+                        _REPLAY_WARNING_FILL_COUNT,
+                    )
+                leg_pnl = await asyncio.to_thread(
+                    _leg_aware_pnl, rows, exposure["entries"], strategy_id
+                )
                 if leg_pnl is None:
                     exposure = _unavailable_exposure("unavailable")
+        ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY.labels(
+            strategy_id=strategy_id
+        ).set(leg_pnl["unmatched_quantity"] if leg_pnl else 0)
         realized_pnl = breakdown.realized
         unrealized_pnl = breakdown.unrealized
         if orphan_mode == "apply" and leg_pnl is not None:
@@ -543,6 +605,12 @@ async def get_strategy_performance(strategy_id: str):
                             leg_pnl["orphaned_unrealized"] if leg_pnl else None
                         ),
                         "orphaned_lots": leg_pnl["orphaned_lots"] if leg_pnl else None,
+                        "ledger_closed_unrealized_pnl": (
+                            leg_pnl["ledger_closed_unrealized"] if leg_pnl else None
+                        ),
+                        "ledger_closed_lots": (
+                            leg_pnl["ledger_closed_lots"] if leg_pnl else None
+                        ),
                     }
                     if exposure is not None
                     else {}
@@ -563,6 +631,12 @@ async def get_strategy_performance(strategy_id: str):
                             "round-book-legs"
                             if orphan_mode == "apply" and leg_pnl is not None
                             else "pnl-calculator"
+                        ),
+                        "orphan_overlay_unmatched_quantity": (
+                            leg_pnl["unmatched_quantity"] if leg_pnl else None
+                        ),
+                        "orphan_overlay_unmatched_lots": (
+                            leg_pnl["unmatched_lots"] if leg_pnl else None
                         ),
                     }
                     if exposure is not None

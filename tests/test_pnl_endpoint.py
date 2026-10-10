@@ -326,6 +326,61 @@ def test_performance_apply_marks_only_the_held_lots_and_the_trend_follows_realiz
     assert body["metadata"]["orphan_marking"] == "apply"
 
 
+def test_performance_apply_excludes_ledger_closed_lots_separately_and_normalizes_time(
+    monkeypatch,
+):
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    leg = body["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]
+    ledger_closed = next(
+        lot for lot in leg["orphaned"] if lot["order_id"] == "e1"
+    )
+    leg["orphaned"].remove(ledger_closed)
+    ledger_closed["opened_at"] = ledger_closed["opened_at"].replace("+00:00", "Z")
+    leg["ledger_closed"] = [ledger_closed]
+
+    response, _ = _performance(monkeypatch, "apply", rows, body)
+
+    stats = response["stats"]
+    assert stats["unrealized_pnl"] == pytest.approx(0.0)
+    assert stats["orphaned_unrealized_pnl"] == pytest.approx(-30.0)
+    assert stats["ledger_closed_unrealized_pnl"] == pytest.approx(-10.0)
+    assert stats["ledger_closed_lots"] == 1
+    assert response["metadata"]["orphan_overlay_unmatched_quantity"] == 0
+
+
+def test_performance_reports_unmatched_cached_orphan_quantity_and_gauge(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    body["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]["orphaned"][0][
+        "order_id"
+    ] = "not-live"
+
+    response, _ = _performance(monkeypatch, "apply", rows, body)
+
+    assert response["metadata"]["orphan_overlay_unmatched_quantity"] == pytest.approx(
+        1.0
+    )
+    assert response["metadata"]["orphan_overlay_unmatched_lots"] == 1
+    assert analysis_route.ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY.labels(
+        strategy_id="S1"
+    )._value.get() == pytest.approx(1.0)
+
+
+def test_performance_warns_before_off_loop_large_replay(monkeypatch, caplog):
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.setattr(analysis_route, "_REPLAY_WARNING_FILL_COUNT", 0)
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    with caplog.at_level("WARNING", logger="data_manager.api.routes.analysis"):
+        _performance(monkeypatch, "apply", rows, body)
+
+    assert "replay has 3 fills" in caplog.text
+
+
 def test_performance_report_mode_adds_the_fields_and_changes_nothing_else(monkeypatch):
     stats = _orphan_stats(monkeypatch, "report", held="1")["stats"]
     assert stats["orphaned_lots"] == 2

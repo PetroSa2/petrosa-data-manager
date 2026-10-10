@@ -487,6 +487,46 @@ async def test_the_endpoint_reports_the_rounds_and_says_when_it_was_truncated():
     assert set(report["strategies"]) == {"s1"}
 
 
+@pytest.mark.asyncio
+async def test_rounds_endpoint_apply_excludes_ledger_closed_lots(monkeypatch):
+    import data_manager.api.app as api_module
+    import data_manager.db.repositories.ledger_repository as ledger_module
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    class FakeRepository:
+        def __init__(self, *_args):
+            pass
+
+        def round_overlay_snapshot(self):
+            return _snapshot(datetime.now(UTC), [])
+
+        def closed_entry_order_ids(self):
+            return {"closed"}
+
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, order_id="closed")]
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=rows)
+    collection = MagicMock()
+    collection.find.return_value = cursor
+    api_module.db_manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"execution_events": collection}),
+        mysql_adapter=object(),
+    )
+    monkeypatch.setattr(ledger_module, "LedgerRepository", FakeRepository)
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
+    try:
+        report = await get_closed_rounds(strategy_id="s1", window_days=30.0)
+    finally:
+        api_module.db_manager = None
+
+    stats = report["strategies"]["s1"]
+    leg = stats["legs"]["ETHUSDT"]["LONG"]
+    assert stats["open_rounds"] == 0
+    assert stats["ledger_closed_rounds"] == 1
+    assert leg["ledger_closed_quantity"] == pytest.approx(1.0)
+
+
 def _routed_collection(by_strategy_filter):
     """An execution_events collection whose find() answers per query (all fills, or one strategy)."""
     calls = []
