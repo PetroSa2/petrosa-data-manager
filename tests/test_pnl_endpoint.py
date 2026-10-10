@@ -264,6 +264,55 @@ def test_win_rate_delta_noise_floor_edges():
     assert f([True, True, False, False])[0] is None
 
 
+def test_win_rate_delta_ties_are_decided_in_exact_arithmetic():
+    """|delta| == 2 SE is never significant, whatever float rounding does (w = 50, 6 -> 14 wins)."""
+    from data_manager.api.routes.analysis import win_rate_delta_with_noise_floor as f
+
+    def windows(earlier_wins: int, later_wins: int, w: int) -> list[bool]:
+        return (
+            [True] * earlier_wins
+            + [False] * (w - earlier_wins)
+            + [True] * later_wins
+            + [False] * (w - later_wins)
+        )
+
+    # (14 - 6)^2 * 50 = 3200 = 2 * 20 * 80: exactly 2 SE -> null
+    delta, window, se = f(windows(6, 14, 50))
+    assert delta is None
+    assert window == 50
+    assert se == pytest.approx((20 * 80 / (2 * 50**3)) ** 0.5)
+    # one more win in the later window (7 -> 14 wins... 6 -> 15) is above the tie: returned exactly
+    assert f(windows(6, 15, 50))[0] == pytest.approx(0.18)
+    # and one fewer is below it
+    assert f(windows(6, 13, 50))[0] is None
+    # the order of the windows only changes the sign
+    assert f(windows(14, 6, 50))[0] is None
+    assert f(windows(15, 6, 50))[0] == pytest.approx(-0.18)
+
+
+def test_win_rate_delta_never_flips_on_ties_for_any_window_size():
+    """The strict test agrees with exact fractions for every (w, a, b) up to w = 40."""
+    from fractions import Fraction
+
+    from data_manager.api.routes.analysis import win_rate_delta_with_noise_floor as f
+
+    for w in range(1, 41):
+        for a in range(w + 1):
+            for b in range(w + 1):
+                outcomes = (
+                    [True] * a + [False] * (w - a) + [True] * b + [False] * (w - b)
+                )
+                wins = a + b
+                if wins in (0, 2 * w):
+                    expected = False
+                else:
+                    pooled = Fraction(wins, 2 * w)
+                    delta = Fraction(b - a, w)
+                    expected = delta**2 > 4 * pooled * (1 - pooled) * 2 / w
+                got = f(outcomes)[0] is not None
+                assert got == expected, (w, a, b)
+
+
 def test_performance_degrades_when_db_missing():
     """No DB should yield 'neutral' trend (not 'unknown') rather than 500.
 
@@ -279,6 +328,9 @@ def test_performance_degrades_when_db_missing():
     body = r.json()
     assert body["stats"]["win_rate"] is None
     assert body["stats"]["win_rate_delta"] is None
+    assert "win_rate_delta_window" in body["stats"]
+    assert body["stats"]["win_rate_delta_window"] is None
+    assert body["stats"]["win_rate_delta_se"] is None
     assert body["stats"]["consecutive_losses"] is None
     assert body["stats"]["recent_pnl_trend"] == "neutral"
     assert body["metadata"]["source"] == "data-manager-analysis-no-db"
@@ -309,6 +361,9 @@ def test_performance_degrades_to_neutral_when_execution_events_read_fails():
         body = r.json()
         assert body["stats"]["win_rate"] is None
         assert body["stats"]["win_rate_delta"] is None
+        assert "win_rate_delta_window" in body["stats"]
+        assert body["stats"]["win_rate_delta_window"] is None
+        assert body["stats"]["win_rate_delta_se"] is None
         assert body["stats"]["consecutive_losses"] is None
         assert body["stats"]["recent_pnl_trend"] == "neutral"
         assert body["metadata"]["source"] == "data-manager-analysis-no-db"

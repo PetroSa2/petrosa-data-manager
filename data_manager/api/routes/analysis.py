@@ -205,26 +205,28 @@ def win_rate_delta_with_noise_floor(
 ) -> tuple[float | None, int | None, float | None]:
     """The win rate of the latest window minus the one before it, only when it is distinguishable from noise.
 
-    The two windows hold ``w = n // 2`` outcomes each. With the pooled win rate ``p`` of both windows the
-    standard error of the difference is ``sqrt(p (1 - p) 2 / w)``, and the delta is returned only when
-    ``|delta| > 2 SE`` (about 95 %), else ``None`` (unknown to the CIO). A pooled ``p`` of 0 or 1 has no
-    variance, so ``p`` is the Laplace estimate ``(wins + 1) / (2 w + 2)`` there. No fixed sample size is
-    assumed: with three outcomes each window is one trade, the delta can only be -1, 0 or +1 and is never
-    above 2 SE (petrosa-data-manager#579). Returns ``(delta, w, SE)``; ``(None, None, None)`` below two outcomes.
+    The two windows hold ``w = n // 2`` outcomes each, ``a`` wins in the earlier and ``b`` in the later one.
+    With the pooled win rate ``p = (a + b) / 2w`` the standard error of the difference is
+    ``SE = sqrt(p (1 - p) 2 / w)``, and the delta ``(b - a) / w`` is returned only when ``|delta| > 2 SE``
+    (about 95 %), else ``None`` (unknown to the CIO). The test is exact, in integers, so a tie is never decided
+    by rounding: ``|delta| > 2 SE`` is ``(b - a)^2 w > 2 (a + b) (2w - a - b)``. A pooled ``p`` of 0 or 1 has no
+    variance (and no delta), so ``SE`` is reported from the Laplace estimate ``(a + b + 1) / (2 w + 2)``
+    there. No fixed sample size is assumed: with three outcomes each window is one trade, the delta can only be
+    -1, 0 or +1 and is never above 2 SE (petrosa-data-manager#579). Returns ``(delta, w, SE)``;
+    ``(None, None, None)`` below two outcomes.
     """
     window = len(outcomes) // 2
     if not window:
         return None, None, None
-    previous = outcomes[-2 * window : -window]
-    current = outcomes[-window:]
-    wins = sum(previous) + sum(current)
-    delta = sum(current) / window - sum(previous) / window
-    pooled = wins / (2 * window)
-    if pooled in (0.0, 1.0):
+    earlier = sum(outcomes[-2 * window : -window])
+    later = sum(outcomes[-window:])
+    wins = earlier + later
+    if wins in (0, 2 * window):
         pooled = (wins + 1) / (2 * window + 2)
-    standard_error = math.sqrt(pooled * (1 - pooled) * 2 / window)
-    significant = abs(delta) > 2 * standard_error
-    return (delta if significant else None), window, standard_error
+        return None, window, math.sqrt(pooled * (1 - pooled) * 2 / window)
+    standard_error = math.sqrt(wins * (2 * window - wins) / (2 * window**3))
+    significant = (later - earlier) ** 2 * window > 2 * wins * (2 * window - wins)
+    return ((later - earlier) / window if significant else None), window, standard_error
 
 
 @router.get("/performance/{strategy_id}")
@@ -249,6 +251,8 @@ async def get_strategy_performance(strategy_id: str):
                 "stats": {
                     "win_rate": None,
                     "win_rate_delta": None,
+                    "win_rate_delta_window": None,
+                    "win_rate_delta_se": None,
                     "consecutive_losses": None,
                     # "neutral" (not "unknown") — matches petrosa-cio's PnlTrend
                     # enum vocabulary (positive|negative|neutral). Same bug
@@ -290,6 +294,8 @@ async def get_strategy_performance(strategy_id: str):
                 "stats": {
                     "win_rate": None,
                     "win_rate_delta": None,
+                    "win_rate_delta_window": None,
+                    "win_rate_delta_se": None,
                     "consecutive_losses": None,
                     # See comment on the no-DB sentinel above: "neutral", not
                     # "unknown" — cio#194 sibling fix.
