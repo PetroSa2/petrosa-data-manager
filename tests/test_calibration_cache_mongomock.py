@@ -368,6 +368,24 @@ async def test_fills_with_an_equal_fill_time_keep_their_ingestion_order():
     assert _key(report) == _key(before)
 
 
+def test_decisions_reversal_keeps_mongo_override_for_merged_map():
+    """The service reverses newest-first reads before merging history.
+
+    Mongo decisions are unique by ``decision_id``. If history is prepended to
+    the reversed Mongo rows, the final map entry must remain Mongo's value.
+    """
+    t = datetime(2026, 10, 1, tzinfo=UTC)
+    events = [
+        _fill("s1", "d1", "buy", "100", t),
+        _fill("s1", "d1", "sell", "110", t + timedelta(minutes=1)),
+    ]
+    history = _decision("s1", "d1", t, confidence=0.1)
+    mongo = _decision("s1", "d1", t, confidence=0.9)
+    report = calibration.build_calibration_records(events, [history, mongo])
+    assert report["records"][0]["decision_id"] == "d1"
+    assert float(report["records"][0]["confidence"]) == pytest.approx(0.9)
+
+
 def test_the_builder_sorts_equal_fill_times_stably_in_the_order_it_is_given():
     """The service hands the builder oldest-first rows; the builder must keep that order on ties."""
     t = datetime(2026, 10, 1, tzinfo=UTC)

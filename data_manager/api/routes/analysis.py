@@ -125,7 +125,10 @@ async def compute_calibration_confidence(
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="Database not available")
     return await get_calibration_records(
-        db_manager.mongodb_adapter, since=since, strategy_id=strategy_id, source=source
+        db_manager.mongodb_adapter,
+        since=since,
+        strategy_id=strategy_id,
+        source=source,
     )
 
 
