@@ -180,26 +180,88 @@ def test_performance_returns_real_win_rate_and_pnl():
         api_module.db_manager = None
 
 
-def test_performance_returns_win_rate_delta_and_consecutive_losses():
-    rows = [
-        _fill(side="buy", qty=1, price=100, seconds_before=800),
-        _fill(side="sell", qty=1, price=110, seconds_before=700),
-        _fill(side="buy", qty=1, price=100, seconds_before=600),
-        _fill(side="sell", qty=1, price=120, seconds_before=500),
-        _fill(side="buy", qty=1, price=100, seconds_before=400),
-        _fill(side="sell", qty=1, price=90, seconds_before=300),
-        _fill(side="buy", qty=1, price=100, seconds_before=200),
-        _fill(side="sell", qty=1, price=80, seconds_before=100),
-    ]
+def _alternating_fills(results: list[bool]) -> list[dict[str, Any]]:
+    """One buy/sell pair per outcome, oldest first (a win sells above, a loss below the entry)."""
+    rows = []
+    for index, won in enumerate(results):
+        before = (len(results) - index) * 1000
+        rows.append(_fill(side="buy", qty=1, price=100, seconds_before=before))
+        rows.append(
+            _fill(
+                side="sell",
+                qty=1,
+                price=110 if won else 90,
+                seconds_before=before - 500,
+            )
+        )
+    return rows
+
+
+def _performance_stats(results: list[bool]) -> dict[str, Any]:
     try:
-        client = _client_with_fills(rows)
+        client = _client_with_fills(_alternating_fills(results))
         response = client.get("/analysis/performance/S1")
         assert response.status_code == 200
-        stats = response.json()["stats"]
-        assert stats["win_rate_delta"] == -1.0
-        assert stats["consecutive_losses"] == 2
+        return response.json()["stats"]
     finally:
         api_module.db_manager = None
+
+
+def test_performance_win_rate_delta_is_null_when_the_windows_are_one_trade():
+    """2W 1L, the last a loss: each window is one trade, the delta (-1.0) is noise (#579)."""
+    stats = _performance_stats([True, True, False])
+    assert stats["wins"] == 2 and stats["losses"] == 1
+    assert stats["win_rate_delta"] is None
+    assert stats["win_rate_delta_window"] == 1
+    assert stats["win_rate_delta_se"] == pytest.approx(0.5**0.5)
+    assert stats["consecutive_losses"] == 1
+
+
+def test_performance_win_rate_delta_is_returned_for_a_real_shift():
+    """40 outcomes: 18 wins of 20, then 4 wins of 20."""
+    stats = _performance_stats([True] * 18 + [False] * 2 + [True] * 4 + [False] * 16)
+    assert stats["win_rate_delta"] == pytest.approx(0.2 - 0.9)
+    assert stats["win_rate_delta_window"] == 20
+    assert stats["win_rate_delta_se"] == pytest.approx((0.55 * 0.45 * 2 / 20) ** 0.5)
+    assert stats["consecutive_losses"] == 16
+
+
+def test_performance_win_rate_delta_keeps_the_response_contract():
+    stats = _performance_stats([True, False, True, False])
+    assert {
+        "win_rate",
+        "wins",
+        "losses",
+        "consecutive_losses",
+        "recent_pnl_trend",
+    } <= set(stats)
+    assert "win_rate_delta" in stats and "win_rate_delta_window" in stats
+
+
+def test_win_rate_delta_noise_floor_edges():
+    from data_manager.api.routes.analysis import win_rate_delta_with_noise_floor as f
+
+    assert f([]) == (None, None, None)
+    assert f([True]) == (None, None, None)
+    # all wins / all losses: p = 0 or 1 has no variance, so the Laplace estimate sets the SE
+    delta, window, se = f([True] * 6)
+    assert (delta, window) == (None, 3)
+    assert se == pytest.approx((7 / 8 * (1 / 8) * 2 / 3) ** 0.5)
+    delta, window, se = f([False] * 6)
+    assert (delta, window) == (None, 3)
+    assert se == pytest.approx((1 / 8 * (7 / 8) * 2 / 3) ** 0.5)
+    # 0 wins then 3 wins (p = 0.5, w = 3): |delta| 1.0 > 2 SE = 0.816, a complete reversal is returned
+    assert f([False] * 3 + [True] * 3)[0] == 1.0
+    assert f([True] * 3 + [False] * 3)[0] == -1.0
+    # but with one trade per window (w = 1) the same reversal is never above 2 SE = 1.414
+    assert f([True, False])[0] is None
+    assert f([False, True])[0] is None
+    # and a 1-of-2 shift at w = 2 is noise (|delta| 0.5 < 2 SE)
+    assert f([True, False, True, True])[0] is None
+    # an odd count drops the oldest outcome (the leading win is ignored)
+    assert f([True] + [False] * 3 + [True] * 3)[0] == 1.0
+    # exactly 2 SE is not enough (w = 2, 2 wins then 0: delta 1.0 vs 2 SE 1.0)
+    assert f([True, True, False, False])[0] is None
 
 
 def test_performance_degrades_when_db_missing():

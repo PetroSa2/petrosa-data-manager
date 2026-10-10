@@ -4,6 +4,7 @@ Analytics endpoints for computed metrics.
 
 import asyncio
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -199,6 +200,33 @@ async def get_volatility(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def win_rate_delta_with_noise_floor(
+    outcomes: list[bool],
+) -> tuple[float | None, int | None, float | None]:
+    """The win rate of the latest window minus the one before it, only when it is distinguishable from noise.
+
+    The two windows hold ``w = n // 2`` outcomes each. With the pooled win rate ``p`` of both windows the
+    standard error of the difference is ``sqrt(p (1 - p) 2 / w)``, and the delta is returned only when
+    ``|delta| > 2 SE`` (about 95 %), else ``None`` (unknown to the CIO). A pooled ``p`` of 0 or 1 has no
+    variance, so ``p`` is the Laplace estimate ``(wins + 1) / (2 w + 2)`` there. No fixed sample size is
+    assumed: with three outcomes each window is one trade, the delta can only be -1, 0 or +1 and is never
+    above 2 SE (petrosa-data-manager#579). Returns ``(delta, w, SE)``; ``(None, None, None)`` below two outcomes.
+    """
+    window = len(outcomes) // 2
+    if not window:
+        return None, None, None
+    previous = outcomes[-2 * window : -window]
+    current = outcomes[-window:]
+    wins = sum(previous) + sum(current)
+    delta = sum(current) / window - sum(previous) / window
+    pooled = wins / (2 * window)
+    if pooled in (0.0, 1.0):
+        pooled = (wins + 1) / (2 * window + 2)
+    standard_error = math.sqrt(pooled * (1 - pooled) * 2 / window)
+    significant = abs(delta) > 2 * standard_error
+    return (delta if significant else None), window, standard_error
+
+
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
     """
@@ -291,17 +319,9 @@ async def get_strategy_performance(strategy_id: str):
 
         decisions = wins + losses
         win_rate = (wins / decisions) if decisions else None
-        comparable_window_size = decisions // 2
-        if comparable_window_size:
-            previous_window = outcomes[
-                -2 * comparable_window_size : -comparable_window_size
-            ]
-            current_window = outcomes[-comparable_window_size:]
-            previous_win_rate = sum(previous_window) / comparable_window_size
-            current_win_rate = sum(current_window) / comparable_window_size
-            win_rate_delta = current_win_rate - previous_win_rate
-        else:
-            win_rate_delta = None
+        win_rate_delta, delta_window, delta_se = win_rate_delta_with_noise_floor(
+            outcomes
+        )
 
         consecutive_losses = None
         if outcomes:
@@ -326,6 +346,9 @@ async def get_strategy_performance(strategy_id: str):
             "stats": {
                 "win_rate": win_rate,
                 "win_rate_delta": win_rate_delta,
+                # The windows and the standard error behind the delta (and why it may be null)
+                "win_rate_delta_window": delta_window,
+                "win_rate_delta_se": delta_se,
                 # The closed rounds behind the win rate: the posterior of the CIO net-EV gate needs them
                 "wins": wins,
                 "losses": losses,
