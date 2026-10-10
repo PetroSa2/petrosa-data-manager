@@ -372,7 +372,8 @@ def test_decisions_reversal_keeps_mongo_override_for_merged_map():
     """The service reverses newest-first reads before merging history.
 
     Mongo decisions are unique by ``decision_id``. If history is prepended to
-    the reversed Mongo rows, the final map entry must remain Mongo's value.
+    the reversed Mongo rows, the final map entry must remain Mongo's value. (The same rule through the whole
+    service, with a real MySQL row, is tested in test_calibration_history_fallback.py.)
     """
     t = datetime(2026, 10, 1, tzinfo=UTC)
     events = [

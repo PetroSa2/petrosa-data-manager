@@ -115,6 +115,17 @@ def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisio
     }
 
 
+def test_build_calibration_records_distinguishes_missing_history() -> None:
+    rows = [
+        _fill("buy", "2026-10-01T12:00:00Z", "missing"),
+        _fill("sell", "2026-10-01T12:01:00Z", "missing"),
+    ]
+
+    result = build_calibration_records(rows, [], history_checked=True)
+
+    assert result["skipped_reasons"] == {"decision_not_in_history": 1}
+
+
 def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:
     rows = [
         _fill("buy", "2026-10-01T12:00:00Z", "d1"),
@@ -215,7 +226,10 @@ async def test_calibration_route_reads_gateway_and_filters() -> None:
         "event_type": {"$in": ["filled", "partial_fill"]},
         "strategy_id": "alpha",
     }
-    assert calls[1][1]["filters"] == {"strategy_id": "alpha", "action": "execute"}
+    assert calls[1][1]["filters"] == {
+        "strategy_id": "alpha",
+        "action": {"$in": ["buy", "execute", "sell", "BUY", "EXECUTE", "SELL"]},
+    }
 
 
 @pytest.mark.asyncio

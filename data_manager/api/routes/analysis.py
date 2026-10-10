@@ -118,8 +118,13 @@ async def compute_calibration_confidence(
     since: datetime | None = None,
     strategy_id: str | None = None,
     source: str = "on_demand",
+    strict_history: bool = False,
 ) -> dict[str, Any]:
-    """Compute the confidence calibration report without route or cache concerns."""
+    """Compute the confidence calibration report without route or cache concerns.
+
+    ``strict_history``: a report that will be cached raises when the MySQL decision history cannot be read,
+    instead of returning one with decisions missing (which would replace the last good cached report).
+    """
     from data_manager.services.calibration_service import get_calibration_records
 
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
@@ -129,6 +134,8 @@ async def compute_calibration_confidence(
         since=since,
         strategy_id=strategy_id,
         source=source,
+        mysql_adapter=getattr(db_manager, "mysql_adapter", None),
+        strict_history=strict_history,
     )
 
 
@@ -147,7 +154,9 @@ async def get_calibration_confidence(
         if precomputer is not None and since is None and strategy_id is None:
             cached = await precomputer.get_or_compute(
                 "calibration",
-                lambda: compute_calibration_confidence(api_module.db_manager),
+                lambda: compute_calibration_confidence(
+                    api_module.db_manager, strict_history=True
+                ),
             )
             if cached is not None:
                 return cached
@@ -185,6 +194,7 @@ async def get_latest_calibration_report(
             api_module.db_manager.mongodb_adapter,
             since=since,
             strategy_id=strategy_id,
+            mysql_adapter=getattr(api_module.db_manager, "mysql_adapter", None),
         )
     except Exception as exc:
         logger.error("latest confidence calibration failed: %s", exc, exc_info=True)
