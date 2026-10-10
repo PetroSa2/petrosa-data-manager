@@ -37,6 +37,14 @@ def test_prepare_for_bson_basic():
     assert isinstance(prepared["nested"]["list"][1]["four"], float)
 
 
+def test_prepare_for_bson_recurses_through_nested_lists_and_tuples():
+    prepared = MongoDBAdapter._prepare_for_bson(
+        {"matrix": [[Decimal("1.5")]], "tuple": (Decimal("2.5"),)}
+    )
+
+    assert prepared == {"matrix": [[1.5]], "tuple": [2.5]}
+
+
 def test_prepare_for_bson_no_mutation():
     """Test that original dictionary is not mutated."""
     data = {1: Decimal("1.0")}

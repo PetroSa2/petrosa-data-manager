@@ -1,14 +1,19 @@
 """Confidence calibration records built from the immutable audit collections."""
 
+import asyncio
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from time import monotonic
 from typing import Any
 
+from data_manager.services.report_precompute import record_report_stage
 from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 MAX_ROWS = 50_000
 FRESHNESS_MAX_AGE_MINUTES = 30
 ZERO = Decimal("0")
+logger = logging.getLogger(__name__)
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -84,22 +89,42 @@ async def get_calibration_records(
     *,
     since: datetime | None = None,
     strategy_id: str | None = None,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Read bounded audit data through the database gateway and build records."""
-    filters = {"strategy_id": strategy_id} if strategy_id else None
+    filters = {
+        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
+        "strategy_id": strategy_id,
+    }
+    read_started = monotonic()
     execution_events = await mongodb.find_filtered(
-        "execution_events",
-        filters=filters,
-        limit=MAX_ROWS,
-        sort_order=1,
+        "execution_events", filters=filters, limit=MAX_ROWS, sort_order=-1
     )
     decisions = await mongodb.find_filtered(
         "cio_decisions",
         filters={"strategy_id": strategy_id, "action": "execute"},
         limit=MAX_ROWS,
-        sort_order=1,
+        sort_order=-1,
     )
-    return build_calibration_records(execution_events, decisions, since=since)
+    if len(execution_events) >= MAX_ROWS:
+        logger.warning("calibration execution_events read reached cap: %d", MAX_ROWS)
+    if len(decisions) >= MAX_ROWS:
+        logger.warning("calibration cio_decisions read reached cap: %d", MAX_ROWS)
+    # Read newest first so the cap keeps the newest rows, then back to oldest first: fills with an equal
+    # ``fill_time`` (a close and a reopen in the same ms) must reach the round book in ingestion order.
+    execution_events = list(reversed(execution_events))
+    decisions = list(reversed(decisions))
+    record_report_stage(
+        "calibration", "read+decode", monotonic() - read_started, source=source
+    )
+    compute_started = monotonic()
+    report = await asyncio.to_thread(
+        build_calibration_records, execution_events, decisions, since=since
+    )
+    record_report_stage(
+        "calibration", "compute", monotonic() - compute_started, source=source
+    )
+    return report
 
 
 def calibration_freshness(
