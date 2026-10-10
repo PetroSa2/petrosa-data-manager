@@ -179,6 +179,47 @@ def test_historic_decisions_use_batched_read_only_role_factory(monkeypatch) -> N
     assert calls == [("mysql://history", "adhoc")]
 
 
+def test_historic_decisions_skip_empty_lookup_without_opening_engine(
+    monkeypatch,
+) -> None:
+    opened = False
+
+    def unexpected_engine(*_args, **_kwargs):
+        nonlocal opened
+        opened = True
+        raise AssertionError("empty lookup must not open MySQL")
+
+    monkeypatch.setattr(calibration, "create_read_only_engine", unexpected_engine)
+
+    assert calibration._read_historic_decisions(set(), "mysql://history") == ([], False)
+    assert opened is False
+
+
+@pytest.mark.asyncio
+async def test_historic_read_failure_preserves_existing_skip_reason(
+    monkeypatch,
+) -> None:
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            if collection == "execution_events":
+                return [
+                    _fill("buy", "2026-10-01T12:00:00Z", "missing"),
+                    _fill("sell", "2026-10-01T12:01:00Z", "missing"),
+                ]
+            return []
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("history unavailable")
+
+    monkeypatch.setattr(calibration, "_read_historic_decisions", unavailable)
+
+    report = await calibration.get_calibration_records(
+        Mongo(), mysql_uri="mysql://history"
+    )
+
+    assert report["skipped_reasons"] == {"no_matching_cio_decision": 1}
+
+
 def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:
     rows = [
         _fill("buy", "2026-10-01T12:00:00Z", "d1"),

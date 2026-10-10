@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import Column, DateTime, MetaData, Numeric, String, Table, select
 
@@ -97,8 +97,7 @@ def build_calibration_records(
             else:
                 skipped_reasons["missing_confidence"] += 1
             continue
-        if decision is None:
-            continue
+        selected_decision = cast(dict[str, Any], decision)
         gross = closed.realized_dec
         costs = closed.fees
         records.append(
@@ -109,7 +108,7 @@ def build_calibration_records(
                 "gross_pnl": gross,
                 "costs": costs,
                 "total_costs": costs,
-                "decision_id": str(decision["decision_id"]),
+                "decision_id": str(selected_decision["decision_id"]),
                 "symbol": closed.symbol,
                 "closed_at": closed.closed_at.isoformat(),
             }
