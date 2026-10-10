@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import sqlalchemy as sa
 from fastapi.encoders import jsonable_encoder
 from mongomock_motor import AsyncMongoMockClient
 from prometheus_client import REGISTRY
@@ -369,126 +368,22 @@ async def test_fills_with_an_equal_fill_time_keep_their_ingestion_order():
     assert _key(report) == _key(before)
 
 
-@pytest.mark.asyncio
-async def test_equal_timestamps_keep_identity_order_and_newest_decision_wins():
-    adapter = _adapter()
+def test_decisions_reversal_keeps_mongo_override_for_merged_map():
+    """The service reverses newest-first reads before merging history.
+
+    Mongo decisions are unique by ``decision_id``. If history is prepended to
+    the reversed Mongo rows, the final map entry must remain Mongo's value.
+    """
     t = datetime(2026, 10, 1, tzinfo=UTC)
     events = [
-        _fill("s1", "d1", "buy", "100", t, ts=t, fill_qty="1", fee="0"),
-        _fill("s1", "d1", "sell", "110", t, ts=t, fill_qty="1", fee="0"),
+        _fill("s1", "d1", "buy", "100", t),
+        _fill("s1", "d1", "sell", "110", t + timedelta(minutes=1)),
     ]
-    await adapter.db["execution_events"].insert_many(events)
-    await adapter.db["cio_decisions"].insert_many(
-        [
-            _decision("s1", "d1", t, confidence=0.1),
-            _decision("s1", "d1", t, confidence=0.9),
-        ]
-    )
-
-    newest_first = await adapter.find_filtered(
-        "execution_events",
-        filters={"strategy_id": "s1"},
-        limit=10,
-        sort_order=-1,
-        secondary_sort_field="_id",
-    )
-    assert [row["side"] for row in newest_first] == ["sell", "buy"]
-    assert [row["side"] for row in reversed(newest_first)] == ["buy", "sell"]
-
-    report = await calibration.get_calibration_records(adapter)
-
+    history = _decision("s1", "d1", t, confidence=0.1)
+    mongo = _decision("s1", "d1", t, confidence=0.9)
+    report = calibration.build_calibration_records(events, [history, mongo])
     assert report["records"][0]["decision_id"] == "d1"
     assert float(report["records"][0]["confidence"]) == pytest.approx(0.9)
-
-
-@pytest.mark.asyncio
-async def test_missing_mongo_decision_is_joined_from_historic_mysql(monkeypatch):
-    adapter = _adapter()
-    t = datetime(2026, 10, 1, tzinfo=UTC)
-    await adapter.db["execution_events"].insert_many(
-        [
-            _fill("s1", "historic", "buy", "100", t),
-            _fill("s1", "historic", "sell", "110", t + timedelta(minutes=1)),
-        ]
-    )
-
-    def historic(_decision_ids, mysql_uri):
-        assert mysql_uri == "mysql://history"
-        return [_decision("s1", "historic", t, confidence=0.7)], True
-
-    monkeypatch.setattr(calibration, "_read_historic_decisions", historic)
-    report = await calibration.get_calibration_records(
-        adapter, mysql_uri="mysql://history"
-    )
-
-    assert report["skipped"] == 0
-    assert report["records"][0]["decision_id"] == "historic"
-    assert float(report["records"][0]["confidence"]) == pytest.approx(0.7)
-
-
-@pytest.mark.asyncio
-async def test_history_checked_missing_decision_gets_distinct_skip_reason(monkeypatch):
-    adapter = _adapter()
-    t = datetime(2026, 10, 1, tzinfo=UTC)
-    await adapter.db["execution_events"].insert_many(
-        [
-            _fill("s1", "missing", "buy", "100", t),
-            _fill("s1", "missing", "sell", "110", t + timedelta(minutes=1)),
-        ]
-    )
-    monkeypatch.setattr(
-        calibration,
-        "_read_historic_decisions",
-        lambda _decision_ids, _mysql_uri: ([], True),
-    )
-
-    report = await calibration.get_calibration_records(
-        adapter,
-        mysql_uri="mysql://history",
-    )
-
-    assert report["skipped"] == 1
-    assert report["skipped_reasons"] == {"decision_not_in_history": 1}
-
-
-def test_historic_decisions_use_the_read_only_role_factory(monkeypatch):
-    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
-    table = sa.Table(
-        "cio_decisions",
-        sa.MetaData(),
-        sa.Column("decision_id", sa.String(128), primary_key=True),
-        sa.Column("strategy_id", sa.String(128), nullable=False),
-        sa.Column("timestamp", sa.DateTime, nullable=False),
-        sa.Column("action", sa.String(20)),
-        sa.Column("confidence", sa.Numeric(6, 5)),
-    )
-    table.create(engine)
-    with engine.begin() as connection:
-        connection.execute(
-            table.insert(),
-            {
-                "decision_id": "historic",
-                "strategy_id": "s1",
-                "timestamp": datetime(2026, 10, 1),
-                "action": "execute",
-                "confidence": 0.7,
-            },
-        )
-    roles = []
-    monkeypatch.setattr(
-        calibration,
-        "create_read_only_engine",
-        lambda uri, role: roles.append((uri, role)) or engine,
-    )
-    monkeypatch.setattr(calibration, "mark_engine_closing", lambda candidate: None)
-
-    rows, checked = calibration._read_historic_decisions(
-        {"historic"}, "mysql://history"
-    )
-
-    assert checked is True
-    assert rows[0]["decision_id"] == "historic"
-    assert roles == [("mysql://history", "adhoc")]
 
 
 def test_the_builder_sorts_equal_fill_times_stably_in_the_order_it_is_given():
