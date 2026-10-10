@@ -306,7 +306,11 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
             for symbol, by_leg in (strategies[strategy_id].get("legs") or {}).items()
             for leg, data in by_leg.items()
             for kind in ("orphaned", "ledger_closed")
-            for lot in (data["orphaned"] if kind == "orphaned" else data.get("ledger_closed", []))
+            for lot in (
+                data["orphaned"]
+                if kind == "orphaned"
+                else data.get("ledger_closed", [])
+            )
         ]
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("performance: rounds report not usable: %s", exc)

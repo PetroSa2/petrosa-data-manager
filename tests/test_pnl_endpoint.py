@@ -332,9 +332,7 @@ def test_performance_apply_excludes_ledger_closed_lots_separately_and_normalizes
     rows = _orphan_fills()
     body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
     leg = body["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]
-    ledger_closed = next(
-        lot for lot in leg["orphaned"] if lot["order_id"] == "e1"
-    )
+    ledger_closed = next(lot for lot in leg["orphaned"] if lot["order_id"] == "e1")
     leg["orphaned"].remove(ledger_closed)
     ledger_closed["opened_at"] = ledger_closed["opened_at"].replace("+00:00", "Z")
     leg["ledger_closed"] = [ledger_closed]
@@ -354,9 +352,9 @@ def test_performance_reports_unmatched_cached_orphan_quantity_and_gauge(monkeypa
 
     rows = _orphan_fills()
     body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
-    body["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]["orphaned"][0][
-        "order_id"
-    ] = "not-live"
+    body["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]["orphaned"][0]["order_id"] = (
+        "not-live"
+    )
 
     response, _ = _performance(monkeypatch, "apply", rows, body)
 
