@@ -227,7 +227,11 @@ async def calibration_health():
     from data_manager.services.calibration_service import get_latest_calibration
 
     try:
-        report = await get_latest_calibration(mongodb)
+        report = await get_latest_calibration(
+            mongodb,
+            mysql_adapter=getattr(manager, "mysql_adapter", None),
+            strict_history=False,
+        )
     except Exception:
         logger.warning("calibration health query failed", exc_info=True)
         return JSONResponse(

@@ -48,9 +48,9 @@ def is_executed_decision(row: dict[str, Any]) -> bool:
     return str(row.get("action", "")).lower() in EXECUTED_DECISION_ACTIONS
 
 
-def _executed_action_filter() -> dict[str, list[str]]:
-    actions = sorted(EXECUTED_DECISION_ACTIONS)
-    return {"$in": actions + [action.upper() for action in actions]}
+def _executed_action_filter() -> dict[str, str]:
+    actions = "|".join(sorted(EXECUTED_DECISION_ACTIONS))
+    return {"$regex": f"^({actions})$", "$options": "i"}
 
 
 def replay_closed_rounds(
@@ -73,6 +73,7 @@ def build_calibration_records(
     *,
     since: datetime | None = None,
     history_checked: bool = False,
+    history_lookup_capped_ids: set[str] | None = None,
     closed_rounds: list[ClosedRound] | None = None,
 ) -> dict[str, Any]:
     """Join closed round-book entries to executed CIO decisions."""
@@ -88,46 +89,38 @@ def build_calibration_records(
     skipped = 0
     skipped_reasons: Counter[str] = Counter()
     for closed in closed_list:
-        decision = None
-        confidence = None
-        matched_decisions = 0
-        execute_decisions = 0
-        missing_confidence = False
-        invalid_confidence = False
-        for decision_id in closed.decision_ids:
-            candidate = decisions_by_id.get(decision_id)
-            if not candidate:
-                continue
-            matched_decisions += 1
-            if not is_executed_decision(candidate):
-                continue
-            execute_decisions += 1
-            candidate_confidence = _decimal(candidate.get("confidence"))
-            if candidate_confidence is None:
-                missing_confidence = True
-                continue
-            if not ZERO <= candidate_confidence <= Decimal("1"):
-                invalid_confidence = True
-                continue
-            decision = candidate
-            confidence = candidate_confidence
-            break
+        entry_decision_id = closed.decision_ids[0] if closed.decision_ids else None
+        decision = decisions_by_id.get(entry_decision_id) if entry_decision_id else None
+        confidence = (
+            _decimal(decision.get("confidence"))
+            if decision and is_executed_decision(decision)
+            else None
+        )
         if confidence is None or not ZERO <= confidence <= Decimal("1"):
             skipped += 1
-            if not closed.decision_ids:
-                skipped_reasons["no_decision_id_on_fill"] += 1
-            elif matched_decisions == 0:
-                skipped_reasons[
-                    "decision_not_in_history"
-                    if history_checked
-                    else "no_matching_cio_decision"
-                ] += 1
-            elif execute_decisions == 0:
+            if entry_decision_id is None:
+                skipped_reasons["entry_decision_unavailable"] += 1
+            elif (
+                decision is None
+                and history_lookup_capped_ids
+                and entry_decision_id in history_lookup_capped_ids
+            ):
+                skipped_reasons["history_lookup_capped"] += 1
+            elif decision is None and history_checked:
+                skipped_reasons["decision_not_in_history"] += 1
+            elif decision is None:
+                skipped_reasons["no_matching_cio_decision"] += 1
+            elif not is_executed_decision(decision):
                 skipped_reasons["non_execute_decision"] += 1
-            elif invalid_confidence and not missing_confidence:
-                skipped_reasons["invalid_confidence"] += 1
             else:
-                skipped_reasons["missing_confidence"] += 1
+                candidate_confidence = _decimal(decision.get("confidence"))
+                if (
+                    candidate_confidence is not None
+                    and not ZERO <= candidate_confidence <= Decimal("1")
+                ):
+                    skipped_reasons["invalid_confidence"] += 1
+                else:
+                    skipped_reasons["missing_confidence"] += 1
             continue
         selected_decision = cast(dict[str, Any], decision)
         gross = closed.realized_dec
@@ -186,12 +179,11 @@ def _read_historic_decisions(
 def _bounded_missing_ids(
     closed_rounds: list[ClosedRound], known_ids: set[str]
 ) -> set[str]:
-    """The decision ids of closed rounds that Mongo does not have, newest rounds first, at most the cap."""
+    """The entry decision ids Mongo does not have, newest rounds first, at most the cap."""
     wanted: dict[str, None] = {}  # insertion-ordered: the newest rounds' ids come first
     for closed in sorted(closed_rounds, key=lambda c: c.closed_at, reverse=True):
-        for decision_id in closed.decision_ids:
-            if decision_id not in known_ids:
-                wanted.setdefault(decision_id)
+        if closed.decision_ids and closed.decision_ids[0] not in known_ids:
+            wanted.setdefault(closed.decision_ids[0])
     if len(wanted) > MAX_HISTORIC_DECISION_IDS:
         logger.warning(
             "calibration historic decision lookup reached cap: %d",
@@ -251,7 +243,13 @@ async def get_calibration_records(
     mongo_decision_ids = {
         str(row["decision_id"]) for row in decisions if row.get("decision_id")
     }
+    all_missing_entry_ids = {
+        closed.decision_ids[0]
+        for closed in closed_rounds
+        if closed.decision_ids and closed.decision_ids[0] not in mongo_decision_ids
+    }
     wanted = _bounded_missing_ids(closed_rounds, mongo_decision_ids)
+    history_lookup_capped_ids = all_missing_entry_ids - wanted
     historic_decisions: list[dict[str, Any]] = []
     history_checked = True
     history_unavailable = False
@@ -281,6 +279,7 @@ async def get_calibration_records(
         decisions,
         since=since,
         history_checked=history_checked,
+        history_lookup_capped_ids=history_lookup_capped_ids,
         closed_rounds=closed_rounds,
     )
     if history_unavailable:
@@ -324,9 +323,14 @@ async def get_latest_calibration(
     strategy_id: str | None = None,
     now: datetime | None = None,
     mysql_adapter: Any | None = None,
+    strict_history: bool = False,
 ) -> dict[str, Any]:
     """Read the calibration report and add its operational freshness signal."""
     report = await get_calibration_records(
-        mongodb, since=since, strategy_id=strategy_id, mysql_adapter=mysql_adapter
+        mongodb,
+        since=since,
+        strategy_id=strategy_id,
+        mysql_adapter=mysql_adapter,
+        strict_history=strict_history,
     )
     return {**report, **calibration_freshness(report["records"], now=now)}
