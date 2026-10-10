@@ -2,8 +2,10 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from time import monotonic
 from typing import Any
 
+from data_manager.services.report_precompute import record_report_stage
 from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 MAX_ROWS = 50_000
@@ -87,11 +89,9 @@ async def get_calibration_records(
 ) -> dict[str, Any]:
     """Read bounded audit data through the database gateway and build records."""
     filters = {"strategy_id": strategy_id} if strategy_id else None
+    read_started = monotonic()
     execution_events = await mongodb.find_filtered(
-        "execution_events",
-        filters=filters,
-        limit=MAX_ROWS,
-        sort_order=1,
+        "execution_events", filters=filters, limit=MAX_ROWS, sort_order=1
     )
     decisions = await mongodb.find_filtered(
         "cio_decisions",
@@ -99,7 +99,11 @@ async def get_calibration_records(
         limit=MAX_ROWS,
         sort_order=1,
     )
-    return build_calibration_records(execution_events, decisions, since=since)
+    record_report_stage("calibration", "read", monotonic() - read_started)
+    decode_started = monotonic()
+    report = build_calibration_records(execution_events, decisions, since=since)
+    record_report_stage("calibration", "decode", monotonic() - decode_started)
+    return report
 
 
 def calibration_freshness(

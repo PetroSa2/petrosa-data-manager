@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 from time import monotonic
@@ -24,6 +25,11 @@ report_stage_seconds = Histogram(
     "Report refresh stage duration",
     ["report", "stage"],
 )
+
+
+def record_report_stage(report: str, stage: str, duration: float) -> None:
+    """Record one report pipeline stage."""
+    report_stage_seconds.labels(report=report, stage=stage).observe(max(0.0, duration))
 
 
 def cache_key(report: str, **params: Any) -> str:
@@ -113,6 +119,9 @@ class ReportPrecomputer:
         )
         if report == "risk_inputs":
             body["as_of"] = computed_at.isoformat()
+        serialize_started = monotonic()
+        json.dumps(body, default=str)
+        record_report_stage(report, "serialize", monotonic() - serialize_started)
         await self.collection.replace_one(
             {"_id": cache_key(report, **params)},
             {
@@ -125,25 +134,25 @@ class ReportPrecomputer:
         report_age_seconds.labels(report=report).set(0)
 
     def _interval(self, report: str) -> int:
-        return (
-            constants.REPORT_RISK_INTERVAL_SECONDS
-            if report == "risk_inputs"
-            else constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
-        )
+        return {
+            "risk_inputs": constants.REPORT_RISK_INTERVAL_SECONDS,
+            "calibration": constants.REPORT_CALIBRATION_INTERVAL_SECONDS,
+        }.get(report, constants.REPORT_SLIPPAGE_INTERVAL_SECONDS)
 
-    async def _refresh(self, report: str, callback: Any) -> None:
+    async def _refresh(self, report: str, callback: Any, **params: Any) -> None:
         started = monotonic()
         try:
             body = await callback()
-            await self._put(report, body, window_days=30)
-            report_stage_seconds.labels(report=report, stage="compute").observe(
-                monotonic() - started
-            )
+            if not params and report != "calibration":
+                params = {"window_days": 30}
+            await self._put(report, body, **params)
+            record_report_stage(report, "compute", monotonic() - started)
         except Exception:
             logger.exception("report refresh failed", extra={"report": report})
 
     async def _run(self) -> None:
         from data_manager.api.routes.analysis import (
+            compute_calibration_confidence,
             compute_closed_rounds,
             compute_slippage_by_regime,
         )
@@ -151,6 +160,7 @@ class ReportPrecomputer:
 
         next_slippage = 0.0
         next_risk = 0.0
+        next_calibration = 0.0
         try:
             while self.running:
                 if (
@@ -176,6 +186,14 @@ class ReportPrecomputer:
                         lambda: compute_risk_inputs(self.db_manager, window_days=30),
                     )
                     next_risk = now + constants.REPORT_RISK_INTERVAL_SECONDS
+                if now >= next_calibration:
+                    await self._refresh(
+                        "calibration",
+                        lambda: compute_calibration_confidence(self.db_manager),
+                    )
+                    next_calibration = (
+                        now + constants.REPORT_CALIBRATION_INTERVAL_SECONDS
+                    )
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             return

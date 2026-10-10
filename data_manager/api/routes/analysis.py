@@ -5,7 +5,7 @@ Analytics endpoints for computed metrics.
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from prometheus_client import Gauge
 from pydantic import BaseModel
 
+import constants
 import data_manager.api.app as api_module
 
 logger = logging.getLogger(__name__)
@@ -70,24 +71,50 @@ router = APIRouter()
 calibration_router = APIRouter()
 
 
+async def compute_calibration_confidence(
+    db_manager: Any,
+    since: datetime | None = None,
+    strategy_id: str | None = None,
+) -> dict[str, Any]:
+    """Compute the confidence calibration report without route or cache concerns."""
+    from data_manager.services.calibration_service import get_calibration_records
+
+    if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
+        raise HTTPException(status_code=503, detail="Database not available")
+    return await get_calibration_records(
+        db_manager.mongodb_adapter, since=since, strategy_id=strategy_id
+    )
+
+
 @router.get("/calibration/confidence")
 async def get_calibration_confidence(
-    since: datetime | None = Query(None),
-    strategy_id: str | None = Query(None),
+    since: datetime | None = None,
+    strategy_id: str | None = None,
 ) -> dict[str, Any]:
     """Return closed, CIO-executed outcomes paired with point-in-time confidence."""
     if not api_module.db_manager or not getattr(
         api_module.db_manager, "mongodb_adapter", None
     ):
         raise HTTPException(status_code=503, detail="Database not available")
-    from data_manager.services.calibration_service import get_calibration_records
-
     try:
-        return await get_calibration_records(
-            api_module.db_manager.mongodb_adapter,
-            since=since,
-            strategy_id=strategy_id,
+        precomputer = getattr(api_module, "report_precomputer", None)
+        if precomputer is not None and since is None and strategy_id is None:
+            cached = await precomputer.get_or_compute(
+                "calibration",
+                lambda: compute_calibration_confidence(api_module.db_manager),
+            )
+            if cached is not None:
+                return cached
+            raise HTTPException(
+                status_code=503,
+                detail="report_warming",
+                headers={"Retry-After": "15"},
+            )
+        return await compute_calibration_confidence(
+            api_module.db_manager, since=since, strategy_id=strategy_id
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("confidence calibration failed: %s", exc, exc_info=True)
         raise HTTPException(
@@ -450,8 +477,6 @@ async def compute_slippage_by_regime(
     Read-only; fills without recorded slippage are counted and left out, fills before the first regime are
     grouped under ``no_regime``.
     """
-    from datetime import timedelta
-
     from data_manager.services.slippage_report import FILL_EVENT_TYPES, build_report
 
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
@@ -472,12 +497,30 @@ async def compute_slippage_by_regime(
             .to_list(length=_SLIPPAGE_MAX_FILLS)
         )
         regimes: dict[str, list[dict[str, Any]]] = {}
-        for pair in sorted(
-            {str(row.get("symbol")) for row in fills if row.get("symbol")}
-        ):
+        from data_manager.services.slippage_report import _when
+
+        unstamped_oldest: dict[str, datetime] = {}
+        for row in fills:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if payload.get("regime_at_fill") or row.get("regime_at_fill"):
+                continue
+            pair = str(row.get("symbol") or "")
+            fill_when = _when(row.get("fill_time") or row.get("timestamp"))
+            if pair and fill_when is not None:
+                previous = unstamped_oldest.get(pair)
+                if previous is None or fill_when < previous:
+                    unstamped_oldest[pair] = fill_when
+
+        for pair in sorted(unstamped_oldest):
+            regime_since = unstamped_oldest[pair] - timedelta(
+                seconds=constants.ANALYTICS_INTERVAL
+            )
             regimes[pair] = (
                 await mongodb.db[f"analytics_{pair}_regime"]
-                .find({}, REGIME_DOC_PROJECTION)
+                .find(
+                    {"metadata.computed_at": {"$gte": regime_since}},
+                    REGIME_DOC_PROJECTION,
+                )
                 .to_list(length=_REGIME_MAX_DOCS)
             )
     except Exception as exc:

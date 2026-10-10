@@ -288,7 +288,11 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
     await compute_slippage_by_regime(manager)
     await compute_closed_rounds(manager)
 
-    assert seen["analytics_BTCUSDT_regime"] == ({}, REGIME_DOC_PROJECTION)
+    regime_query, projection = seen["analytics_BTCUSDT_regime"]
+    assert regime_query["metadata.computed_at"]["$gte"] == datetime(
+        2025, 12, 31, 23, 45, tzinfo=UTC
+    )
+    assert projection == REGIME_DOC_PROJECTION
     # rounds reads whole events (see the note above SLIPPAGE_FILL_PROJECTION): no projection argument
     assert len(seen["execution_events"]) == 1
 

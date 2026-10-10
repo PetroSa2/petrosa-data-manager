@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
 import data_manager.api.app as api_module
 from data_manager.api.app import create_app
+from data_manager.api.middleware.metrics import REQUEST_DURATION
 from data_manager.api.routes.analysis import (
     get_calibration_confidence,
     get_latest_calibration_report,
@@ -154,6 +156,29 @@ async def test_calibration_route_requires_database() -> None:
     with pytest.raises(HTTPException) as error:
         await get_calibration_confidence()
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_default_calibration_route_serves_cached_report() -> None:
+    precomputer = SimpleNamespace(
+        get_or_compute=AsyncMock(return_value={"records": [], "skipped": 0})
+    )
+    api_module.db_manager = SimpleNamespace(mongodb_adapter=object())
+    api_module.report_precomputer = precomputer
+    try:
+        result = await get_calibration_confidence()
+    finally:
+        api_module.db_manager = None
+        api_module.report_precomputer = None
+
+    assert result == {"records": [], "skipped": 0}
+    precomputer.get_or_compute.assert_awaited_once()
+    assert precomputer.get_or_compute.await_args.args[0] == "calibration"
+
+
+def test_request_duration_has_long_report_buckets() -> None:
+    assert 30.0 in REQUEST_DURATION._upper_bounds
+    assert 60.0 in REQUEST_DURATION._upper_bounds
 
 
 @pytest.mark.asyncio
