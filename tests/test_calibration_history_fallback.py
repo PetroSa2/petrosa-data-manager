@@ -132,9 +132,10 @@ def test_the_executed_action_rule_is_one_set_and_case_insensitive():
         assert calibration.is_executed_decision({"action": action})
     for action in ("hold", "skip", "pause_strategy", "", None):
         assert not calibration.is_executed_decision({"action": action})
-    assert {"BUY", "buy", "execute"} <= set(
-        calibration._executed_action_filter()["$in"]
-    )
+    assert calibration._executed_action_filter() == {
+        "$regex": "^(buy|execute|sell)$",
+        "$options": "i",
+    }
 
 
 @pytest.mark.asyncio
@@ -201,7 +202,7 @@ async def test_each_skip_reason_is_reported():
         "decision_not_in_history": 1,
         "invalid_confidence": 1,
         "missing_confidence": 1,
-        "no_decision_id_on_fill": 1,
+        "entry_decision_unavailable": 1,
         "non_execute_decision": 1,
     }
     assert report["skipped"] == 5
@@ -279,6 +280,7 @@ async def test_the_id_cap_warns_and_keeps_the_newest_rounds(monkeypatch, caplog)
         "d3",
     ]  # the two newest rounds
     assert sorted(r["decision_id"] for r in report["records"]) == ["d2", "d3"]
+    assert report["skipped_reasons"] == {"history_lookup_capped": 2}
 
 
 class _BrokenEngine:
