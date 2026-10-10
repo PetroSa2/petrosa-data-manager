@@ -1181,25 +1181,3 @@ def test_a_lot_orphaned_to_within_the_tolerance_is_not_an_open_round():
     assert stats["oldest_open_round_opened_at"] is None
     assert stats["fills_in_orphaned_rounds"] == 1
     assert applied["accounted"] is True
-
-
-def test_overlay_lists_the_held_lots_and_they_add_up_to_the_held_quantity():
-    """The held part of each lot is listed with its price (the performance route marks them, petrosa-data-manager#581)."""
-    rows = _production_fills()
-    report = _report(
-        rows, exchange=_production_exchange(), closed_entry_orders={"ich-open"}
-    )
-    checked = 0
-    for strategy in report["strategies"].values():
-        for by_leg in strategy.get("legs", {}).values():
-            for leg in by_leg.values():
-                held = sum(lot["quantity"] for lot in leg["held"])
-                assert held == pytest.approx(leg["held_quantity"])
-                assert all(lot["reason"] == "held" for lot in leg["held"])
-                checked += 1
-    assert checked >= 4
-    iceberg = report["strategies"]["iceberg_detector"]["legs"]["BTCUSDT"]["LONG"]
-    assert [lot["quantity"] for lot in iceberg["held"]] == [pytest.approx(0.0006)]
-    assert (
-        iceberg["held"][0]["order_id"] == "ice-buy-25"
-    )  # the newest lot is the held one

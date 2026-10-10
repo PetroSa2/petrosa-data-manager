@@ -417,31 +417,37 @@ def test_performance_never_computes_the_rounds_report(monkeypatch):
 
 
 def test_performance_survives_a_cache_read_failure_and_malformed_bodies(monkeypatch):
+    import copy
+
     rows = _orphan_fills()
     good = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
 
-    malformed_lot = json_copy = __import__("json").loads(__import__("json").dumps(good))
-    legs = malformed_lot["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]
-    legs["orphaned"][0]["price"] = "not-a-number"
-    no_held = __import__("json").loads(__import__("json").dumps(good))
-    del no_held["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"][
-        "held"
-    ]  # a cache from before this field
-    no_age = __import__("json").loads(__import__("json").dumps(good))
-    del no_age["metadata"]["age_seconds"]
-    other = __import__("json").loads(__import__("json").dumps(good))
-    other["strategies"] = {"S2": other["strategies"]["S1"]}  # predates S1's first fill
-    for broken in (
-        malformed_lot,
-        no_held,
-        no_age,
-        other,
-        {"orphan_overlay": "enabled"},
-    ):
-        body, _ = _performance(monkeypatch, "apply", rows, broken)
-        assert body["metadata"]["orphan_overlay"] == "unavailable"
-        assert body["stats"]["unrealized_pnl"] == pytest.approx(-40.0)
-        assert body["stats"]["orphaned_lots"] is None
+    def broken(edit):
+        body = copy.deepcopy(good)
+        edit(body)
+        return body
+
+    legs = lambda body: body["strategies"]["S1"]["legs"]["BTCUSDT"]["LONG"]  # noqa: E731
+    variants = {
+        "bad quantity": broken(lambda b: legs(b)["orphaned"][0].update(quantity="x")),
+        "no order id key": broken(lambda b: legs(b)["orphaned"][0].pop("order_id")),
+        "no orphaned list": broken(lambda b: legs(b).pop("orphaned")),
+        "no age": broken(lambda b: b["metadata"].pop("age_seconds")),
+        "no snapshot age": broken(lambda b: b.pop("exchange_snapshot_age_seconds")),
+        "predates the strategy": broken(
+            lambda b: b.update(strategies={"S2": b["strategies"]["S1"]})
+        ),
+        "no strategies": {"orphan_overlay": "enabled"},
+    }
+    for name, body_variant in variants.items():
+        body, _ = _performance(monkeypatch, "apply", rows, body_variant)
+        assert body["metadata"]["orphan_overlay"] in {
+            "unavailable",
+            "disabled_stale",
+        }, name
+        assert body["stats"]["unrealized_pnl"] == pytest.approx(-40.0), name
+        assert body["stats"]["orphaned_lots"] is None, name
+        assert body["metadata"]["pnl_source"] == "pnl-calculator", name
 
     import data_manager.api.app as module
 
@@ -456,6 +462,19 @@ def test_performance_survives_a_cache_read_failure_and_malformed_bodies(monkeypa
         monkeypatch.setattr(module, "report_precomputer", None, raising=False)
     assert response.status_code == 200
     assert response.json()["metadata"]["orphan_overlay"] == "unavailable"
+
+
+def test_a_cache_of_unknown_age_is_stale_not_fresh(monkeypatch):
+    """The precomputer reports an unknown age as stale: age null, stale true: nothing is applied."""
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    body["metadata"].update(age_seconds=None, stale=True)
+    served, _ = _performance(monkeypatch, "apply", rows, body)
+    assert served["metadata"]["orphan_overlay"] == "disabled_stale"
+    assert served["stats"]["unrealized_pnl"] == pytest.approx(-40.0)
+    body["metadata"].pop("stale")  # a body that does not say it is fresh is not fresh
+    served, _ = _performance(monkeypatch, "apply", rows, body)
+    assert served["metadata"]["orphan_overlay"] == "disabled_stale"
 
 
 def test_a_fully_orphaned_short_book_is_exactly_zero_and_the_trend_is_neutral(
@@ -517,36 +536,195 @@ def test_realized_pnl_with_orphans_keeps_the_trend_on_realized(monkeypatch):
     assert reported["unrealized_pnl"] == pytest.approx(-30.0)
 
 
-def test_both_hedge_legs_on_one_symbol_are_valued_from_the_round_book(monkeypatch):
-    """PnlCalculator nets a BUY against a SELL on one symbol; the round book keeps the two legs apart.
+def _ps(row: dict[str, Any], side: str) -> dict[str, Any]:
+    row["position_side"] = side
+    return row
 
-    Subtracting the orphaned amount from the calculator's figure would turn an empty exchange into a phantom
-    -10 here; the held lots of the round book make it exactly 0 (and the held legs their own value).
+
+def _applied(monkeypatch, cache_rows, now_rows, exchange_rows, mode="apply"):
+    body = _rounds_cache_body(monkeypatch, cache_rows, exchange_rows)
+    served, _ = _performance(monkeypatch, mode, now_rows, body)
+    return served
+
+
+def test_hedge_legs_are_one_book_for_realized_and_unrealized(monkeypatch):
+    """A. A closed LONG round of -15, then LONG 1@100 and SHORT 1@110 both held, mark 110.
+
+    True total = -15 + (110-100) + (110-110) = -5. PnlCalculator nets the two legs (realized -5) and a held-lot
+    unrealized of +10 on top would double count to a positive trend.
     """
     rows = [
-        _fill(side="buy", qty=1, price=100, seconds_before=300, order_id="l"),
-        _fill(side="sell", qty=1, price=110, seconds_before=200, order_id="s"),
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=900, order_id="a1"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="sell", qty=1, price=85, seconds_before=800, order_id="a2"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=300, order_id="l"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="sell", qty=1, price=110, seconds_before=200, order_id="s"),
+            "SHORT",
+        ),
     ]
-    rows[0]["position_side"] = "LONG"
-    rows[1]["position_side"] = "SHORT"
-    flat = _rounds_cache_body(monkeypatch, rows, [])
-    stats = _performance(monkeypatch, "apply", rows, flat)[0]["stats"]
+    exchange = [_btc("LONG", "1"), _btc("SHORT", "-1")]
+    stats = _applied(monkeypatch, rows, rows, exchange)
+    assert stats["metadata"]["pnl_source"] == "round-book-legs"
+    stats = stats["stats"]
+    assert stats["realized_pnl"] == pytest.approx(-15.0)
+    assert stats["unrealized_pnl"] == pytest.approx(10.0)
+    assert stats["orphaned_lots"] == 0
+    assert stats["recent_pnl_trend"] == "negative"  # -5, not +10 or +20
+    # report mode leaves the calculator's figures alone (it nets the legs: realized -5, unrealized 0)
+    reported = _applied(monkeypatch, rows, rows, exchange, mode="report")["stats"]
+    assert reported["realized_pnl"] == pytest.approx(-5.0)
+    assert reported["unrealized_pnl"] == 0
+    assert reported["recent_pnl_trend"] == "negative"
+
+
+def test_both_hedge_legs_orphaned_with_the_exchange_flat(monkeypatch):
+    rows = [
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=300, order_id="l"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="sell", qty=1, price=110, seconds_before=200, order_id="s"),
+            "SHORT",
+        ),
+    ]
+    stats = _applied(monkeypatch, rows, rows, [])["stats"]
     assert stats["orphaned_lots"] == 2
     assert stats["orphaned_unrealized_pnl"] == pytest.approx(
         10.0
-    )  # +10 long, 0 short at the mark 110
+    )  # +10 long, 0 short, mark 110
+    assert stats["realized_pnl"] == 0  # the legs are not netted into a profit
     assert stats["unrealized_pnl"] == 0.0
-    assert stats["realized_pnl"] == pytest.approx(
-        10.0
-    )  # the calculator nets the two legs
-    held = _rounds_cache_body(
-        monkeypatch, rows, [_btc("LONG", "1"), _btc("SHORT", "-1")]
-    )
-    both = _performance(monkeypatch, "apply", rows, held)[0]["stats"]
-    assert both["orphaned_lots"] == 0
-    assert both["unrealized_pnl"] == pytest.approx(
-        10.0
-    )  # each leg from the round book: (110-100) + (110-110)
+    assert stats["recent_pnl_trend"] == "neutral"
+
+
+def test_a_lot_closed_after_the_cache_is_not_counted_twice(monkeypatch):
+    """B. The lot was held when the cache was computed and sold at a profit since: realized has it, the
+    live book no longer has the lot, so it is not valued again at the mark."""
+    cached = [
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=900, order_id="b1"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="sell", qty=1, price=85, seconds_before=800, order_id="b2"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=300, order_id="b3"),
+            "LONG",
+        ),
+    ]
+    now = cached + [
+        _ps(
+            _fill(side="sell", qty=1, price=110, seconds_before=10, order_id="b4"),
+            "LONG",
+        )
+    ]
+    stats = _applied(monkeypatch, cached, now, [_btc("LONG", "1")])["stats"]
+    assert stats["realized_pnl"] == pytest.approx(-5.0)  # -15 + 10
+    assert stats["unrealized_pnl"] == 0.0
+    assert stats["recent_pnl_trend"] == "negative"
+
+
+def test_a_lot_opened_after_the_cache_is_held_by_default(monkeypatch):
+    """C. A lot (and a tiny later one that sets the mark) opened after the cache is not missing."""
+    cached = [
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=900, order_id="c1"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="sell", qty=1, price=105, seconds_before=800, order_id="c2"),
+            "LONG",
+        ),
+    ]
+    now = cached + [
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=300, order_id="c3"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="buy", qty=0.0001, price=80, seconds_before=10, order_id="c4"),
+            "LONG",
+        ),
+    ]
+    stats = _applied(monkeypatch, cached, now, [_btc("LONG", "0")])["stats"]
+    assert stats["realized_pnl"] == pytest.approx(5.0)
+    assert stats["unrealized_pnl"] == pytest.approx(
+        -20.0
+    )  # (80-100) * 1 + (80-80) * 0.0001
+    assert stats["orphaned_lots"] == 0
+    assert stats["recent_pnl_trend"] == "negative"  # -15
+
+
+def test_a_lot_orphaned_in_the_cache_and_sold_since_is_not_excluded_twice(monkeypatch):
+    cached = [
+        _ps(
+            _fill(side="buy", qty=1, price=100, seconds_before=900, order_id="e1"),
+            "LONG",
+        )
+    ]
+    now = cached + [
+        _ps(
+            _fill(side="sell", qty=1, price=90, seconds_before=10, order_id="e2"),
+            "LONG",
+        )
+    ]
+    stats = _applied(monkeypatch, cached, now, [])[
+        "stats"
+    ]  # flat at the cache: e1 was orphaned
+    assert stats["orphaned_lots"] == 0
+    assert stats["orphaned_unrealized_pnl"] == 0
+    assert stats["realized_pnl"] == pytest.approx(-10.0)
+    assert stats["recent_pnl_trend"] == "negative"
+
+
+def test_a_phantom_is_not_netted_into_a_real_short_by_the_leg_book(monkeypatch):
+    """D. A phantom LONG 1@90 (the exchange holds no LONG) and a real SHORT 1@101, mark 103.
+
+    The calculator nets them into a realized +11; the leg-aware book keeps the phantom LONG apart: the real
+    exposure is the short, (101-103) * 1 = -2 (negative), and the phantom's +13 is reported as orphaned.
+    """
+    rows = [
+        _ps(
+            _fill(side="buy", qty=1, price=90, seconds_before=900, order_id="ph"),
+            "LONG",
+        ),
+        _ps(
+            _fill(side="sell", qty=1, price=101, seconds_before=300, order_id="sh"),
+            "SHORT",
+        ),
+        _ps(
+            _fill(
+                side="sell", qty=0.000001, price=103, seconds_before=100, order_id="mk"
+            ),
+            "SHORT",
+        ),
+    ]
+    exchange = [_btc("SHORT", "-1.000001")]
+    applied = _applied(monkeypatch, rows, rows, exchange)["stats"]
+    assert applied["realized_pnl"] == 0
+    assert applied["unrealized_pnl"] == pytest.approx(-2.0)
+    assert applied["orphaned_lots"] == 1
+    assert applied["orphaned_unrealized_pnl"] == pytest.approx(13.0)
+    assert applied["recent_pnl_trend"] == "negative"
+    reported = _applied(monkeypatch, rows, rows, exchange, mode="report")["stats"]
+    assert reported["realized_pnl"] == pytest.approx(
+        11.0
+    )  # the calculator's netting, unchanged in report
+    assert reported["orphaned_unrealized_pnl"] == pytest.approx(
+        13.0
+    )  # from the same leg-aware book
 
 
 def test_performance_carries_both_the_win_rate_delta_audit_and_the_orphan_fields(
@@ -562,17 +740,6 @@ def test_performance_carries_both_the_win_rate_delta_audit_and_the_orphan_fields
     assert stats["win_rate_delta"] is None  # no closed round: nothing to compare
     assert stats["win_rate_delta_window"] is None
     assert stats["orphaned_lots"] == 2
-
-
-def test_pnl_calculator_exposes_its_mark_prices():
-    from data_manager.services.pnl_calculator import PnlCalculator
-
-    calc = PnlCalculator()
-    assert calc.mark_of("BTCUSDT") is None
-    calc.apply_fill(_fill(side="buy", qty=1, price=100))
-    assert calc.mark_of("BTCUSDT") == 100
-    calc.set_mark("BTCUSDT", 95.0)
-    assert calc.mark_of("BTCUSDT") == 95.0
 
 
 def test_performance_win_rate_delta_is_null_when_the_windows_are_one_trade():

@@ -495,7 +495,6 @@ class RoundBook:
                     key,
                     {
                         "orphaned": [],
-                        "held": [],
                         "ledger_closed": [],
                         "open_lot_quantity": 0.0,
                         "held_quantity": 0.0,
@@ -524,7 +523,6 @@ class RoundBook:
                 bucket["open_lot_quantity"] += lot.qty
                 if lot.opened_at.timestamp() * 1000 > float(as_of_ms):
                     bucket["held_quantity"] += lot.qty
-                    bucket["held"].append(self._lot_dict(lot, lot.qty, "held"))
                     continue
                 held = min(lot.qty, remaining_exchange)
                 remaining_exchange -= held
@@ -532,8 +530,6 @@ class RoundBook:
                 threshold = thresholds[strategy][0]
                 eligible = (now - lot.opened_at).total_seconds() >= threshold
                 bucket["held_quantity"] += held
-                if held > 0:
-                    bucket["held"].append(self._lot_dict(lot, held, "held"))
                 tolerance = ROUND_ORPHAN_QUANTITY_TOLERANCE * max(
                     1.0, abs(lot.qty), abs(exchange_quantity)
                 )
@@ -549,14 +545,11 @@ class RoundBook:
                         bucket["_orphaned_lot_ids"].add(id(lot))
                 else:
                     bucket["held_quantity"] += excess
-                    if excess > 0:
-                        bucket["held"].append(self._lot_dict(lot, excess, "held"))
             for strategy, lot in entries:
                 result.setdefault(
                     (strategy, symbol, leg),
                     {
                         "orphaned": [],
-                        "held": [],
                         "ledger_closed": [],
                         "open_lot_quantity": 0.0,
                         "held_quantity": 0.0,
@@ -580,6 +573,29 @@ class RoundBook:
             "exchange_snapshot_age_seconds": age,
             "as_of_ms": as_of_ms,
         }
+
+    def realized_total(self, strategy_id: str) -> float:
+        """Realized P&L of one strategy: its closed rounds plus the exits already booked in its open rounds."""
+        closed = sum(r.realized for r in self.closed if r.strategy_id == strategy_id)
+        open_cycles = sum(
+            book.cycle.realized
+            for (owner, _symbol, _leg), book in self._books.items()
+            if owner == strategy_id and book.cycle is not None
+        )
+        return closed + open_cycles
+
+    def open_lots(self, strategy_id: str) -> list[tuple[str, str, _Lot]]:
+        """``(symbol, leg, lot)`` of every open lot of one strategy, ``leg`` being the side the lot was opened on.
+
+        Hedge legs stay apart; a netted book's lots are LONG or SHORT by their own side. Read-only.
+        """
+        out: list[tuple[str, str, _Lot]] = []
+        for (owner, symbol, _leg), book in self._books.items():
+            if owner != strategy_id:
+                continue
+            out.extend((symbol, "LONG", lot) for lot in book.long)
+            out.extend((symbol, "SHORT", lot) for lot in book.short)
+        return out
 
     @staticmethod
     def _lot_dict(lot: _Lot, quantity: float, reason: str) -> dict[str, Any]:
