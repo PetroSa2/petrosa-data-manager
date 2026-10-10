@@ -398,6 +398,22 @@ def test_performance_warning_uses_labelled_fallback_budget(monkeypatch, caplog):
     assert "10.000s budget_source=default_fallback" in caplog.text
 
 
+@pytest.mark.parametrize("budget", ["not-a-number", "0"])
+def test_performance_warning_uses_labelled_fallback_for_invalid_budget(
+    monkeypatch, caplog, budget
+):
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.setenv("DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S", budget)
+    monkeypatch.setattr(analysis_route, "perf_counter", iter([1.0, 9.1]).__next__)
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    with caplog.at_level("WARNING", logger="data_manager.api.routes.analysis"):
+        _performance(monkeypatch, "apply", rows, body)
+
+    assert "budget_source=invalid_fallback" in caplog.text
+
+
 def test_performance_replay_duration_histogram_records_measured_value(monkeypatch):
     import data_manager.api.routes.analysis as analysis_route
 
