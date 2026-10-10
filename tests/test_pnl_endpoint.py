@@ -202,6 +202,174 @@ def test_performance_returns_win_rate_delta_and_consecutive_losses():
         api_module.db_manager = None
 
 
+def _orphan_fills() -> list[dict[str, Any]]:
+    """Three long entries of 1 BTC at 100, 120 and 90 (oldest first); the mark is the last fill, 90."""
+    return [
+        _fill(side="buy", qty=1, price=100, seconds_before=300, order_id="e1"),
+        _fill(side="buy", qty=1, price=120, seconds_before=200, order_id="e2"),
+        _fill(side="buy", qty=1, price=90, seconds_before=100, order_id="e3"),
+    ]
+
+
+def _orphan_stats(monkeypatch, mode: str | None, held: str, snapshot_age_s: int = 0):
+    """Performance stats with the exchange holding ``held`` BTC LONG (``None`` mode: variable unset)."""
+    import data_manager.db.repositories.ledger_repository as ledger_module
+
+    class FakeRepository:
+        def __init__(self, *_args):
+            pass
+
+        def round_overlay_snapshot(self):
+            now_ms = int(datetime.now(UTC).timestamp() * 1000) - snapshot_age_s * 1000
+            return {
+                "as_of_ms": now_ms,
+                "rows": [
+                    {"symbol": "BTCUSDT", "position_side": "LONG", "quantity": held}
+                ],
+            }
+
+        def closed_entry_order_ids(self):
+            return set()
+
+    monkeypatch.setattr(ledger_module, "LedgerRepository", FakeRepository)
+    if mode is None:
+        monkeypatch.delenv("ROUND_ORPHAN_MARKING", raising=False)
+    else:
+        monkeypatch.setenv("ROUND_ORPHAN_MARKING", mode)
+    try:
+        client = _client_with_fills(_orphan_fills())
+        api_module.db_manager.mysql_adapter = object()
+        response = client.get("/analysis/performance/S1")
+        assert response.status_code == 200
+        return response.json()
+    finally:
+        api_module.db_manager = None
+
+
+def test_performance_apply_excludes_orphaned_lots_from_unrealized_and_trend(
+    monkeypatch,
+):
+    body = _orphan_stats(monkeypatch, "apply", held="1")  # only the newest lot is held
+    stats = body["stats"]
+    # lots at 100 and 120 are orphaned: (90-100) + (90-120) = -40 leaves; the held lot is at the mark
+    assert stats["orphaned_lots"] == 2
+    assert stats["orphaned_unrealized_pnl"] == pytest.approx(-40.0)
+    assert stats["unrealized_pnl"] == pytest.approx(0.0)
+    assert stats["realized_pnl"] == 0
+    assert (
+        stats["recent_pnl_trend"] == "neutral"
+    )  # was negative with the phantom exposure
+    assert body["metadata"]["orphan_overlay"] == "enabled"
+    assert body["metadata"]["orphan_marking"] == "apply"
+
+
+def test_performance_report_mode_adds_the_fields_and_changes_nothing_else(monkeypatch):
+    stats = _orphan_stats(monkeypatch, "report", held="1")["stats"]
+    assert stats["orphaned_lots"] == 2
+    assert stats["orphaned_unrealized_pnl"] == pytest.approx(-40.0)
+    assert stats["unrealized_pnl"] == pytest.approx(-40.0)  # still includes them
+    assert stats["recent_pnl_trend"] == "negative"
+
+
+def test_performance_off_mode_is_exactly_the_old_response(monkeypatch):
+    body = _orphan_stats(monkeypatch, "off", held="1")
+    assert body["stats"]["unrealized_pnl"] == pytest.approx(-40.0)
+    assert body["stats"]["recent_pnl_trend"] == "negative"
+    assert "orphaned_lots" not in body["stats"]
+    assert "orphaned_unrealized_pnl" not in body["stats"]
+    assert "orphan_overlay" not in body["metadata"]
+
+
+def test_performance_mixed_case_excludes_only_the_orphaned_part(monkeypatch):
+    """The exchange holds 2 of the 3 BTC: the two newest lots are held, only the 100 lot is orphaned."""
+    stats = _orphan_stats(monkeypatch, "apply", held="2")["stats"]
+    assert stats["orphaned_lots"] == 1
+    assert stats["orphaned_unrealized_pnl"] == pytest.approx(-10.0)
+    assert stats["unrealized_pnl"] == pytest.approx(-30.0)  # (90-120) of the held lot
+    assert stats["recent_pnl_trend"] == "negative"
+    # a partly held lot: the exchange holds 2.5 BTC, 0.5 of the oldest lot is orphaned
+    partial = _orphan_stats(monkeypatch, "apply", held="2.5")["stats"]
+    assert partial["orphaned_lots"] == 1
+    assert partial["orphaned_unrealized_pnl"] == pytest.approx(-5.0)
+    assert partial["unrealized_pnl"] == pytest.approx(-35.0)
+
+
+def test_performance_everything_held_excludes_nothing(monkeypatch):
+    stats = _orphan_stats(monkeypatch, "apply", held="3")["stats"]
+    assert stats["orphaned_lots"] == 0
+    assert stats["orphaned_unrealized_pnl"] == 0
+    assert stats["unrealized_pnl"] == pytest.approx(-40.0)
+
+
+def test_performance_apply_with_a_stale_snapshot_leaves_the_stats_unchanged(
+    monkeypatch,
+):
+    """A stale exchange snapshot disables the overlay: nothing is excluded, the amounts are unknown."""
+    body = _orphan_stats(monkeypatch, "apply", held="0", snapshot_age_s=3600)
+    stats = body["stats"]
+    assert stats["unrealized_pnl"] == pytest.approx(-40.0)
+    assert stats["orphaned_lots"] is None
+    assert stats["orphaned_unrealized_pnl"] is None
+    assert body["metadata"]["orphan_overlay"] == "disabled_stale"
+
+
+def test_performance_default_mode_is_report(monkeypatch):
+    body = _orphan_stats(monkeypatch, None, held="1")
+    assert body["metadata"]["orphan_marking"] == "report"
+    assert body["stats"]["unrealized_pnl"] == pytest.approx(-40.0)
+
+
+def test_performance_uses_the_precomputed_rounds_report_and_survives_its_failure(
+    monkeypatch,
+):
+    """The orphan lots come from the rounds report the precomputer serves (one overlay, not a copy)."""
+    cached = {
+        "orphan_overlay": "enabled",
+        "strategies": {
+            "S1": {
+                "legs": {
+                    "BTCUSDT": {
+                        "LONG": {"orphaned": [{"quantity": 2.0, "price": 100.0}]}
+                    }
+                }
+            }
+        },
+    }
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
+    try:
+        client = _client_with_fills(_orphan_fills())
+        precomputer = MagicMock()
+        precomputer.get_or_compute = AsyncMock(return_value=cached)
+        monkeypatch.setattr(
+            api_module, "report_precomputer", precomputer, raising=False
+        )
+        stats = client.get("/analysis/performance/S1").json()["stats"]
+        assert precomputer.get_or_compute.await_args.args[0] == "rounds"
+        assert stats["orphaned_lots"] == 1
+        assert stats["orphaned_unrealized_pnl"] == pytest.approx(-20.0)  # (90-100)*2
+        assert stats["unrealized_pnl"] == pytest.approx(-20.0)  # -40 - (-20)
+
+        precomputer.get_or_compute = AsyncMock(side_effect=RuntimeError("cache down"))
+        failed = client.get("/analysis/performance/S1").json()
+        assert failed["stats"]["unrealized_pnl"] == pytest.approx(-40.0)
+        assert failed["stats"]["orphaned_lots"] is None
+        assert failed["metadata"]["orphan_overlay"] == "unavailable"
+    finally:
+        api_module.db_manager = None
+        monkeypatch.setattr(api_module, "report_precomputer", None, raising=False)
+
+
+def test_pnl_calculator_exposes_its_mark_prices():
+    from data_manager.services.pnl_calculator import PnlCalculator
+
+    calc = PnlCalculator()
+    assert calc.mark_of("BTCUSDT") is None
+    calc.apply_fill(_fill(side="buy", qty=1, price=100))
+    assert calc.mark_of("BTCUSDT") == 100
+    calc.set_mark("BTCUSDT", 95.0)
+    assert calc.mark_of("BTCUSDT") == 95.0
+
+
 def test_performance_degrades_when_db_missing():
     """No DB should yield 'neutral' trend (not 'unknown') rather than 500.
 

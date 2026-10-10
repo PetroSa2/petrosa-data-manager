@@ -199,6 +199,58 @@ async def get_volatility(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _strategy_orphan_exposure(strategy_id: str, calc: Any) -> dict[str, Any]:
+    """The unrealized P&L of the lots the round-book overlay classifies as orphaned (petrosa-data-manager#581).
+
+    Reuses the classification of ``/analysis/rounds`` (#577) instead of repeating it: the rounds report (the
+    precomputed one when there is a cache) lists, per leg, the orphaned part of each lot with its price; each is
+    marked with the mark price of this replay. Read-only. When the overlay is not ``enabled`` (a stale or
+    missing exchange snapshot, a cut read, no database) nothing is classified: ``status`` says why and the
+    amounts are ``None``, so the stats stay as they were.
+    """
+    try:
+        precomputer = getattr(api_module, "report_precomputer", None)
+        if precomputer is not None:
+            report = await precomputer.get_or_compute(
+                "rounds",
+                lambda: compute_closed_rounds(api_module.db_manager, None, 30),
+                window_days=30,
+            )
+        else:
+            report = await compute_closed_rounds(api_module.db_manager, None, 30)
+    except Exception as exc:
+        logger.warning("performance: orphan overlay unavailable: %s", exc)
+        report = None
+    status = (report or {}).get("orphan_overlay") or "unavailable"
+    if report is None or status != "enabled":
+        return {
+            "status": status,
+            "orphaned_lots": None,
+            "orphaned_unrealized_pnl": None,
+        }
+    lots = 0
+    unrealized = 0.0
+    legs = (report.get("strategies") or {}).get(strategy_id, {}).get("legs") or {}
+    for symbol, by_leg in legs.items():
+        mark = calc.mark_of(symbol)
+        for leg, data in by_leg.items():
+            for lot in data.get("orphaned") or []:
+                lots += 1
+                if mark is None:
+                    continue
+                quantity, price = float(lot["quantity"]), float(lot["price"])
+                unrealized += (
+                    (mark - price) * quantity
+                    if leg == "LONG"
+                    else (price - mark) * quantity
+                )
+    return {
+        "status": status,
+        "orphaned_lots": lots,
+        "orphaned_unrealized_pnl": unrealized,
+    }
+
+
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
     """
@@ -312,11 +364,27 @@ async def get_strategy_performance(strategy_id: str):
                 consecutive_losses += 1
 
         breakdown = calc.strategy_pnl(strategy_id)
+        # The orphan overlay of #577: off = unchanged; report = the amounts only; apply = the orphaned lots
+        # (lots the exchange no longer holds) leave unrealized_pnl and the total behind recent_pnl_trend.
+        orphan_mode = _round_overlay_mode()
+        exposure = (
+            await _strategy_orphan_exposure(strategy_id, calc)
+            if orphan_mode != "off"
+            else None
+        )
+        unrealized_pnl = breakdown.unrealized
+        if (
+            orphan_mode == "apply"
+            and exposure is not None
+            and exposure["orphaned_unrealized_pnl"] is not None
+        ):
+            unrealized_pnl -= exposure["orphaned_unrealized_pnl"]
+        total_pnl = breakdown.realized + unrealized_pnl
         recent_trend = (
             "positive"
-            if breakdown.total > 0
+            if total_pnl > 0
             else "negative"
-            if breakdown.total < 0
+            if total_pnl < 0
             # "neutral" (not "flat") — matches petrosa-cio's PnlTrend enum vocabulary
             # (positive|negative|neutral). See PetroSa2/petrosa-data-manager#306.
             else "neutral"
@@ -332,7 +400,15 @@ async def get_strategy_performance(strategy_id: str):
                 "consecutive_losses": consecutive_losses,
                 "recent_pnl_trend": recent_trend,
                 "realized_pnl": breakdown.realized,
-                "unrealized_pnl": breakdown.unrealized,
+                "unrealized_pnl": unrealized_pnl,
+                **(
+                    {
+                        "orphaned_unrealized_pnl": exposure["orphaned_unrealized_pnl"],
+                        "orphaned_lots": exposure["orphaned_lots"],
+                    }
+                    if exposure is not None
+                    else {}
+                ),
             },
             "metadata": {
                 "strategy_id": strategy_id,
@@ -340,6 +416,14 @@ async def get_strategy_performance(strategy_id: str):
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
                 "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
+                **(
+                    {
+                        "orphan_overlay": exposure["status"],
+                        "orphan_marking": orphan_mode,
+                    }
+                    if exposure is not None
+                    else {}
+                ),
             },
         }
     except Exception as e:

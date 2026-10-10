@@ -167,6 +167,10 @@ class PnlCalculator:
         """Override the latest mark price for a symbol."""
         self._marks[symbol] = mark_price
 
+    def mark_of(self, symbol: str) -> float | None:
+        """The mark price used for a symbol (the latest fill price unless overridden), None when unknown."""
+        return self._marks.get(symbol)
+
     # ------------------------------------------------------------------
     # Queries.
     # ------------------------------------------------------------------
