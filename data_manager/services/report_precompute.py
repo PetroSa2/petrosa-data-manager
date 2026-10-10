@@ -22,13 +22,17 @@ report_age_seconds = Gauge(
 report_stage_seconds = Histogram(
     "data_manager_report_stage_seconds",
     "Report refresh stage duration",
-    ["report", "stage"],
+    ["report", "stage", "source"],
 )
 
 
-def record_report_stage(report: str, stage: str, duration: float) -> None:
+def record_report_stage(
+    report: str, stage: str, duration: float, *, source: str = "on_demand"
+) -> None:
     """Record one report pipeline stage."""
-    report_stage_seconds.labels(report=report, stage=stage).observe(max(0.0, duration))
+    report_stage_seconds.labels(report=report, stage=stage, source=source).observe(
+        max(0.0, duration)
+    )
 
 
 def cache_key(report: str, **params: Any) -> str:
@@ -106,7 +110,14 @@ class ReportPrecomputer:
             await self._put(report, body, **params)
             return await self.get(report, **params)
 
-    async def _put(self, report: str, body: dict[str, Any], **params: Any) -> None:
+    async def _put(
+        self,
+        report: str,
+        body: dict[str, Any],
+        *,
+        source: str = "on_demand",
+        **params: Any,
+    ) -> None:
         from bson import BSON
 
         from data_manager.db.mongodb_adapter import MongoDBAdapter
@@ -125,7 +136,9 @@ class ReportPrecomputer:
         serialize_started = monotonic()
         prepared_body = MongoDBAdapter._prepare_for_bson(body)
         BSON.encode(prepared_body)
-        record_report_stage(report, "serialize", monotonic() - serialize_started)
+        record_report_stage(
+            report, "serialize", monotonic() - serialize_started, source=source
+        )
         await self.collection.replace_one(
             {"_id": cache_key(report, **params)},
             {
@@ -146,9 +159,10 @@ class ReportPrecomputer:
     async def _refresh(self, report: str, callback: Any, **params: Any) -> None:
         try:
             body = await callback()
+            source = params.pop("source", "refresh")
             if not params and report != "calibration":
                 params = {"window_days": 30}
-            await self._put(report, body, **params)
+            await self._put(report, body, source=source, **params)
         except Exception:
             logger.exception("report refresh failed", extra={"report": report})
 
@@ -176,17 +190,23 @@ class ReportPrecomputer:
                 if now >= next_slippage:
                     await self._refresh(
                         "slippage_by_regime",
-                        lambda: compute_slippage_by_regime(self.db_manager, 30),
+                        lambda: compute_slippage_by_regime(
+                            self.db_manager, 30, source="refresh"
+                        ),
                     )
                     await self._refresh(
                         "rounds",
-                        lambda: compute_closed_rounds(self.db_manager, None, 30),
+                        lambda: compute_closed_rounds(
+                            self.db_manager, None, 30, source="refresh"
+                        ),
                     )
                     next_slippage = now + constants.REPORT_SLIPPAGE_INTERVAL_SECONDS
                 if now >= next_risk:
                     await self._refresh(
                         "risk_inputs",
-                        lambda: compute_risk_inputs(self.db_manager, window_days=30),
+                        lambda: compute_risk_inputs(
+                            self.db_manager, window_days=30, source="refresh"
+                        ),
                     )
                     next_risk = now + constants.REPORT_RISK_INTERVAL_SECONDS
                 if now >= next_calibration:
@@ -194,7 +214,9 @@ class ReportPrecomputer:
                         calibration_task = asyncio.create_task(
                             self._refresh(
                                 "calibration",
-                                lambda: compute_calibration_confidence(self.db_manager),
+                                lambda: compute_calibration_confidence(
+                                    self.db_manager, source="refresh"
+                                ),
                             )
                         )
                     next_calibration = (

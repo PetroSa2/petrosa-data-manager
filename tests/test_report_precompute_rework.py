@@ -304,6 +304,58 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
 
 
 @pytest.mark.asyncio
+async def test_regime_bound_keeps_latest_anchor_before_oldest_unstamped_fill():
+    fill_time = datetime(2026, 1, 1, tzinfo=UTC)
+    anchor = {
+        "regime": "calm",
+        "timestamp": datetime(2025, 12, 31, 23, tzinfo=UTC),
+    }
+    future = {
+        "regime": "volatile",
+        "timestamp": datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
+    }
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def sort(self, *args):
+            return self
+
+        async def to_list(self, length=None):
+            return self.rows
+
+    class Collection:
+        def __init__(self, name):
+            self.name = name
+
+        def find(self, query, projection=None):
+            if self.name == "execution_events":
+                return Cursor(
+                    [
+                        {
+                            "event_type": "filled",
+                            "symbol": "BTCUSDT",
+                            "timestamp": fill_time,
+                            "slippage_bp": 1.0,
+                        }
+                    ]
+                )
+            return Cursor([anchor] if "$lt" in query["timestamp"] else [future])
+
+    class Database(dict):
+        def __getitem__(self, name):
+            return Collection(name)
+
+    report = await compute_slippage_by_regime(
+        SimpleNamespace(mongodb_adapter=SimpleNamespace(db=Database()))
+    )
+
+    assert report["by_regime"]["calm"]["count"] == 1
+    assert "volatile" not in report["by_regime"]
+
+
+@pytest.mark.asyncio
 async def test_default_routes_serve_cached_reports_without_computing(monkeypatch):
     import data_manager.api.app as api_module
     from data_manager.api.routes.analysis import (

@@ -178,7 +178,10 @@ async def test_calibration_route_reads_gateway_and_filters() -> None:
         api_module.db_manager = None
 
     assert result == {"records": [], "skipped": 0}
-    assert calls[0][1]["filters"] == {"strategy_id": "alpha"}
+    assert calls[0][1]["filters"] == {
+        "event_type": {"$in": ["filled", "partial_fill"]},
+        "strategy_id": "alpha",
+    }
     assert calls[1][1]["filters"] == {"strategy_id": "alpha", "action": "execute"}
 
 
@@ -206,6 +209,45 @@ async def test_default_calibration_route_serves_cached_report() -> None:
     assert result == {"records": [], "skipped": 0}
     precomputer.get_or_compute.assert_awaited_once()
     assert precomputer.get_or_compute.await_args.args[0] == "calibration"
+
+
+@pytest.mark.asyncio
+async def test_default_calibration_route_reads_back_real_cached_body() -> None:
+    class Collection:
+        def __init__(self) -> None:
+            self.rows = {}
+
+        async def find_one(self, query):
+            return self.rows.get(query["_id"])
+
+        async def replace_one(self, query, document, upsert=False):
+            self.rows[query["_id"]] = document
+
+    collection = Collection()
+    manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"report_cache": collection})
+    )
+    body = build_calibration_records(
+        [
+            _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+            _fill("sell", "2026-10-01T12:01:00Z", "d1"),
+        ],
+        [{"decision_id": "d1", "action": "execute", "confidence": "0.875"}],
+    )
+    await ReportPrecomputer(manager)._put("calibration", body)
+
+    api_module.db_manager = manager
+    api_module.report_precomputer = ReportPrecomputer(manager)
+    try:
+        result = await get_calibration_confidence()
+    finally:
+        api_module.db_manager = None
+        api_module.report_precomputer = None
+
+    record = result["records"][0]
+    assert isinstance(record["confidence"], float)
+    assert isinstance(record["net_pnl"], float)
+    assert record["strategy_id"] == "alpha"
 
 
 def test_request_duration_has_long_report_buckets() -> None:

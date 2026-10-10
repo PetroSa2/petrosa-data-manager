@@ -77,6 +77,7 @@ async def compute_calibration_confidence(
     db_manager: Any,
     since: datetime | None = None,
     strategy_id: str | None = None,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Compute the confidence calibration report without route or cache concerns."""
     from data_manager.services.calibration_service import get_calibration_records
@@ -84,7 +85,7 @@ async def compute_calibration_confidence(
     if not db_manager or not getattr(db_manager, "mongodb_adapter", None):
         raise HTTPException(status_code=503, detail="Database not available")
     return await get_calibration_records(
-        db_manager.mongodb_adapter, since=since, strategy_id=strategy_id
+        db_manager.mongodb_adapter, since=since, strategy_id=strategy_id, source=source
     )
 
 
@@ -471,6 +472,7 @@ async def compute_slippage_by_regime(
     window_days: float = 30.0,
     symbol: str | None = None,
     role: str | None = None,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Slippage per market regime from the per-fill cost telemetry (petrosa-data-manager#535).
 
@@ -530,19 +532,22 @@ async def compute_slippage_by_regime(
                 {"timestamp": {"$gte": regime_since}}, REGIME_DOC_PROJECTION
             ).to_list(length=_REGIME_MAX_DOCS)
             regimes[pair] = anchor + bounded
-        record_report_stage("slippage_by_regime", "read", monotonic() - read_started)
-        decode_started = monotonic()
+        record_report_stage(
+            "slippage_by_regime",
+            "read+decode",
+            monotonic() - read_started,
+            source=source,
+        )
         fills = list(fills)
         regimes = {pair: list(rows) for pair, rows in regimes.items()}
-        record_report_stage(
-            "slippage_by_regime", "decode", monotonic() - decode_started
-        )
     except Exception as exc:
         logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     compute_started = monotonic()
     report = await asyncio.to_thread(build_report, fills, regimes, role=role)
-    record_report_stage("slippage_by_regime", "compute", monotonic() - compute_started)
+    record_report_stage(
+        "slippage_by_regime", "compute", monotonic() - compute_started, source=source
+    )
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "window_days": window_days,
@@ -617,6 +622,7 @@ async def compute_closed_rounds(
     db_manager: Any,
     strategy_id: str | None = None,
     window_days: float = 30.0,
+    source: str = "on_demand",
 ) -> dict[str, Any]:
     """Per-strategy fills, closed and open rounds, closed-round rate and median holding time.
 
@@ -641,7 +647,9 @@ async def compute_closed_rounds(
         read_started = monotonic()
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
         rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
-        record_report_stage("rounds", "read+decode", monotonic() - read_started)
+        record_report_stage(
+            "rounds", "read+decode", monotonic() - read_started, source=source
+        )
         return rows
 
     own_query = {**base_query, "strategy_id": strategy_id} if strategy_id else None
@@ -685,7 +693,9 @@ async def compute_closed_rounds(
         closed_entry_orders=closed_entry_orders,
         apply_overlay=mode == "apply",
     )
-    record_report_stage("rounds", "compute", monotonic() - compute_started)
+    record_report_stage(
+        "rounds", "compute", monotonic() - compute_started, source=source
+    )
     if mode == "off":
         report["orphan_overlay"] = "off"
     elif overlay_cut or truncated:

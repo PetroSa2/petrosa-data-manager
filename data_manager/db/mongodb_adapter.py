@@ -1170,34 +1170,26 @@ class MongoDBAdapter(BaseAdapter):
         """
         from decimal import Decimal
 
-        new_doc = {}
-        for key, value in doc.items():
-            str_key = str(key)
-            if str_key in new_doc:
-                logger.warning(
-                    "Key collision detected during BSON preparation: '%s' "
-                    "already exists in document. Data may be overwritten.",
-                    str_key,
-                )
-
+        def prepare(value: Any) -> Any:
             if isinstance(value, Decimal):
-                new_doc[str_key] = float(value)
-            elif isinstance(value, dict):
-                new_doc[str_key] = MongoDBAdapter._prepare_for_bson(value)
-            elif isinstance(value, list):
-                new_doc[str_key] = [
-                    (
-                        MongoDBAdapter._prepare_for_bson(item)
-                        if isinstance(item, dict)
-                        else float(item)
-                        if isinstance(item, Decimal)
-                        else item
-                    )
-                    for item in value
-                ]
-            else:
-                new_doc[str_key] = value
-        return new_doc
+                return float(value)
+            if isinstance(value, dict):
+                result: dict[str, Any] = {}
+                for key, item in value.items():
+                    str_key = str(key)
+                    if str_key in result:
+                        logger.warning(
+                            "Key collision detected during BSON preparation: '%s' "
+                            "already exists in document. Data may be overwritten.",
+                            str_key,
+                        )
+                    result[str_key] = prepare(item)
+                return result
+            if isinstance(value, list | tuple):
+                return [prepare(item) for item in value]
+            return value
+
+        return prepare(doc)
 
     # -------------------------------------------------------------------------
     # Configuration Management Methods
