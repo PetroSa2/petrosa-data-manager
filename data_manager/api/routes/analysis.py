@@ -4,6 +4,7 @@ Analytics endpoints for computed metrics.
 
 import asyncio
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -251,6 +252,35 @@ async def _strategy_orphan_exposure(strategy_id: str, calc: Any) -> dict[str, An
     }
 
 
+def win_rate_delta_with_noise_floor(
+    outcomes: list[bool],
+) -> tuple[float | None, int | None, float | None]:
+    """The win rate of the latest window minus the one before it, only when it is distinguishable from noise.
+
+    The two windows hold ``w = n // 2`` outcomes each, ``a`` wins in the earlier and ``b`` in the later one.
+    With the pooled win rate ``p = (a + b) / 2w`` the standard error of the difference is
+    ``SE = sqrt(p (1 - p) 2 / w)``, and the delta ``(b - a) / w`` is returned only when ``|delta| > 2 SE``
+    (about 95 %), else ``None`` (unknown to the CIO). The test is exact, in integers, so a tie is never decided
+    by rounding: ``|delta| > 2 SE`` is ``(b - a)^2 w > 2 (a + b) (2w - a - b)``. A pooled ``p`` of 0 or 1 has no
+    variance (and no delta), so ``SE`` is reported from the Laplace estimate ``(a + b + 1) / (2 w + 2)``
+    there. No fixed sample size is assumed: with three outcomes each window is one trade, the delta can only be
+    -1, 0 or +1 and is never above 2 SE (petrosa-data-manager#579). Returns ``(delta, w, SE)``;
+    ``(None, None, None)`` below two outcomes.
+    """
+    window = len(outcomes) // 2
+    if not window:
+        return None, None, None
+    earlier = sum(outcomes[-2 * window : -window])
+    later = sum(outcomes[-window:])
+    wins = earlier + later
+    if wins in (0, 2 * window):
+        pooled = (wins + 1) / (2 * window + 2)
+        return None, window, math.sqrt(pooled * (1 - pooled) * 2 / window)
+    standard_error = math.sqrt(wins * (2 * window - wins) / (2 * window**3))
+    significant = (later - earlier) ** 2 * window > 2 * wins * (2 * window - wins)
+    return ((later - earlier) / window if significant else None), window, standard_error
+
+
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
     """
@@ -273,6 +303,8 @@ async def get_strategy_performance(strategy_id: str):
                 "stats": {
                     "win_rate": None,
                     "win_rate_delta": None,
+                    "win_rate_delta_window": None,
+                    "win_rate_delta_se": None,
                     "consecutive_losses": None,
                     # "neutral" (not "unknown") — matches petrosa-cio's PnlTrend
                     # enum vocabulary (positive|negative|neutral). Same bug
@@ -314,6 +346,8 @@ async def get_strategy_performance(strategy_id: str):
                 "stats": {
                     "win_rate": None,
                     "win_rate_delta": None,
+                    "win_rate_delta_window": None,
+                    "win_rate_delta_se": None,
                     "consecutive_losses": None,
                     # See comment on the no-DB sentinel above: "neutral", not
                     # "unknown" — cio#194 sibling fix.
@@ -343,17 +377,9 @@ async def get_strategy_performance(strategy_id: str):
 
         decisions = wins + losses
         win_rate = (wins / decisions) if decisions else None
-        comparable_window_size = decisions // 2
-        if comparable_window_size:
-            previous_window = outcomes[
-                -2 * comparable_window_size : -comparable_window_size
-            ]
-            current_window = outcomes[-comparable_window_size:]
-            previous_win_rate = sum(previous_window) / comparable_window_size
-            current_win_rate = sum(current_window) / comparable_window_size
-            win_rate_delta = current_win_rate - previous_win_rate
-        else:
-            win_rate_delta = None
+        win_rate_delta, delta_window, delta_se = win_rate_delta_with_noise_floor(
+            outcomes
+        )
 
         consecutive_losses = None
         if outcomes:
@@ -394,6 +420,9 @@ async def get_strategy_performance(strategy_id: str):
             "stats": {
                 "win_rate": win_rate,
                 "win_rate_delta": win_rate_delta,
+                # The windows and the standard error behind the delta (and why it may be null)
+                "win_rate_delta_window": delta_window,
+                "win_rate_delta_se": delta_se,
                 # The closed rounds behind the win rate: the posterior of the CIO net-EV gate needs them
                 "wins": wins,
                 "losses": losses,
