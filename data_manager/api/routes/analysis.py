@@ -129,10 +129,8 @@ async def compute_calibration_confidence(
         since=since,
         strategy_id=strategy_id,
         source=source,
-        mysql_uri=(
-            constants.MYSQL_URI
-            if getattr(db_manager, "mysql_adapter", None)
-            else None
+        mysql_uri=getattr(
+            getattr(db_manager, "mysql_adapter", None), "connection_string", None
         ),
     )
 
@@ -190,10 +188,10 @@ async def get_latest_calibration_report(
             api_module.db_manager.mongodb_adapter,
             since=since,
             strategy_id=strategy_id,
-            mysql_uri=(
-                constants.MYSQL_URI
-                if getattr(api_module.db_manager, "mysql_adapter", None)
-                else None
+            mysql_uri=getattr(
+                getattr(api_module.db_manager, "mysql_adapter", None),
+                "connection_string",
+                None,
             ),
         )
     except Exception as exc:
