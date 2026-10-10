@@ -572,15 +572,32 @@ async def test_leader_refreshes_calibration_under_the_default_cache_key(monkeypa
     )
     precomputer = ReportPrecomputer(manager, SimpleNamespace(is_leader=True))
     precomputer.running = True
+    # The loop cancels an unfinished calibration task when it exits (its replay runs in a worker thread), so
+    # a fixed sleep races it: wait until the calibration refresh has completed, then stop the loop.
     real_sleep = asyncio.sleep
+    refreshed: list[str] = []
+    original_refresh = precomputer._refresh
 
-    async def stop_after_calibration(_seconds):
-        await real_sleep(0.01)
-        precomputer.running = False
+    async def tracked_refresh(report, callback, **params):
+        await original_refresh(report, callback, **params)
+        refreshed.append(report)
 
-    monkeypatch.setattr(report_precompute.asyncio, "sleep", stop_after_calibration)
+    monkeypatch.setattr(precomputer, "_refresh", tracked_refresh)
+    ticks = 0
+
+    async def stop_once_calibration_is_refreshed(_seconds):
+        nonlocal ticks
+        ticks += 1
+        if "calibration" in refreshed or ticks > 1000:
+            precomputer.running = False
+        await real_sleep(0.005)
+
+    monkeypatch.setattr(
+        report_precompute.asyncio, "sleep", stop_once_calibration_is_refreshed
+    )
     await precomputer._run()
 
+    assert "calibration" in refreshed
     assert "calibration" in cache.rows
     record = cache.rows["calibration"]["body"]["records"][0]
     assert isinstance(record["confidence"], float)
