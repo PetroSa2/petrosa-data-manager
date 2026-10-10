@@ -200,55 +200,83 @@ async def get_volatility(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _strategy_orphan_exposure(strategy_id: str, calc: Any) -> dict[str, Any]:
-    """The unrealized P&L of the lots the round-book overlay classifies as orphaned (petrosa-data-manager#581).
-
-    Reuses the classification of ``/analysis/rounds`` (#577) instead of repeating it: the rounds report (the
-    precomputed one when there is a cache) lists, per leg, the orphaned part of each lot with its price; each is
-    marked with the mark price of this replay. Read-only. When the overlay is not ``enabled`` (a stale or
-    missing exchange snapshot, a cut read, no database) nothing is classified: ``status`` says why and the
-    amounts are ``None``, so the stats stay as they were.
-    """
-    try:
-        precomputer = getattr(api_module, "report_precomputer", None)
-        if precomputer is not None:
-            report = await precomputer.get_or_compute(
-                "rounds",
-                lambda: compute_closed_rounds(api_module.db_manager, None, 30),
-                window_days=30,
-            )
-        else:
-            report = await compute_closed_rounds(api_module.db_manager, None, 30)
-    except Exception as exc:
-        logger.warning("performance: orphan overlay unavailable: %s", exc)
-        report = None
-    status = (report or {}).get("orphan_overlay") or "unavailable"
-    if report is None or status != "enabled":
-        return {
-            "status": status,
-            "orphaned_lots": None,
-            "orphaned_unrealized_pnl": None,
-        }
-    lots = 0
-    unrealized = 0.0
-    legs = (report.get("strategies") or {}).get(strategy_id, {}).get("legs") or {}
-    for symbol, by_leg in legs.items():
-        mark = calc.mark_of(symbol)
-        for leg, data in by_leg.items():
-            for lot in data.get("orphaned") or []:
-                lots += 1
-                if mark is None:
-                    continue
-                quantity, price = float(lot["quantity"]), float(lot["price"])
-                unrealized += (
-                    (mark - price) * quantity
-                    if leg == "LONG"
-                    else (price - mark) * quantity
-                )
+def _unavailable_exposure(status: str) -> dict[str, Any]:
     return {
         "status": status,
+        "orphaned_lots": None,
+        "orphaned_unrealized_pnl": None,
+        "held_unrealized_pnl": None,
+    }
+
+
+async def _strategy_orphan_exposure(strategy_id: str, calc: Any) -> dict[str, Any]:
+    """The orphaned and the held exposure of a strategy from the round-book overlay (petrosa-data-manager#581).
+
+    Reuses the classification of ``/analysis/rounds`` (#577) instead of repeating it: it reads the precomputed
+    rounds report, which lists per leg the orphaned and the held part of each lot with its price, and marks
+    them with the mark prices of this replay. Read-only, and CACHE READ ONLY: it never computes the report (a
+    cold compute reads every fill and would run inline on the CIO's decision path), so a miss is ``warming`` and
+    no precompute is ``unavailable``. A cached report older than the exchange snapshot allows is
+    ``disabled_stale``: the overlay was decided when the report was computed, and
+    ``ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS`` bounds the age of the snapshot plus the age of the cache. In every
+    such case (and for a malformed body) nothing is excluded and the amounts are ``None``.
+    """
+    from data_manager.services.round_book import ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS
+
+    precomputer = getattr(api_module, "report_precomputer", None)
+    if precomputer is None:
+        return _unavailable_exposure("unavailable")
+    try:
+        report = await precomputer.get("rounds", window_days=30)
+    except Exception as exc:
+        logger.warning("performance: rounds cache unreadable: %s", exc)
+        return _unavailable_exposure("unavailable")
+    if report is None:
+        return _unavailable_exposure("warming")
+    try:
+        status = report.get("orphan_overlay")
+        if status != "enabled":
+            return _unavailable_exposure(str(status or "unavailable"))
+        metadata = report.get("metadata") or {}
+        cache_age = float(metadata["age_seconds"])
+        snapshot_age = float(report["exchange_snapshot_age_seconds"])
+        if (
+            metadata.get("stale")
+            or cache_age + snapshot_age > ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS
+        ):
+            return _unavailable_exposure("disabled_stale")
+        strategies = report.get("strategies") or {}
+        if strategy_id not in strategies:
+            # the report predates this strategy's first fill: nothing is known about its lots
+            return _unavailable_exposure("unavailable")
+        lots = 0
+        orphaned_pnl = 0.0
+        held_pnl = 0.0
+        legs = strategies[strategy_id].get("legs") or {}
+        for symbol, by_leg in legs.items():
+            mark = calc.mark_of(symbol)
+            for leg, data in by_leg.items():
+                orphaned, held = data["orphaned"], data["held"]
+                lots += len(orphaned)
+                if mark is None:
+                    continue
+                sign = 1.0 if leg == "LONG" else -1.0
+                for lot in orphaned:
+                    orphaned_pnl += (
+                        sign * (mark - float(lot["price"])) * float(lot["quantity"])
+                    )
+                for lot in held:
+                    held_pnl += (
+                        sign * (mark - float(lot["price"])) * float(lot["quantity"])
+                    )
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning("performance: rounds report not usable: %s", exc)
+        return _unavailable_exposure("unavailable")
+    return {
+        "status": "enabled",
         "orphaned_lots": lots,
-        "orphaned_unrealized_pnl": unrealized,
+        "orphaned_unrealized_pnl": orphaned_pnl,
+        "held_unrealized_pnl": held_pnl,
     }
 
 
@@ -390,8 +418,9 @@ async def get_strategy_performance(strategy_id: str):
                 consecutive_losses += 1
 
         breakdown = calc.strategy_pnl(strategy_id)
-        # The orphan overlay of #577: off = unchanged; report = the amounts only; apply = the orphaned lots
-        # (lots the exchange no longer holds) leave unrealized_pnl and the total behind recent_pnl_trend.
+        # The orphan overlay of #577: off = unchanged; report = the amounts only; apply = unrealized_pnl is the
+        # mark-to-market of the lots the exchange still holds (a sum over the held lots of the round book, so a
+        # fully orphaned book is exactly 0 and the trend follows realized P&L).
         orphan_mode = _round_overlay_mode()
         exposure = (
             await _strategy_orphan_exposure(strategy_id, calc)
@@ -402,9 +431,9 @@ async def get_strategy_performance(strategy_id: str):
         if (
             orphan_mode == "apply"
             and exposure is not None
-            and exposure["orphaned_unrealized_pnl"] is not None
+            and exposure["held_unrealized_pnl"] is not None
         ):
-            unrealized_pnl -= exposure["orphaned_unrealized_pnl"]
+            unrealized_pnl = exposure["held_unrealized_pnl"]
         total_pnl = breakdown.realized + unrealized_pnl
         recent_trend = (
             "positive"

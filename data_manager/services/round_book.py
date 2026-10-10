@@ -495,6 +495,7 @@ class RoundBook:
                     key,
                     {
                         "orphaned": [],
+                        "held": [],
                         "ledger_closed": [],
                         "open_lot_quantity": 0.0,
                         "held_quantity": 0.0,
@@ -523,6 +524,7 @@ class RoundBook:
                 bucket["open_lot_quantity"] += lot.qty
                 if lot.opened_at.timestamp() * 1000 > float(as_of_ms):
                     bucket["held_quantity"] += lot.qty
+                    bucket["held"].append(self._lot_dict(lot, lot.qty, "held"))
                     continue
                 held = min(lot.qty, remaining_exchange)
                 remaining_exchange -= held
@@ -530,6 +532,8 @@ class RoundBook:
                 threshold = thresholds[strategy][0]
                 eligible = (now - lot.opened_at).total_seconds() >= threshold
                 bucket["held_quantity"] += held
+                if held > 0:
+                    bucket["held"].append(self._lot_dict(lot, held, "held"))
                 tolerance = ROUND_ORPHAN_QUANTITY_TOLERANCE * max(
                     1.0, abs(lot.qty), abs(exchange_quantity)
                 )
@@ -545,11 +549,14 @@ class RoundBook:
                         bucket["_orphaned_lot_ids"].add(id(lot))
                 else:
                     bucket["held_quantity"] += excess
+                    if excess > 0:
+                        bucket["held"].append(self._lot_dict(lot, excess, "held"))
             for strategy, lot in entries:
                 result.setdefault(
                     (strategy, symbol, leg),
                     {
                         "orphaned": [],
+                        "held": [],
                         "ledger_closed": [],
                         "open_lot_quantity": 0.0,
                         "held_quantity": 0.0,
