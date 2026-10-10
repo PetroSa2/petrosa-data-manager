@@ -1,5 +1,6 @@
 """Confidence calibration records built from the immutable audit collections."""
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from time import monotonic
@@ -101,8 +102,14 @@ async def get_calibration_records(
     )
     record_report_stage("calibration", "read", monotonic() - read_started)
     decode_started = monotonic()
-    report = build_calibration_records(execution_events, decisions, since=since)
+    execution_events = list(execution_events)
+    decisions = list(decisions)
     record_report_stage("calibration", "decode", monotonic() - decode_started)
+    compute_started = monotonic()
+    report = await asyncio.to_thread(
+        build_calibration_records, execution_events, decisions, since=since
+    )
+    record_report_stage("calibration", "compute", monotonic() - compute_started)
     return report
 
 

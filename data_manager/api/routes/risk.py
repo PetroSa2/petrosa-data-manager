@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -17,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 import constants
 import data_manager.api.app as api_module
 from data_manager.services import risk_inputs as ri
+from data_manager.services.report_precompute import record_report_stage
 from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
 
 logger = logging.getLogger(__name__)
@@ -146,6 +148,7 @@ async def compute_risk_inputs(
     now = datetime.now(UTC)
     daily_start = now - timedelta(days=window_days + 2)
     hourly_start = now - timedelta(days=max(sigma_1h_days, sigma_1h_floor_days) + 1)
+    read_started = monotonic()
 
     async def one(symbol: str):
         daily_candles, hourly_candles = await asyncio.gather(
@@ -155,6 +158,11 @@ async def compute_risk_inputs(
         return symbol, daily_candles, hourly_candles
 
     loaded = await asyncio.gather(*(one(s) for s in pairs), return_exceptions=True)
+    record_report_stage("risk_inputs", "read", monotonic() - read_started)
+    decode_started = monotonic()
+    loaded = list(loaded)
+    record_report_stage("risk_inputs", "decode", monotonic() - decode_started)
+    compute_started = monotonic()
     per_symbol: dict[str, Any] = {}
     returns_by_symbol: dict[str, list] = {}
     for item in loaded:
@@ -217,7 +225,7 @@ async def compute_risk_inputs(
         logger.error("risk inputs: strategy fills not readable: %s", exc, exc_info=True)
         strategies_error = "strategy fills not readable"
 
-    return {
+    report = {
         "as_of": now.isoformat(),
         "params": {
             "window_days": window_days,
@@ -236,6 +244,8 @@ async def compute_risk_inputs(
         "strategies": strategies,
         "strategies_error": strategies_error,
     }
+    record_report_stage("risk_inputs", "compute", monotonic() - compute_started)
+    return report
 
 
 @router.get("/inputs")

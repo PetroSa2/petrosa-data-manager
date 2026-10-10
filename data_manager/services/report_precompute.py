@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import UTC, datetime
 from time import monotonic
@@ -108,6 +107,10 @@ class ReportPrecomputer:
             return await self.get(report, **params)
 
     async def _put(self, report: str, body: dict[str, Any], **params: Any) -> None:
+        from bson import BSON
+
+        from data_manager.db.mongodb_adapter import MongoDBAdapter
+
         computed_at = datetime.now(UTC)
         body = dict(body)
         metadata = body.setdefault("metadata", {})
@@ -120,13 +123,14 @@ class ReportPrecomputer:
         if report == "risk_inputs":
             body["as_of"] = computed_at.isoformat()
         serialize_started = monotonic()
-        json.dumps(body, default=str)
+        prepared_body = MongoDBAdapter._prepare_for_bson(body)
+        BSON.encode(prepared_body)
         record_report_stage(report, "serialize", monotonic() - serialize_started)
         await self.collection.replace_one(
             {"_id": cache_key(report, **params)},
             {
                 "_id": cache_key(report, **params),
-                "body": body,
+                "body": prepared_body,
                 "computed_at": computed_at,
             },
             upsert=True,
@@ -140,13 +144,11 @@ class ReportPrecomputer:
         }.get(report, constants.REPORT_SLIPPAGE_INTERVAL_SECONDS)
 
     async def _refresh(self, report: str, callback: Any, **params: Any) -> None:
-        started = monotonic()
         try:
             body = await callback()
             if not params and report != "calibration":
                 params = {"window_days": 30}
             await self._put(report, body, **params)
-            record_report_stage(report, "compute", monotonic() - started)
         except Exception:
             logger.exception("report refresh failed", extra={"report": report})
 
@@ -161,6 +163,7 @@ class ReportPrecomputer:
         next_slippage = 0.0
         next_risk = 0.0
         next_calibration = 0.0
+        calibration_task: asyncio.Task[None] | None = None
         try:
             while self.running:
                 if (
@@ -187,13 +190,22 @@ class ReportPrecomputer:
                     )
                     next_risk = now + constants.REPORT_RISK_INTERVAL_SECONDS
                 if now >= next_calibration:
-                    await self._refresh(
-                        "calibration",
-                        lambda: compute_calibration_confidence(self.db_manager),
-                    )
+                    if calibration_task is None or calibration_task.done():
+                        calibration_task = asyncio.create_task(
+                            self._refresh(
+                                "calibration",
+                                lambda: compute_calibration_confidence(
+                                    self.db_manager
+                                ),
+                            )
+                        )
                     next_calibration = (
                         now + constants.REPORT_CALIBRATION_INTERVAL_SECONDS
                     )
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             return
+        finally:
+            if calibration_task is not None and not calibration_task.done():
+                calibration_task.cancel()
+                await asyncio.gather(calibration_task, return_exceptions=True)

@@ -7,6 +7,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from time import monotonic
 from typing import Any
 
 try:
@@ -22,6 +23,7 @@ from pydantic import BaseModel
 
 import constants
 import data_manager.api.app as api_module
+from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
 
@@ -489,6 +491,7 @@ async def compute_slippage_by_regime(
     if symbol:
         query["symbol"] = symbol
     mongodb = db_manager.mongodb_adapter
+    read_started = monotonic()
     try:
         fills = (
             await mongodb.db["execution_events"]
@@ -515,18 +518,27 @@ async def compute_slippage_by_regime(
             regime_since = unstamped_oldest[pair] - timedelta(
                 seconds=constants.ANALYTICS_INTERVAL
             )
-            regimes[pair] = (
-                await mongodb.db[f"analytics_{pair}_regime"]
-                .find(
-                    {"metadata.computed_at": {"$gte": regime_since}},
-                    REGIME_DOC_PROJECTION,
-                )
-                .to_list(length=_REGIME_MAX_DOCS)
-            )
+            collection = mongodb.db[f"analytics_{pair}_regime"]
+            anchor = await collection.find(
+                {"timestamp": {"$lt": regime_since}}, REGIME_DOC_PROJECTION
+            ).sort("timestamp", -1).to_list(length=1)
+            bounded = await collection.find(
+                {"timestamp": {"$gte": regime_since}}, REGIME_DOC_PROJECTION
+            ).to_list(length=_REGIME_MAX_DOCS)
+            regimes[pair] = anchor + bounded
+        record_report_stage("slippage_by_regime", "read", monotonic() - read_started)
+        decode_started = monotonic()
+        fills = list(fills)
+        regimes = {pair: list(rows) for pair, rows in regimes.items()}
+        record_report_stage("slippage_by_regime", "decode", monotonic() - decode_started)
     except Exception as exc:
         logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    compute_started = monotonic()
     report = await asyncio.to_thread(build_report, fills, regimes, role=role)
+    record_report_stage(
+        "slippage_by_regime", "compute", monotonic() - compute_started
+    )
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "window_days": window_days,
@@ -622,8 +634,11 @@ async def compute_closed_rounds(
     base_query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
 
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
+        read_started = monotonic()
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
-        return await cursor.to_list(length=_ROUND_MAX_FILLS)
+        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+        record_report_stage("rounds", "read+decode", monotonic() - read_started)
+        return rows
 
     own_query = {**base_query, "strategy_id": strategy_id} if strategy_id else None
     try:
@@ -657,6 +672,7 @@ async def compute_closed_rounds(
                 exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
         else:
             exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+    compute_started = monotonic()
     report = await asyncio.to_thread(
         build_report,
         rows,
@@ -665,6 +681,7 @@ async def compute_closed_rounds(
         closed_entry_orders=closed_entry_orders,
         apply_overlay=mode == "apply",
     )
+    record_report_stage("rounds", "compute", monotonic() - compute_started)
     if mode == "off":
         report["orphan_overlay"] = "off"
     elif overlay_cut or truncated:

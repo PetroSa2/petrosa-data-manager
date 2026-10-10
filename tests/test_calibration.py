@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from bson import BSON
 from fastapi import HTTPException
 
 import data_manager.api.app as api_module
@@ -18,6 +19,7 @@ from data_manager.services.calibration_service import (
     build_calibration_records,
     calibration_freshness,
 )
+from data_manager.services.report_precompute import ReportPrecomputer
 
 
 def _fill(side: str, timestamp: str, decision_id: str) -> dict:
@@ -57,6 +59,36 @@ def test_build_calibration_records_joins_and_preserves_decimal_values() -> None:
     assert record["costs"] == Decimal("0.20")
     assert record["net_pnl"] == Decimal("0.80")
     assert result["skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_calibration_report_is_bson_safe_when_cached() -> None:
+    class Collection:
+        def __init__(self) -> None:
+            self.document = None
+
+        async def replace_one(self, query, document, upsert=False) -> None:
+            self.document = document
+
+    collection = Collection()
+    manager = SimpleNamespace(
+        mongodb_adapter=SimpleNamespace(db={"report_cache": collection})
+    )
+    body = build_calibration_records(
+        [
+            _fill("buy", "2026-10-01T12:00:00Z", "d1"),
+            _fill("sell", "2026-10-01T12:01:00Z", "d1"),
+        ],
+        [{"decision_id": "d1", "action": "execute", "confidence": "0.875"}],
+    )
+
+    await ReportPrecomputer(manager)._put("calibration", body)
+
+    assert collection.document is not None
+    BSON.encode(collection.document["body"])
+    record = collection.document["body"]["records"][0]
+    assert isinstance(record["confidence"], float)
+    assert isinstance(record["net_pnl"], float)
 
 
 def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisions() -> (
