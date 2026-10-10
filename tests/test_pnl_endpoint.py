@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -367,16 +368,75 @@ def test_performance_reports_unmatched_cached_orphan_quantity_and_gauge(monkeypa
     )._value.get() == pytest.approx(1.0)
 
 
-def test_performance_warns_before_off_loop_large_replay(monkeypatch, caplog):
+def test_performance_warns_when_measured_replay_exceeds_budget_fraction(
+    monkeypatch, caplog
+):
     import data_manager.api.routes.analysis as analysis_route
 
-    monkeypatch.setattr(analysis_route, "_REPLAY_WARNING_FILL_COUNT", 0)
+    monkeypatch.setenv("DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S", "1.0")
+    monkeypatch.setattr(analysis_route, "perf_counter", iter([1.0, 1.9]).__next__)
     rows = _orphan_fills()
     body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
     with caplog.at_level("WARNING", logger="data_manager.api.routes.analysis"):
         _performance(monkeypatch, "apply", rows, body)
 
-    assert "replay has 3 fills" in caplog.text
+    assert "replay duration 0.900s" in caplog.text
+    assert "budget_source=configured" in caplog.text
+
+
+def test_performance_warning_uses_labelled_fallback_budget(monkeypatch, caplog):
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.delenv("DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S", raising=False)
+    monkeypatch.setattr(analysis_route, "perf_counter", iter([1.0, 9.1]).__next__)
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    with caplog.at_level("WARNING", logger="data_manager.api.routes.analysis"):
+        _performance(monkeypatch, "apply", rows, body)
+
+    assert "budget_source=default_fallback" in caplog.text
+    assert "10.000s budget_source=default_fallback" in caplog.text
+
+
+def test_performance_replay_duration_histogram_records_measured_value(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.setattr(analysis_route, "perf_counter", iter([2.0, 2.25]).__next__)
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    before = analysis_route.ROUND_BOOK_REPLAY_DURATION._sum.get()
+    _performance(monkeypatch, "apply", rows, body)
+
+    assert (
+        analysis_route.ROUND_BOOK_REPLAY_DURATION._sum.get() - before
+        == pytest.approx(0.25)
+    )
+
+
+def test_performance_unknown_overlay_sets_nan_gauge(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = _orphan_fills()
+    body = _rounds_cache_body(monkeypatch, rows, [_btc("LONG", "1")])
+    _performance(monkeypatch, "off", rows, body)
+
+    assert math.isnan(
+        analysis_route.ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY.labels(
+            strategy_id="S1"
+        )._value.get()
+    )
+
+
+def test_performance_unavailable_overlay_sets_nan_gauge(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    _performance(monkeypatch, "apply", _orphan_fills(), None)
+
+    assert math.isnan(
+        analysis_route.ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY.labels(
+            strategy_id="S1"
+        )._value.get()
+    )
 
 
 def test_performance_report_mode_adds_the_fields_and_changes_nothing_else(monkeypatch):
