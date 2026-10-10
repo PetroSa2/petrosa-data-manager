@@ -110,8 +110,10 @@ async def get_calibration_records(
         logger.warning("calibration execution_events read reached cap: %d", MAX_ROWS)
     if len(decisions) >= MAX_ROWS:
         logger.warning("calibration cio_decisions read reached cap: %d", MAX_ROWS)
-    execution_events = list(execution_events)
-    decisions = list(decisions)
+    # Read newest first so the cap keeps the newest rows, then back to oldest first: fills with an equal
+    # ``fill_time`` (a close and a reopen in the same ms) must reach the round book in ingestion order.
+    execution_events = list(reversed(execution_events))
+    decisions = list(reversed(decisions))
     record_report_stage(
         "calibration", "read+decode", monotonic() - read_started, source=source
     )

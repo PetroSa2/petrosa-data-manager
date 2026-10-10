@@ -118,8 +118,6 @@ class ReportPrecomputer:
         source: str = "on_demand",
         **params: Any,
     ) -> None:
-        from bson import BSON
-
         from data_manager.db.mongodb_adapter import MongoDBAdapter
 
         computed_at = datetime.now(UTC)
@@ -135,7 +133,6 @@ class ReportPrecomputer:
             body["as_of"] = computed_at.isoformat()
         serialize_started = monotonic()
         prepared_body = MongoDBAdapter._prepare_for_bson(body)
-        BSON.encode(prepared_body)
         record_report_stage(
             report, "serialize", monotonic() - serialize_started, source=source
         )
