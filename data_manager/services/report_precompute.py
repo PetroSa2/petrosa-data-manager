@@ -217,7 +217,9 @@ class ReportPrecomputer:
                             self._refresh(
                                 "calibration",
                                 lambda: compute_calibration_confidence(
-                                    self.db_manager, source="refresh"
+                                    self.db_manager,
+                                    source="refresh",
+                                    strict_history=True,
                                 ),
                             )
                         )

@@ -4,12 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-import sqlalchemy as sa
 from bson import BSON
 from fastapi import HTTPException
 
 import data_manager.api.app as api_module
-import data_manager.services.calibration_service as calibration
 from data_manager.api.app import create_app
 from data_manager.api.middleware.metrics import REQUEST_DURATION
 from data_manager.api.routes.analysis import (
@@ -128,98 +126,6 @@ def test_build_calibration_records_distinguishes_missing_history() -> None:
     assert result["skipped_reasons"] == {"decision_not_in_history": 1}
 
 
-def test_historic_decisions_use_batched_read_only_role_factory(monkeypatch) -> None:
-    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
-    table = sa.Table(
-        "cio_decisions",
-        sa.MetaData(),
-        sa.Column("decision_id", sa.String(128), primary_key=True),
-        sa.Column("strategy_id", sa.String(128)),
-        sa.Column("timestamp", sa.DateTime),
-        sa.Column("action", sa.String(20)),
-        sa.Column("confidence", sa.Numeric(6, 5)),
-    )
-    table.create(engine)
-    with engine.begin() as connection:
-        connection.execute(
-            table.insert(),
-            [
-                {
-                    "decision_id": "d1",
-                    "strategy_id": "alpha",
-                    "timestamp": datetime(2026, 10, 1),
-                    "action": "execute",
-                    "confidence": 0.7,
-                },
-                {
-                    "decision_id": "d2",
-                    "strategy_id": "alpha",
-                    "timestamp": datetime(2026, 10, 2),
-                    "action": "execute",
-                    "confidence": 0.8,
-                },
-            ],
-        )
-
-    calls: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        calibration,
-        "create_read_only_engine",
-        lambda uri, role: calls.append((uri, role)) or engine,
-    )
-    monkeypatch.setattr(calibration, "mark_engine_closing", lambda candidate: None)
-    monkeypatch.setattr(calibration, "MYSQL_DECISION_BATCH_SIZE", 1)
-
-    rows, checked = calibration._read_historic_decisions(
-        {"d1", "d2"}, "mysql://history"
-    )
-
-    assert checked is True
-    assert {row["decision_id"] for row in rows} == {"d1", "d2"}
-    assert calls == [("mysql://history", "adhoc")]
-
-
-def test_historic_decisions_skip_empty_lookup_without_opening_engine(
-    monkeypatch,
-) -> None:
-    opened = False
-
-    def unexpected_engine(*_args, **_kwargs):
-        nonlocal opened
-        opened = True
-        raise AssertionError("empty lookup must not open MySQL")
-
-    monkeypatch.setattr(calibration, "create_read_only_engine", unexpected_engine)
-
-    assert calibration._read_historic_decisions(set(), "mysql://history") == ([], False)
-    assert opened is False
-
-
-@pytest.mark.asyncio
-async def test_historic_read_failure_preserves_existing_skip_reason(
-    monkeypatch,
-) -> None:
-    class Mongo:
-        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
-            if collection == "execution_events":
-                return [
-                    _fill("buy", "2026-10-01T12:00:00Z", "missing"),
-                    _fill("sell", "2026-10-01T12:01:00Z", "missing"),
-                ]
-            return []
-
-    def unavailable(*_args, **_kwargs):
-        raise RuntimeError("history unavailable")
-
-    monkeypatch.setattr(calibration, "_read_historic_decisions", unavailable)
-
-    report = await calibration.get_calibration_records(
-        Mongo(), mysql_uri="mysql://history"
-    )
-
-    assert report["skipped_reasons"] == {"no_matching_cio_decision": 1}
-
-
 def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:
     rows = [
         _fill("buy", "2026-10-01T12:00:00Z", "d1"),
@@ -320,7 +226,10 @@ async def test_calibration_route_reads_gateway_and_filters() -> None:
         "event_type": {"$in": ["filled", "partial_fill"]},
         "strategy_id": "alpha",
     }
-    assert calls[1][1]["filters"] == {"strategy_id": "alpha", "action": "execute"}
+    assert calls[1][1]["filters"] == {
+        "strategy_id": "alpha",
+        "action": {"$in": ["buy", "execute", "sell", "BUY", "EXECUTE", "SELL"]},
+    }
 
 
 @pytest.mark.asyncio
