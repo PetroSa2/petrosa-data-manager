@@ -230,6 +230,133 @@ async def get_volatility(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _unavailable_exposure(status: str) -> dict[str, Any]:
+    return {"status": status, "entries": None}
+
+
+async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
+    """The orphaned lots of a strategy per the round-book overlay (#577), from the precomputed rounds report.
+
+    The cache only says WHICH lots are orphaned (symbol, leg, order id, time, quantity); the amounts are
+    valued from the live replay of the route's own fills (``_leg_aware_pnl``), so cache lag cannot double count
+    a lot sold since or miss one opened since. CACHE READ ONLY: it never computes the report (a cold compute
+    reads every fill and would run inline on the CIO's decision path): a miss is ``warming``, no precompute is
+    ``unavailable``. A cached report older than the exchange snapshot allows, or of unknown age, is
+    ``disabled_stale``: the overlay was decided when the report was computed, and
+    ``ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS`` bounds the age of the snapshot plus the age of the cache. In every
+    such case (and for a malformed body) nothing is excluded.
+    """
+    from data_manager.services.round_book import ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS
+
+    precomputer = getattr(api_module, "report_precomputer", None)
+    if precomputer is None:
+        return _unavailable_exposure("unavailable")
+    try:
+        report = await precomputer.get("rounds", window_days=30)
+    except Exception as exc:
+        logger.warning("performance: rounds cache unreadable: %s", exc)
+        return _unavailable_exposure("unavailable")
+    if report is None:
+        return _unavailable_exposure("warming")
+    try:
+        status = report.get("orphan_overlay")
+        if status != "enabled":
+            return _unavailable_exposure(str(status or "unavailable"))
+        metadata = report.get("metadata") or {}
+        if metadata.get("stale") is not False:  # stale, or unknown
+            return _unavailable_exposure("disabled_stale")
+        cache_age = float(metadata["age_seconds"])
+        snapshot_age = float(report["exchange_snapshot_age_seconds"])
+        if cache_age + snapshot_age > ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS:
+            return _unavailable_exposure("disabled_stale")
+        strategies = report.get("strategies") or {}
+        if strategies.get(strategy_id) is None:
+            # the report predates this strategy's first fill: nothing is known about its lots
+            return _unavailable_exposure("unavailable")
+        entries = [
+            (
+                str(symbol),
+                str(leg),
+                str(lot["opened_at"]),
+                lot["order_id"],
+                float(lot["quantity"]),
+            )
+            for symbol, by_leg in (strategies[strategy_id].get("legs") or {}).items()
+            for leg, data in by_leg.items()
+            for lot in data["orphaned"]
+        ]
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning("performance: rounds report not usable: %s", exc)
+        return _unavailable_exposure("unavailable")
+    return {"status": "enabled", "entries": entries}
+
+
+def _leg_aware_pnl(
+    rows: list[dict[str, Any]],
+    orphaned: list[tuple[str, str, str, Any, float]],
+    strategy_id: str,
+) -> dict[str, Any] | None:
+    """Realized and unrealized P&L of one strategy from ONE leg-aware replay of its own fills (#581).
+
+    The replay is the round book's: hedge legs stay apart, so realized and unrealized describe the same lots at
+    the same time (``PnlCalculator`` nets BUY against SELL on a symbol whatever the position side). The cached
+    orphan list is matched to the still-open lots by identity (symbol, leg, order id, opened at); a lot closed
+    since the cache was computed is simply not open here, and a lot opened since is held by default. Returns
+    ``None`` when an open lot has no mark price (nothing is guessed).
+    """
+    from data_manager.services.round_book import (
+        FILL_EVENT_TYPES,
+        ROUND_ORPHAN_QUANTITY_TOLERANCE,
+        RoundBook,
+        _number,
+        _when,
+    )
+
+    book = RoundBook()
+    marks: dict[str, float] = {}
+    fills = [row for row in rows if row.get("event_type") in FILL_EVENT_TYPES]
+    for row in sorted(
+        fills, key=lambda r: _when(r) or datetime.min.replace(tzinfo=UTC)
+    ):
+        book.apply(row)
+        symbol = row.get("symbol")
+        price = _number(row.get("fill_price") or row.get("price"))
+        quantity = _number(
+            row.get("fill_qty") or row.get("fill_quantity") or row.get("qty")
+        )
+        if symbol and price and price > 0 and quantity and quantity > 0:
+            marks[str(symbol)] = (
+                price  # the latest fill price, in the price the lots are valued at
+            )
+    excluded: dict[tuple[str, str, Any, str], float] = {}
+    for symbol, leg, opened_at, order_id, quantity in orphaned:
+        key = (symbol, leg, order_id, opened_at)
+        excluded[key] = excluded.get(key, 0.0) + quantity
+    held_pnl = 0.0
+    orphaned_pnl = 0.0
+    orphaned_lots = 0
+    for symbol, leg, lot in book.open_lots(strategy_id):
+        mark = marks.get(symbol)
+        if mark is None:
+            return None
+        key = (symbol, leg, lot.order_id, lot.opened_at.isoformat())
+        taken = min(lot.qty, excluded.get(key, 0.0))
+        if key in excluded:
+            excluded[key] -= taken
+        sign = 1.0 if leg == "LONG" else -1.0
+        per_unit = sign * (mark - lot.price)
+        held_pnl += per_unit * (lot.qty - taken)
+        orphaned_pnl += per_unit * taken
+        if taken > ROUND_ORPHAN_QUANTITY_TOLERANCE * max(1.0, lot.qty):
+            orphaned_lots += 1
+    return {
+        "realized": book.realized_total(strategy_id),
+        "held_unrealized": held_pnl,
+        "orphaned_unrealized": orphaned_pnl,
+        "orphaned_lots": orphaned_lots,
+    }
+
+
 def win_rate_delta_with_noise_floor(
     outcomes: list[bool],
 ) -> tuple[float | None, int | None, float | None]:
@@ -368,11 +495,29 @@ async def get_strategy_performance(strategy_id: str):
                 consecutive_losses += 1
 
         breakdown = calc.strategy_pnl(strategy_id)
+        # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
+        # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
+        # orphaned lots left out of unrealized, so the trend total describes one book at one time.
+        orphan_mode = _round_overlay_mode()
+        exposure = None
+        leg_pnl = None
+        if orphan_mode != "off":
+            exposure = await _orphaned_lots_from_the_cache(strategy_id)
+            if exposure["entries"] is not None:
+                leg_pnl = _leg_aware_pnl(rows, exposure["entries"], strategy_id)
+                if leg_pnl is None:
+                    exposure = _unavailable_exposure("unavailable")
+        realized_pnl = breakdown.realized
+        unrealized_pnl = breakdown.unrealized
+        if orphan_mode == "apply" and leg_pnl is not None:
+            realized_pnl = leg_pnl["realized"]
+            unrealized_pnl = leg_pnl["held_unrealized"]
+        total_pnl = realized_pnl + unrealized_pnl
         recent_trend = (
             "positive"
-            if breakdown.total > 0
+            if total_pnl > 0
             else "negative"
-            if breakdown.total < 0
+            if total_pnl < 0
             # "neutral" (not "flat") — matches petrosa-cio's PnlTrend enum vocabulary
             # (positive|negative|neutral). See PetroSa2/petrosa-data-manager#306.
             else "neutral"
@@ -390,8 +535,18 @@ async def get_strategy_performance(strategy_id: str):
                 "losses": losses,
                 "consecutive_losses": consecutive_losses,
                 "recent_pnl_trend": recent_trend,
-                "realized_pnl": breakdown.realized,
-                "unrealized_pnl": breakdown.unrealized,
+                "realized_pnl": realized_pnl,
+                "unrealized_pnl": unrealized_pnl,
+                **(
+                    {
+                        "orphaned_unrealized_pnl": (
+                            leg_pnl["orphaned_unrealized"] if leg_pnl else None
+                        ),
+                        "orphaned_lots": leg_pnl["orphaned_lots"] if leg_pnl else None,
+                    }
+                    if exposure is not None
+                    else {}
+                ),
             },
             "metadata": {
                 "strategy_id": strategy_id,
@@ -399,6 +554,20 @@ async def get_strategy_performance(strategy_id: str):
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
                 "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
+                **(
+                    {
+                        "orphan_overlay": exposure["status"],
+                        "orphan_marking": orphan_mode,
+                        # which book the realized/unrealized/trend figures come from
+                        "pnl_source": (
+                            "round-book-legs"
+                            if orphan_mode == "apply" and leg_pnl is not None
+                            else "pnl-calculator"
+                        ),
+                    }
+                    if exposure is not None
+                    else {}
+                ),
             },
         }
     except Exception as e:

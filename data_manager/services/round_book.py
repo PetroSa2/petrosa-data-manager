@@ -574,6 +574,29 @@ class RoundBook:
             "as_of_ms": as_of_ms,
         }
 
+    def realized_total(self, strategy_id: str) -> float:
+        """Realized P&L of one strategy: its closed rounds plus the exits already booked in its open rounds."""
+        closed = sum(r.realized for r in self.closed if r.strategy_id == strategy_id)
+        open_cycles = sum(
+            book.cycle.realized
+            for (owner, _symbol, _leg), book in self._books.items()
+            if owner == strategy_id and book.cycle is not None
+        )
+        return closed + open_cycles
+
+    def open_lots(self, strategy_id: str) -> list[tuple[str, str, _Lot]]:
+        """``(symbol, leg, lot)`` of every open lot of one strategy, ``leg`` being the side the lot was opened on.
+
+        Hedge legs stay apart; a netted book's lots are LONG or SHORT by their own side. Read-only.
+        """
+        out: list[tuple[str, str, _Lot]] = []
+        for (owner, symbol, _leg), book in self._books.items():
+            if owner != strategy_id:
+                continue
+            out.extend((symbol, "LONG", lot) for lot in book.long)
+            out.extend((symbol, "SHORT", lot) for lot in book.short)
+        return out
+
     @staticmethod
     def _lot_dict(lot: _Lot, quantity: float, reason: str) -> dict[str, Any]:
         return {

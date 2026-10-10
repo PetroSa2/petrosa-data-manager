@@ -823,3 +823,18 @@ def test_a_projection_without_the_top_level_regime_stamp_would_change_the_report
     assert build_slippage_report(projected, regimes) != build_slippage_report(
         fills, regimes
     )
+
+
+@pytest.mark.asyncio
+async def test_a_cached_row_without_a_datetime_age_is_stale_not_fresh():
+    """A row whose computed_at is not a datetime must not keep the age 0 / not stale it was stored with."""
+    collection = FakeCollection()
+    collection.rows["rounds:window_days=30"] = {
+        "body": {"metadata": {"age_seconds": 0.0, "stale": False}},
+        "computed_at": "2026-10-10T00:00:00+00:00",
+    }
+    served = await ReportPrecomputer(
+        SimpleNamespace(mongodb_adapter=FakeMongo(collection))
+    ).get("rounds", window_days=30)
+    assert served["metadata"]["stale"] is True
+    assert served["metadata"]["age_seconds"] is None

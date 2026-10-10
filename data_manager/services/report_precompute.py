@@ -88,6 +88,11 @@ class ReportPrecomputer:
             metadata["computed_at"] = computed_at.isoformat()
             metadata["age_seconds"] = age
             metadata["stale"] = age > self._interval(report) * 3
+        else:
+            # An unknown age must not read as fresh: the body still says age 0 / not stale from when it was put.
+            metadata = body.setdefault("metadata", {})
+            metadata["age_seconds"] = None
+            metadata["stale"] = True
         return body
 
     async def get_or_compute(
