@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from time import monotonic
@@ -44,6 +45,7 @@ def build_calibration_records(
     }
     records: list[dict[str, Any]] = []
     skipped = 0
+    skipped_reasons: Counter[str] = Counter()
     for closed in book.closed:
         if since is not None:
             close_time = closed.closed_at
@@ -51,20 +53,40 @@ def build_calibration_records(
                 continue
         decision = None
         confidence = None
+        matched_decisions = 0
+        execute_decisions = 0
+        missing_confidence = False
+        invalid_confidence = False
         for decision_id in closed.decision_ids:
             candidate = decisions_by_id.get(decision_id)
-            if not candidate or str(candidate.get("action", "")).lower() != "execute":
+            if not candidate:
                 continue
+            matched_decisions += 1
+            if str(candidate.get("action", "")).lower() != "execute":
+                continue
+            execute_decisions += 1
             candidate_confidence = _decimal(candidate.get("confidence"))
-            if (
-                candidate_confidence is not None
-                and ZERO <= candidate_confidence <= Decimal("1")
-            ):
-                decision = candidate
-                confidence = candidate_confidence
-                break
+            if candidate_confidence is None:
+                missing_confidence = True
+                continue
+            if not ZERO <= candidate_confidence <= Decimal("1"):
+                invalid_confidence = True
+                continue
+            decision = candidate
+            confidence = candidate_confidence
+            break
         if confidence is None or not ZERO <= confidence <= Decimal("1"):
             skipped += 1
+            if not closed.decision_ids:
+                skipped_reasons["no_decision_id_on_fill"] += 1
+            elif matched_decisions == 0:
+                skipped_reasons["no_matching_cio_decision"] += 1
+            elif execute_decisions == 0:
+                skipped_reasons["non_execute_decision"] += 1
+            elif invalid_confidence and not missing_confidence:
+                skipped_reasons["invalid_confidence"] += 1
+            else:
+                skipped_reasons["missing_confidence"] += 1
             continue
         gross = closed.realized_dec
         costs = closed.fees
@@ -81,7 +103,11 @@ def build_calibration_records(
                 "closed_at": closed.closed_at.isoformat(),
             }
         )
-    return {"records": records, "skipped": skipped}
+    return {
+        "records": records,
+        "skipped": skipped,
+        "skipped_reasons": dict(sorted(skipped_reasons.items())),
+    }
 
 
 async def get_calibration_records(

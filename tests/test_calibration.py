@@ -105,7 +105,14 @@ def test_build_calibration_records_skips_missing_invalid_and_non_execute_decisio
         [{"decision_id": "d2", "action": "pause", "confidence": "0.9"}],
     )
 
-    assert result == {"records": [], "skipped": 2}
+    assert result == {
+        "records": [],
+        "skipped": 2,
+        "skipped_reasons": {
+            "no_matching_cio_decision": 1,
+            "non_execute_decision": 1,
+        },
+    }
 
 
 def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:
@@ -124,6 +131,32 @@ def test_build_calibration_records_uses_later_valid_executed_confidence() -> Non
     assert result["records"][0]["confidence"] == Decimal("0.7")
 
 
+def test_build_calibration_records_classifies_missing_and_invalid_confidence() -> None:
+    rows = [
+        _fill("buy", "2026-10-01T12:00:00Z", None),
+        _fill("sell", "2026-10-01T12:01:00Z", None),
+        _fill("buy", "2026-10-01T13:00:00Z", "invalid"),
+        _fill("sell", "2026-10-01T13:01:00Z", "invalid"),
+        _fill("buy", "2026-10-01T14:00:00Z", "missing"),
+        _fill("sell", "2026-10-01T14:01:00Z", "missing"),
+    ]
+
+    result = build_calibration_records(
+        rows,
+        [
+            {"decision_id": "invalid", "action": "execute", "confidence": 2},
+            {"decision_id": "missing", "action": "execute", "confidence": None},
+        ],
+    )
+
+    assert result["skipped"] == 3
+    assert result["skipped_reasons"] == {
+        "invalid_confidence": 1,
+        "missing_confidence": 1,
+        "no_decision_id_on_fill": 1,
+    }
+
+
 def test_build_calibration_records_applies_since() -> None:
     rows = [
         _fill("buy", "2026-10-01T12:00:00Z", "d1"),
@@ -135,7 +168,7 @@ def test_build_calibration_records_applies_since() -> None:
         since=datetime(2026, 10, 2, tzinfo=UTC),
     )
 
-    assert result == {"records": [], "skipped": 0}
+    assert result == {"records": [], "skipped": 0, "skipped_reasons": {}}
 
 
 def test_calibration_route_is_mirrored_under_both_analysis_prefixes() -> None:
@@ -177,7 +210,7 @@ async def test_calibration_route_reads_gateway_and_filters() -> None:
     finally:
         api_module.db_manager = None
 
-    assert result == {"records": [], "skipped": 0}
+    assert result == {"records": [], "skipped": 0, "skipped_reasons": {}}
     assert calls[0][1]["filters"] == {
         "event_type": {"$in": ["filled", "partial_fill"]},
         "strategy_id": "alpha",
@@ -196,7 +229,9 @@ async def test_calibration_route_requires_database() -> None:
 @pytest.mark.asyncio
 async def test_default_calibration_route_serves_cached_report() -> None:
     precomputer = SimpleNamespace(
-        get_or_compute=AsyncMock(return_value={"records": [], "skipped": 0})
+        get_or_compute=AsyncMock(
+            return_value={"records": [], "skipped": 0, "skipped_reasons": {}}
+        )
     )
     api_module.db_manager = SimpleNamespace(mongodb_adapter=object())
     api_module.report_precomputer = precomputer
@@ -206,7 +241,7 @@ async def test_default_calibration_route_serves_cached_report() -> None:
         api_module.db_manager = None
         api_module.report_precomputer = None
 
-    assert result == {"records": [], "skipped": 0}
+    assert result == {"records": [], "skipped": 0, "skipped_reasons": {}}
     precomputer.get_or_compute.assert_awaited_once()
     assert precomputer.get_or_compute.await_args.args[0] == "calibration"
 
