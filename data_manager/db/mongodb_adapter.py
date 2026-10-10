@@ -471,6 +471,7 @@ class MongoDBAdapter(BaseAdapter):
         limit: int = 100,
         sort_field: str = "timestamp",
         sort_order: int = -1,
+        secondary_sort_field: str | None = None,
     ) -> list[dict[str, Any]]:
         """Query a collection with a composable equality + time-window filter.
 
@@ -492,6 +493,8 @@ class MongoDBAdapter(BaseAdapter):
             limit: hard cap on returned documents (caller enforces sanity).
             sort_field: field to sort + window on (defaults to ``timestamp``).
             sort_order: 1 (ASC) or -1 (DESC, default — newest first).
+            secondary_sort_field: optional field used as a deterministic tie-breaker
+                with the same direction as ``sort_field``.
         """
         if not self._connected:
             raise DatabaseError("Not connected to database")
@@ -514,7 +517,14 @@ class MongoDBAdapter(BaseAdapter):
                 if window:
                     query[sort_field] = window
 
-            cursor = coll.find(query).sort(sort_field, sort_order).limit(limit)
+            if secondary_sort_field:
+                sort_spec = [
+                    (sort_field, sort_order),
+                    (secondary_sort_field, sort_order),
+                ]
+                cursor = coll.find(query).sort(sort_spec).limit(limit)
+            else:
+                cursor = coll.find(query).sort(sort_field, sort_order).limit(limit)
             documents = await cursor.to_list(length=limit)
 
             for doc in documents:

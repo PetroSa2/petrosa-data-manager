@@ -124,13 +124,18 @@ async def get_calibration_records(
     }
     read_started = monotonic()
     execution_events = await mongodb.find_filtered(
-        "execution_events", filters=filters, limit=MAX_ROWS, sort_order=-1
+        "execution_events",
+        filters=filters,
+        limit=MAX_ROWS,
+        sort_order=-1,
+        secondary_sort_field="_id",
     )
     decisions = await mongodb.find_filtered(
         "cio_decisions",
         filters={"strategy_id": strategy_id, "action": "execute"},
         limit=MAX_ROWS,
         sort_order=-1,
+        secondary_sort_field="_id",
     )
     if len(execution_events) >= MAX_ROWS:
         logger.warning("calibration execution_events read reached cap: %d", MAX_ROWS)

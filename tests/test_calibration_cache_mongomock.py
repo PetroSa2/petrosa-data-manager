@@ -368,6 +368,38 @@ async def test_fills_with_an_equal_fill_time_keep_their_ingestion_order():
     assert _key(report) == _key(before)
 
 
+@pytest.mark.asyncio
+async def test_equal_timestamps_keep_identity_order_and_newest_decision_wins():
+    adapter = _adapter()
+    t = datetime(2026, 10, 1, tzinfo=UTC)
+    events = [
+        _fill("s1", "d1", "buy", "100", t, ts=t, fill_qty="1", fee="0"),
+        _fill("s1", "d1", "sell", "110", t, ts=t, fill_qty="1", fee="0"),
+    ]
+    await adapter.db["execution_events"].insert_many(events)
+    await adapter.db["cio_decisions"].insert_many(
+        [
+            _decision("s1", "d1", t, confidence=0.1),
+            _decision("s1", "d1", t, confidence=0.9),
+        ]
+    )
+
+    newest_first = await adapter.find_filtered(
+        "execution_events",
+        filters={"strategy_id": "s1"},
+        limit=10,
+        sort_order=-1,
+        secondary_sort_field="_id",
+    )
+    assert [row["side"] for row in newest_first] == ["sell", "buy"]
+    assert [row["side"] for row in reversed(newest_first)] == ["buy", "sell"]
+
+    report = await calibration.get_calibration_records(adapter)
+
+    assert report["records"][0]["decision_id"] == "d1"
+    assert float(report["records"][0]["confidence"]) == pytest.approx(0.9)
+
+
 def test_the_builder_sorts_equal_fill_times_stably_in_the_order_it_is_given():
     """The service hands the builder oldest-first rows; the builder must keep that order on ties."""
     t = datetime(2026, 10, 1, tzinfo=UTC)
