@@ -723,6 +723,20 @@ def test_fills_without_a_position_side_are_netted_and_counted():
     assert report["accounted"] is True
 
 
+def test_netted_flip_tags_the_flipping_fill_on_the_new_round():
+    book = RoundBook()
+    book.apply(_fill("s1", "buy", 1.0, 100.0, 0, decision_id="E"))
+    book.apply(_fill("s1", "sell", 2.0, 101.0, 1, decision_id="X"))
+
+    assert book.closed[0].decision_ids == ("E", "X")
+    cycle = book._books[("s1", "ETHUSDT", "NET")].cycle
+    assert cycle is not None
+    assert cycle.decision_ids == ["X"]
+
+    book.apply(_fill("s1", "buy", 1.0, 100.0, 2, decision_id="Z"))
+    assert cycle.decision_ids == ["X", "Z"]
+
+
 def test_hedge_and_netted_fills_stay_fully_accounted_under_random_input():
     rng = random.Random(7)
     rows = []

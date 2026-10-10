@@ -244,6 +244,7 @@ async def calibration_health():
         "latest_at": report["latest_at"],
         "max_age_minutes": report["max_age_minutes"],
         "age_minutes": report["age_minutes"],
+        "history_unavailable": report.get("history_unavailable", False),
     }
 
 

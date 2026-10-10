@@ -263,9 +263,10 @@ async def test_the_id_cap_warns_and_keeps_the_newest_rounds(monkeypatch, caplog)
     queries = _record_queries(engine)
     await _seed(
         mongo,
-        [row for i, d in enumerate(ids) for row in _fills(d, T0 + timedelta(hours=i))],
+        [row for i, d in enumerate(ids) for row in _fills(d, T0 + timedelta(hours=i))]
+        + _fills("d-missing", T0 + timedelta(hours=4)),
     )
-    monkeypatch.setattr(calibration, "MAX_HISTORIC_DECISION_IDS", 2)
+    monkeypatch.setattr(calibration, "MAX_HISTORIC_DECISION_IDS", 3)
     caplog.set_level(
         logging.WARNING, logger="data_manager.services.calibration_service"
     )
@@ -273,14 +274,18 @@ async def test_the_id_cap_warns_and_keeps_the_newest_rounds(monkeypatch, caplog)
         mongo, mysql_adapter=SimpleNamespace(engine=engine)
     )
     assert any(
-        "decision lookup reached cap: 2" in r.getMessage() for r in caplog.records
+        "decision lookup reached cap: 3" in r.getMessage() for r in caplog.records
     )
     assert sorted(i for q in queries for i in q) == [
+        "d-missing",
         "d2",
         "d3",
-    ]  # the two newest rounds
+    ]  # the three newest rounds, including one absent from history
     assert sorted(r["decision_id"] for r in report["records"]) == ["d2", "d3"]
-    assert report["skipped_reasons"] == {"history_lookup_capped": 2}
+    assert report["skipped_reasons"] == {
+        "decision_not_in_history": 1,
+        "history_lookup_capped": 2,
+    }
 
 
 class _BrokenEngine:
