@@ -8,7 +8,7 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from time import monotonic
+from time import monotonic, perf_counter
 from typing import Any
 
 try:
@@ -19,7 +19,7 @@ except ImportError:
     UTC = timezone.utc  # noqa: UP017
 
 from fastapi import APIRouter, HTTPException, Query
-from prometheus_client import Gauge
+from prometheus_client import Gauge, Histogram
 from pydantic import BaseModel
 
 import constants
@@ -43,10 +43,40 @@ ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY = Gauge(
     "Cached orphan quantity without a matching live lot",
     ["strategy_id"],
 )
+ROUND_BOOK_REPLAY_DURATION = Histogram(
+    "data_manager_round_book_replay_duration_seconds",
+    "Duration of the leg-aware round-book replay",
+)
 
-_REPLAY_SECONDS_PER_FILL = 0.004
-_CIO_TIMEOUT_SECONDS = 10.0
-_REPLAY_WARNING_FILL_COUNT = int(_CIO_TIMEOUT_SECONDS / _REPLAY_SECONDS_PER_FILL)
+_REPLAY_BUDGET_ENV = "DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S"
+_REPLAY_BUDGET_FRACTION = 0.8
+_REPLAY_BUDGET_FALLBACK_SECONDS = 10.0
+
+
+def _replay_budget_seconds() -> tuple[float, str]:
+    """Return the CIO-matching request budget and how it was resolved."""
+    configured = os.getenv(_REPLAY_BUDGET_ENV)
+    if configured is None:
+        return _REPLAY_BUDGET_FALLBACK_SECONDS, "default_fallback"
+    try:
+        value = float(configured)
+    except ValueError:
+        logger.warning(
+            "performance: invalid %s=%r; using %.1fs budget_source=invalid_fallback",
+            _REPLAY_BUDGET_ENV,
+            configured,
+            _REPLAY_BUDGET_FALLBACK_SECONDS,
+        )
+        return _REPLAY_BUDGET_FALLBACK_SECONDS, "invalid_fallback"
+    if value <= 0:
+        logger.warning(
+            "performance: %s must be positive; using %.1fs budget_source=invalid_fallback",
+            _REPLAY_BUDGET_ENV,
+            _REPLAY_BUDGET_FALLBACK_SECONDS,
+        )
+        return _REPLAY_BUDGET_FALLBACK_SECONDS, "invalid_fallback"
+    return value, "configured"
+
 
 #: Fields ``slippage_report.build_report`` reads from an ``execution_events`` fill: the event type, symbol and
 #: times, and the telemetry (``role``, ``reduce_only``, ``slippage_bp``, ``intended_price``, ``regime_at_fill``)
@@ -562,20 +592,29 @@ async def get_strategy_performance(strategy_id: str):
         if orphan_mode != "off":
             exposure = await _orphaned_lots_from_the_cache(strategy_id)
             if exposure["entries"] is not None:
-                if len(rows) > _REPLAY_WARNING_FILL_COUNT:
-                    logger.warning(
-                        "performance: replay has %s fills; warning threshold is %s",
-                        len(rows),
-                        _REPLAY_WARNING_FILL_COUNT,
+                budget_seconds, budget_source = _replay_budget_seconds()
+                replay_started = perf_counter()
+                try:
+                    leg_pnl = await asyncio.to_thread(
+                        _leg_aware_pnl, rows, exposure["entries"], strategy_id
                     )
-                leg_pnl = await asyncio.to_thread(
-                    _leg_aware_pnl, rows, exposure["entries"], strategy_id
-                )
+                finally:
+                    replay_duration = perf_counter() - replay_started
+                    ROUND_BOOK_REPLAY_DURATION.observe(replay_duration)
+                    if replay_duration > budget_seconds * _REPLAY_BUDGET_FRACTION:
+                        logger.warning(
+                            "performance: replay duration %.3fs exceeds %.0f%% of "
+                            "%.3fs budget_source=%s",
+                            replay_duration,
+                            _REPLAY_BUDGET_FRACTION * 100,
+                            budget_seconds,
+                            budget_source,
+                        )
                 if leg_pnl is None:
                     exposure = _unavailable_exposure("unavailable")
         ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY.labels(
             strategy_id=strategy_id
-        ).set(leg_pnl["unmatched_quantity"] if leg_pnl else 0)
+        ).set(leg_pnl["unmatched_quantity"] if leg_pnl is not None else float("nan"))
         realized_pnl = breakdown.realized
         unrealized_pnl = breakdown.unrealized
         if orphan_mode == "apply" and leg_pnl is not None:

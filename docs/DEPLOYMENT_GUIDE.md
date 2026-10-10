@@ -286,6 +286,12 @@ MAX_BATCH_SIZE: "1000"
 MAX_CONCURRENT_TASKS: "10"
 MESSAGE_QUEUE_SIZE: "10000"
 
+# CIO request budget
+# Keep this equal to CIO_CONTEXT_FETCH_TIMEOUT_S in the CIO deployment.
+# The data-manager replay warning uses 80% of this budget; 10 seconds is the
+# labelled fallback when DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S is absent or invalid.
+DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S: "10.0"
+
 # Trading Pairs
 SUPPORTED_PAIRS: "BTCUSDT,ETHUSDT,BNBUSDT,ADAUSDT,SOLUSDT"
 ```
