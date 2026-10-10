@@ -510,7 +510,9 @@ async def test_leader_refreshes_calibration_under_the_default_cache_key(monkeypa
     cache = FakeCollection()
     manager = SimpleNamespace(mongodb_adapter=Adapter(cache))
     monkeypatch.setattr(api_module, "db_manager", manager)
-    monkeypatch.setattr(analysis, "compute_slippage_by_regime", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        analysis, "compute_slippage_by_regime", AsyncMock(return_value={})
+    )
     monkeypatch.setattr(analysis, "compute_closed_rounds", AsyncMock(return_value={}))
     monkeypatch.setattr(
         "data_manager.api.routes.risk.compute_risk_inputs",

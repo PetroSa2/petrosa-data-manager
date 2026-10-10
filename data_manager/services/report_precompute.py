@@ -194,9 +194,7 @@ class ReportPrecomputer:
                         calibration_task = asyncio.create_task(
                             self._refresh(
                                 "calibration",
-                                lambda: compute_calibration_confidence(
-                                    self.db_manager
-                                ),
+                                lambda: compute_calibration_confidence(self.db_manager),
                             )
                         )
                     next_calibration = (

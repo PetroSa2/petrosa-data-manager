@@ -519,9 +519,13 @@ async def compute_slippage_by_regime(
                 seconds=constants.ANALYTICS_INTERVAL
             )
             collection = mongodb.db[f"analytics_{pair}_regime"]
-            anchor = await collection.find(
-                {"timestamp": {"$lt": regime_since}}, REGIME_DOC_PROJECTION
-            ).sort("timestamp", -1).to_list(length=1)
+            anchor = (
+                await collection.find(
+                    {"timestamp": {"$lt": regime_since}}, REGIME_DOC_PROJECTION
+                )
+                .sort("timestamp", -1)
+                .to_list(length=1)
+            )
             bounded = await collection.find(
                 {"timestamp": {"$gte": regime_since}}, REGIME_DOC_PROJECTION
             ).to_list(length=_REGIME_MAX_DOCS)
@@ -530,15 +534,15 @@ async def compute_slippage_by_regime(
         decode_started = monotonic()
         fills = list(fills)
         regimes = {pair: list(rows) for pair, rows in regimes.items()}
-        record_report_stage("slippage_by_regime", "decode", monotonic() - decode_started)
+        record_report_stage(
+            "slippage_by_regime", "decode", monotonic() - decode_started
+        )
     except Exception as exc:
         logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     compute_started = monotonic()
     report = await asyncio.to_thread(build_report, fills, regimes, role=role)
-    record_report_stage(
-        "slippage_by_regime", "compute", monotonic() - compute_started
-    )
+    record_report_stage("slippage_by_regime", "compute", monotonic() - compute_started)
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "window_days": window_days,
