@@ -126,20 +126,42 @@ def test_build_calibration_records_distinguishes_missing_history() -> None:
     assert result["skipped_reasons"] == {"decision_not_in_history": 1}
 
 
-def test_build_calibration_records_uses_later_valid_executed_confidence() -> None:
+def test_build_calibration_records_uses_entry_confidence_for_long_and_short() -> None:
     rows = [
-        _fill("buy", "2026-10-01T12:00:00Z", "d1"),
-        _fill("sell", "2026-10-01T12:01:00Z", "d2"),
+        _fill("buy", "2026-10-01T12:00:00Z", "long-entry"),
+        _fill("sell", "2026-10-01T12:01:00Z", "long-exit"),
+        _fill("sell", "2026-10-01T13:00:00Z", "short-entry"),
+        _fill("buy", "2026-10-01T13:01:00Z", "short-exit"),
     ]
     result = build_calibration_records(
         rows,
         [
-            {"decision_id": "d1", "action": "execute", "confidence": None},
-            {"decision_id": "d2", "action": "execute", "confidence": "0.7"},
+            {"decision_id": "long-entry", "action": "buy", "confidence": "0.7"},
+            {"decision_id": "long-exit", "action": "sell", "confidence": "0.9"},
+            {"decision_id": "short-entry", "action": "sell", "confidence": "0.6"},
+            {"decision_id": "short-exit", "action": "buy", "confidence": "0.8"},
         ],
     )
 
-    assert result["records"][0]["confidence"] == Decimal("0.7")
+    assert [(r["decision_id"], r["confidence"]) for r in result["records"]] == [
+        ("long-entry", Decimal("0.7")),
+        ("short-entry", Decimal("0.6")),
+    ]
+
+
+def test_build_calibration_records_skips_when_entry_decision_is_unavailable() -> None:
+    result = build_calibration_records(
+        [
+            _fill("buy", "2026-10-01T12:00:00Z", None),
+            _fill("sell", "2026-10-01T12:01:00Z", None),
+            _fill("sell", "2026-10-01T13:00:00Z", None),
+            _fill("buy", "2026-10-01T13:01:00Z", None),
+        ],
+        [],
+    )
+
+    assert result["records"] == []
+    assert result["skipped_reasons"] == {"entry_decision_unavailable": 2}
 
 
 def test_build_calibration_records_classifies_missing_and_invalid_confidence() -> None:
@@ -164,7 +186,7 @@ def test_build_calibration_records_classifies_missing_and_invalid_confidence() -
     assert result["skipped_reasons"] == {
         "invalid_confidence": 1,
         "missing_confidence": 1,
-        "no_decision_id_on_fill": 1,
+        "entry_decision_unavailable": 1,
     }
 
 
@@ -228,7 +250,7 @@ async def test_calibration_route_reads_gateway_and_filters() -> None:
     }
     assert calls[1][1]["filters"] == {
         "strategy_id": "alpha",
-        "action": {"$in": ["buy", "execute", "sell", "BUY", "EXECUTE", "SELL"]},
+        "action": {"$regex": "^(buy|execute|sell)$", "$options": "i"},
     }
 
 
@@ -387,6 +409,41 @@ async def test_calibration_health_reports_empty_data_as_degraded() -> None:
 
     assert response["status"] == "degraded"
     assert response["fresh"] is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_health_passes_mysql_in_non_strict_mode(monkeypatch) -> None:
+    manager = SimpleNamespace(
+        mongodb_adapter=object(),
+        mysql_adapter=object(),
+    )
+    observed = {}
+
+    async def fake_latest(mongodb, **kwargs):
+        observed.update(mongodb=mongodb, **kwargs)
+        return {
+            "records": [],
+            "fresh": False,
+            "latest_at": None,
+            "max_age_minutes": 30,
+            "age_minutes": None,
+        }
+
+    monkeypatch.setattr(
+        "data_manager.services.calibration_service.get_latest_calibration", fake_latest
+    )
+    api_module.db_manager = manager
+    try:
+        response = await calibration_health()
+    finally:
+        api_module.db_manager = None
+
+    assert response["status"] == "degraded"
+    assert observed == {
+        "mongodb": manager.mongodb_adapter,
+        "mysql_adapter": manager.mysql_adapter,
+        "strict_history": False,
+    }
 
 
 @pytest.mark.asyncio
