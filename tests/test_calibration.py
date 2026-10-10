@@ -20,9 +20,10 @@ from data_manager.services.calibration_service import (
     calibration_freshness,
 )
 from data_manager.services.report_precompute import ReportPrecomputer
+from data_manager.services.round_book import ClosedRound
 
 
-def _fill(side: str, timestamp: str, decision_id: str) -> dict:
+def _fill(side: str, timestamp: str, decision_id: str, **extra) -> dict:
     return {
         "event_type": "filled",
         "strategy_id": "alpha",
@@ -34,6 +35,7 @@ def _fill(side: str, timestamp: str, decision_id: str) -> dict:
         "fee_asset": "USDT",
         "decision_id": decision_id,
         "fill_time": timestamp,
+        **extra,
     }
 
 
@@ -147,6 +149,47 @@ def test_build_calibration_records_uses_entry_confidence_for_long_and_short() ->
         ("long-entry", Decimal("0.7")),
         ("short-entry", Decimal("0.6")),
     ]
+
+
+def test_build_calibration_records_skips_missing_entry_confidence_for_hedge_legs() -> (
+    None
+):
+    result = build_calibration_records(
+        [],
+        [
+            {"decision_id": "long-exit", "action": "sell", "confidence": "0.9"},
+            {"decision_id": "short-entry", "action": "sell", "confidence": None},
+            {"decision_id": "short-exit", "action": "buy", "confidence": "0.8"},
+        ],
+        closed_rounds=[
+            ClosedRound(
+                strategy_id="alpha",
+                symbol="BTCUSDT",
+                opened_at=datetime(2026, 10, 1, 12, tzinfo=UTC),
+                closed_at=datetime(2026, 10, 1, 12, 1, tzinfo=UTC),
+                realized=0,
+                fills=2,
+                position_side="LONG",
+                decision_ids=("long-entry-missing", "long-exit"),
+            ),
+            ClosedRound(
+                strategy_id="alpha",
+                symbol="BTCUSDT",
+                opened_at=datetime(2026, 10, 1, 13, tzinfo=UTC),
+                closed_at=datetime(2026, 10, 1, 13, 1, tzinfo=UTC),
+                realized=0,
+                fills=2,
+                position_side="SHORT",
+                decision_ids=("short-entry", "short-exit"),
+            ),
+        ],
+    )
+
+    assert result["records"] == []
+    assert result["skipped_reasons"] == {
+        "no_matching_cio_decision": 1,
+        "missing_confidence": 1,
+    }
 
 
 def test_build_calibration_records_skips_when_entry_decision_is_unavailable() -> None:
@@ -409,6 +452,7 @@ async def test_calibration_health_reports_empty_data_as_degraded() -> None:
 
     assert response["status"] == "degraded"
     assert response["fresh"] is False
+    assert response["history_unavailable"] is False
 
 
 @pytest.mark.asyncio
@@ -427,6 +471,7 @@ async def test_calibration_health_passes_mysql_in_non_strict_mode(monkeypatch) -
             "latest_at": None,
             "max_age_minutes": 30,
             "age_minutes": None,
+            "history_unavailable": True,
         }
 
     monkeypatch.setattr(
@@ -439,6 +484,7 @@ async def test_calibration_health_passes_mysql_in_non_strict_mode(monkeypatch) -
         api_module.db_manager = None
 
     assert response["status"] == "degraded"
+    assert response["history_unavailable"] is True
     assert observed == {
         "mongodb": manager.mongodb_adapter,
         "mysql_adapter": manager.mysql_adapter,

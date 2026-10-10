@@ -307,6 +307,7 @@ class RoundBook:
             if remaining > 0:
                 book.cycle = _Cycle(opened_at=when)
                 book.cycle.entry_notional = _dec(remaining) * _dec(price)
+                self._tag(book.cycle)
             else:
                 book.cycle = None
 
