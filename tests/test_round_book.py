@@ -1429,7 +1429,8 @@ def test_large_quantity_dust_closes_a_round():
     stats = _report(
         [
             _fill("s1", "buy", 50_000_000.1, 100.0, 0),
-            _fill("s1", "sell", 50_000_000.1, 90.0, 1),
+            _fill("s1", "buy", 0.2, 100.0, 1),
+            _fill("s1", "sell", 50_000_000.3, 90.0, 2),
         ]
     )["strategies"]["s1"]
 
