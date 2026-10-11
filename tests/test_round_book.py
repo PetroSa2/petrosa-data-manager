@@ -2,6 +2,7 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -727,14 +728,186 @@ def test_netted_flip_tags_the_flipping_fill_on_the_new_round():
     book = RoundBook()
     book.apply(_fill("s1", "buy", 1.0, 100.0, 0, decision_id="E"))
     book.apply(_fill("s1", "sell", 2.0, 101.0, 1, decision_id="X"))
-
     assert book.closed[0].decision_ids == ("E", "X")
     cycle = book._books[("s1", "ETHUSDT", "NET")].cycle
     assert cycle is not None
     assert cycle.decision_ids == ["X"]
-
     book.apply(_fill("s1", "buy", 1.0, 100.0, 2, decision_id="Z"))
     assert cycle.decision_ids == ["X", "Z"]
+
+
+def _flip_rows(fee=True):
+    extra = {"fee": "{}", "fee_asset": "USDT"} if fee else {}
+
+    def with_fee(amount, **kwargs):
+        return {
+            **kwargs,
+            **{k: v.format(amount) if k == "fee" else v for k, v in extra.items()},
+        }
+
+    return [
+        _fill(
+            "s1",
+            "buy",
+            1.0,
+            100.0,
+            0,
+            decision_id="E",
+            position_id="P1",
+            **with_fee("0.10"),
+        ),
+        _fill(
+            "s1",
+            "sell",
+            2.0,
+            101.0,
+            1,
+            decision_id="X",
+            position_id="P1",
+            **with_fee("0.20"),
+        ),
+        _fill(
+            "s1",
+            "buy",
+            1.0,
+            99.0,
+            2,
+            decision_id="Z",
+            position_id="P2",
+            **with_fee("0.10"),
+        ),
+    ]
+
+
+def test_a_netted_flip_does_not_double_count_the_flipping_fills_fee_or_position_id():
+    book = RoundBook()
+    for row in _flip_rows():
+        book.apply(row)
+    first, second = book.closed
+    assert (first.fees, first.fills, first.fee_unknown_fills) == (Decimal("0.30"), 2, 0)
+    assert (second.fees, second.fills, second.fee_unknown_fills) == (
+        Decimal("0.10"),
+        1,
+        0,
+    )
+    assert first.fees + second.fees == Decimal(
+        "0.40"
+    )  # the fill fees, each counted once
+    assert first.position_ids == ("P1",)
+    assert second.position_ids == (
+        "P2",
+    )  # the flipping fill's position id stays with the round it closed
+    assert first.decision_ids == ("E", "X")
+    assert second.decision_ids == (
+        "X",
+        "Z",
+    )  # only its decision id travels to the new round
+
+
+def test_a_netted_flip_does_not_double_count_unknown_fees():
+    book = RoundBook()
+    for row in _flip_rows(fee=False):
+        book.apply(row)
+    first, second = book.closed
+    assert (first.fills, first.fee_unknown_fills) == (2, 2)
+    assert (second.fills, second.fee_unknown_fills) == (1, 1)
+    for closed in book.closed:
+        assert closed.fee_unknown_fills <= closed.fills
+    assert sum(c.fee_unknown_fills for c in book.closed) == 3  # one per fill
+
+
+def test_the_open_round_after_a_flip_carries_no_fee_and_no_position_id_of_the_flipping_fill():
+    book = RoundBook()
+    for row in _flip_rows()[:2]:
+        book.apply(row)
+    cycle = book._books[("s1", "ETHUSDT", "NET")].cycle
+    assert cycle is not None
+    assert (cycle.fees, cycle.fee_unknown_fills, cycle.fills) == (Decimal("0"), 0, 0)
+    assert cycle.position_ids == [] and cycle.decision_ids == ["X"]
+
+
+def _netted_oracle(rows):
+    """The rounds of one netted (strategy, symbol), worked out independently of RoundBook: a fill belongs to the
+    round open before it; a fill that takes the position to zero or across it closes that round, and across it
+    only its decision id starts the next one."""
+    position = 0.0
+    rounds = [
+        {
+            "fees": Decimal("0"),
+            "unknown": 0,
+            "fills": 0,
+            "positions": [],
+            "decisions": [],
+        }
+    ]
+    closed = []
+    for row in rows:
+        current = rounds[-1]
+        current["fills"] += 1
+        if row.get("fee") is None:
+            current["unknown"] += 1
+        else:
+            current["fees"] += abs(Decimal(row["fee"]))
+        for key, bucket in (("position_id", "positions"), ("decision_id", "decisions")):
+            if row.get(key) and row[key] not in current[bucket]:
+                current[bucket].append(row[key])
+        before = position
+        position += row["fill_qty"] if row["side"] == "buy" else -row["fill_qty"]
+        if before != 0 and (position == 0 or (before > 0) != (position > 0)):
+            closed.append(current)
+            fresh = {
+                "fees": Decimal("0"),
+                "unknown": 0,
+                "fills": 0,
+                "positions": [],
+                "decisions": [],
+            }
+            if position != 0 and row.get("decision_id"):
+                fresh["decisions"].append(row["decision_id"])
+            rounds.append(fresh)
+    return closed
+
+
+@pytest.mark.parametrize("seed", range(25))
+def test_round_fees_fee_unknowns_and_ids_match_an_independent_oracle_under_random_netted_flips(
+    seed,
+):
+    rng = random.Random(seed)
+    rows = {key: [] for key in (("a", "ETHUSDT"), ("a", "BTCUSDT"), ("b", "ETHUSDT"))}
+    sequence = []
+    for i in range(120):
+        strategy, symbol = rng.choice(list(rows))
+        row = _fill(
+            strategy,
+            rng.choice(["buy", "sell"]),
+            rng.choice([0.5, 1.0, 1.5, 2.0]),
+            100 + rng.random(),
+            i,
+            symbol=symbol,
+            decision_id=f"D{i}",
+            position_id=f"P{rng.randint(1, 6)}",
+        )
+        if rng.random() < 0.8:
+            row["fee"] = f"{rng.randint(1, 99) / 100:.2f}"
+            row["fee_asset"] = "USDT"
+        rows[(strategy, symbol)].append(row)
+        sequence.append(row)
+    book = RoundBook()
+    for row in sequence:
+        book.apply(row)
+    for (strategy, symbol), group in rows.items():
+        expected = _netted_oracle(group)
+        actual = [
+            c for c in book.closed if (c.strategy_id, c.symbol) == (strategy, symbol)
+        ]
+        assert len(actual) == len(expected), (seed, strategy, symbol)
+        for closed, want in zip(actual, expected, strict=True):
+            assert closed.fees == want["fees"], (seed, closed.decision_ids)
+            assert closed.fee_unknown_fills == want["unknown"]
+            assert closed.fills == want["fills"]
+            assert closed.fee_unknown_fills <= closed.fills
+            assert list(closed.position_ids) == want["positions"]
+            assert list(closed.decision_ids) == want["decisions"]
 
 
 def test_hedge_and_netted_fills_stay_fully_accounted_under_random_input():
