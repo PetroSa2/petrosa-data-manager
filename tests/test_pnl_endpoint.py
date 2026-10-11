@@ -1267,16 +1267,112 @@ def test_a_netted_strategy_has_the_same_outcomes_under_every_mode(monkeypatch):
     assert (applied["wins"], applied["losses"]) == (3, 2)
 
 
-def test_under_apply_without_a_usable_overlay_the_outcomes_stay_the_calculators(
+UNUSABLE_CACHES = [
+    None,  # a miss: the cache is warming
+    {"stale": True},  # flagged stale by the precomputer
+    {"snapshot_age_s": 3600},  # the snapshot behind it was already stale
+    {"cache_age_s": 7 * 24 * 3600.0},  # an expired entry
+]
+
+
+def _hedge_with_phantom_and_closed_rounds():
+    """Two closed LONG losses and a short win, plus one open LONG and one open SHORT the calculator would pair."""
+    return _legs(
+        [
+            ("buy", "LONG", 1, 100, 1000, "a1"),
+            ("sell", "LONG", 1, 90, 900, "a2"),  # loss
+            ("sell", "SHORT", 1, 100, 800, "b1"),
+            ("buy", "SHORT", 1, 90, 700, "b2"),  # short win
+            ("buy", "LONG", 1, 100, 600, "c1"),
+            ("sell", "LONG", 1, 95, 500, "c2"),  # loss
+            ("buy", "LONG", 1, 100, 400, "d1"),  # open LONG
+            (
+                "sell",
+                "SHORT",
+                1,
+                90,
+                300,
+                "d2",
+            ),  # open SHORT: the calculator closes d1 against it
+        ]
+    )
+
+
+@pytest.mark.parametrize("cache", UNUSABLE_CACHES)
+def test_under_apply_the_outcomes_come_from_the_leg_book_even_without_a_usable_overlay(
+    monkeypatch, cache
+):
+    """The replay does not need the orphan cache, so a warming or stale cache cannot bring the netting artifacts
+    back: the CIO must not flip between a cold start and a phantom streak across restarts."""
+    rows = _hedge_with_phantom_and_closed_rounds()
+    exchange = [_btc("LONG", "1"), _btc("SHORT", "-1")]
+    fresh = _applied(monkeypatch, rows, rows, exchange)
+    assert fresh["metadata"]["outcome_source"] == "round-book-legs"
+    if cache is None:
+        body, _ = _performance(monkeypatch, "apply", rows, None)
+    else:
+        stale = _rounds_cache_body(monkeypatch, rows, exchange, **cache)
+        body, _ = _performance(monkeypatch, "apply", rows, stale)
+    assert (
+        body["metadata"]["pnl_source"] == "pnl-calculator"
+    )  # realized and unrealized stay a pair
+    assert body["metadata"]["outcome_source"] == "round-book-legs"
+    keys = ("wins", "losses", "win_rate", "consecutive_losses", "win_rate_delta")
+    assert {k: body["stats"][k] for k in keys} == {k: fresh["stats"][k] for k in keys}
+    assert (body["stats"]["wins"], body["stats"]["losses"]) == (
+        1,
+        2,
+    )  # not the calculator's artifacts
+
+
+def test_the_calculators_outcomes_stay_in_off_and_report_and_name_no_outcome_source(
     monkeypatch,
 ):
-    """When the leg-aware book is not used (no cache), P&L and outcomes both fall back together."""
-    rows = _legs(
-        [("buy", "LONG", 1, 100, 300, "l"), ("sell", "SHORT", 1, 90, 200, "s")]
+    rows = _hedge_with_phantom_and_closed_rounds()
+    exchange = [_btc("LONG", "1"), _btc("SHORT", "-1")]
+    for mode in ("report", "off"):
+        body = _applied(monkeypatch, rows, rows, exchange, mode=mode)
+        assert "outcome_source" not in body["metadata"], mode
+        assert body["stats"]["wins"] + body["stats"]["losses"] > 0, mode
+
+
+def _with_fees(rows, fee):
+    return [{**row, "fee": fee, "fee_asset": "USDT"} for row in rows]
+
+
+@pytest.mark.parametrize(
+    ("fee", "won"),
+    [
+        ("0.50", False),
+        ("0.10", True),
+        ("0.20", False),
+    ],  # gross +0.40; fees 1.00, 0.20, 0.40 in total
+)
+def test_a_round_is_a_win_or_a_loss_on_net_pnl(monkeypatch, fee, won):
+    """Gross +0.40: fees of 1.00 make it a loss; fees of 0.20 leave a win; fees equal to the gain are break-even."""
+    rows = _with_fees(
+        _legs(
+            [("buy", "LONG", 1, 100, 300, "a1"), ("sell", "LONG", 1, 100.4, 200, "a2")]
+        ),
+        fee,
     )
-    body, _ = _performance(monkeypatch, "apply", rows, None)
-    assert body["metadata"]["pnl_source"] == "pnl-calculator"
-    assert (body["stats"]["wins"], body["stats"]["losses"]) == (0, 1)
+    stats, _ = _outcomes_of(monkeypatch, rows)
+    if fee == "0.20":
+        assert (stats["wins"], stats["losses"]) == (0, 0)  # net exactly 0: neither
+    else:
+        assert (stats["wins"], stats["losses"]) == ((1, 0) if won else (0, 1))
+
+
+def test_a_fee_in_another_asset_is_not_netted_but_the_gross_outcome_stands(monkeypatch):
+    """A fee that is not in the quote asset is counted as unknown, not as a cost (as for the calibration)."""
+    rows = [
+        {**row, "fee": "0.5", "fee_asset": "BNB"}
+        for row in _legs(
+            [("buy", "LONG", 1, 100, 300, "a1"), ("sell", "LONG", 1, 100.4, 200, "a2")]
+        )
+    ]
+    stats, _ = _outcomes_of(monkeypatch, rows)
+    assert (stats["wins"], stats["losses"]) == (1, 0)
 
 
 def test_the_win_rate_delta_under_apply_is_null_when_the_windows_are_one_trade(
