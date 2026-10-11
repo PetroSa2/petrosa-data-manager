@@ -1408,3 +1408,115 @@ def test_a_lot_orphaned_to_within_the_tolerance_is_not_an_open_round():
     assert stats["oldest_open_round_opened_at"] is None
     assert stats["fills_in_orphaned_rounds"] == 1
     assert applied["accounted"] is True
+
+
+def test_decimal_float_dust_closes_a_round():
+    stats = _report(
+        [
+            _fill("s1", "buy", 0.1, 100.0, 0),
+            _fill("s1", "buy", 0.2, 100.0, 1),
+            _fill("s1", "sell", 0.3, 90.0, 2),
+        ]
+    )["strategies"]["s1"]
+
+    assert stats["closed_rounds"] == 1
+    assert stats["open_rounds"] == 0
+    assert stats["losses"] == 1
+    assert stats["realized_pnl_closed_rounds"] == pytest.approx(-3.0)
+
+
+def test_large_quantity_dust_closes_a_round():
+    stats = _report(
+        [
+            _fill("s1", "buy", 50_000_000.1, 100.0, 0),
+            _fill("s1", "buy", 0.2, 100.0, 1),
+            _fill("s1", "sell", 50_000_000.3, 90.0, 2),
+        ]
+    )["strategies"]["s1"]
+
+    assert stats["closed_rounds"] == 1
+    assert stats["open_rounds"] == 0
+
+
+def test_real_remaining_position_stays_open():
+    stats = _report(
+        [
+            _fill("s1", "buy", 1.0, 100.0, 0),
+            _fill("s1", "sell", 0.99999999, 90.0, 1),
+        ]
+    )["strategies"]["s1"]
+
+    assert stats["closed_rounds"] == 0
+    assert stats["open_rounds"] == 1
+
+
+def test_integer_quantities_are_unchanged_when_overlay_is_off_or_report_only():
+    rows = [
+        _fill("s1", "buy", 2, 100, 0, symbol="BTCUSDT"),
+        _fill("s1", "sell", 1, 110, 1, symbol="BTCUSDT"),
+    ]
+    plain = _report(rows)
+    report_mode = _report(rows, exchange=_snapshot(rows=[]), closed_entry_orders=set())
+    for result in (plain, report_mode):
+        assert result["strategies"]["s1"]["closed_rounds"] == 0
+        assert result["strategies"]["s1"]["open_rounds"] == 1
+        assert result["strategies"]["s1"]["fills_in_open_rounds"] == 2
+        assert result["strategies"]["s1"]["realized_pnl_closed_rounds"] == 0.0
+
+
+def _leg_oracle(rows):
+    lots = []
+    realized = Decimal("0")
+    fills = 0
+    closed = []
+    for row in rows:
+        quantity = Decimal(str(row["fill_qty"]))
+        if row["side"] == "buy":
+            fills += 1
+            lots.append([quantity, Decimal(str(row["fill_price"]))])
+            continue
+        if not lots:
+            continue
+        fills += 1
+        remaining = quantity
+        while remaining > 0 and lots:
+            lot_quantity, lot_price = lots[0]
+            take = min(lot_quantity, remaining)
+            realized += (Decimal(str(row["fill_price"])) - lot_price) * take
+            lot_quantity -= take
+            remaining -= take
+            if lot_quantity <= 0:
+                lots.pop(0)
+            else:
+                lots[0][0] = lot_quantity
+        if not lots and fills:
+            closed.append((realized, fills))
+            realized = Decimal("0")
+            fills = 0
+    return closed
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_hedge_fifo_fuzz_matches_the_independent_leg_model(seed):
+    rng = random.Random(seed)
+    rows = [
+        _fill(
+            "s1",
+            rng.choice(["buy", "sell"]),
+            rng.choice([0.1, 0.2, 0.3, 0.4]),
+            rng.choice([90.0, 100.0, 110.0]),
+            index,
+            symbol="BTCUSDT",
+            position_side="LONG",
+        )
+        for index in range(100)
+    ]
+    book = RoundBook()
+    for row in rows:
+        book.apply(row)
+    expected = _leg_oracle(rows)
+
+    assert len(book.closed) == len(expected)
+    for actual, (realized, fills) in zip(book.closed, expected, strict=True):
+        assert actual.realized == pytest.approx(float(realized))
+        assert actual.fills == fills

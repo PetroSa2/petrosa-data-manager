@@ -252,40 +252,45 @@ class RoundBook:
         opposite, same = (
             (book.short, book.long) if side == "buy" else (book.long, book.short)
         )
-        remaining = qty
-        matched = 0.0
+        remaining = _dec(qty)
+        matched = ZERO
         realized = 0.0
-        while remaining > 0 and opposite:
+        while remaining > ZERO and opposite:
             lot = opposite[0]
-            take = min(lot.qty, remaining)
+            lot_quantity = _dec(lot.qty)
+            take = min(lot_quantity, remaining)
             realized += (
-                (lot.price - price) * take
+                (lot.price - price) * float(take)
                 if side == "buy"
-                else (price - lot.price) * take
+                else (price - lot.price) * float(take)
             )
             cycle.realized_dec += (
                 (_dec(lot.price) - _dec(price)) * _dec(take)
                 if side == "buy"
                 else (_dec(price) - _dec(lot.price)) * _dec(take)
             )
-            lot.qty -= take
+            lot.qty = float(lot_quantity - take)
             remaining -= take
+            if _dec(lot.qty) == ZERO:
+                lot.qty = 0.0
+            if remaining == ZERO:
+                remaining = 0.0
             matched += take
-            if lot.qty <= 0:
+            if _dec(lot.qty) == ZERO:
                 opposite.popleft()
         cycle.realized += realized
-        if matched > 0:
+        if matched > ZERO:
             cycle.exit_fills += 1
             self._exit[strategy_id] += 1
         else:
             cycle.entry_fills += 1
             self._entry[strategy_id] += 1
-        flipped = matched > 0 and not opposite and remaining > 0
-        if remaining > 0:
-            same.append(self._lot(remaining, price, when))
+        flipped = matched > ZERO and not opposite and remaining > ZERO
+        if remaining > ZERO:
+            same.append(self._lot(float(remaining), price, when))
             if not flipped:
                 cycle.entry_notional += _dec(remaining) * _dec(price)
-        if matched > 0 and not opposite:
+        if matched > ZERO and not opposite:
             # The position went flat (or flipped): the round is closed at this fill.
             self.closed.append(
                 ClosedRound(
@@ -304,9 +309,9 @@ class RoundBook:
                 )
             )
             self._closed_fills[strategy_id] += cycle.fills
-            if remaining > 0:
+            if remaining > ZERO:
                 book.cycle = _Cycle(opened_at=when)
-                book.cycle.entry_notional = _dec(remaining) * _dec(price)
+                book.cycle.entry_notional = remaining * _dec(price)
                 # Only the flipping order's decision id: its fee, its fee-unknown count and its position id
                 # already belong to the round it closed (dm#597).
                 self._tag(book.cycle, decision_only=True)
@@ -348,23 +353,28 @@ class RoundBook:
         cycle.exit_fills += 1
         self._tag(cycle)
         self._exit[strategy_id] += 1
-        remaining = qty
-        while remaining > 0 and lots:
+        remaining = _dec(qty)
+        while remaining > ZERO and lots:
             lot = lots[0]
-            take = min(lot.qty, remaining)
+            lot_quantity = _dec(lot.qty)
+            take = min(lot_quantity, remaining)
             cycle.realized += (
-                (price - lot.price) * take
+                (price - lot.price) * float(take)
                 if leg == "LONG"
-                else (lot.price - price) * take
+                else (lot.price - price) * float(take)
             )
             cycle.realized_dec += (
                 (_dec(price) - _dec(lot.price)) * _dec(take)
                 if leg == "LONG"
                 else (_dec(lot.price) - _dec(price)) * _dec(take)
             )
-            lot.qty -= take
+            lot.qty = float(lot_quantity - take)
             remaining -= take
-            if lot.qty <= 0:
+            if _dec(lot.qty) == ZERO:
+                lot.qty = 0.0
+            if remaining == ZERO:
+                remaining = 0.0
+            if _dec(lot.qty) == ZERO:
                 lots.popleft()
         if not lots:
             self.closed.append(
