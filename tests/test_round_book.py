@@ -1425,114 +1425,42 @@ def test_decimal_float_dust_closes_a_round():
     assert stats["realized_pnl_closed_rounds"] == pytest.approx(-3.0)
 
 
-@pytest.mark.parametrize(
-    "closed_entry_orders",
-    [set(), {"orphan-entry"}],
-    ids=["orphan", "ledger-closed"],
-)
-def test_apply_replays_real_exit_without_orphan_or_ledger_closed_lot(
-    closed_entry_orders,
-):
-    rows = [
-        _fill(
-            "s1",
-            "buy",
-            1.0,
-            100.0,
-            0,
-            symbol="BTCUSDT",
-            order_id="orphan-entry",
-        ),
-        _fill(
-            "s1",
-            "buy",
-            1.0,
-            100.0,
-            5 * 60,
-            symbol="BTCUSDT",
-            order_id="real-entry",
-        ),
-        _fill(
-            "s1",
-            "sell",
-            1.0,
-            90.0,
-            6 * 60 + 5,
-            symbol="BTCUSDT",
-            order_id="real-exit",
-        ),
-    ]
-    now = T0 + timedelta(hours=6, minutes=10)
-    applied = build_report(
-        rows,
-        now=now,
-        exchange=_snapshot(
-            T0 + timedelta(hours=6),
-            rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}],
-        ),
-        closed_entry_orders=closed_entry_orders,
-        apply_overlay=True,
-    )
+def test_large_quantity_dust_closes_a_round():
+    stats = _report(
+        [
+            _fill("s1", "buy", 50_000_000.1, 100.0, 0),
+            _fill("s1", "sell", 50_000_000.1, 90.0, 1),
+        ]
+    )["strategies"]["s1"]
 
-    stats = applied["strategies"]["s1"]
     assert stats["closed_rounds"] == 1
-    assert stats["losses"] == 1
-    assert stats["realized_pnl_closed_rounds"] == pytest.approx(-10.0)
     assert stats["open_rounds"] == 0
-    assert applied["accounted"] is True
 
 
-def test_apply_preserves_pyramiding_and_partial_real_exits_after_orphan_removal():
+def test_real_remaining_position_stays_open():
+    stats = _report(
+        [
+            _fill("s1", "buy", 1.0, 100.0, 0),
+            _fill("s1", "sell", 0.99999999, 90.0, 1),
+        ]
+    )["strategies"]["s1"]
+
+    assert stats["closed_rounds"] == 0
+    assert stats["open_rounds"] == 1
+
+
+def test_integer_quantities_are_unchanged_when_overlay_is_off_or_report_only():
     rows = [
-        _fill(
-            "s1",
-            "buy",
-            1.0,
-            100.0,
-            0,
-            symbol="BTCUSDT",
-            order_id="orphan-entry",
-        ),
-        _fill(
-            "s1",
-            "buy",
-            1.0,
-            100.0,
-            5 * 60,
-            symbol="BTCUSDT",
-            order_id="real-entry-1",
-        ),
-        _fill(
-            "s1",
-            "buy",
-            0.5,
-            110.0,
-            5 * 60 + 1,
-            symbol="BTCUSDT",
-            order_id="real-entry-2",
-        ),
-        _fill("s1", "sell", 0.5, 95.0, 6 * 60, symbol="BTCUSDT"),
-        _fill("s1", "sell", 0.5, 90.0, 6 * 60 + 1, symbol="BTCUSDT"),
-        _fill("s1", "sell", 0.5, 85.0, 6 * 60 + 2, symbol="BTCUSDT"),
+        _fill("s1", "buy", 2, 100, 0, symbol="BTCUSDT"),
+        _fill("s1", "sell", 1, 110, 1, symbol="BTCUSDT"),
     ]
-    applied = build_report(
-        rows,
-        now=T0 + timedelta(hours=6, minutes=10),
-        exchange=_snapshot(
-            T0 + timedelta(hours=6),
-            rows=[{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}],
-        ),
-        closed_entry_orders=set(),
-        apply_overlay=True,
-    )
-
-    stats = applied["strategies"]["s1"]
-    assert stats["closed_rounds"] == 1
-    assert stats["exit_fills"] == 3
-    assert stats["losses"] == 1
-    assert stats["realized_pnl_closed_rounds"] == pytest.approx(-20.0)
-    assert stats["open_rounds"] == 0
-    assert applied["accounted"] is True
+    plain = _report(rows)
+    report_mode = _report(rows, exchange=_snapshot(rows=[]), closed_entry_orders=set())
+    for result in (plain, report_mode):
+        assert result["strategies"]["s1"]["closed_rounds"] == 0
+        assert result["strategies"]["s1"]["open_rounds"] == 1
+        assert result["strategies"]["s1"]["fills_in_open_rounds"] == 2
+        assert result["strategies"]["s1"]["realized_pnl_closed_rounds"] == 0.0
 
 
 def _leg_oracle(rows):

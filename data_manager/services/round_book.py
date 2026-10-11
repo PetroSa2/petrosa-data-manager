@@ -45,7 +45,6 @@ class _Lot:
     opened_at: datetime
     order_id: str | None = None
     position_id: str | None = None
-    source_row_id: int | None = None
 
 
 ZERO = Decimal("0")
@@ -58,10 +57,6 @@ def _dec(value: Any) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return ZERO
-
-
-def _quantity_is_zero(value: float) -> bool:
-    return abs(_dec(value)) <= _dec(ROUND_ORPHAN_QUANTITY_TOLERANCE)
 
 
 @dataclass
@@ -173,8 +168,6 @@ class RoundBook:
         self._side_unknown: dict[str, int] = defaultdict(int)
         # legacy exit rows (side LONG/SHORT) read as the closing order side (petrosa-data-manager#550)
         self._legacy_mapped: dict[str, int] = defaultdict(int)
-        self._orphaned_fill_totals: dict[str, int] | None = None
-        self._open_fill_totals: dict[str, int] | None = None
 
     def apply(self, row: dict[str, Any]) -> None:
         """Account for one fill row (other event types are not fills and are ignored)."""
@@ -237,7 +230,6 @@ class RoundBook:
             opened_at=when,
             order_id=str(order_id) if order_id is not None else None,
             position_id=str(position_id) if position_id is not None else None,
-            source_row_id=id(row),
         )
 
     def _apply_netted(
@@ -260,44 +252,45 @@ class RoundBook:
         opposite, same = (
             (book.short, book.long) if side == "buy" else (book.long, book.short)
         )
-        remaining = qty
-        matched = 0.0
+        remaining = _dec(qty)
+        matched = ZERO
         realized = 0.0
-        while not _quantity_is_zero(remaining) and opposite:
+        while remaining > ZERO and opposite:
             lot = opposite[0]
-            take = min(lot.qty, remaining)
+            lot_quantity = _dec(lot.qty)
+            take = min(lot_quantity, remaining)
             realized += (
-                (lot.price - price) * take
+                (lot.price - price) * float(take)
                 if side == "buy"
-                else (price - lot.price) * take
+                else (price - lot.price) * float(take)
             )
             cycle.realized_dec += (
                 (_dec(lot.price) - _dec(price)) * _dec(take)
                 if side == "buy"
                 else (_dec(price) - _dec(lot.price)) * _dec(take)
             )
-            lot.qty -= take
+            lot.qty = float(lot_quantity - take)
             remaining -= take
-            if _quantity_is_zero(lot.qty):
+            if _dec(lot.qty) == ZERO:
                 lot.qty = 0.0
-            if _quantity_is_zero(remaining):
+            if remaining == ZERO:
                 remaining = 0.0
             matched += take
-            if _quantity_is_zero(lot.qty):
+            if _dec(lot.qty) == ZERO:
                 opposite.popleft()
         cycle.realized += realized
-        if not _quantity_is_zero(matched):
+        if matched > ZERO:
             cycle.exit_fills += 1
             self._exit[strategy_id] += 1
         else:
             cycle.entry_fills += 1
             self._entry[strategy_id] += 1
-        flipped = matched > 0 and not opposite and remaining > 0
-        if not _quantity_is_zero(remaining):
-            same.append(self._lot(remaining, price, when))
+        flipped = matched > ZERO and not opposite and remaining > ZERO
+        if remaining > ZERO:
+            same.append(self._lot(float(remaining), price, when))
             if not flipped:
                 cycle.entry_notional += _dec(remaining) * _dec(price)
-        if not _quantity_is_zero(matched) and not opposite:
+        if matched > ZERO and not opposite:
             # The position went flat (or flipped): the round is closed at this fill.
             self.closed.append(
                 ClosedRound(
@@ -316,9 +309,9 @@ class RoundBook:
                 )
             )
             self._closed_fills[strategy_id] += cycle.fills
-            if remaining > 0:
+            if remaining > ZERO:
                 book.cycle = _Cycle(opened_at=when)
-                book.cycle.entry_notional = _dec(remaining) * _dec(price)
+                book.cycle.entry_notional = remaining * _dec(price)
                 # Only the flipping order's decision id: its fee, its fee-unknown count and its position id
                 # already belong to the round it closed (dm#597).
                 self._tag(book.cycle, decision_only=True)
@@ -360,27 +353,28 @@ class RoundBook:
         cycle.exit_fills += 1
         self._tag(cycle)
         self._exit[strategy_id] += 1
-        remaining = qty
-        while not _quantity_is_zero(remaining) and lots:
+        remaining = _dec(qty)
+        while remaining > ZERO and lots:
             lot = lots[0]
-            take = min(lot.qty, remaining)
+            lot_quantity = _dec(lot.qty)
+            take = min(lot_quantity, remaining)
             cycle.realized += (
-                (price - lot.price) * take
+                (price - lot.price) * float(take)
                 if leg == "LONG"
-                else (lot.price - price) * take
+                else (lot.price - price) * float(take)
             )
             cycle.realized_dec += (
                 (_dec(price) - _dec(lot.price)) * _dec(take)
                 if leg == "LONG"
                 else (_dec(lot.price) - _dec(price)) * _dec(take)
             )
-            lot.qty -= take
+            lot.qty = float(lot_quantity - take)
             remaining -= take
-            if _quantity_is_zero(lot.qty):
+            if _dec(lot.qty) == ZERO:
                 lot.qty = 0.0
-            if _quantity_is_zero(remaining):
+            if remaining == ZERO:
                 remaining = 0.0
-            if _quantity_is_zero(lot.qty):
+            if _dec(lot.qty) == ZERO:
                 lots.popleft()
         if not lots:
             self.closed.append(
@@ -533,8 +527,6 @@ class RoundBook:
                         "holding_source": thresholds[strategy][1],
                         "_orphaned_lot_ids": set(),
                         "_ledger_closed_lot_ids": set(),
-                        "_orphaned_source_row_ids": set(),
-                        "_ledger_closed_source_row_ids": set(),
                     },
                 )
                 if lot.order_id is not None and lot.order_id in closed_entry_orders:
@@ -543,8 +535,6 @@ class RoundBook:
                     )
                     bucket["ledger_closed_quantity"] += lot.qty
                     bucket["_ledger_closed_lot_ids"].add(id(lot))
-                    if lot.source_row_id is not None:
-                        bucket["_ledger_closed_source_row_ids"].add(lot.source_row_id)
                     bucket["open_lot_quantity"] += lot.qty
                     continue
                 bucket["open_lot_quantity"] += lot.qty
@@ -570,8 +560,6 @@ class RoundBook:
                     bucket["orphaned_quantity"] += excess
                     if excess >= lot.qty - tolerance:
                         bucket["_orphaned_lot_ids"].add(id(lot))
-                        if lot.source_row_id is not None:
-                            bucket["_orphaned_source_row_ids"].add(lot.source_row_id)
                 else:
                     bucket["held_quantity"] += excess
             for strategy, lot in entries:
@@ -594,8 +582,6 @@ class RoundBook:
                         "holding_source": thresholds[strategy][1],
                         "_orphaned_lot_ids": set(),
                         "_ledger_closed_lot_ids": set(),
-                        "_orphaned_source_row_ids": set(),
-                        "_ledger_closed_source_row_ids": set(),
                     },
                 )
         return result, {
@@ -647,22 +633,16 @@ class RoundBook:
         exchange: dict[str, Any] | None = None,
         closed_entry_orders: set[str] | None = None,
         apply_overlay: bool = False,
-        _overlay_override: dict[tuple[str, str, str], dict[str, Any]] | None = None,
-        _overlay_meta_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Per-strategy fills, rounds, rate and holding time, plus the unattributed fills and a check."""
         now = now or datetime.now(UTC)
         since = now - timedelta(days=window_days)
-        if _overlay_override is None:
-            overlay, overlay_meta = self._orphan_overlay(
-                now=now,
-                window_days=window_days,
-                exchange=exchange,
-                closed_entry_orders=closed_entry_orders,
-            )
-        else:
-            overlay = _overlay_override
-            overlay_meta = _overlay_meta_override or {}
+        overlay, overlay_meta = self._orphan_overlay(
+            now=now,
+            window_days=window_days,
+            exchange=exchange,
+            closed_entry_orders=closed_entry_orders,
+        )
         overlay_enabled = exchange is not None and closed_entry_orders is not None
         overlay_active = (
             apply_overlay and overlay_meta.get("orphan_overlay") == "enabled"
@@ -709,10 +689,6 @@ class RoundBook:
                 # Every lot of the round is orphaned or ledger-closed: its fills are no longer in an open
                 # round, so they are counted here and the accounting check still balances.
                 orphaned_fills[strategy_id] += book.cycle.fills
-        if overlay_active and self._orphaned_fill_totals is not None:
-            orphaned_fills.update(self._orphaned_fill_totals)
-        if overlay_active and self._open_fill_totals is not None:
-            open_fills.update(self._open_fill_totals)
         closed_by: dict[str, list[ClosedRound]] = defaultdict(list)
         for closed in self.closed:
             closed_by[closed.strategy_id].append(closed)
@@ -793,19 +769,14 @@ class RoundBook:
                 )
                 strategy["legs"] = strategy_legs
             if overlay_active and overlay_enabled:
-                if self._open_fill_totals is None:
-                    strategy["open_rounds"] = sum(
-                        1
-                        for symbol_data in strategy_legs.values()
-                        for v in symbol_data.values()
-                        if v["held_quantity"]
-                        > ROUND_ORPHAN_QUANTITY_TOLERANCE
-                        * max(
-                            1.0,
-                            abs(v["open_lot_quantity"]),
-                            abs(v["exchange_quantity"]),
-                        )
-                    )
+                strategy["open_rounds"] = sum(
+                    1
+                    for symbol_data in strategy_legs.values()
+                    for v in symbol_data.values()
+                    if v["held_quantity"]
+                    > ROUND_ORPHAN_QUANTITY_TOLERANCE
+                    * max(1.0, abs(v["open_lot_quantity"]), abs(v["exchange_quantity"]))
+                )
                 strategy["fills_in_orphaned_rounds"] = orphaned_fills[strategy_id]
                 strategy["oldest_open_round_opened_at"] = (
                     oldest_open[strategy_id].isoformat()
@@ -854,186 +825,6 @@ def build_report(
     )
     for row in ordered:
         book.apply(row)
-    if apply_overlay and exchange is not None and closed_entry_orders is not None:
-        overlay, overlay_meta = book._orphan_overlay(
-            now=now or datetime.now(UTC),
-            window_days=window_days,
-            exchange=exchange,
-            closed_entry_orders=closed_entry_orders,
-        )
-        if overlay_meta.get("orphan_overlay") == "enabled":
-            snapshot_at = datetime.fromtimestamp(
-                float(exchange["as_of_ms"]) / 1000, tz=UTC
-            )
-            snapshot_book = RoundBook()
-            for row in ordered:
-                if (_when(row) or datetime.min.replace(tzinfo=UTC)) < snapshot_at:
-                    snapshot_book.apply(row)
-            snapshot_overlay, _ = snapshot_book._orphan_overlay(
-                now=now or datetime.now(UTC),
-                window_days=window_days,
-                exchange=exchange,
-                closed_entry_orders=closed_entry_orders,
-            )
-            snapshot_excluded_rows = {
-                source_row_id
-                for bucket in snapshot_overlay.values()
-                for name in (
-                    "_orphaned_source_row_ids",
-                    "_ledger_closed_source_row_ids",
-                )
-                for source_row_id in bucket[name]
-            }
-            for key, snapshot_bucket in snapshot_overlay.items():
-                bucket = overlay.setdefault(key, dict(snapshot_bucket))
-                added_quantities: dict[str, float] = {}
-                for name, source_name in (
-                    ("orphaned", "_orphaned_source_row_ids"),
-                    ("ledger_closed", "_ledger_closed_source_row_ids"),
-                ):
-                    existing_lots = {
-                        (
-                            item.get("opened_at"),
-                            item.get("order_id"),
-                            item.get("position_id"),
-                        )
-                        for item in bucket.get(name, [])
-                    }
-                    additions = [
-                        item
-                        for item in snapshot_bucket[name]
-                        if (
-                            item.get("opened_at"),
-                            item.get("order_id"),
-                            item.get("position_id"),
-                        )
-                        not in existing_lots
-                    ]
-                    added_quantities[name] = sum(item["quantity"] for item in additions)
-                    bucket[name] = bucket.get(name, []) + additions
-                for name in (
-                    "orphaned_quantity",
-                    "ledger_closed_quantity",
-                ):
-                    source_name = (
-                        "orphaned" if name == "orphaned_quantity" else "ledger_closed"
-                    )
-                    bucket[name] = bucket.get(name, 0.0) + added_quantities[source_name]
-                for name in (
-                    "_orphaned_lot_ids",
-                    "_ledger_closed_lot_ids",
-                    "_orphaned_source_row_ids",
-                    "_ledger_closed_source_row_ids",
-                ):
-                    bucket[name] = bucket.get(name, set()) | snapshot_bucket[name]
-            excluded_rows = {
-                source_row_id
-                for bucket in overlay.values()
-                for key in (
-                    "_orphaned_source_row_ids",
-                    "_ledger_closed_source_row_ids",
-                )
-                for source_row_id in bucket[key]
-            }
-            excluded_rows |= snapshot_excluded_rows
-            if excluded_rows:
-                replayed = RoundBook()
-                for row in ordered:
-                    if id(row) not in excluded_rows:
-                        replayed.apply(row)
-                if not replayed.closed and book.closed:
-                    return book.report(
-                        now=now,
-                        window_days=window_days,
-                        exchange=exchange,
-                        closed_entry_orders=closed_entry_orders,
-                        apply_overlay=True,
-                    )
-                replayed._fills = book._fills.copy()
-                replayed._entry = book._entry.copy()
-                replayed._exit = book._exit.copy()
-                replayed._side_unknown = book._side_unknown.copy()
-                replayed._legacy_mapped = book._legacy_mapped.copy()
-                replayed.unattributed = book.unattributed.copy()
-                orphaned_fill_totals: dict[str, int] = defaultdict(int)
-                for key, original in book._books.items():
-                    strategy, symbol, _leg = key
-                    original_lots = (*original.long, *original.short)
-                    overlay_sources = set()
-                    for overlay_leg in ("LONG", "SHORT"):
-                        bucket = overlay.get((strategy, symbol, overlay_leg), {})
-                        overlay_sources |= bucket.get("_orphaned_source_row_ids", set())
-                        overlay_sources |= bucket.get(
-                            "_ledger_closed_source_row_ids", set()
-                        )
-                    excluded = overlay_sources & excluded_rows
-                    if not excluded or original.cycle is None:
-                        continue
-                    surviving_original = [
-                        lot
-                        for lot in original_lots
-                        if lot.source_row_id not in excluded
-                    ]
-                    replayed_book = replayed._books.get(key)
-                    if not surviving_original:
-                        orphaned_fill_totals[strategy] += original.cycle.fills
-                    elif replayed_book is not None and replayed_book.cycle is None:
-                        closed_fills = sum(
-                            closed.fills
-                            for closed in replayed.closed
-                            if closed.strategy_id == strategy
-                            and closed.symbol == symbol
-                            and closed.opened_at >= original.cycle.opened_at
-                        )
-                        orphaned_fill_totals[strategy] += max(
-                            0, original.cycle.fills - closed_fills
-                        )
-                replayed._orphaned_fill_totals = dict(orphaned_fill_totals)
-                open_fill_totals: dict[str, int] = defaultdict(int)
-                for key, replayed_book in replayed._books.items():
-                    if replayed_book.cycle is None:
-                        continue
-                    original = book._books.get(key)
-                    if original is not None and original.cycle is not None:
-                        original_lots = (*original.long, *original.short)
-                        if any(
-                            lot.source_row_id not in excluded_rows
-                            for lot in original_lots
-                        ):
-                            open_fill_totals[key[0]] += original.cycle.fills
-                            continue
-                    open_fill_totals[key[0]] += replayed_book.cycle.fills
-                replayed._open_fill_totals = dict(open_fill_totals)
-                rebound: dict[tuple[str, str, str], dict[str, Any]] = {}
-                lots_by_source = {
-                    lot.source_row_id: lot
-                    for book_value in replayed._books.values()
-                    for lot in (*book_value.long, *book_value.short)
-                    if lot.source_row_id is not None
-                }
-                for key, bucket in overlay.items():
-                    copy = dict(bucket)
-                    copy["_orphaned_lot_ids"] = {
-                        id(lots_by_source[source_row_id])
-                        for source_row_id in bucket["_orphaned_source_row_ids"]
-                        if source_row_id in lots_by_source
-                    }
-                    copy["_ledger_closed_lot_ids"] = {
-                        id(lots_by_source[source_row_id])
-                        for source_row_id in bucket["_ledger_closed_source_row_ids"]
-                        if source_row_id in lots_by_source
-                    }
-                    rebound[key] = copy
-                book = replayed
-                return book.report(
-                    now=now,
-                    window_days=window_days,
-                    exchange=exchange,
-                    closed_entry_orders=closed_entry_orders,
-                    apply_overlay=True,
-                    _overlay_override=rebound,
-                    _overlay_meta_override=overlay_meta,
-                )
     return book.report(
         now=now,
         window_days=window_days,
