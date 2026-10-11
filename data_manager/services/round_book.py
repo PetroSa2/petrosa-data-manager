@@ -307,7 +307,9 @@ class RoundBook:
             if remaining > 0:
                 book.cycle = _Cycle(opened_at=when)
                 book.cycle.entry_notional = _dec(remaining) * _dec(price)
-                self._tag(book.cycle)
+                # Only the flipping order's decision id: its fee, its fee-unknown count and its position id
+                # already belong to the round it closed (dm#597).
+                self._tag(book.cycle, decision_only=True)
             else:
                 book.cycle = None
 
@@ -385,30 +387,34 @@ class RoundBook:
             self._closed_fills[strategy_id] += cycle.fills
             book.cycle = None
 
-    def _tag(self, cycle: _Cycle) -> None:
-        """Book the current fill's fee and identifiers on the round it belongs to."""
+    def _tag(self, cycle: _Cycle, *, decision_only: bool = False) -> None:
+        """Book the current fill's fee and identifiers on the round it belongs to.
+
+        ``decision_only`` books just the decision id: the netted fill that flips the position closes one round
+        and opens the next, and its fee, fee status and position id belong to the round it closed.
+        """
         row = getattr(self, "_row", None) or {}
         payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
 
         def field_of(name: str) -> Any:
             return row.get(name) if row.get(name) is not None else payload.get(name)
 
-        fee = field_of("fee")
-        if fee is None:
-            fee = field_of("fees")
-        asset = str(field_of("fee_asset") or "").upper()
-        status = str(field_of("fee_status") or "").lower()
-        symbol = str(row.get("symbol") or "")
-        quote = next((q for q in QUOTE_ASSETS if symbol.endswith(q)), "")
-        in_quote = bool(asset) and asset == quote or (not asset and bool(quote))
-        if fee is None or status in ("unknown", "needs_conversion") or not in_quote:
-            cycle.fee_unknown_fills += 1
-        else:
-            cycle.fees += abs(_dec(fee))
-        for name, bucket in (
-            ("position_id", cycle.position_ids),
-            ("decision_id", cycle.decision_ids),
-        ):
+        buckets = [("decision_id", cycle.decision_ids)]
+        if not decision_only:
+            fee = field_of("fee")
+            if fee is None:
+                fee = field_of("fees")
+            asset = str(field_of("fee_asset") or "").upper()
+            status = str(field_of("fee_status") or "").lower()
+            symbol = str(row.get("symbol") or "")
+            quote = next((q for q in QUOTE_ASSETS if symbol.endswith(q)), "")
+            in_quote = bool(asset) and asset == quote or (not asset and bool(quote))
+            if fee is None or status in ("unknown", "needs_conversion") or not in_quote:
+                cycle.fee_unknown_fills += 1
+            else:
+                cycle.fees += abs(_dec(fee))
+            buckets.insert(0, ("position_id", cycle.position_ids))
+        for name, bucket in buckets:
             value = field_of(name)
             if value and str(value) not in bucket:
                 bucket.append(str(value))
