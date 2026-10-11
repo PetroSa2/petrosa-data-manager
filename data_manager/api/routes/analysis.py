@@ -443,7 +443,15 @@ def _leg_aware_pnl(
         for kind, quantity in by_kind.items()
         if kind == "orphaned"
     )
+    # One outcome per closed round (a round the leg-aware book closed), in the order the rounds closed; a
+    # break-even round is neither a win nor a loss (as for the fills of the netting calculator).
+    closed_rounds = sorted(
+        (c for c in book.closed if c.strategy_id == strategy_id),
+        key=lambda c: c.closed_at,
+    )
+    outcomes = [c.realized > 0 for c in closed_rounds if c.realized != 0]
     return {
+        "outcomes": outcomes,
         "realized": book.realized_total(strategy_id),
         "held_unrealized": held_pnl,
         "orphaned_unrealized": orphaned_pnl,
@@ -452,6 +460,33 @@ def _leg_aware_pnl(
         "ledger_closed_lots": ledger_closed_lots,
         "unmatched_quantity": unmatched_quantity,
         "unmatched_lots": unmatched_lots,
+    }
+
+
+def outcome_stats(outcomes: list[bool], *, known_book: bool = False) -> dict[str, Any]:
+    """Wins, losses, win rate, win-rate delta and the trailing loss streak of ``outcomes`` (oldest first).
+
+    ``known_book`` says the outcomes come from a complete replay (the leg-aware book): no closed round then means
+    a streak of 0, where the netting calculator's empty list means unknown (``None``).
+    """
+    wins = sum(outcomes)
+    losses = len(outcomes) - wins
+    delta, window, standard_error = win_rate_delta_with_noise_floor(outcomes)
+    consecutive_losses = None
+    if outcomes or known_book:
+        consecutive_losses = 0
+        for won in reversed(outcomes):
+            if won:
+                break
+            consecutive_losses += 1
+    return {
+        "wins": wins,
+        "losses": losses,
+        "win_rate": (wins / len(outcomes)) if outcomes else None,
+        "win_rate_delta": delta,
+        "win_rate_delta_window": window,
+        "win_rate_delta_se": standard_error,
+        "consecutive_losses": consecutive_losses,
     }
 
 
@@ -564,34 +599,14 @@ async def get_strategy_performance(strategy_id: str):
             }
 
         calc = PnlCalculator()
-        wins = 0
-        losses = 0
         outcomes: list[bool] = []
         for row in rows:
             impact = calc.apply_fill(row)
             if impact is None or impact.realized_pnl == 0:
                 continue
-            if impact.realized_pnl > 0:
-                wins += 1
-                outcomes.append(True)
-            else:
-                losses += 1
-                outcomes.append(False)
+            outcomes.append(impact.realized_pnl > 0)
 
-        decisions = wins + losses
-        win_rate = (wins / decisions) if decisions else None
-        win_rate_delta, delta_window, delta_se = win_rate_delta_with_noise_floor(
-            outcomes
-        )
-
-        consecutive_losses = None
-        if outcomes:
-            consecutive_losses = 0
-            for won in reversed(outcomes):
-                if won:
-                    break
-                consecutive_losses += 1
-
+        outcome = outcome_stats(outcomes)
         breakdown = calc.strategy_pnl(strategy_id)
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
@@ -630,6 +645,9 @@ async def get_strategy_performance(strategy_id: str):
         if orphan_mode == "apply" and leg_pnl is not None:
             realized_pnl = leg_pnl["realized"]
             unrealized_pnl = leg_pnl["held_unrealized"]
+            # The same book decides the outcomes: the netting calculator pairs a hedge strategy's LONG entry with
+            # its SHORT entry and reports losses of rounds that never closed (dm#599).
+            outcome = outcome_stats(leg_pnl["outcomes"], known_book=True)
         total_pnl = realized_pnl + unrealized_pnl
         recent_trend = (
             "positive"
@@ -643,15 +661,15 @@ async def get_strategy_performance(strategy_id: str):
 
         return {
             "stats": {
-                "win_rate": win_rate,
-                "win_rate_delta": win_rate_delta,
+                "win_rate": outcome["win_rate"],
+                "win_rate_delta": outcome["win_rate_delta"],
                 # The windows and the standard error behind the delta (and why it may be null)
-                "win_rate_delta_window": delta_window,
-                "win_rate_delta_se": delta_se,
+                "win_rate_delta_window": outcome["win_rate_delta_window"],
+                "win_rate_delta_se": outcome["win_rate_delta_se"],
                 # The closed rounds behind the win rate: the posterior of the CIO net-EV gate needs them
-                "wins": wins,
-                "losses": losses,
-                "consecutive_losses": consecutive_losses,
+                "wins": outcome["wins"],
+                "losses": outcome["losses"],
+                "consecutive_losses": outcome["consecutive_losses"],
                 "recent_pnl_trend": recent_trend,
                 "realized_pnl": realized_pnl,
                 "unrealized_pnl": unrealized_pnl,
