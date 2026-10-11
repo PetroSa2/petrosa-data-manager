@@ -250,6 +250,9 @@ def _rounds_cache_body(
         def closed_entry_order_ids(self):
             return set()
 
+        async def live_closed_entry_order_ids(self):
+            return set()
+
     monkeypatch.setattr(ledger_module, "LedgerRepository", FakeRepository)
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
     _client_with_fills(rows)

@@ -1054,12 +1054,16 @@ async def compute_closed_rounds(
 
         mysql = getattr(db_manager, "mysql_adapter", None)
         if mysql is not None:
-            repo = LedgerRepository(mysql, None)
+            repo = LedgerRepository(mysql, mongodb)
             try:
-                exchange, closed_entry_orders = await asyncio.gather(
+                # Closed entry orders: the live Mongo position stores AND the MySQL history (dm#603 F1: the MySQL
+                # tables stop at 2026-09-26, so the reconciler's closures were invisible to the orphan overlay).
+                exchange, closed_historic, closed_live = await asyncio.gather(
                     asyncio.to_thread(repo.round_overlay_snapshot),
                     asyncio.to_thread(repo.closed_entry_order_ids),
+                    repo.live_closed_entry_order_ids(),
                 )
+                closed_entry_orders = closed_historic | closed_live
             except Exception as exc:
                 logger.warning("rounds: orphan overlay inputs unavailable: %s", exc)
                 exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()

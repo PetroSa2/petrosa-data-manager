@@ -504,6 +504,9 @@ async def test_rounds_endpoint_apply_excludes_ledger_closed_lots(monkeypatch):
         def closed_entry_order_ids(self):
             return {"closed"}
 
+        async def live_closed_entry_order_ids(self):
+            return set()
+
     rows = [_fill("s1", "buy", 1.0, 100.0, 0, order_id="closed")]
     cursor = MagicMock()
     cursor.sort.return_value = cursor
@@ -1026,6 +1029,9 @@ async def test_endpoint_loads_overlay_inputs_and_reports_fresh_mode(monkeypatch)
         def closed_entry_order_ids(self):
             return set()
 
+        async def live_closed_entry_order_ids(self):
+            return set()
+
     monkeypatch.setattr(ledger_module, "LedgerRepository", FakeRepository)
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "report")
     api_module.db_manager = SimpleNamespace(
@@ -1520,3 +1526,167 @@ def test_hedge_fifo_fuzz_matches_the_independent_leg_model(seed):
     for actual, (realized, fills) in zip(book.closed, expected, strict=True):
         assert actual.realized == pytest.approx(float(realized))
         assert actual.fills == fills
+
+
+# ----------------------------------------------------------------------------------------------
+# dm#603 F1: the closed entry order ids come from the LIVE Mongo position stores too
+# ----------------------------------------------------------------------------------------------
+class _FakeCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def to_list(self, length=None):
+        return list(self.rows)
+
+
+class _FakeCollection:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    def find(self, query, projection=None):
+        self.calls.append((query, projection))
+        return _FakeCursor(self.rows)
+
+
+@pytest.mark.asyncio
+async def test_live_closed_entry_order_ids_read_both_mongo_position_stores():
+    from data_manager.db.repositories.ledger_repository import (
+        CLOSED_POSITION_STATUSES,
+        LedgerRepository,
+    )
+
+    positions = _FakeCollection([{"entry_order_id": "p1"}, {"entry_order_id": 42}])
+    strategy_positions = _FakeCollection(
+        [{"entry_order_id": "sp1"}, {"entry_order_id": None}, {}]
+    )
+    repo = LedgerRepository(
+        None,
+        SimpleNamespace(
+            db={"positions": positions, "strategy_positions": strategy_positions}
+        ),
+    )
+    assert await repo.live_closed_entry_order_ids() == {"p1", "42", "sp1"}
+    assert CLOSED_POSITION_STATUSES == (
+        "closed",
+        "closed_externally",
+        "reconciled_to_exchange",
+    )
+    for collection in (positions, strategy_positions):
+        ((query, projection),) = collection.calls
+        assert query == {
+            "status": {"$in": list(CLOSED_POSITION_STATUSES)},
+            "entry_order_id": {"$ne": None},
+        }
+        assert projection == {"entry_order_id": 1, "_id": 0}
+
+
+@pytest.mark.asyncio
+async def test_live_closed_entry_order_ids_fail_loudly_without_mongo():
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    with pytest.raises(RuntimeError, match="MongoDB is not available"):
+        await LedgerRepository(None, None).live_closed_entry_order_ids()
+
+
+def _overlay_route_case(monkeypatch, *, historic, live):
+    """/analysis/rounds with one entry fill and an exchange snapshot that holds nothing of it."""
+    import data_manager.api.app as api_module
+    import data_manager.db.repositories.ledger_repository as ledger_module
+
+    rows = [_fill("s1", "buy", 1.0, 100.0, 0, symbol="BTCUSDT", order_id="entry")]
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=rows)
+    collection = MagicMock()
+    collection.find.return_value = cursor
+    seen = {}
+
+    class FakeRepository:
+        def __init__(self, mysql, mongodb):
+            seen["mongodb"] = mongodb
+
+        def round_overlay_snapshot(self):
+            return {"as_of_ms": int(datetime.now(UTC).timestamp() * 1000), "rows": []}
+
+        def closed_entry_order_ids(self):
+            return set(historic)
+
+        async def live_closed_entry_order_ids(self):
+            if isinstance(live, Exception):
+                raise live
+            return set(live)
+
+    monkeypatch.setattr(ledger_module, "LedgerRepository", FakeRepository)
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "report")
+    mongodb = SimpleNamespace(db={"execution_events": collection})
+    api_module.db_manager = SimpleNamespace(
+        mongodb_adapter=mongodb, mysql_adapter=object()
+    )
+    return api_module, seen, mongodb
+
+
+@pytest.mark.asyncio
+async def test_an_entry_closed_only_in_the_live_store_is_ledger_closed_not_an_orphan(
+    monkeypatch,
+):
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    api_module, seen, mongodb = _overlay_route_case(
+        monkeypatch, historic=[], live=["entry"]
+    )
+    try:
+        report = await get_closed_rounds(strategy_id=None, window_days=30.0)
+    finally:
+        api_module.db_manager = None
+    stats = report["strategies"]["s1"]
+    assert stats["orphaned_lots"] == 0
+    assert stats["ledger_closed_rounds"] == 1
+    assert seen["mongodb"] is mongodb  # the repository is given the live store
+
+
+@pytest.mark.asyncio
+async def test_an_entry_closed_only_in_the_historic_tables_stays_ledger_closed(
+    monkeypatch,
+):
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    api_module, _, _ = _overlay_route_case(monkeypatch, historic=["entry"], live=[])
+    try:
+        report = await get_closed_rounds(strategy_id=None, window_days=30.0)
+    finally:
+        api_module.db_manager = None
+    assert report["strategies"]["s1"]["ledger_closed_rounds"] == 1
+    assert report["strategies"]["s1"]["orphaned_lots"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_entry_closed_nowhere_is_still_an_orphan(monkeypatch):
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    api_module, _, _ = _overlay_route_case(
+        monkeypatch, historic=["other"], live=["another"]
+    )
+    try:
+        report = await get_closed_rounds(strategy_id=None, window_days=30.0)
+    finally:
+        api_module.db_manager = None
+    assert report["strategies"]["s1"]["orphaned_lots"] == 1
+    assert report["strategies"]["s1"]["ledger_closed_rounds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_live_store_disables_the_overlay_instead_of_reading_nothing_as_open(
+    monkeypatch,
+):
+    from data_manager.api.routes.analysis import get_closed_rounds
+
+    api_module, _, _ = _overlay_route_case(
+        monkeypatch, historic=["entry"], live=RuntimeError("mongo down")
+    )
+    try:
+        report = await get_closed_rounds(strategy_id=None, window_days=30.0)
+    finally:
+        api_module.db_manager = None
+    assert report["orphan_overlay"] == "missing"
+    assert report["strategies"]["s1"].get("orphaned_lots", 0) == 0

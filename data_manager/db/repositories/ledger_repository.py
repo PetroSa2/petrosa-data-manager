@@ -21,6 +21,8 @@ from data_manager.services.ledger_tolerance import (
 
 _exchange_info = ExchangeInfoCache()
 
+#: Position statuses that mean the entry order is closed (MySQL and Mongo position tables alike).
+CLOSED_POSITION_STATUSES = ("closed", "closed_externally", "reconciled_to_exchange")
 #: Open row quantity and exchange quantity are tied within this difference.
 QUANTITY_TOLERANCE = Decimal("0.000000001")
 
@@ -532,8 +534,38 @@ class LedgerRepository(BaseRepository):
             "rows": [dict(row) for row in rows],
         }
 
+    async def live_closed_entry_order_ids(self) -> set[str]:
+        """Entry order ids closed according to the LIVE position stores (Mongo ``positions`` and ``strategy_positions``).
+
+        The MySQL position tables are a frozen historic copy (``positions`` stops at 2026-09-26, ``strategy_positions``
+        is empty), so the closures written since, such as the open-row reconciler's ``reconciled_to_exchange`` (te#747),
+        are only here. Raises when Mongo is not available: the caller must not treat that as "nothing is closed".
+        """
+        if self.mongodb is None:
+            raise RuntimeError("MongoDB is not available")
+        ids: set[str] = set()
+        for collection in ("positions", "strategy_positions"):
+            rows = await (
+                self.mongodb.db[collection]
+                .find(
+                    {
+                        "status": {"$in": list(CLOSED_POSITION_STATUSES)},
+                        "entry_order_id": {"$ne": None},
+                    },
+                    {"entry_order_id": 1, "_id": 0},
+                )
+                .to_list(length=None)
+            )
+            ids.update(
+                str(row["entry_order_id"])
+                for row in rows
+                if row.get("entry_order_id") is not None
+            )
+        return ids
+
     def closed_entry_order_ids(self) -> set[str]:
-        """Return entry order ids already known to be closed by the position ledger."""
+        """Entry order ids closed according to the MySQL position tables (a frozen historic copy; see
+        ``live_closed_entry_order_ids`` for the live stores)."""
         rows = (
             self._run(
                 "SELECT entry_order_id FROM positions WHERE status IN "
