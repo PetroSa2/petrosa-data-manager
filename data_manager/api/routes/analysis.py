@@ -363,16 +363,18 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
 
 def _leg_aware_pnl(
     rows: list[dict[str, Any]],
-    overlay_lots: list[tuple[str, str, str, Any, float, str]],
+    overlay_lots: list[tuple[str, str, str, Any, float, str]] | None,
     strategy_id: str,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Realized and unrealized P&L of one strategy from ONE leg-aware replay of its own fills (#581).
 
     The replay is the round book's: hedge legs stay apart, so realized and unrealized describe the same lots at
     the same time (``PnlCalculator`` nets BUY against SELL on a symbol whatever the position side). The cached
     overlay list is matched to the still-open lots by identity (symbol, leg, order id, opened at); a lot closed
     since the cache was computed is simply not open here, and a lot opened since is held by default. Returns
-    ``None`` when an open lot has no mark price (nothing is guessed).
+    ``complete`` False (and no unrealized figures) when there is no overlay list or an open lot has no mark price
+    (nothing is guessed). The closed-round ``outcomes`` and ``realized`` never need the overlay: they are in every
+    result.
     """
     from data_manager.services.round_book import (
         FILL_EVENT_TYPES,
@@ -398,6 +400,17 @@ def _leg_aware_pnl(
             marks[str(symbol)] = (
                 price  # the latest fill price, in the price the lots are valued at
             )
+    # One outcome per closed round (a round the leg-aware book closed), in the order the rounds closed, a win or a
+    # loss on NET P&L (realized minus the round's fees), as the calibration does. A break-even round is neither.
+    closed_rounds = sorted(
+        (c for c in book.closed if c.strategy_id == strategy_id),
+        key=lambda c: c.closed_at,
+    )
+    net = [c.realized_dec - c.fees for c in closed_rounds]
+    outcomes = [value > 0 for value in net if value != 0]
+    realized_total = book.realized_total(strategy_id)
+    if overlay_lots is None:
+        return {"outcomes": outcomes, "realized": realized_total, "complete": False}
     excluded: dict[tuple[str, str, Any, str], dict[str, float]] = {}
     for symbol, leg, opened_at, order_id, quantity, kind in overlay_lots:
         key = (symbol, leg, order_id, opened_at)
@@ -411,7 +424,7 @@ def _leg_aware_pnl(
     for symbol, leg, lot in book.open_lots(strategy_id):
         mark = marks.get(symbol)
         if mark is None:
-            return None
+            return {"outcomes": outcomes, "realized": realized_total, "complete": False}
         key = (symbol, leg, lot.order_id, _normalise_overlay_timestamp(lot.opened_at))
         by_kind = excluded.get(key, {})
         orphaned_taken = min(lot.qty, by_kind.get("orphaned", 0.0))
@@ -444,7 +457,9 @@ def _leg_aware_pnl(
         if kind == "orphaned"
     )
     return {
-        "realized": book.realized_total(strategy_id),
+        "complete": True,
+        "outcomes": outcomes,
+        "realized": realized_total,
         "held_unrealized": held_pnl,
         "orphaned_unrealized": orphaned_pnl,
         "orphaned_lots": orphaned_lots,
@@ -452,6 +467,57 @@ def _leg_aware_pnl(
         "ledger_closed_lots": ledger_closed_lots,
         "unmatched_quantity": unmatched_quantity,
         "unmatched_lots": unmatched_lots,
+    }
+
+
+async def _timed_leg_replay(
+    rows: list[dict[str, Any]],
+    overlay_lots: list[tuple[str, str, str, Any, float, str]] | None,
+    strategy_id: str,
+) -> dict[str, Any]:
+    """``_leg_aware_pnl`` off the event loop, its duration measured against the replay budget."""
+    budget_seconds, budget_source = _replay_budget_seconds()
+    replay_started = perf_counter()
+    try:
+        return await asyncio.to_thread(_leg_aware_pnl, rows, overlay_lots, strategy_id)
+    finally:
+        replay_duration = perf_counter() - replay_started
+        ROUND_BOOK_REPLAY_DURATION.observe(replay_duration)
+        if replay_duration > budget_seconds * _REPLAY_BUDGET_FRACTION:
+            logger.warning(
+                "performance: replay duration %.3fs exceeds %.0f%% of "
+                "%.3fs budget_source=%s",
+                replay_duration,
+                _REPLAY_BUDGET_FRACTION * 100,
+                budget_seconds,
+                budget_source,
+            )
+
+
+def outcome_stats(outcomes: list[bool], *, known_book: bool = False) -> dict[str, Any]:
+    """Wins, losses, win rate, win-rate delta and the trailing loss streak of ``outcomes`` (oldest first).
+
+    ``known_book`` says the outcomes come from a complete replay (the leg-aware book): no closed round then means
+    a streak of 0, where the netting calculator's empty list means unknown (``None``).
+    """
+    wins = sum(outcomes)
+    losses = len(outcomes) - wins
+    delta, window, standard_error = win_rate_delta_with_noise_floor(outcomes)
+    consecutive_losses = None
+    if outcomes or known_book:
+        consecutive_losses = 0
+        for won in reversed(outcomes):
+            if won:
+                break
+            consecutive_losses += 1
+    return {
+        "wins": wins,
+        "losses": losses,
+        "win_rate": (wins / len(outcomes)) if outcomes else None,
+        "win_rate_delta": delta,
+        "win_rate_delta_window": window,
+        "win_rate_delta_se": standard_error,
+        "consecutive_losses": consecutive_losses,
     }
 
 
@@ -564,34 +630,14 @@ async def get_strategy_performance(strategy_id: str):
             }
 
         calc = PnlCalculator()
-        wins = 0
-        losses = 0
         outcomes: list[bool] = []
         for row in rows:
             impact = calc.apply_fill(row)
             if impact is None or impact.realized_pnl == 0:
                 continue
-            if impact.realized_pnl > 0:
-                wins += 1
-                outcomes.append(True)
-            else:
-                losses += 1
-                outcomes.append(False)
+            outcomes.append(impact.realized_pnl > 0)
 
-        decisions = wins + losses
-        win_rate = (wins / decisions) if decisions else None
-        win_rate_delta, delta_window, delta_se = win_rate_delta_with_noise_floor(
-            outcomes
-        )
-
-        consecutive_losses = None
-        if outcomes:
-            consecutive_losses = 0
-            for won in reversed(outcomes):
-                if won:
-                    break
-                consecutive_losses += 1
-
+        outcome = outcome_stats(outcomes)
         breakdown = calc.strategy_pnl(strategy_id)
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
@@ -599,29 +645,19 @@ async def get_strategy_performance(strategy_id: str):
         orphan_mode = _round_overlay_mode()
         exposure = None
         leg_pnl = None
+        leg_book = None
         if orphan_mode != "off":
             exposure = await _orphaned_lots_from_the_cache(strategy_id)
-            if exposure["entries"] is not None:
-                budget_seconds, budget_source = _replay_budget_seconds()
-                replay_started = perf_counter()
-                try:
-                    leg_pnl = await asyncio.to_thread(
-                        _leg_aware_pnl, rows, exposure["entries"], strategy_id
-                    )
-                finally:
-                    replay_duration = perf_counter() - replay_started
-                    ROUND_BOOK_REPLAY_DURATION.observe(replay_duration)
-                    if replay_duration > budget_seconds * _REPLAY_BUDGET_FRACTION:
-                        logger.warning(
-                            "performance: replay duration %.3fs exceeds %.0f%% of "
-                            "%.3fs budget_source=%s",
-                            replay_duration,
-                            _REPLAY_BUDGET_FRACTION * 100,
-                            budget_seconds,
-                            budget_source,
-                        )
-                if leg_pnl is None:
-                    exposure = _unavailable_exposure("unavailable")
+        overlay = exposure["entries"] if exposure is not None else None
+        # Under apply the replay always runs: the outcomes (and realized) do not need the orphan cache, only the
+        # orphan/unrealized split does, so a warming or stale cache must not bring the netting artifacts back.
+        if overlay is not None or orphan_mode == "apply":
+            leg_book = await _timed_leg_replay(rows, overlay, strategy_id)
+        if overlay is not None:
+            assert leg_book is not None
+            leg_pnl = leg_book if leg_book["complete"] else None
+            if leg_pnl is None:
+                exposure = _unavailable_exposure("unavailable")
         ROUND_BOOK_ORPHAN_OVERLAY_UNMATCHED_QUANTITY.labels(
             strategy_id=strategy_id
         ).set(leg_pnl["unmatched_quantity"] if leg_pnl is not None else float("nan"))
@@ -630,6 +666,11 @@ async def get_strategy_performance(strategy_id: str):
         if orphan_mode == "apply" and leg_pnl is not None:
             realized_pnl = leg_pnl["realized"]
             unrealized_pnl = leg_pnl["held_unrealized"]
+        if orphan_mode == "apply" and leg_book is not None:
+            # The leg-aware book decides the outcomes, whatever the state of the orphan cache: the netting
+            # calculator pairs a hedge strategy's LONG entry with its SHORT entry and reports losses of rounds that
+            # never closed (dm#599).
+            outcome = outcome_stats(leg_book["outcomes"], known_book=True)
         total_pnl = realized_pnl + unrealized_pnl
         recent_trend = (
             "positive"
@@ -643,15 +684,15 @@ async def get_strategy_performance(strategy_id: str):
 
         return {
             "stats": {
-                "win_rate": win_rate,
-                "win_rate_delta": win_rate_delta,
+                "win_rate": outcome["win_rate"],
+                "win_rate_delta": outcome["win_rate_delta"],
                 # The windows and the standard error behind the delta (and why it may be null)
-                "win_rate_delta_window": delta_window,
-                "win_rate_delta_se": delta_se,
+                "win_rate_delta_window": outcome["win_rate_delta_window"],
+                "win_rate_delta_se": outcome["win_rate_delta_se"],
                 # The closed rounds behind the win rate: the posterior of the CIO net-EV gate needs them
-                "wins": wins,
-                "losses": losses,
-                "consecutive_losses": consecutive_losses,
+                "wins": outcome["wins"],
+                "losses": outcome["losses"],
+                "consecutive_losses": outcome["consecutive_losses"],
                 "recent_pnl_trend": recent_trend,
                 "realized_pnl": realized_pnl,
                 "unrealized_pnl": unrealized_pnl,
@@ -687,6 +728,18 @@ async def get_strategy_performance(strategy_id: str):
                             "round-book-legs"
                             if orphan_mode == "apply" and leg_pnl is not None
                             else "pnl-calculator"
+                        ),
+                        # which book wins, losses, win rate and the streak come from
+                        **(
+                            {
+                                "outcome_source": (
+                                    "round-book-legs"
+                                    if leg_book is not None
+                                    else "pnl-calculator"
+                                )
+                            }
+                            if orphan_mode == "apply"
+                            else {}
                         ),
                         "orphan_overlay_unmatched_quantity": (
                             leg_pnl["unmatched_quantity"] if leg_pnl else None

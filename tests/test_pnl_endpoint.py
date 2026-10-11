@@ -1136,3 +1136,309 @@ async def test_consumer_hook_error_does_not_propagate():
     assert consumer._on_persisted is bad_hook
     # Silence unused-import warning.
     _ = logger
+
+
+# ---------------------------------------------------------------- outcomes from the leg-aware book (dm#599)
+def _legs(spec):
+    """Fills of hedge legs: (side, position side, quantity, price, seconds before T0, order id, symbol)."""
+    return [
+        _ps(
+            _fill(
+                side=side,
+                qty=qty,
+                price=price,
+                seconds_before=ago,
+                order_id=oid,
+                symbol=symbol,
+            ),
+            leg,
+        )
+        for side, leg, qty, price, ago, oid, *rest in spec
+        for symbol in [rest[0] if rest else "BTCUSDT"]
+    ]
+
+
+def _hedge_alternating(results):
+    """One closed LONG round per outcome, oldest first (a win sells above the entry, a loss below)."""
+    return [_ps(row, "LONG") for row in _alternating_fills(results)]
+
+
+def _outcomes_of(monkeypatch, rows, mode="apply", exchange=None):
+    served = _applied(monkeypatch, rows, rows, exchange or [], mode=mode)
+    return served["stats"], served["metadata"]
+
+
+def test_a_hedge_strategy_with_two_open_legs_and_no_closed_round_has_no_wins_and_no_losses(
+    monkeypatch,
+):
+    """The live case: the LONG entry at 100 and the SHORT entry at 90 are two open legs, no round closed.
+    PnlCalculator pairs them and reports a loss of 10."""
+    rows = _legs(
+        [
+            ("buy", "LONG", 1, 100, 300, "l"),
+            ("sell", "SHORT", 1, 90, 200, "s"),
+        ]
+    )
+    exchange = [_btc("LONG", "1"), _btc("SHORT", "-1")]
+    stats, metadata = _outcomes_of(monkeypatch, rows, exchange=exchange)
+    assert metadata["pnl_source"] == "round-book-legs"
+    assert (stats["wins"], stats["losses"], stats["consecutive_losses"]) == (0, 0, 0)
+    assert stats["win_rate"] is None
+    assert stats["win_rate_delta"] is None and stats["win_rate_delta_window"] is None
+    # off and report keep today's figures (the netting artifact included): the contract is unchanged
+    for mode in ("report", "off"):
+        old, _ = _outcomes_of(monkeypatch, rows, mode=mode, exchange=exchange)
+        assert (old["wins"], old["losses"], old["consecutive_losses"]) == (0, 1, 1), (
+            mode
+        )
+        assert old["win_rate"] == 0.0, mode
+
+
+def test_real_closed_losing_rounds_are_counted_once_each_in_the_order_they_closed(
+    monkeypatch,
+):
+    rows = _legs(
+        [
+            ("buy", "LONG", 1, 100, 1000, "a1"),
+            ("sell", "LONG", 1, 90, 900, "a2"),  # loss
+            ("sell", "SHORT", 1, 100, 800, "b1"),
+            ("buy", "SHORT", 1, 90, 700, "b2"),  # a short round that won
+            ("buy", "LONG", 1, 100, 600, "c1"),
+            ("sell", "LONG", 1, 95, 500, "c2"),  # loss
+            ("buy", "LONG", 1, 100, 400, "d1"),
+            ("sell", "LONG", 1, 90, 300, "d2"),  # loss
+        ]
+    )
+    stats, metadata = _outcomes_of(monkeypatch, rows)
+    assert metadata["pnl_source"] == "round-book-legs"
+    assert (stats["wins"], stats["losses"]) == (1, 3)
+    assert stats["win_rate"] == pytest.approx(0.25)
+    assert stats["consecutive_losses"] == 2  # loss, win, loss, loss
+    assert stats["realized_pnl"] == pytest.approx(-10 + 10 - 5 - 10)
+
+
+def test_outcomes_follow_the_close_time_not_the_open_time(monkeypatch):
+    rows = _legs(
+        [
+            ("buy", "LONG", 1, 100, 1000, "b1", "BTCUSDT"),  # opened first ...
+            ("buy", "LONG", 1, 100, 900, "e1", "ETHUSDT"),
+            (
+                "sell",
+                "LONG",
+                1,
+                110,
+                800,
+                "e2",
+                "ETHUSDT",
+            ),  # ... the ETH win closes first
+            (
+                "sell",
+                "LONG",
+                1,
+                90,
+                700,
+                "b2",
+                "BTCUSDT",
+            ),  # ... the BTC loss closes last
+        ]
+    )
+    stats, _ = _outcomes_of(monkeypatch, rows)
+    assert (stats["wins"], stats["losses"]) == (1, 1)
+    assert stats["consecutive_losses"] == 1  # the last round to close was a loss
+
+
+def test_a_break_even_round_is_neither_a_win_nor_a_loss(monkeypatch):
+    rows = _legs(
+        [("buy", "LONG", 1, 100, 300, "a1"), ("sell", "LONG", 1, 100, 200, "a2")]
+    )
+    stats, _ = _outcomes_of(monkeypatch, rows)
+    assert (stats["wins"], stats["losses"], stats["consecutive_losses"]) == (0, 0, 0)
+    assert stats["win_rate"] is None
+
+
+def test_a_netted_strategy_has_the_same_outcomes_under_every_mode(monkeypatch):
+    """No position side: the leg-aware book nets like the calculator, so nothing changes for such a strategy."""
+    rows = _alternating_fills([True, True, False, False, True])
+    keys = ("wins", "losses", "win_rate", "consecutive_losses", "win_rate_delta")
+    applied, metadata = _outcomes_of(monkeypatch, rows)
+    reported, _ = _outcomes_of(monkeypatch, rows, mode="report")
+    assert metadata["pnl_source"] == "round-book-legs"
+    assert {k: applied[k] for k in keys} == {k: reported[k] for k in keys}
+    assert (applied["wins"], applied["losses"]) == (3, 2)
+
+
+UNUSABLE_CACHES = [
+    None,  # a miss: the cache is warming
+    {"stale": True},  # flagged stale by the precomputer
+    {"snapshot_age_s": 3600},  # the snapshot behind it was already stale
+    {"cache_age_s": 7 * 24 * 3600.0},  # an expired entry
+]
+
+
+def _hedge_with_phantom_and_closed_rounds():
+    """Two closed LONG losses and a short win, plus one open LONG and one open SHORT the calculator would pair."""
+    return _legs(
+        [
+            ("buy", "LONG", 1, 100, 1000, "a1"),
+            ("sell", "LONG", 1, 90, 900, "a2"),  # loss
+            ("sell", "SHORT", 1, 100, 800, "b1"),
+            ("buy", "SHORT", 1, 90, 700, "b2"),  # short win
+            ("buy", "LONG", 1, 100, 600, "c1"),
+            ("sell", "LONG", 1, 95, 500, "c2"),  # loss
+            ("buy", "LONG", 1, 100, 400, "d1"),  # open LONG
+            (
+                "sell",
+                "SHORT",
+                1,
+                90,
+                300,
+                "d2",
+            ),  # open SHORT: the calculator closes d1 against it
+        ]
+    )
+
+
+@pytest.mark.parametrize("cache", UNUSABLE_CACHES)
+def test_under_apply_the_outcomes_come_from_the_leg_book_even_without_a_usable_overlay(
+    monkeypatch, cache
+):
+    """The replay does not need the orphan cache, so a warming or stale cache cannot bring the netting artifacts
+    back: the CIO must not flip between a cold start and a phantom streak across restarts."""
+    rows = _hedge_with_phantom_and_closed_rounds()
+    exchange = [_btc("LONG", "1"), _btc("SHORT", "-1")]
+    fresh = _applied(monkeypatch, rows, rows, exchange)
+    assert fresh["metadata"]["outcome_source"] == "round-book-legs"
+    if cache is None:
+        body, _ = _performance(monkeypatch, "apply", rows, None)
+    else:
+        stale = _rounds_cache_body(monkeypatch, rows, exchange, **cache)
+        body, _ = _performance(monkeypatch, "apply", rows, stale)
+    assert (
+        body["metadata"]["pnl_source"] == "pnl-calculator"
+    )  # realized and unrealized stay a pair
+    assert body["metadata"]["outcome_source"] == "round-book-legs"
+    keys = ("wins", "losses", "win_rate", "consecutive_losses", "win_rate_delta")
+    assert {k: body["stats"][k] for k in keys} == {k: fresh["stats"][k] for k in keys}
+    assert (body["stats"]["wins"], body["stats"]["losses"]) == (
+        1,
+        2,
+    )  # not the calculator's artifacts
+
+
+def test_the_calculators_outcomes_stay_in_off_and_report_and_name_no_outcome_source(
+    monkeypatch,
+):
+    rows = _hedge_with_phantom_and_closed_rounds()
+    exchange = [_btc("LONG", "1"), _btc("SHORT", "-1")]
+    for mode in ("report", "off"):
+        body = _applied(monkeypatch, rows, rows, exchange, mode=mode)
+        assert "outcome_source" not in body["metadata"], mode
+        assert body["stats"]["wins"] + body["stats"]["losses"] > 0, mode
+
+
+def _with_fees(rows, fee):
+    return [{**row, "fee": fee, "fee_asset": "USDT"} for row in rows]
+
+
+@pytest.mark.parametrize(
+    ("fee", "won"),
+    [
+        ("0.50", False),
+        ("0.10", True),
+        ("0.20", False),
+    ],  # gross +0.40; fees 1.00, 0.20, 0.40 in total
+)
+def test_a_round_is_a_win_or_a_loss_on_net_pnl(monkeypatch, fee, won):
+    """Gross +0.40: fees of 1.00 make it a loss; fees of 0.20 leave a win; fees equal to the gain are break-even."""
+    rows = _with_fees(
+        _legs(
+            [("buy", "LONG", 1, 100, 300, "a1"), ("sell", "LONG", 1, 100.4, 200, "a2")]
+        ),
+        fee,
+    )
+    stats, _ = _outcomes_of(monkeypatch, rows)
+    if fee == "0.20":
+        assert (stats["wins"], stats["losses"]) == (0, 0)  # net exactly 0: neither
+    else:
+        assert (stats["wins"], stats["losses"]) == ((1, 0) if won else (0, 1))
+
+
+def test_a_fee_in_another_asset_is_not_netted_but_the_gross_outcome_stands(monkeypatch):
+    """A fee that is not in the quote asset is counted as unknown, not as a cost (as for the calibration)."""
+    rows = [
+        {**row, "fee": "0.5", "fee_asset": "BNB"}
+        for row in _legs(
+            [("buy", "LONG", 1, 100, 300, "a1"), ("sell", "LONG", 1, 100.4, 200, "a2")]
+        )
+    ]
+    stats, _ = _outcomes_of(monkeypatch, rows)
+    assert (stats["wins"], stats["losses"]) == (1, 0)
+
+
+def test_the_win_rate_delta_under_apply_is_null_when_the_windows_are_one_trade(
+    monkeypatch,
+):
+    """The #579 case on round outcomes: 2W 1L, the last a loss, each window one trade."""
+    stats, metadata = _outcomes_of(monkeypatch, _hedge_alternating([True, True, False]))
+    assert metadata["pnl_source"] == "round-book-legs"
+    assert stats["wins"] == 2 and stats["losses"] == 1
+    assert stats["win_rate_delta"] is None
+    assert stats["win_rate_delta_window"] == 1
+    assert stats["win_rate_delta_se"] == pytest.approx(0.5**0.5)
+    assert stats["consecutive_losses"] == 1
+
+
+def test_the_win_rate_delta_under_apply_is_returned_for_a_real_shift(monkeypatch):
+    """40 round outcomes: 18 wins of 20, then 4 wins of 20."""
+    results = [True] * 18 + [False] * 2 + [True] * 4 + [False] * 16
+    stats, _ = _outcomes_of(monkeypatch, _hedge_alternating(results))
+    assert stats["win_rate_delta"] == pytest.approx(0.2 - 0.9)
+    assert stats["win_rate_delta_window"] == 20
+    assert stats["win_rate_delta_se"] == pytest.approx((0.55 * 0.45 * 2 / 20) ** 0.5)
+    assert stats["consecutive_losses"] == 16
+    assert stats["win_rate"] == pytest.approx(22 / 40)
+
+
+def test_the_response_contract_is_the_same_under_apply(monkeypatch):
+    stats, _ = _outcomes_of(monkeypatch, _hedge_alternating([True, False, True, False]))
+    assert {
+        "win_rate",
+        "wins",
+        "losses",
+        "consecutive_losses",
+        "recent_pnl_trend",
+        "win_rate_delta",
+        "win_rate_delta_window",
+        "win_rate_delta_se",
+    } <= set(stats)
+
+
+def test_outcome_stats_helper_separates_an_unknown_streak_from_a_known_zero():
+    from data_manager.api.routes.analysis import outcome_stats
+
+    assert (
+        outcome_stats([])["consecutive_losses"] is None
+    )  # the calculator: nothing seen
+    known = outcome_stats(
+        [], known_book=True
+    )  # a complete leg replay: no round, no losses
+    assert known["consecutive_losses"] == 0 and known["win_rate"] is None
+    assert known["wins"] == 0 and known["losses"] == 0
+    mixed = outcome_stats([False, True, False, False])
+    assert (mixed["wins"], mixed["losses"], mixed["consecutive_losses"]) == (1, 3, 2)
+    assert mixed["win_rate"] == pytest.approx(0.25)
+
+
+def test_leg_outcomes_belong_to_the_requested_strategy_only():
+    from data_manager.api.routes.analysis import _leg_aware_pnl
+
+    rows = _legs(
+        [("buy", "LONG", 1, 100, 400, "a1"), ("sell", "LONG", 1, 90, 300, "a2")]
+    ) + [
+        {**row, "strategy_id": "S2"}
+        for row in _legs(
+            [("buy", "LONG", 1, 100, 200, "b1"), ("sell", "LONG", 1, 120, 100, "b2")]
+        )
+    ]
+    assert _leg_aware_pnl(rows, [], "S1")["outcomes"] == [False]
+    assert _leg_aware_pnl(rows, [], "S2")["outcomes"] == [True]
