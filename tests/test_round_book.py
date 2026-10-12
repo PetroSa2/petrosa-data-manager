@@ -1795,7 +1795,10 @@ def test_a_symbol_the_exchange_stops_reporting_closes_at_the_last_seen_mark():
     history = {
         "cut_over_ms": _ms(T0),
         "snapshots": [
-            {"as_of_ms": _ms(T0 + timedelta(minutes=5)), "rows": [_position_row(mark=120.0)]},
+            {
+                "as_of_ms": _ms(T0 + timedelta(minutes=5)),
+                "rows": [_position_row(mark=120.0)],
+            },
             {"as_of_ms": _ms(T0 + timedelta(minutes=10)), "rows": []},
         ],
     }
@@ -1911,6 +1914,9 @@ def test_fuzz_synthetic_exits_always_leave_the_book_accounted():
             }
             for step in range(rng.randint(1, 3))
         ]
-        history = {"cut_over_ms": _ms(T0 - timedelta(minutes=1)), "snapshots": snapshots}
+        history = {
+            "cut_over_ms": _ms(T0 - timedelta(minutes=1)),
+            "snapshots": snapshots,
+        }
         report = _report(rows, exchange_history=history)
         assert report["accounted"] is True
