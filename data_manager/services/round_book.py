@@ -36,6 +36,8 @@ ROUND_ORPHAN_AGE_FACTOR = 3.0
 ROUND_ORPHAN_FALLBACK_HOLD_SECONDS = 4.0 * 60 * 60
 ROUND_ORPHAN_MAX_SNAPSHOT_AGE_SECONDS = 1800.0
 ROUND_ORPHAN_QUANTITY_TOLERANCE = 1e-9
+#: A synthetic exit quantity below this fraction of the leg is treated as zero (petrosa-data-manager#603).
+SYNTHETIC_EXIT_QUANTITY_TOLERANCE = 1e-9
 
 
 @dataclass
@@ -73,6 +75,8 @@ class _Cycle:
     entry_notional: Decimal = ZERO  # sum of entry quantity x price
     position_ids: list[str] = field(default_factory=list)
     decision_ids: list[str] = field(default_factory=list)
+    #: True once any fill of the round is a synthetic exit (petrosa-data-manager#603)
+    synthetic: bool = False
 
 
 @dataclass
@@ -90,6 +94,8 @@ class ClosedRound:
     entry_notional: Decimal = ZERO
     position_ids: tuple[str, ...] = ()
     decision_ids: tuple[str, ...] = ()
+    #: True when the round was closed by a synthetic exit (petrosa-data-manager#603)
+    synthetic: bool = False
 
     @property
     def holding_seconds(self) -> float:
@@ -168,6 +174,20 @@ class RoundBook:
         self._side_unknown: dict[str, int] = defaultdict(int)
         # legacy exit rows (side LONG/SHORT) read as the closing order side (petrosa-data-manager#550)
         self._legacy_mapped: dict[str, int] = defaultdict(int)
+        # rounds a synthetic exit closed whose entries predate the exchange-history cut-over: reported as
+        # excluded, never as outcomes (petrosa-data-manager#603)
+        self._cut_over: datetime | None = None
+        self.excluded_pre_history: list[ClosedRound] = []
+        self._excluded_fills: dict[str, int] = defaultdict(int)
+        self._excluded_lots: dict[str, int] = defaultdict(int)
+
+    def set_cut_over(self, cut_over_ms: int | float | None) -> None:
+        """Set the exchange-history cut-over: a synthetic round opened before it is excluded, not an outcome."""
+        self._cut_over = (
+            datetime.fromtimestamp(float(cut_over_ms) / 1000, tz=UTC)
+            if cut_over_ms is not None
+            else None
+        )
 
     def apply(self, row: dict[str, Any]) -> None:
         """Account for one fill row (other event types are not fills and are ignored)."""
@@ -210,7 +230,7 @@ class RoundBook:
         book = self._books[(strategy_id, symbol, leg)]
         if leg == NET:
             self._apply_netted(book, strategy_id, str(symbol), side, qty, price, when)
-            if not _has_position_side(row):
+            if not _has_position_side(row) and not row.get("synthetic"):
                 self._side_unknown[strategy_id] += 1
         else:
             self._apply_leg(book, strategy_id, str(symbol), leg, side, qty, price, when)
@@ -292,7 +312,7 @@ class RoundBook:
                 cycle.entry_notional += _dec(remaining) * _dec(price)
         if matched > ZERO and not opposite:
             # The position went flat (or flipped): the round is closed at this fill.
-            self.closed.append(
+            self._record_close(
                 ClosedRound(
                     strategy_id=strategy_id,
                     symbol=symbol,
@@ -306,9 +326,11 @@ class RoundBook:
                     entry_notional=cycle.entry_notional,
                     position_ids=tuple(cycle.position_ids),
                     decision_ids=tuple(cycle.decision_ids),
-                )
+                    synthetic=cycle.synthetic,
+                ),
+                cycle,
+                strategy_id,
             )
-            self._closed_fills[strategy_id] += cycle.fills
             if remaining > ZERO:
                 book.cycle = _Cycle(opened_at=when)
                 book.cycle.entry_notional = remaining * _dec(price)
@@ -377,7 +399,7 @@ class RoundBook:
             if _dec(lot.qty) == ZERO:
                 lots.popleft()
         if not lots:
-            self.closed.append(
+            self._record_close(
                 ClosedRound(
                     strategy_id=strategy_id,
                     symbol=symbol,
@@ -392,9 +414,11 @@ class RoundBook:
                     entry_notional=cycle.entry_notional,
                     position_ids=tuple(cycle.position_ids),
                     decision_ids=tuple(cycle.decision_ids),
-                )
+                    synthetic=cycle.synthetic,
+                ),
+                cycle,
+                strategy_id,
             )
-            self._closed_fills[strategy_id] += cycle.fills
             book.cycle = None
 
     def _tag(self, cycle: _Cycle, *, decision_only: bool = False) -> None:
@@ -408,6 +432,9 @@ class RoundBook:
 
         def field_of(name: str) -> Any:
             return row.get(name) if row.get(name) is not None else payload.get(name)
+
+        if not decision_only and row.get("synthetic"):
+            cycle.synthetic = True
 
         buckets = [("decision_id", cycle.decision_ids)]
         if not decision_only:
@@ -431,6 +458,22 @@ class RoundBook:
 
     def _unattributed(self, reason: str) -> None:
         self.unattributed[reason] += 1
+
+    def _record_close(
+        self, closed: ClosedRound, cycle: _Cycle, strategy_id: str
+    ) -> None:
+        """File a finished round: an outcome, unless a synthetic close of a pre-cut-over round (excluded)."""
+        if (
+            closed.synthetic
+            and self._cut_over is not None
+            and closed.opened_at < self._cut_over
+        ):
+            self.excluded_pre_history.append(closed)
+            self._excluded_fills[strategy_id] += cycle.fills
+            self._excluded_lots[strategy_id] += cycle.entry_fills
+            return
+        self.closed.append(closed)
+        self._closed_fills[strategy_id] += cycle.fills
 
     # ------------------------------------------------------------------
     def _orphan_overlay(
@@ -707,7 +750,18 @@ class RoundBook:
                 "exit_fills": self._exit[strategy_id],
                 "fills_in_closed_rounds": self._closed_fills[strategy_id],
                 "fills_in_open_rounds": open_fills[strategy_id],
+                "fills_in_excluded_pre_history_rounds": self._excluded_fills[
+                    strategy_id
+                ],
                 "closed_rounds": len(rounds),
+                "synthetic_rounds": sum(1 for r in rounds if r.synthetic),
+                "synthetic_realized_pnl": sum(
+                    r.realized for r in rounds if r.synthetic
+                ),
+                "excluded_pre_history_rounds": sum(
+                    1 for r in self.excluded_pre_history if r.strategy_id == strategy_id
+                ),
+                "excluded_pre_history_lots": self._excluded_lots[strategy_id],
                 "open_rounds": open_rounds[strategy_id],
                 "window_days": window_days,
                 "closed_rounds_in_window": len(recent),
@@ -796,16 +850,165 @@ class RoundBook:
                 "position_side_unknown": sum(self._side_unknown.values()),
                 "legacy_exit_side_mapped": sum(self._legacy_mapped.values()),
             },
-            # Every fill is in a closed round, the open round of its strategy, or unattributed.
+            # Every fill is in a closed round, the open round of its strategy, an orphaned round,
+            # or an excluded pre-cut-over round, or unattributed.
             "accounted": all(
                 s["fills"]
                 == s["fills_in_closed_rounds"]
                 + s["fills_in_open_rounds"]
                 + s.get("fills_in_orphaned_rounds", 0)
+                + s["fills_in_excluded_pre_history_rounds"]
                 for s in strategies.values()
             ),
             **(overlay_meta if overlay_enabled else {}),
         }
+
+
+def _snapshot_legs(
+    snapshot: dict[str, Any],
+) -> dict[tuple[str, str], tuple[float, float | None]]:
+    """``(symbol, leg) -> (quantity, mark)`` of one exchange snapshot (``BOTH`` split by sign)."""
+    legs: dict[tuple[str, str], tuple[float, float | None]] = {}
+    for row in snapshot.get("rows") or []:
+        symbol = str(row.get("symbol") or "").strip()
+        quantity = _number(row.get("quantity"))
+        if not symbol or quantity is None:
+            continue
+        side = str(row.get("position_side") or "").strip().upper()
+        if side == "BOTH":
+            side = "LONG" if quantity >= 0 else "SHORT"
+        if side not in ("LONG", "SHORT"):
+            continue
+        legs[(symbol, side)] = (abs(quantity), _number(row.get("mark_price")))
+    return legs
+
+
+def _reconcile_snapshot(
+    book: RoundBook,
+    legs: dict[tuple[str, str], tuple[float, float | None]],
+    last_mark: dict[tuple[str, str], float],
+    at: datetime,
+) -> list[dict[str, Any]]:
+    """Synthetic exits for the open quantity the strategies hold over the exchange on one snapshot.
+
+    The excess of the strategies' open quantity on a (symbol, leg) over the exchange is closed FIFO
+    oldest-first across all strategies' lots, at the snapshot's mark (the last mark seen for a symbol the
+    exchange no longer reports), before any circle of the book is attributed to a later snapshot. Pure:
+    returns fill-shaped rows; the caller applies them. A symbol the exchange no longer reports counts as a
+    full drop; a symbol never priced is left alone (nothing is guessed).
+    """
+    open_by_leg: dict[tuple[str, str], list[tuple[str, str, _Lot, str]]] = defaultdict(
+        list
+    )
+    for (strategy_id, symbol, book_leg), state in book._books.items():
+        for lot in state.long:
+            open_by_leg[(symbol, "LONG")].append((strategy_id, symbol, lot, book_leg))
+        for lot in state.short:
+            open_by_leg[(symbol, "SHORT")].append((strategy_id, symbol, lot, book_leg))
+    emitted: list[dict[str, Any]] = []
+    for (symbol, leg), entries in open_by_leg.items():
+        key = (symbol, leg)
+        current = legs.get(key)
+        exchange_quantity = current[0] if current is not None else 0.0
+        mark = (
+            current[1]
+            if current is not None and current[1] is not None
+            else last_mark.get(key)
+        )
+        if mark is None:
+            continue
+        open_total = sum(lot.qty for _s, _y, lot, _l in entries)
+        excess = open_total - exchange_quantity
+        tolerance = SYNTHETIC_EXIT_QUANTITY_TOLERANCE * max(
+            1.0, abs(open_total), abs(exchange_quantity)
+        )
+        if excess <= tolerance:
+            continue
+        remaining = excess
+        for strategy_id, lot_symbol, lot, book_leg in sorted(
+            entries, key=lambda item: item[2].opened_at
+        ):
+            if remaining <= tolerance:
+                break
+            take = min(lot.qty, remaining)
+            if take <= SYNTHETIC_EXIT_QUANTITY_TOLERANCE:
+                continue
+            row: dict[str, Any] = {
+                "event_type": "filled",
+                "strategy_id": strategy_id,
+                "symbol": lot_symbol,
+                "side": "sell" if leg == "LONG" else "buy",
+                "fill_qty": take,
+                "fill_price": mark,
+                "fill_time": at,
+                "fee": 0,
+                "synthetic": True,
+            }
+            if book_leg != NET:
+                row["position_side"] = leg
+            emitted.append(row)
+            remaining -= take
+    return emitted
+
+
+def build_synthetic_exits(
+    rows: list[dict[str, Any]],
+    exchange_history: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Synthetic exits from the exchange snapshot series (petrosa-data-manager#603).
+
+    Replays ``rows`` against every snapshot after the cut-over; wherever the strategies' open quantity
+    exceeds the exchange's, emits a mark-priced, fee-free synthetic exit (``synthetic: true``), FIFO
+    oldest-first across strategies. Read-only: returns the fill-shaped rows for one canonical replay.
+    """
+    snapshots = (exchange_history or {}).get("snapshots") or []
+    if not snapshots:
+        return []
+    ordered = sorted(
+        (row for row in rows if row.get("event_type") in FILL_EVENT_TYPES),
+        key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC),
+    )
+    book = RoundBook()
+    synthetic: list[dict[str, Any]] = []
+    last_mark: dict[tuple[str, str], float] = {}
+    index = 0
+    for snapshot in snapshots:
+        as_of_ms = snapshot.get("as_of_ms")
+        if as_of_ms is None:
+            continue
+        at = datetime.fromtimestamp(float(as_of_ms) / 1000, tz=UTC)
+        while index < len(ordered):
+            when = _when(ordered[index]) or datetime.min.replace(tzinfo=UTC)
+            if when > at:
+                break
+            book.apply(ordered[index])
+            index += 1
+        legs = _snapshot_legs(snapshot)
+        for key, (_qty, mark) in legs.items():
+            if mark is not None:
+                last_mark[key] = mark
+        for row in _reconcile_snapshot(book, legs, last_mark, at):
+            synthetic.append(row)
+            book.apply(row)
+    return synthetic
+
+
+def replay_book(
+    rows: list[dict[str, Any]],
+    *,
+    exchange_history: dict[str, Any] | None = None,
+) -> RoundBook:
+    """One canonical replay of the fills plus their synthetic exits into a :class:`RoundBook`."""
+    book = RoundBook()
+    if exchange_history:
+        book.set_cut_over(exchange_history.get("cut_over_ms"))
+    fills = [row for row in rows if row.get("event_type") in FILL_EVENT_TYPES]
+    merged = fills + build_synthetic_exits(fills, exchange_history)
+    for row in sorted(
+        merged, key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC)
+    ):
+        book.apply(row)
+    return book
 
 
 def build_report(
@@ -816,15 +1019,14 @@ def build_report(
     exchange: dict[str, Any] | None = None,
     closed_entry_orders: set[str] | None = None,
     apply_overlay: bool = False,
+    exchange_history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Replay fill rows (any order) and return the per-strategy report."""
-    book = RoundBook()
-    ordered = sorted(
-        (row for row in rows if row.get("event_type") in FILL_EVENT_TYPES),
-        key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC),
-    )
-    for row in ordered:
-        book.apply(row)
+    """Replay fill rows (any order) and return the per-strategy report.
+
+    ``exchange_history`` adds the synthetic exits of the exchange snapshot series after the cut-over
+    (petrosa-data-manager#603) to the one canonical replay.
+    """
+    book = replay_book(rows, exchange_history=exchange_history)
     return book.report(
         now=now,
         window_days=window_days,

@@ -8,6 +8,7 @@ drain's ``scorecard_service`` (``analysis.py``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -16,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 import data_manager.api.app as api_module
-from data_manager.services.round_book import FILL_EVENT_TYPES, RoundBook, _when
+from data_manager.services.round_book import FILL_EVENT_TYPES, _when, replay_book
 from data_manager.services.strategy_net_r import (
     score_rounds,
     stop_fraction_of,
@@ -89,6 +90,19 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
+async def _load_exchange_history() -> dict[str, Any] | None:
+    """The exchange snapshot series for the synthetic exits; None when MySQL is unavailable."""
+    mysql = getattr(api_module.db_manager, "mysql_adapter", None)
+    if mysql is None:
+        return None
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    repo = LedgerRepository(
+        mysql, getattr(api_module.db_manager, "mongodb_adapter", None)
+    )
+    return await asyncio.to_thread(repo.round_exchange_history)
+
+
 async def _scored() -> list:
     if not api_module.db_manager or not getattr(
         api_module.db_manager, "mongodb_adapter", None
@@ -97,9 +111,7 @@ async def _scored() -> list:
     try:
         fills = await _load_fills(None)
         fills.sort(key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC))
-        book = RoundBook()
-        for row in fills:
-            book.apply(row)
+        book = replay_book(fills, exchange_history=await _load_exchange_history())
         position_ids = sorted({p for r in book.closed for p in r.position_ids})
         decision_ids = sorted({d for r in book.closed for d in r.decision_ids})
         stops = await _load_stops(position_ids)

@@ -541,6 +541,55 @@ class LedgerRepository(BaseRepository):
             "rows": [dict(row) for row in rows],
         }
 
+    def round_exchange_history(self) -> dict[str, Any]:
+        """The exchange position snapshot series after the cut-over (petrosa-data-manager#603).
+
+        The cut-over is the first stored exchange snapshot: before it there is no exchange history, so a
+        synthetic close there is excluded rather than mis-priced. Read-only.
+        """
+        earliest = (
+            self._run(
+                "SELECT MIN(as_of_ms) AS earliest FROM ledger_exchange_positions_snapshot"
+            )
+            .mappings()
+            .first()
+        )
+        cut_over_ms = (
+            int(earliest["earliest"])
+            if earliest and earliest["earliest"] is not None
+            else None
+        )
+        if cut_over_ms is None:
+            return {"cut_over_ms": None, "snapshots": []}
+        rows = (
+            self._run(
+                "SELECT as_of_ms, symbol, position_side, quantity, mark_price "
+                "FROM ledger_exchange_positions WHERE as_of_ms>=:cut_over "
+                "ORDER BY as_of_ms",
+                {"cut_over": cut_over_ms},
+            )
+            .mappings()
+            .all()
+        )
+        snapshots: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            as_of_ms = int(row["as_of_ms"])
+            snapshot = snapshots.setdefault(
+                as_of_ms, {"as_of_ms": as_of_ms, "rows": []}
+            )
+            snapshot["rows"].append(
+                {
+                    "symbol": row["symbol"],
+                    "position_side": row["position_side"],
+                    "quantity": row["quantity"],
+                    "mark_price": row["mark_price"],
+                }
+            )
+        return {
+            "cut_over_ms": cut_over_ms,
+            "snapshots": [snapshots[key] for key in sorted(snapshots)],
+        }
+
     async def live_closed_entry_order_ids(self) -> set[str]:
         """Entry order ids closed according to the LIVE position stores (Mongo ``positions`` and ``strategy_positions``).
 

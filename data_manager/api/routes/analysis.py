@@ -361,10 +361,47 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
     return {"status": "enabled", "entries": entries}
 
 
+async def _load_synthetic_exits(
+    strategy_id: str,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """The synthetic exits of one strategy and the cut-over, from a global replay (petrosa-data-manager#603).
+
+    The exchange quantity is the aggregate over all strategies, so the exits are computed on every fill and then
+    the strategy's own are returned. Empty when MySQL is unavailable.
+    """
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+    from data_manager.services.round_book import FILL_EVENT_TYPES, build_synthetic_exits
+
+    mysql = getattr(api_module.db_manager, "mysql_adapter", None)
+    if mysql is None:
+        return [], None
+    mongodb = getattr(api_module.db_manager, "mongodb_adapter", None)
+    if mongodb is None:
+        return [], None
+    repo = LedgerRepository(mysql, mongodb)
+    history = await asyncio.to_thread(repo.round_exchange_history)
+    cut_over_ms = history.get("cut_over_ms")
+    if not history.get("snapshots"):
+        return [], cut_over_ms
+    all_fills = (
+        await mongodb.db["execution_events"]
+        .find({"event_type": {"$in": sorted(FILL_EVENT_TYPES)}})
+        .sort("timestamp", 1)
+        .to_list(length=_ROUND_MAX_FILLS)
+    )
+    synthetic = build_synthetic_exits(all_fills, history)
+    return [
+        row for row in synthetic if str(row.get("strategy_id")) == strategy_id
+    ], cut_over_ms
+
+
 def _leg_aware_pnl(
     rows: list[dict[str, Any]],
     overlay_lots: list[tuple[str, str, str, Any, float, str]] | None,
     strategy_id: str,
+    *,
+    synthetic_rows: list[dict[str, Any]] | None = None,
+    cut_over_ms: int | None = None,
 ) -> dict[str, Any]:
     """Realized and unrealized P&L of one strategy from ONE leg-aware replay of its own fills (#581).
 
@@ -374,7 +411,7 @@ def _leg_aware_pnl(
     since the cache was computed is simply not open here, and a lot opened since is held by default. Returns
     ``complete`` False (and no unrealized figures) when there is no overlay list or an open lot has no mark price
     (nothing is guessed). The closed-round ``outcomes`` and ``realized`` never need the overlay: they are in every
-    result.
+    result. ``synthetic_rows`` are the strategy's synthetic exits (petrosa-data-manager#603) replayed with it.
     """
     from data_manager.services.round_book import (
         FILL_EVENT_TYPES,
@@ -385,10 +422,13 @@ def _leg_aware_pnl(
     )
 
     book = RoundBook()
+    if cut_over_ms is not None:
+        book.set_cut_over(cut_over_ms)
     marks: dict[str, float] = {}
     fills = [row for row in rows if row.get("event_type") in FILL_EVENT_TYPES]
+    merged = fills + list(synthetic_rows or [])
     for row in sorted(
-        fills, key=lambda r: _when(r) or datetime.min.replace(tzinfo=UTC)
+        merged, key=lambda r: _when(r) or datetime.min.replace(tzinfo=UTC)
     ):
         book.apply(row)
         symbol = row.get("symbol")
@@ -474,12 +514,22 @@ async def _timed_leg_replay(
     rows: list[dict[str, Any]],
     overlay_lots: list[tuple[str, str, str, Any, float, str]] | None,
     strategy_id: str,
+    *,
+    synthetic_rows: list[dict[str, Any]] | None = None,
+    cut_over_ms: int | None = None,
 ) -> dict[str, Any]:
     """``_leg_aware_pnl`` off the event loop, its duration measured against the replay budget."""
     budget_seconds, budget_source = _replay_budget_seconds()
     replay_started = perf_counter()
     try:
-        return await asyncio.to_thread(_leg_aware_pnl, rows, overlay_lots, strategy_id)
+        return await asyncio.to_thread(
+            _leg_aware_pnl,
+            rows,
+            overlay_lots,
+            strategy_id,
+            synthetic_rows=synthetic_rows,
+            cut_over_ms=cut_over_ms,
+        )
     finally:
         replay_duration = perf_counter() - replay_started
         ROUND_BOOK_REPLAY_DURATION.observe(replay_duration)
@@ -652,7 +702,23 @@ async def get_strategy_performance(strategy_id: str):
         # Under apply the replay always runs: the outcomes (and realized) do not need the orphan cache, only the
         # orphan/unrealized split does, so a warming or stale cache must not bring the netting artifacts back.
         if overlay is not None or orphan_mode == "apply":
-            leg_book = await _timed_leg_replay(rows, overlay, strategy_id)
+            synthetic_rows: list[dict[str, Any]] = []
+            cut_over_ms: int | None = None
+            try:
+                synthetic_rows, cut_over_ms = await _load_synthetic_exits(strategy_id)
+            except Exception as exc:
+                logger.warning(
+                    "performance: synthetic exits unavailable for %s: %s",
+                    strategy_id,
+                    exc,
+                )
+            leg_book = await _timed_leg_replay(
+                rows,
+                overlay,
+                strategy_id,
+                synthetic_rows=synthetic_rows,
+                cut_over_ms=cut_over_ms,
+            )
         if overlay is not None:
             assert leg_book is not None
             leg_pnl = leg_book if leg_book["complete"] else None
@@ -995,7 +1061,9 @@ def _slice_round_report(report: dict[str, Any], strategy_id: str) -> dict[str, A
     }
     report["accounted"] = strategy is None or strategy["fills"] == strategy[
         "fills_in_closed_rounds"
-    ] + strategy["fills_in_open_rounds"] + strategy.get("fills_in_orphaned_rounds", 0)
+    ] + strategy["fills_in_open_rounds"] + strategy.get(
+        "fills_in_orphaned_rounds", 0
+    ) + strategy.get("fills_in_excluded_pre_history_rounds", 0)
     return report
 
 
@@ -1049,12 +1117,21 @@ async def compute_closed_rounds(
     overlay_possible = mode != "off" and not overlay_cut and not truncated
     exchange = None
     closed_entry_orders: set[str] | None = None
-    if overlay_possible:
+    exchange_history: dict[str, Any] | None = None
+    mysql = getattr(db_manager, "mysql_adapter", None)
+    global_read = not (own_query and mode == "off") and not overlay_cut
+    if mysql is not None:
         from data_manager.db.repositories.ledger_repository import LedgerRepository
 
-        mysql = getattr(db_manager, "mysql_adapter", None)
-        if mysql is not None:
-            repo = LedgerRepository(mysql, mongodb)
+        repo = LedgerRepository(mysql, mongodb)
+        if global_read and not truncated:
+            try:
+                # Synthetic exits: the exchange snapshot series after the cut-over (petrosa-data-manager#603).
+                exchange_history = await asyncio.to_thread(repo.round_exchange_history)
+            except Exception as exc:
+                logger.warning("rounds: exchange history unavailable: %s", exc)
+                exchange_history = None
+        if overlay_possible:
             try:
                 # Closed entry orders: the live Mongo position stores AND the MySQL history (dm#603 F1: the MySQL
                 # tables stop at 2026-09-26, so the reconciler's closures were invisible to the orphan overlay).
@@ -1067,8 +1144,8 @@ async def compute_closed_rounds(
             except Exception as exc:
                 logger.warning("rounds: orphan overlay inputs unavailable: %s", exc)
                 exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
-        else:
-            exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
+    if overlay_possible and exchange is None:
+        exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
     compute_started = monotonic()
     report = await asyncio.to_thread(
         build_report,
@@ -1077,6 +1154,7 @@ async def compute_closed_rounds(
         exchange=exchange,
         closed_entry_orders=closed_entry_orders,
         apply_overlay=mode == "apply",
+        exchange_history=exchange_history,
     )
     record_report_stage(
         "rounds", "compute", monotonic() - compute_started, source=source

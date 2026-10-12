@@ -34,6 +34,8 @@ class ScoredRound:
     stop_fraction: Decimal | None
     net: Decimal = field(init=False)
     net_r: Decimal | None = field(init=False)
+    #: True when the round was closed by a synthetic exchange exit (petrosa-data-manager#603)
+    synthetic: bool = False
 
     def __post_init__(self) -> None:
         self.net = self.gross - self.fees
@@ -87,6 +89,7 @@ def score_rounds(
                 fee_unknown_fills=r.fee_unknown_fills,
                 entry_notional=r.entry_notional,
                 stop_fraction=stop,
+                synthetic=bool(getattr(r, "synthetic", False)),
             )
         )
     return sorted(out, key=lambda x: x.closed_at)
@@ -109,6 +112,7 @@ def strategy_net_r(rounds: list[ScoredRound]) -> dict[str, Any]:
             "net_r": [decimal_string(r.net_r) for r in rs if r.net_r is not None],
             "cumulative_net_loss_usd": decimal_string(max(ZERO, -total)),
             "closed_rounds": len(rs),
+            "synthetic_rounds": sum(1 for r in rs if r.synthetic),
             "rounds_without_risk": sum(1 for r in rs if r.net_r is None),
             "fee_unknown_fills": sum(r.fee_unknown_fills for r in rs),
         }

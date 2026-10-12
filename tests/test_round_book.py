@@ -1723,3 +1723,194 @@ async def test_an_unreadable_live_store_disables_the_overlay_instead_of_reading_
         api_module.db_manager = None
     assert report["orphan_overlay"] == "missing"
     assert report["strategies"]["s1"].get("orphaned_lots", 0) == 0
+
+
+def _ms(at):
+    return int(at.timestamp() * 1000)
+
+
+def _position_row(symbol="ETHUSDT", leg="LONG", quantity=0.0, mark=110.0):
+    return {
+        "symbol": symbol,
+        "position_side": leg,
+        "quantity": quantity,
+        "mark_price": mark,
+    }
+
+
+def _history(rows, cut_over=T0, at=T0 + timedelta(minutes=5)):
+    return {
+        "cut_over_ms": _ms(cut_over),
+        "snapshots": [{"as_of_ms": _ms(at), "rows": rows}],
+    }
+
+
+def test_a_post_cut_over_round_closes_synthetically_at_the_mark():
+    rows = [_fill("s", "buy", 1.0, 100.0, 1, position_side="LONG")]
+    report = _report(rows, exchange_history=_history([_position_row()]))
+    strategy = report["strategies"]["s"]
+    assert strategy["closed_rounds"] == 1
+    assert strategy["synthetic_rounds"] == 1
+    assert strategy["realized_pnl_closed_rounds"] == pytest.approx(10.0)
+    assert strategy["fills_in_excluded_pre_history_rounds"] == 0
+    assert report["accounted"] is True
+
+
+def test_a_pre_cut_over_round_is_excluded_not_counted():
+    rows = [_fill("s", "buy", 1.0, 100.0, -10, position_side="LONG")]
+    report = _report(rows, exchange_history=_history([_position_row()]))
+    strategy = report["strategies"]["s"]
+    assert strategy["closed_rounds"] == 0
+    assert strategy["synthetic_rounds"] == 0
+    assert strategy["excluded_pre_history_rounds"] == 1
+    assert strategy["excluded_pre_history_lots"] == 1
+    assert strategy["fills_in_excluded_pre_history_rounds"] == 2
+    assert strategy["realized_pnl_closed_rounds"] == 0
+    assert report["accounted"] is True
+
+
+def test_the_excess_closes_the_oldest_lots_first_across_strategies():
+    rows = [
+        _fill("old", "buy", 1.0, 100.0, 1, position_side="LONG"),
+        _fill("new", "buy", 1.0, 100.0, 2, position_side="LONG"),
+    ]
+    history = _history([_position_row(quantity=1.0)])
+    report = _report(rows, exchange_history=history)
+    assert report["strategies"]["old"]["closed_rounds"] == 1
+    assert report["strategies"]["old"]["synthetic_rounds"] == 1
+    assert report["strategies"]["new"]["closed_rounds"] == 0
+    assert report["accounted"] is True
+
+
+def test_no_exchange_history_leaves_the_book_untouched():
+    rows = [_fill("s", "buy", 1.0, 100.0, 1, position_side="LONG")]
+    report = _report(rows, exchange_history={"cut_over_ms": None, "snapshots": []})
+    assert report["strategies"]["s"]["closed_rounds"] == 0
+    assert report["strategies"]["s"]["synthetic_rounds"] == 0
+    assert report["accounted"] is True
+
+
+def test_a_symbol_the_exchange_stops_reporting_closes_at_the_last_seen_mark():
+    rows = [_fill("s", "buy", 1.0, 100.0, 1, position_side="LONG")]
+    history = {
+        "cut_over_ms": _ms(T0),
+        "snapshots": [
+            {"as_of_ms": _ms(T0 + timedelta(minutes=5)), "rows": [_position_row(mark=120.0)]},
+            {"as_of_ms": _ms(T0 + timedelta(minutes=10)), "rows": []},
+        ],
+    }
+    report = _report(rows, exchange_history=history)
+    strategy = report["strategies"]["s"]
+    assert strategy["closed_rounds"] == 1
+    assert strategy["synthetic_rounds"] == 1
+    assert strategy["realized_pnl_closed_rounds"] == pytest.approx(20.0)
+    assert report["accounted"] is True
+
+
+def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+        def all(self):
+            return self.rows
+
+    repo = LedgerRepository(object(), None)
+
+    def run(statement, _params=None):
+        if "MIN(as_of_ms)" in statement:
+            return Result([{"earliest": 1_000}])
+        return Result(
+            [
+                {
+                    "as_of_ms": 1_000,
+                    "symbol": "BTCUSDT",
+                    "position_side": "LONG",
+                    "quantity": "1",
+                    "mark_price": "100",
+                },
+                {
+                    "as_of_ms": 2_000,
+                    "symbol": "BTCUSDT",
+                    "position_side": "LONG",
+                    "quantity": "0",
+                    "mark_price": "110",
+                },
+            ]
+        )
+
+    repo._run = run
+    history = repo.round_exchange_history()
+    assert history["cut_over_ms"] == 1_000
+    assert [s["as_of_ms"] for s in history["snapshots"]] == [1_000, 2_000]
+    assert history["snapshots"][1]["rows"][0]["mark_price"] == "110"
+
+
+def test_round_exchange_history_without_snapshots_is_empty():
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+        def all(self):
+            return self.rows
+
+    repo = LedgerRepository(object(), None)
+    repo._run = lambda statement, _params=None: Result([{"earliest": None}])
+    assert repo.round_exchange_history() == {"cut_over_ms": None, "snapshots": []}
+
+
+def test_fuzz_synthetic_exits_always_leave_the_book_accounted():
+    """An independent model over random fills and snapshots (petrosa-data-manager#603).
+
+    Whatever the sequence of entries, exits, partial lots and exchange quantity drops, the one canonical
+    replay must still account for every fill: closed + open + orphaned + excluded == attributed.
+    """
+    rng = random.Random(603)
+    for _ in range(80):
+        rows = []
+        minute = 0
+        for _ in range(rng.randint(1, 8)):
+            minute += rng.randint(1, 3)
+            rows.append(
+                _fill(
+                    "s",
+                    rng.choice(["buy", "sell"]),
+                    rng.randint(1, 3),
+                    100.0 + rng.random(),
+                    minute,
+                    position_side="LONG",
+                )
+            )
+        snapshots = [
+            {
+                "as_of_ms": _ms(T0 + timedelta(minutes=100 + step)),
+                "rows": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "position_side": "LONG",
+                        "quantity": rng.choice([0, 1, 2, 3]),
+                        "mark_price": 105.0,
+                    }
+                ],
+            }
+            for step in range(rng.randint(1, 3))
+        ]
+        history = {"cut_over_ms": _ms(T0 - timedelta(minutes=1)), "snapshots": snapshots}
+        report = _report(rows, exchange_history=history)
+        assert report["accounted"] is True

@@ -505,3 +505,20 @@ async def test_calibration_health_reports_query_failure_as_unavailable() -> None
         api_module.db_manager = None
 
     assert response.status_code == 503
+
+
+def test_a_synthetic_round_is_skipped_with_its_own_reason():
+    closed = ClosedRound(
+        strategy_id="alpha",
+        symbol="BTCUSDT",
+        opened_at=datetime(2026, 10, 1, tzinfo=UTC),
+        closed_at=datetime(2026, 10, 1, 1, tzinfo=UTC),
+        realized=1.0,
+        fills=2,
+        realized_dec=Decimal("1"),
+        synthetic=True,
+    )
+    report = build_calibration_records([], [], closed_rounds=[closed])
+    assert report["records"] == []
+    assert report["skipped"] == 1
+    assert report["skipped_reasons"] == {"synthetic_exit": 1}
