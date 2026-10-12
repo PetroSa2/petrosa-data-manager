@@ -1549,10 +1549,23 @@ class _FakeCollection:
         return _FakeCursor(self.rows)
 
 
+class _StatusFilteringCollection:
+    """Honours the Mongo ``status`` ``$in`` filter so a real-exit ``closed`` row can be shown excluded."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    def find(self, query, projection=None):
+        self.calls.append((query, projection))
+        allowed = set(query["status"]["$in"])
+        return _FakeCursor([row for row in self.rows if row.get("status") in allowed])
+
+
 @pytest.mark.asyncio
 async def test_live_closed_entry_order_ids_read_both_mongo_position_stores():
     from data_manager.db.repositories.ledger_repository import (
-        CLOSED_POSITION_STATUSES,
+        EXTERNAL_CLOSE_POSITION_STATUSES,
         LedgerRepository,
     )
 
@@ -1567,18 +1580,38 @@ async def test_live_closed_entry_order_ids_read_both_mongo_position_stores():
         ),
     )
     assert await repo.live_closed_entry_order_ids() == {"p1", "42", "sp1"}
-    assert CLOSED_POSITION_STATUSES == (
-        "closed",
+    assert EXTERNAL_CLOSE_POSITION_STATUSES == (
         "closed_externally",
         "reconciled_to_exchange",
     )
+    assert "closed" not in EXTERNAL_CLOSE_POSITION_STATUSES
     for collection in (positions, strategy_positions):
         ((query, projection),) = collection.calls
         assert query == {
-            "status": {"$in": list(CLOSED_POSITION_STATUSES)},
+            "status": {"$in": list(EXTERNAL_CLOSE_POSITION_STATUSES)},
             "entry_order_id": {"$ne": None},
         }
         assert projection == {"entry_order_id": 1, "_id": 0}
+
+
+@pytest.mark.asyncio
+async def test_live_closed_ids_drop_real_exits_but_keep_ghost_and_reconciler_closes():
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    positions = _StatusFilteringCollection(
+        [
+            {"entry_order_id": "real-exit", "status": "closed"},
+            {"entry_order_id": "ghost", "status": "closed_externally"},
+            {"entry_order_id": "reconciled", "status": "reconciled_to_exchange"},
+        ]
+    )
+    repo = LedgerRepository(
+        None,
+        SimpleNamespace(
+            db={"positions": positions, "strategy_positions": _FakeCollection([])}
+        ),
+    )
+    assert await repo.live_closed_entry_order_ids() == {"ghost", "reconciled"}
 
 
 @pytest.mark.asyncio
