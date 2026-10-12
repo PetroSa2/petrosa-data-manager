@@ -291,10 +291,6 @@ class RoundBook:
             )
             lot.qty = float(lot_quantity - take)
             remaining -= take
-            if _dec(lot.qty) == ZERO:
-                lot.qty = 0.0
-            if remaining == ZERO:
-                remaining = 0.0
             matched += take
             if _dec(lot.qty) == ZERO:
                 opposite.popleft()
@@ -392,10 +388,6 @@ class RoundBook:
             )
             lot.qty = float(lot_quantity - take)
             remaining -= take
-            if _dec(lot.qty) == ZERO:
-                lot.qty = 0.0
-            if remaining == ZERO:
-                remaining = 0.0
             if _dec(lot.qty) == ZERO:
                 lots.popleft()
         if not lots:
