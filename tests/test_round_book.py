@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from data_manager.maintenance import round_report
-from data_manager.services.round_book import RoundBook, build_report
+from data_manager.services.round_book import (
+    RoundBook,
+    _number,
+    build_report,
+    build_synthetic_exits,
+    replay_book,
+)
 
 T0 = datetime(2026, 10, 1, tzinfo=UTC)
 NOW = datetime(2026, 10, 7, tzinfo=UTC)
@@ -1636,19 +1642,26 @@ def test_hedge_fifo_fuzz_matches_the_independent_leg_model(seed):
 class _FakeCursor:
     def __init__(self, rows):
         self.rows = rows
+        self.limit_value = None
+
+    def limit(self, value):
+        self.limit_value = value
+        return self
 
     async def to_list(self, length=None):
-        return list(self.rows)
+        return list(self.rows[:length] if length is not None else self.rows)
 
 
 class _FakeCollection:
     def __init__(self, rows):
         self.rows = rows
         self.calls = []
+        self.cursor = None
 
     def find(self, query, projection=None):
         self.calls.append((query, projection))
-        return _FakeCursor(self.rows)
+        self.cursor = _FakeCursor(self.rows)
+        return self.cursor
 
 
 class _StatusFilteringCollection:
@@ -1668,6 +1681,7 @@ class _StatusFilteringCollection:
 async def test_live_closed_entry_order_ids_read_both_mongo_position_stores():
     from data_manager.db.repositories.ledger_repository import (
         EXTERNAL_CLOSE_POSITION_STATUSES,
+        LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT,
         LedgerRepository,
     )
 
@@ -1694,6 +1708,31 @@ async def test_live_closed_entry_order_ids_read_both_mongo_position_stores():
             "entry_order_id": {"$ne": None},
         }
         assert projection == {"entry_order_id": 1, "_id": 0}
+        assert collection.cursor.limit_value == LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT + 1
+
+
+@pytest.mark.asyncio
+async def test_live_closed_entry_order_ids_reject_an_unbounded_result():
+    from data_manager.db.repositories.ledger_repository import (
+        LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT,
+        LedgerRepository,
+    )
+
+    rows = [
+        {"entry_order_id": str(index)}
+        for index in range(LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT + 1)
+    ]
+    repo = LedgerRepository(
+        None,
+        SimpleNamespace(
+            db={
+                "positions": _FakeCollection(rows),
+                "strategy_positions": _FakeCollection([]),
+            }
+        ),
+    )
+    with pytest.raises(RuntimeError, match="exceeded"):
+        await repo.live_closed_entry_order_ids()
 
 
 @pytest.mark.asyncio
@@ -1912,6 +1951,56 @@ def test_a_symbol_the_exchange_stops_reporting_closes_at_the_last_seen_mark():
     assert report["accounted"] is True
 
 
+def test_a_real_replayable_exit_wins_over_a_later_snapshot_decrease():
+    rows = [
+        _fill("s", "buy", 1.0, 100.0, 1, position_side="LONG"),
+        _fill("s", "sell", 1.0, 105.0, 2, position_side="LONG"),
+    ]
+    history = {
+        "cut_over_ms": _ms(T0),
+        "snapshots": [
+            {
+                "as_of_ms": _ms(T0 + timedelta(minutes=5)),
+                "rows": [_position_row(quantity=1.0)],
+            },
+            {"as_of_ms": _ms(T0 + timedelta(minutes=10)), "rows": []},
+        ],
+    }
+    report = _report(rows, exchange_history=history)
+    assert report["strategies"]["s"]["synthetic_rounds"] == 0
+    assert report["strategies"]["s"]["realized_pnl_closed_rounds"] == pytest.approx(5.0)
+    assert report["accounted"] is True
+
+
+def test_synthetic_exit_closes_the_short_residual_after_a_netted_flip():
+    rows = [
+        _fill("s", "buy", 1.0, 100.0, 1),
+        _fill("s", "sell", 2.0, 110.0, 2),
+    ]
+    history = {
+        "cut_over_ms": _ms(T0),
+        "snapshots": [
+            {
+                "as_of_ms": _ms(T0 + timedelta(minutes=5)),
+                "rows": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "position_side": "SHORT",
+                        "quantity": -1.0,
+                        "mark_price": 105.0,
+                    }
+                ],
+            },
+            {"as_of_ms": _ms(T0 + timedelta(minutes=10)), "rows": []},
+        ],
+    }
+    book = replay_book(rows, exchange_history=history)
+    assert book.closed
+    assert [round.synthetic for round in book.closed] == [False, True]
+    assert book.closed[-1].realized == pytest.approx(5.0)
+    assert book.report(now=T0 + timedelta(days=1))["accounted"] is True
+
+
 def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
     from data_manager.db.repositories.ledger_repository import LedgerRepository
 
@@ -1933,6 +2022,10 @@ def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
     def run(statement, _params=None):
         if "MIN(as_of_ms)" in statement:
             return Result([{"earliest": 1_000}])
+        if "FROM ledger_exchange_positions_snapshot" in statement:
+            return Result(
+                [{"as_of_ms": 1_000}, {"as_of_ms": 2_000}, {"as_of_ms": 3_000}]
+            )
         return Result(
             [
                 {
@@ -1955,8 +2048,48 @@ def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
     repo._run = run
     history = repo.round_exchange_history()
     assert history["cut_over_ms"] == 1_000
-    assert [s["as_of_ms"] for s in history["snapshots"]] == [1_000, 2_000]
+    assert [s["as_of_ms"] for s in history["snapshots"]] == [1_000, 2_000, 3_000]
     assert history["snapshots"][1]["rows"][0]["mark_price"] == "110"
+
+
+def test_round_exchange_history_keeps_an_empty_snapshot_timestamp():
+    from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+        def all(self):
+            return self.rows
+
+    repo = LedgerRepository(object(), None)
+
+    def run(statement, _params=None):
+        if "MIN(as_of_ms)" in statement:
+            return Result([{"earliest": 1_000}])
+        if "FROM ledger_exchange_positions_snapshot" in statement:
+            return Result([{"as_of_ms": 1_000}, {"as_of_ms": 2_000}])
+        return Result(
+            [
+                {
+                    "as_of_ms": 1_000,
+                    "symbol": "BTCUSDT",
+                    "position_side": "LONG",
+                    "quantity": "1",
+                    "mark_price": "100",
+                }
+            ]
+        )
+
+    repo._run = run
+    history = repo.round_exchange_history()
+    assert history["snapshots"][1] == {"as_of_ms": 2_000, "rows": []}
 
 
 def test_round_exchange_history_without_snapshots_is_empty():
@@ -2022,3 +2155,41 @@ def test_fuzz_synthetic_exits_always_leave_the_book_accounted():
         }
         report = _report(rows, exchange_history=history)
         assert report["accounted"] is True
+
+
+def test_independent_fifo_model_matches_monotonic_snapshot_exits():
+    rng = random.Random(603_2)
+    for _ in range(40):
+        rows = []
+        total = 0
+        for index in range(rng.randint(1, 6)):
+            quantity = rng.randint(1, 3)
+            total += quantity
+            rows.append(
+                _fill(
+                    "s", "buy", quantity, 100.0 + index, index + 1, position_side="LONG"
+                )
+            )
+        first = rng.randint(0, total)
+        second = rng.randint(0, first)
+        history = {
+            "cut_over_ms": _ms(T0),
+            "snapshots": [
+                {
+                    "as_of_ms": _ms(T0 + timedelta(minutes=10)),
+                    "rows": [_position_row(quantity=first)],
+                },
+                {
+                    "as_of_ms": _ms(T0 + timedelta(minutes=20)),
+                    "rows": [_position_row(quantity=second)],
+                },
+            ],
+        }
+        book = replay_book(rows, exchange_history=history)
+        expected = total - second
+        actual = sum(
+            _number(row.get("fill_qty")) or 0.0
+            for row in build_synthetic_exits(rows, history)
+        )
+        assert actual == pytest.approx(expected)
+        assert book.report(now=T0 + timedelta(days=1))["accounted"] is True
