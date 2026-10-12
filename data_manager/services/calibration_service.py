@@ -14,8 +14,7 @@ from data_manager.services.report_precompute import record_report_stage
 from data_manager.services.round_book import (
     FILL_EVENT_TYPES,
     ClosedRound,
-    RoundBook,
-    _when,
+    replay_book,
 )
 
 MAX_ROWS = 50_000
@@ -54,16 +53,16 @@ def _executed_action_filter() -> dict[str, str]:
 
 
 def replay_closed_rounds(
-    execution_events: list[dict[str, Any]], *, since: datetime | None = None
+    execution_events: list[dict[str, Any]],
+    *,
+    since: datetime | None = None,
+    exchange_history: dict[str, Any] | None = None,
 ) -> list[ClosedRound]:
-    """The closed rounds of the fills (closed at or after ``since`` when given), from the round book."""
-    book = RoundBook()
-    ordered = sorted(
-        (row for row in execution_events if row.get("event_type") in FILL_EVENT_TYPES),
-        key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC),
-    )
-    for row in ordered:
-        book.apply(row)
+    """The closed rounds of the fills (closed at or after ``since`` when given), from the round book.
+
+    ``exchange_history`` adds the synthetic exits of the exchange snapshot series (petrosa-data-manager#603).
+    """
+    book = replay_book(execution_events, exchange_history=exchange_history)
     return [c for c in book.closed if since is None or c.closed_at >= since]
 
 
@@ -89,6 +88,11 @@ def build_calibration_records(
     skipped = 0
     skipped_reasons: Counter[str] = Counter()
     for closed in closed_list:
+        if getattr(closed, "synthetic", False):
+            # A synthetic round has no strategy exit decision to calibrate against (petrosa-data-manager#603).
+            skipped += 1
+            skipped_reasons["synthetic_exit"] += 1
+            continue
         entry_decision_id = closed.decision_ids[0] if closed.decision_ids else None
         decision = decisions_by_id.get(entry_decision_id) if entry_decision_id else None
         confidence = (
@@ -237,8 +241,21 @@ async def get_calibration_records(
     # ``fill_time`` (a close and a reopen in the same ms) must reach the round book in ingestion order.
     execution_events = list(reversed(execution_events))
     decisions = list(reversed(decisions))
+    exchange_history: dict[str, Any] | None = None
+    if mysql_adapter is not None:
+        try:
+            from data_manager.db.repositories.ledger_repository import LedgerRepository
+
+            repo = LedgerRepository(mysql_adapter, mongodb)
+            exchange_history = await asyncio.to_thread(repo.round_exchange_history)
+        except Exception as exc:
+            logger.warning("calibration exchange history unavailable: %s", exc)
+            exchange_history = None
     closed_rounds = await asyncio.to_thread(
-        replay_closed_rounds, execution_events, since=since
+        replay_closed_rounds,
+        execution_events,
+        since=since,
+        exchange_history=exchange_history,
     )
     mongo_decision_ids = {
         str(row["decision_id"]) for row in decisions if row.get("decision_id")

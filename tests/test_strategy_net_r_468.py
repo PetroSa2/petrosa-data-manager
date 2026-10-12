@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import data_manager.api.app as api_module
 from data_manager.api.app import create_app
 from data_manager.api.routes import strategy_net_r as route
-from data_manager.services.round_book import RoundBook
+from data_manager.services.round_book import ClosedRound, RoundBook
 from data_manager.services.strategy_net_r import (
     score_rounds,
     stop_fraction_of,
@@ -381,3 +381,31 @@ def test_an_unreadable_number_in_a_fill_counts_as_zero():
         and _dec(None) == D("0")
         and _dec("1.5") == D("1.5")
     )
+
+
+def test_synthetic_rounds_are_counted_separately():
+    real = ClosedRound(
+        strategy_id="s",
+        symbol="BTCUSDT",
+        opened_at=T0,
+        closed_at=T0 + timedelta(minutes=5),
+        realized=10.0,
+        fills=2,
+        realized_dec=D("10"),
+        entry_notional=D("100"),
+    )
+    synth = ClosedRound(
+        strategy_id="s",
+        symbol="BTCUSDT",
+        opened_at=T0,
+        closed_at=T0 + timedelta(minutes=10),
+        realized=-5.0,
+        fills=2,
+        realized_dec=D("-5"),
+        entry_notional=D("100"),
+        synthetic=True,
+    )
+    scored = score_rounds([real, synth])
+    report = strategy_net_r(scored)
+    assert report["strategies"]["s"]["closed_rounds"] == 2
+    assert report["strategies"]["s"]["synthetic_rounds"] == 1
