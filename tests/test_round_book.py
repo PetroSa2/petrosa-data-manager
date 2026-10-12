@@ -39,6 +39,81 @@ def _snapshot(at=NOW, rows=None):
     }
 
 
+INTEGER_FLOAT_BOOK_GOLDEN = {
+    "accounted": True,
+    "strategies": {
+        "s1": {
+            "fills": 2,
+            "entry_fills": 1,
+            "exit_fills": 1,
+            "fills_in_closed_rounds": 0,
+            "fills_in_open_rounds": 2,
+            "closed_rounds": 0,
+            "open_rounds": 1,
+            "window_days": 30.0,
+            "closed_rounds_in_window": 0,
+            "closed_round_rate_per_day": 0.0,
+            "median_holding_seconds": None,
+            "n": 0,
+            "realized_pnl_closed_rounds": 0,
+            "wins": 0,
+            "losses": 0,
+            "first_fill_at": "2026-10-01T00:00:00+00:00",
+            "last_closed_at": None,
+            "oldest_open_round_opened_at": "2026-10-01T00:00:00+00:00",
+            "position_side_unknown": 2,
+            "legacy_exit_side_mapped": 0,
+        },
+        "s2": {
+            "fills": 2,
+            "entry_fills": 1,
+            "exit_fills": 1,
+            "fills_in_closed_rounds": 0,
+            "fills_in_open_rounds": 2,
+            "closed_rounds": 0,
+            "open_rounds": 1,
+            "window_days": 30.0,
+            "closed_rounds_in_window": 0,
+            "closed_round_rate_per_day": 0.0,
+            "median_holding_seconds": None,
+            "n": 0,
+            "realized_pnl_closed_rounds": 0,
+            "wins": 0,
+            "losses": 0,
+            "first_fill_at": "2026-10-01T00:00:00+00:00",
+            "last_closed_at": None,
+            "oldest_open_round_opened_at": "2026-10-01T00:00:00+00:00",
+            "position_side_unknown": 0,
+            "legacy_exit_side_mapped": 0,
+        },
+    },
+    "totals": {
+        "fills": 4,
+        "attributed_to_a_strategy": 4,
+        "unattributed": 0,
+        "position_side_unknown": 2,
+        "legacy_exit_side_mapped": 0,
+    },
+    "unattributed": {},
+}
+
+
+def _accounting_projection(result):
+    return {
+        "accounted": result["accounted"],
+        "strategies": {
+            strategy_id: {
+                key: value
+                for key, value in strategy.items()
+                if key in INTEGER_FLOAT_BOOK_GOLDEN["strategies"][strategy_id]
+            }
+            for strategy_id, strategy in result["strategies"].items()
+        },
+        "totals": result["totals"],
+        "unattributed": result["unattributed"],
+    }
+
+
 def test_orphan_overlay_allocates_exchange_quantity_newest_first_across_strategies():
     rows = [
         _fill("old", "buy", 1.0, 100.0, 0, symbol="BTCUSDT", order_id="old-order"),
@@ -1431,6 +1506,21 @@ def test_decimal_float_dust_closes_a_round():
     assert stats["realized_pnl_closed_rounds"] == pytest.approx(-3.0)
 
 
+def test_decimal_float_dust_closes_a_split_exit_round():
+    stats = _report(
+        [
+            _fill("s1", "buy", 0.3, 100.0, 0),
+            _fill("s1", "sell", 0.1, 90.0, 1),
+            _fill("s1", "sell", 0.2, 90.0, 2),
+        ]
+    )["strategies"]["s1"]
+
+    assert stats["closed_rounds"] == 1
+    assert stats["open_rounds"] == 0
+    assert stats["losses"] == 1
+    assert stats["realized_pnl_closed_rounds"] == pytest.approx(-3.0)
+
+
 def test_large_quantity_dust_closes_a_round():
     stats = _report(
         [
@@ -1444,30 +1534,42 @@ def test_large_quantity_dust_closes_a_round():
     assert stats["open_rounds"] == 0
 
 
-def test_real_remaining_position_stays_open():
-    stats = _report(
-        [
-            _fill("s1", "buy", 1.0, 100.0, 0),
-            _fill("s1", "sell", 0.99999999, 90.0, 1),
-        ]
-    )["strategies"]["s1"]
+def test_real_hedge_remainder_stays_open():
+    rows = [
+        _fill("s1", "buy", 1.0, 100.0, 0, position_side="LONG"),
+        _fill(
+            "s1",
+            "sell",
+            0.99999999,
+            90.0,
+            1,
+            position_side="LONG",
+        ),
+    ]
+    book = RoundBook()
+    for row in rows:
+        book.apply(row)
+    stats = _report(rows)["strategies"]["s1"]
 
     assert stats["closed_rounds"] == 0
     assert stats["open_rounds"] == 1
+    open_lots = book.open_lots("s1")
+    assert len(open_lots) == 1
+    assert open_lots[0][:2] == ("ETHUSDT", "LONG")
+    assert open_lots[0][2].qty == pytest.approx(1e-8)
 
 
 def test_integer_quantities_are_unchanged_when_overlay_is_off_or_report_only():
     rows = [
         _fill("s1", "buy", 2, 100, 0, symbol="BTCUSDT"),
         _fill("s1", "sell", 1, 110, 1, symbol="BTCUSDT"),
+        _fill("s2", "buy", 2, 100, 0, symbol="ETHUSDT", position_side="LONG"),
+        _fill("s2", "sell", 1, 110, 1, symbol="ETHUSDT", position_side="LONG"),
     ]
     plain = _report(rows)
     report_mode = _report(rows, exchange=_snapshot(rows=[]), closed_entry_orders=set())
     for result in (plain, report_mode):
-        assert result["strategies"]["s1"]["closed_rounds"] == 0
-        assert result["strategies"]["s1"]["open_rounds"] == 1
-        assert result["strategies"]["s1"]["fills_in_open_rounds"] == 2
-        assert result["strategies"]["s1"]["realized_pnl_closed_rounds"] == 0.0
+        assert _accounting_projection(result) == INTEGER_FLOAT_BOOK_GOLDEN
 
 
 def _leg_oracle(rows):
