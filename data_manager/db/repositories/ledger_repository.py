@@ -30,6 +30,8 @@ CLOSED_POSITION_STATUSES = ("closed", "closed_externally", "reconciled_to_exchan
 #: strategy exit (its exit fill already consumed the lot), so counting it here again would hide a lot that FIFO left
 #: open when the fill and the stored ``position_id`` disagree (petrosa-data-manager#603 F1 follow-up).
 EXTERNAL_CLOSE_POSITION_STATUSES = ("closed_externally", "reconciled_to_exchange")
+# Bound the live overlay read and leave one sentinel row to detect truncation.
+LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT = 100_000
 #: Open row quantity and exchange quantity are tied within this difference.
 QUANTITY_TOLERANCE = Decimal("0.000000001")
 
@@ -561,6 +563,15 @@ class LedgerRepository(BaseRepository):
         )
         if cut_over_ms is None:
             return {"cut_over_ms": None, "snapshots": []}
+        snapshot_rows = (
+            self._run(
+                "SELECT as_of_ms FROM ledger_exchange_positions_snapshot "
+                "WHERE as_of_ms>=:cut_over ORDER BY as_of_ms",
+                {"cut_over": cut_over_ms},
+            )
+            .mappings()
+            .all()
+        )
         rows = (
             self._run(
                 "SELECT as_of_ms, symbol, position_side, quantity, mark_price "
@@ -571,7 +582,10 @@ class LedgerRepository(BaseRepository):
             .mappings()
             .all()
         )
-        snapshots: dict[int, dict[str, Any]] = {}
+        snapshots: dict[int, dict[str, Any]] = {
+            int(row["as_of_ms"]): {"as_of_ms": int(row["as_of_ms"]), "rows": []}
+            for row in snapshot_rows
+        }
         for row in rows:
             as_of_ms = int(row["as_of_ms"])
             snapshot = snapshots.setdefault(
@@ -603,23 +617,24 @@ class LedgerRepository(BaseRepository):
         if self.mongodb is None:
             raise RuntimeError("MongoDB is not available")
         ids: set[str] = set()
+        read_limit = LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT + 1
         for collection in ("positions", "strategy_positions"):
-            rows = await (
-                self.mongodb.db[collection]
-                .find(
-                    {
-                        "status": {"$in": list(EXTERNAL_CLOSE_POSITION_STATUSES)},
-                        "entry_order_id": {"$ne": None},
-                    },
-                    {"entry_order_id": 1, "_id": 0},
+            cursor = self.mongodb.db[collection].find(
+                {
+                    "status": {"$in": list(EXTERNAL_CLOSE_POSITION_STATUSES)},
+                    "entry_order_id": {"$ne": None},
+                },
+                {"entry_order_id": 1, "_id": 0},
+            )
+            rows = await cursor.limit(read_limit).to_list(length=read_limit)
+            if len(rows) > LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT:
+                raise RuntimeError(
+                    f"live closed entry order read exceeded {LIVE_CLOSED_ENTRY_ORDER_IDS_LIMIT} rows"
                 )
-                .to_list(length=None)
-            )
-            ids.update(
-                str(row["entry_order_id"])
-                for row in rows
-                if row.get("entry_order_id") is not None
-            )
+            for row in rows:
+                entry_order_id = row.get("entry_order_id")
+                if entry_order_id is not None:
+                    ids.add(str(entry_order_id))
         return ids
 
     def closed_entry_order_ids(self) -> set[str]:
