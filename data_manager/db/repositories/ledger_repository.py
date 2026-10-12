@@ -21,8 +21,15 @@ from data_manager.services.ledger_tolerance import (
 
 _exchange_info = ExchangeInfoCache()
 
-#: Position statuses that mean the entry order is closed (MySQL and Mongo position tables alike).
+#: Position statuses that mean the entry order is closed (MySQL and Mongo position tables alike). The frozen MySQL
+#: ``positions`` table records both real strategy exits and the older reconciler's closures as ``closed``, so it keeps
+#: reading all three.
 CLOSED_POSITION_STATUSES = ("closed", "closed_externally", "reconciled_to_exchange")
+#: Live closes that carry NO strategy exit, which the round book must treat as ledger-closed because no exit fill
+#: will consume the lot: a ghost/external close or an open-row reconciler close. A plain ``closed`` row is a real
+#: strategy exit (its exit fill already consumed the lot), so counting it here again would hide a lot that FIFO left
+#: open when the fill and the stored ``position_id`` disagree (petrosa-data-manager#603 F1 follow-up).
+EXTERNAL_CLOSE_POSITION_STATUSES = ("closed_externally", "reconciled_to_exchange")
 #: Open row quantity and exchange quantity are tied within this difference.
 QUANTITY_TOLERANCE = Decimal("0.000000001")
 
@@ -539,7 +546,10 @@ class LedgerRepository(BaseRepository):
 
         The MySQL position tables are a frozen historic copy (``positions`` stops at 2026-09-26, ``strategy_positions``
         is empty), so the closures written since, such as the open-row reconciler's ``reconciled_to_exchange`` (te#747),
-        are only here. Raises when Mongo is not available: the caller must not treat that as "nothing is closed".
+        are only here. Only closes with no strategy exit count (``EXTERNAL_CLOSE_POSITION_STATUSES``): a live ``closed``
+        row is a real exit whose fill already consumed the lot, so listing it here would hide a real open lot when FIFO
+        and the stored ``position_id`` disagree. Raises when Mongo is not available: the caller must not treat that as
+        "nothing is closed".
         """
         if self.mongodb is None:
             raise RuntimeError("MongoDB is not available")
@@ -549,7 +559,7 @@ class LedgerRepository(BaseRepository):
                 self.mongodb.db[collection]
                 .find(
                     {
-                        "status": {"$in": list(CLOSED_POSITION_STATUSES)},
+                        "status": {"$in": list(EXTERNAL_CLOSE_POSITION_STATUSES)},
                         "entry_order_id": {"$ne": None},
                     },
                     {"entry_order_id": 1, "_id": 0},
