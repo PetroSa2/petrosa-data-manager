@@ -107,6 +107,7 @@ class DataManagerApp:
         self.candle_warmup_scheduler = None  # #319 — set in start()
         self.ledger_tieout_scheduler = None
         self.klines_freshness_task: asyncio.Task | None = None
+        self.klines_completeness_task: asyncio.Task | None = None
         self.klines_daily_gaps_task: asyncio.Task | None = None
         self.mysql_server_status_task: asyncio.Task | None = None
         self.report_precomputer = None
@@ -636,6 +637,19 @@ class DataManagerApp:
                 ),
             )
         )
+        from data_manager.maintenance.klines_completeness import (
+            completeness_loop,
+        )
+
+        self.klines_completeness_task = asyncio.create_task(
+            completeness_loop(
+                lambda: self.db_manager,
+                self._shutdown_event,
+                is_leader=lambda: (
+                    self.leader_election is None or self.leader_election.is_leader
+                ),
+            )
+        )
         from data_manager.auditor.gap_detector import GapDetector
         from data_manager.maintenance.klines_daily_gaps import (
             daily_completeness_loop,
@@ -769,6 +783,13 @@ class DataManagerApp:
             except asyncio.CancelledError:
                 pass
             self.klines_freshness_task = None
+        if self.klines_completeness_task:
+            self.klines_completeness_task.cancel()
+            try:
+                await self.klines_completeness_task
+            except asyncio.CancelledError:
+                pass
+            self.klines_completeness_task = None
         if self._summary_task:
             self._summary_task.cancel()
             try:
