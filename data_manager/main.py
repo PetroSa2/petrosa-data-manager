@@ -108,6 +108,7 @@ class DataManagerApp:
         self.ledger_tieout_scheduler = None
         self.klines_freshness_task: asyncio.Task | None = None
         self.klines_daily_gaps_task: asyncio.Task | None = None
+        self.mysql_server_status_task: asyncio.Task | None = None
         self.report_precomputer = None
         self.running = False
         self._shutdown_event = asyncio.Event()
@@ -234,6 +235,22 @@ class DataManagerApp:
             await adapter.ensure_indexes(collection)
         for timeframe in constants.SUPPORTED_INTERVALS:
             await adapter.ensure_indexes(f"klines_{timeframe}")
+
+    def _start_mysql_server_status_collector(self) -> None:
+        from data_manager.maintenance.mysql_server_status import (
+            mysql_server_status_loop,
+        )
+
+        self.mysql_server_status_task = asyncio.create_task(
+            mysql_server_status_loop(
+                lambda: (
+                    self.db_manager.mysql_adapter
+                    if self.db_manager is not None
+                    else None
+                ),
+                self._shutdown_event,
+            )
+        )
 
     async def start(self) -> None:
         """Start all application components."""
@@ -601,6 +618,7 @@ class DataManagerApp:
 
         self.running = True
         logger.info("All components started successfully")
+        self._start_mysql_server_status_collector()
 
         # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
         # AFTER self.running=True so the `while self.running` loop runs its
@@ -727,6 +745,13 @@ class DataManagerApp:
         # Cancel the startup retry first: it may publish or leave behind a
         # manager, and the shutdown below must see the final one.
         await self._cancel_database_retry()
+        if self.mysql_server_status_task:
+            self.mysql_server_status_task.cancel()
+            try:
+                await self.mysql_server_status_task
+            except asyncio.CancelledError:
+                pass
+            self.mysql_server_status_task = None
         if self.db_manager:
             await self.db_manager.shutdown()
             logger.info("Database connections closed")
