@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from prometheus_client import Counter, Gauge
 
@@ -68,6 +68,73 @@ gaps_filled_auto_total = Counter(
     "Total gaps auto-filled (auto vs manual fill ratio)",
     ["symbol", "timeframe"],
 )
+backfill_jobs_empty_total = Counter(
+    "data_manager_backfill_jobs_empty_total",
+    "Total candle backfill jobs that fetched no records",
+    ["symbol", "timeframe"],
+)
+
+_empty_ranges: dict[tuple[str, str, str, str], tuple[int, datetime | None]] = {}
+_auto_backfill_jobs: dict[str, BackfillRequest] = {}
+
+
+def register_auto_backfill(job_id: str, request: BackfillRequest) -> None:
+    """Keep auto-backfill provenance without changing the job table schema."""
+    if request.source in {"gap_detector", "streaming_gap_detector"}:
+        _auto_backfill_jobs[job_id] = request
+
+
+def pop_auto_backfill(job_id: str) -> BackfillRequest | None:
+    """Return and remove auto-backfill provenance for a completed job."""
+    return _auto_backfill_jobs.pop(job_id, None)
+
+
+def backfill_range_key(request: BackfillRequest) -> tuple[str, str, str, str]:
+    """Return the stable identity used for empty-range cooldowns."""
+    return (
+        request.symbol,
+        request.timeframe or "",
+        request.start_time.isoformat(),
+        request.end_time.isoformat(),
+    )
+
+
+def empty_backfill_suppressed(request: BackfillRequest) -> bool:
+    """Return whether an exact range is in its configured cooldown."""
+    key = backfill_range_key(request)
+    state = _empty_ranges.get(key)
+    if state is None:
+        return False
+    _, cooldown_until = state
+    if cooldown_until is not None and cooldown_until > datetime.now(UTC):
+        return True
+    _empty_ranges.pop(key, None)
+    return False
+
+
+def record_empty_backfill(request: BackfillRequest) -> None:
+    """Record an empty range and start cooldown after the configured threshold."""
+    import constants
+
+    key = backfill_range_key(request)
+    count, cooldown_until = _empty_ranges.get(key, (0, None))
+    if cooldown_until is not None:
+        if cooldown_until > datetime.now(UTC):
+            return
+        count, cooldown_until = 0, None
+    count += 1
+    if count >= constants.BACKFILL_EMPTY_COOLDOWN_THRESHOLD:
+        cooldown_until = datetime.now(UTC) + timedelta(
+            seconds=constants.BACKFILL_EMPTY_COOLDOWN_SECONDS
+        )
+        logger.warning(
+            "Backfill range entering empty-result cooldown: %s %s %s to %s",
+            request.symbol,
+            request.timeframe,
+            request.start_time,
+            request.end_time,
+        )
+    _empty_ranges[key] = (count, cooldown_until)
 
 
 class BackfillRequestQueue:

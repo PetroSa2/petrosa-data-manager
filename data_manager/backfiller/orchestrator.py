@@ -6,6 +6,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 try:
     from datetime import UTC
@@ -13,7 +14,6 @@ except ImportError:
     from datetime import timezone
 
     UTC = timezone.utc  # noqa: UP017
-from decimal import Decimal
 
 from data_manager.backfiller.binance_client import BinanceClient
 from data_manager.db.database_manager import DatabaseManager
@@ -24,6 +24,13 @@ from data_manager.db.repositories import (
 )
 from data_manager.models.events import BackfillJob, BackfillRequest
 from data_manager.models.market_data import Candle, FundingRate
+from data_manager.services.backfill_queue import (
+    backfill_jobs_empty_total,
+    gaps_filled_auto_total,
+    pop_auto_backfill,
+    record_empty_backfill,
+    register_auto_backfill,
+)
 from data_manager.utils.time_utils import create_time_chunks, parse_timeframe_to_minutes
 
 logger = logging.getLogger(__name__)
@@ -88,6 +95,8 @@ class BackfillOrchestrator:
         job_record = {**job_dump, **request_dump}
         await self.backfill_repo.create_job(job_record)
 
+        register_auto_backfill(job.job_id, request)
+
         # Start execution in background
         asyncio.create_task(self.execute_backfill(job.job_id))
 
@@ -121,9 +130,20 @@ class BackfillOrchestrator:
 
             # Execute backfill based on data type
             if data_type == "candles":
-                await self._backfill_candles(
+                fetched, inserted, had_error = await self._backfill_candles(
                     job_id, symbol, timeframe, start_time, end_time
                 )
+                request = pop_auto_backfill(job_id)
+                if request is not None:
+                    if inserted > 0:
+                        gaps_filled_auto_total.labels(
+                            symbol=symbol, timeframe=timeframe
+                        ).inc()
+                    elif fetched == 0 and not had_error:
+                        backfill_jobs_empty_total.labels(
+                            symbol=symbol, timeframe=timeframe
+                        ).inc()
+                        record_empty_backfill(request)
             elif data_type == "funding":
                 await self._backfill_funding(job_id, symbol, start_time, end_time)
             else:
@@ -148,7 +168,7 @@ class BackfillOrchestrator:
         timeframe: str,
         start_time: datetime,
         end_time: datetime,
-    ) -> None:
+    ) -> tuple[int, int, bool]:
         """Backfill candle data."""
         logger.info(
             f"Backfilling candles for {symbol} {timeframe} "
@@ -163,6 +183,7 @@ class BackfillOrchestrator:
 
         total_fetched = 0
         total_inserted = 0
+        had_error = False
 
         for chunk_start, chunk_end in chunks:
             try:
@@ -204,6 +225,7 @@ class BackfillOrchestrator:
                 )
 
             except Exception as e:
+                had_error = True
                 logger.error(
                     f"Error backfilling chunk {chunk_start} to {chunk_end}: {e}"
                 )
@@ -212,6 +234,7 @@ class BackfillOrchestrator:
             f"Backfill complete for {symbol} {timeframe}: "
             f"fetched={total_fetched}, inserted={total_inserted}"
         )
+        return total_fetched, total_inserted, had_error
 
     async def _backfill_funding(
         self,

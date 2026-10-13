@@ -28,6 +28,7 @@ from data_manager.services.backfill_queue import (
     BackfillRequestQueue,
     backfill_queue_flushed_total,
 )
+from data_manager.utils.time_utils import last_closed_candle_open
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +277,6 @@ class AuditScheduler:
         logger.info("Starting audit cycle")
         audit_start = datetime.now(UTC)
 
-        # Define audit window (last 24 hours)
-        end = datetime.now(UTC)
-        start = end - timedelta(hours=24)
-
         symbols_audited = 0
         total_gaps = 0
         total_duplicates = 0
@@ -291,6 +288,8 @@ class AuditScheduler:
         async def audit_subset(symbol, timeframe):
             async with semaphore:
                 try:
+                    end = last_closed_candle_open(datetime.now(UTC), timeframe)
+                    start = end - timedelta(hours=24)
                     # Detect gaps
                     gaps = await self.gap_detector.detect_gaps(
                         symbol, timeframe, start, end
@@ -370,8 +369,11 @@ class AuditScheduler:
 
         # Audit each supported symbol and timeframe in parallel
         tasks = []
+        timeframes = constants.SUPPORTED_INTERVALS
+        if not isinstance(timeframes, list | tuple):
+            timeframes = constants.SUPPORTED_TIMEFRAMES
         for symbol in constants.SUPPORTED_PAIRS:
-            for timeframe in constants.SUPPORTED_TIMEFRAMES:
+            for timeframe in timeframes:
                 tasks.append(audit_subset(symbol, timeframe))
 
         results = await asyncio.gather(*tasks)

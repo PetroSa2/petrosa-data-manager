@@ -469,12 +469,18 @@ LEADER_ELECTION_TIMEOUT = int(os.getenv("LEADER_ELECTION_TIMEOUT", "30"))  # sec
 
 # Auto-Backfill Configuration
 ENABLE_AUTO_BACKFILL = os.getenv("ENABLE_AUTO_BACKFILL", "false").lower() == "true"
-# Every missing closed candle is actionable.  Rate safety comes from the queue
-# and the per-request backfill window, not from dropping short gaps (#449).
-MIN_AUTO_BACKFILL_GAP = 0
+MIN_AUTO_BACKFILL_GAP = int(
+    os.getenv("MIN_AUTO_BACKFILL_GAP", str(MIN_GAP_SIZE_SECONDS))
+)
 MAX_AUTO_BACKFILL_JOBS = int(
     os.getenv("MAX_AUTO_BACKFILL_JOBS", "5")
 )  # concurrent jobs
+BACKFILL_EMPTY_COOLDOWN_THRESHOLD = int(
+    os.getenv("BACKFILL_EMPTY_COOLDOWN_THRESHOLD", "3")
+)
+BACKFILL_EMPTY_COOLDOWN_SECONDS = int(
+    os.getenv("BACKFILL_EMPTY_COOLDOWN_SECONDS", "3600")
+)
 
 # Backfill request queue (petrosa-data-manager#320)
 # In-memory queue used when the backfill orchestrator is unavailable.
