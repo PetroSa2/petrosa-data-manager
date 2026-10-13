@@ -105,6 +105,7 @@ class DataManagerApp:
         self.pnl_publisher = None  # P4.1 follow-up (#652) — set in start()
         self.alert_dispatcher: AlertDispatcher | None = None  # #183 alert spine
         self.candle_warmup_scheduler = None  # #319 — set in start()
+        self.ledger_tieout_scheduler = None
         self.klines_freshness_task: asyncio.Task | None = None
         self.klines_daily_gaps_task: asyncio.Task | None = None
         self.report_precomputer = None
@@ -596,6 +597,7 @@ class DataManagerApp:
         asyncio.create_task(self._run_analytics())
         asyncio.create_task(self._run_drawdown_scheduler())
         asyncio.create_task(self._run_candle_warmup_scheduler())
+        asyncio.create_task(self._run_ledger_tieout_scheduler())
 
         self.running = True
         logger.info("All components started successfully")
@@ -777,6 +779,13 @@ class DataManagerApp:
                 logger.info("Candle warm-up scheduler stopped")
             except Exception as e:
                 logger.warning(f"Error stopping candle warm-up scheduler: {e}")
+
+        if self.ledger_tieout_scheduler:
+            try:
+                await self.ledger_tieout_scheduler.stop()
+                logger.info("Ledger tie-out scheduler stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping ledger tie-out scheduler: {e}")
 
         if self.report_precomputer:
             await self.report_precomputer.stop()
@@ -1258,6 +1267,34 @@ class DataManagerApp:
             )
         except Exception as e:
             logger.error(f"Error in DrawdownScheduler: {e}", exc_info=True)
+
+    async def _run_ledger_tieout_scheduler(self) -> None:
+        if not constants.LEDGER_TIEOUT_SCHEDULER_ENABLED:
+            logger.info("Ledger tie-out scheduler is disabled")
+            return
+        if not self.db_manager or not self.db_manager.mysql_adapter:
+            logger.warning("Ledger tie-out scheduler not started: no mysql_adapter")
+            return
+
+        from data_manager.db.repositories.ledger_repository import LedgerRepository
+        from data_manager.services.ledger_tieout_scheduler import (
+            LedgerTieoutScheduler,
+        )
+
+        try:
+            repository = LedgerRepository(
+                mysql_adapter=self.db_manager.mysql_adapter,
+                mongodb_adapter=getattr(self.db_manager, "mongodb_adapter", None),
+            )
+            self.ledger_tieout_scheduler = LedgerTieoutScheduler(
+                repository=repository,
+                leader_election=self.leader_election,
+            )
+            await self.ledger_tieout_scheduler.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Error starting ledger tie-out scheduler: %s", exc, exc_info=True
+            )
 
     async def _run_candle_warmup_scheduler(self) -> None:
         """Continuous candle warm-up backfill (petrosa-data-manager#319).
