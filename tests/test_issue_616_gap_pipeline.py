@@ -8,7 +8,10 @@ from data_manager.backfiller.orchestrator import BackfillOrchestrator
 from data_manager.models.events import BackfillRequest
 from data_manager.models.health import GapInfo
 from data_manager.services import backfill_queue
-from data_manager.utils.time_utils import parse_timeframe_to_seconds
+from data_manager.utils.time_utils import (
+    last_closed_candle_open,
+    parse_timeframe_to_seconds,
+)
 
 
 def _db():
@@ -31,6 +34,34 @@ async def test_last_closed_candle_has_no_tail_gap(timeframe):
     detector.audit_repo.log_gap = AsyncMock()
 
     assert await detector.detect_gaps("BTCUSDT", timeframe, start, end) == []
+    detector.audit_repo.log_gap.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeframe", ["5m", "15m", "30m", "1h", "1d"])
+async def test_gap_detection_clamps_end_to_latest_closed_candle(timeframe):
+    detector = GapDetector(_db())
+    fixed_now = datetime(2026, 1, 2, 0, 7, tzinfo=UTC)
+    interval = timedelta(seconds=parse_timeframe_to_seconds(timeframe))
+    latest_closed = last_closed_candle_open(fixed_now, timeframe)
+    start = latest_closed - interval
+    detector.candle_repo.get_range = AsyncMock(
+        return_value=[{"timestamp": start}, {"timestamp": latest_closed}]
+    )
+    detector.audit_repo.log_gap = AsyncMock()
+
+    with patch("data_manager.auditor.gap_detector.datetime") as clock:
+        clock.now.return_value = fixed_now
+        assert (
+            await detector.detect_gaps(
+                "BTCUSDT", timeframe, start, fixed_now + interval
+            )
+            == []
+        )
+
+    detector.candle_repo.get_range.assert_awaited_once_with(
+        "BTCUSDT", timeframe, start, latest_closed
+    )
     detector.audit_repo.log_gap.assert_not_awaited()
 
 
