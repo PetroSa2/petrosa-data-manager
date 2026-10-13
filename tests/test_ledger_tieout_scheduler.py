@@ -94,12 +94,22 @@ async def test_missing_leader_election_does_not_run_when_election_enabled():
     repository.positions_tieout.assert_not_called()
 
 
-def test_missing_leader_election_runs_only_when_election_is_disabled():
+@pytest.mark.asyncio
+async def test_disabled_leader_election_fails_closed():
+    repository = MagicMock()
     with patch(
         "data_manager.services.ledger_tieout_scheduler.constants.ENABLE_LEADER_ELECTION",
         False,
     ):
-        assert LedgerTieoutScheduler(MagicMock())._is_leader() is True
+        scheduler = LedgerTieoutScheduler(
+            repository, leader_election=MagicMock(is_leader=True)
+        )
+
+        assert scheduler._is_leader() is False
+        assert await scheduler.run_cycle() is None
+
+    repository.tieout.assert_not_called()
+    repository.positions_tieout.assert_not_called()
 
 
 @pytest.mark.asyncio
