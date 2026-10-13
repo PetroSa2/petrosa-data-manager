@@ -438,6 +438,16 @@ KLINES_MYSQL_FRESHNESS_INTERVAL_SECONDS = int(
     os.getenv("KLINES_MYSQL_FRESHNESS_INTERVAL_SECONDS", "300")
 )
 
+# MySQL archive completeness is sampled hourly over the most recent 30 days by
+# default. Both values are configurable so operators can balance coverage and
+# the number of synchronous MySQL count queries per cycle.
+KLINES_MYSQL_COMPLETENESS_INTERVAL_SECONDS = int(
+    os.getenv("KLINES_MYSQL_COMPLETENESS_INTERVAL_SECONDS", "3600")
+)
+KLINES_MYSQL_COMPLETENESS_LOOKBACK_DAYS = int(
+    os.getenv("KLINES_MYSQL_COMPLETENESS_LOOKBACK_DAYS", "30")
+)
+
 # AC3 — no empty-read window. During the cutover the candle read path falls
 # back to the non-primary backend whenever the primary returns an empty or
 # short result, so execution never sees a starved candle window while Mongo is
