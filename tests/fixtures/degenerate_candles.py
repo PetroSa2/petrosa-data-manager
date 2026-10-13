@@ -5,7 +5,14 @@ from datetime import UTC, datetime, timedelta
 _START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _candle(timestamp: datetime, open_price: float, high: float, low: float, close: float, volume: float) -> dict:
+def _candle(
+    timestamp: datetime,
+    open_price: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: float,
+) -> dict:
     return {
         "timestamp": timestamp,
         "open": open_price,
@@ -38,11 +45,17 @@ SHORT_SERIES = [
     _candle(_START, 100.0, 101.0, 99.0, 100.5, 10.0),
     _candle(_START + timedelta(minutes=5), 100.5, 101.5, 100.0, 101.0, 11.0),
 ]
-SHORT_SERIES_DEFECT = "fewer than warmup minimum candles exercise undersized-series handling"
+SHORT_SERIES_DEFECT = (
+    "fewer than warmup minimum candles exercise undersized-series handling"
+)
 
 DEGENERATE_CANDLE_SETS = (
     ("flat_bar", FLAT_BAR, FLAT_BAR_DEFECT),
     ("zero_priced_bar", ZERO_PRICED_BAR, ZERO_PRICED_BAR_DEFECT),
-    ("all_zero_rolling_window", ALL_ZERO_ROLLING_WINDOW, ALL_ZERO_ROLLING_WINDOW_DEFECT),
+    (
+        "all_zero_rolling_window",
+        ALL_ZERO_ROLLING_WINDOW,
+        ALL_ZERO_ROLLING_WINDOW_DEFECT,
+    ),
     ("short_series", SHORT_SERIES, SHORT_SERIES_DEFECT),
 )
