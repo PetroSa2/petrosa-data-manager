@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
@@ -34,6 +34,9 @@ TIEOUT_VARIANCE = Gauge(
 )
 TIEOUT_CUMULATIVE = Gauge(
     "ledger_tieout_cumulative_variance_usd", "Cumulative ledger tie-out variance"
+)
+TIEOUT_LAST_COMPLETE_DAY = Gauge(
+    "ledger_tieout_last_complete_day", "Last complete UTC day included in tie-out"
 )
 OPEN_POSITION_VARIANCE = Gauge(
     "ledger_open_positions_variance", "Ledger rows without exchange positions"
@@ -253,6 +256,14 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
             float(max(variances, key=lambda value: abs(value), default=Decimal("0")))
         )
         TIEOUT_CUMULATIVE.set(float(result["cumulative_variance"]))
+        if variances:
+            TIEOUT_LAST_COMPLETE_DAY.set(
+                datetime.combine(
+                    min(to, datetime.now(UTC).date() - timedelta(days=1)),
+                    datetime.min.time(),
+                    UTC,
+                ).timestamp()
+            )
         return result
     except HTTPException:
         raise
