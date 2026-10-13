@@ -211,9 +211,7 @@ class RegimeClassifier:
             volume_clarity = level_clarity(volume_spike_ratio, VOLUME_LOW, VOLUME_HIGH)
             if regime == "transitional":
                 confidence = transitional_confidence(vol_clarity, volume_clarity)
-            held_observations, held_since = await self._held(
-                symbol, timeframe, regime
-            )
+            held_observations, held_since = await self._held(symbol, timeframe, regime)
             computed_at = datetime.now(UTC)
             inputs = {
                 "annualized_volatility": annualized_vol,
