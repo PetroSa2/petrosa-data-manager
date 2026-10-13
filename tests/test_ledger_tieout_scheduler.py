@@ -29,6 +29,7 @@ async def test_cycle_uses_lookback_range_and_sets_gauges():
     repository.positions_tieout.return_value = {"phantom_rows": [{"id": 1}]}
     scheduler = LedgerTieoutScheduler(
         repository,
+        leader_election=MagicMock(is_leader=True),
         now=lambda: datetime(2026, 10, 13, 15, tzinfo=UTC),
     )
 
@@ -72,10 +73,42 @@ async def test_non_leader_does_not_run_cycle():
 
 
 @pytest.mark.asyncio
+async def test_unknown_leader_does_not_run_cycle():
+    repository = MagicMock()
+    scheduler = LedgerTieoutScheduler(
+        repository, leader_election=MagicMock(is_leader=None)
+    )
+
+    assert await scheduler.run_cycle() is None
+    repository.tieout.assert_not_called()
+    repository.positions_tieout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_missing_leader_election_does_not_run_when_election_enabled():
+    repository = MagicMock()
+    scheduler = LedgerTieoutScheduler(repository, leader_election=None)
+
+    assert await scheduler.run_cycle() is None
+    repository.tieout.assert_not_called()
+    repository.positions_tieout.assert_not_called()
+
+
+def test_missing_leader_election_runs_only_when_election_is_disabled():
+    with patch(
+        "data_manager.services.ledger_tieout_scheduler.constants.ENABLE_LEADER_ELECTION",
+        False,
+    ):
+        assert LedgerTieoutScheduler(MagicMock())._is_leader() is True
+
+
+@pytest.mark.asyncio
 async def test_failure_isolated_and_next_run_succeeds(caplog):
     repository = MagicMock()
     repository.positions_tieout.return_value = {"phantom_rows": []}
-    scheduler = LedgerTieoutScheduler(repository)
+    scheduler = LedgerTieoutScheduler(
+        repository, leader_election=MagicMock(is_leader=True)
+    )
     scheduler.interval_seconds = 0.001
     scheduler.running = True
     calls = 0
@@ -114,7 +147,9 @@ async def test_repository_calls_run_off_event_loop():
 
     repository.tieout.side_effect = tieout
     repository.positions_tieout.side_effect = positions_tieout
-    await LedgerTieoutScheduler(repository).run_cycle()
+    await LedgerTieoutScheduler(
+        repository, leader_election=MagicMock(is_leader=True)
+    ).run_cycle()
 
     assert worker_threads
     assert all(thread_id != loop_thread for thread_id in worker_threads)
@@ -192,3 +227,32 @@ async def test_app_wires_ledger_scheduler():
     )
     scheduler.start.assert_awaited_once()
     assert app.ledger_tieout_scheduler is scheduler
+
+
+@pytest.mark.asyncio
+async def test_app_does_not_start_ledger_scheduler_without_database():
+    from data_manager.main import DataManagerApp
+
+    app = DataManagerApp()
+
+    with patch(
+        "data_manager.main.constants.LEDGER_TIEOUT_SCHEDULER_ENABLED", True
+    ):
+        await app._run_ledger_tieout_scheduler()
+
+    assert app.ledger_tieout_scheduler is None
+
+
+@pytest.mark.asyncio
+async def test_app_stops_ledger_scheduler():
+    from data_manager.main import DataManagerApp
+
+    app = DataManagerApp()
+    scheduler = MagicMock()
+    scheduler.stop = AsyncMock()
+    app.ledger_tieout_scheduler = scheduler
+
+    with patch.object(app, "_unwire_route_publishers"):
+        await app.stop()
+
+    scheduler.stop.assert_awaited_once()
