@@ -25,7 +25,6 @@ from data_manager.db.repositories import CandleRepository
 from data_manager.models.events import BackfillRequest, EventType, MarketDataEvent
 from data_manager.services.backfill_queue import (
     BackfillRequestQueue,
-    gaps_filled_auto_total,
     gaps_queued_total,
 )
 from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_seconds
@@ -327,9 +326,6 @@ class StreamingGapDetector:
                     job = await self.backfill_orchestrator.create_backfill_job(request)
                     backfills_triggered_total.labels(
                         symbol=symbol, timeframe=timeframe, source="streaming"
-                    ).inc()
-                    gaps_filled_auto_total.labels(
-                        symbol=symbol, timeframe=timeframe
                     ).inc()
                     logger.info(
                         f"Streaming backfill triggered: {job.job_id} for "

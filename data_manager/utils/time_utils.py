@@ -88,6 +88,14 @@ def parse_timeframe_to_seconds(timeframe: str) -> int:
     return parse_timeframe_to_minutes(timeframe) * 60
 
 
+def last_closed_candle_open(now: datetime, timeframe: str) -> datetime:
+    """Return the open time of the latest fully closed candle."""
+    now = as_aware_utc(now)
+    interval_seconds = parse_timeframe_to_seconds(timeframe)
+    closed_epoch = int(now.timestamp()) // interval_seconds * interval_seconds
+    return datetime.fromtimestamp(closed_epoch - interval_seconds, tz=UTC)
+
+
 def calculate_expected_records(start: datetime, end: datetime, timeframe: str) -> int:
     """
     Calculate expected number of records in a time range.

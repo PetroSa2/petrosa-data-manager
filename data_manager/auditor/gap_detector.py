@@ -3,7 +3,7 @@ Gap detection for time series data.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from prometheus_client import Counter, Gauge
 
@@ -14,10 +14,14 @@ from data_manager.models.events import BackfillRequest
 from data_manager.models.health import GapInfo
 from data_manager.services.backfill_queue import (
     BackfillRequestQueue,
-    gaps_filled_auto_total,
+    empty_backfill_suppressed,
     gaps_queued_total,
 )
-from data_manager.utils.time_utils import as_aware_utc, parse_timeframe_to_seconds
+from data_manager.utils.time_utils import (
+    as_aware_utc,
+    last_closed_candle_open,
+    parse_timeframe_to_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +94,10 @@ class GapDetector:
             # "can't compare offset-naive and offset-aware datetimes".
             start = as_aware_utc(start)
             end = as_aware_utc(end)
+            end = min(end, last_closed_candle_open(datetime.now(UTC), timeframe))
+
+            if end <= start:
+                return []
 
             logger.debug(
                 f"Detecting gaps for {symbol} {timeframe} from {start} to {end}"
@@ -226,6 +234,17 @@ class GapDetector:
             severity: Gap severity level
         """
         try:
+            if gap.duration_seconds < constants.MIN_AUTO_BACKFILL_GAP:
+                logger.debug(
+                    "Skipping undersized backfill for %s %s: %ss",
+                    symbol,
+                    timeframe,
+                    gap.duration_seconds,
+                )
+                return
+            if gap.end_time <= gap.start_time:
+                return
+
             # Create backfill request
             request = BackfillRequest(
                 symbol=symbol,
@@ -236,6 +255,16 @@ class GapDetector:
                 priority=1 if severity == "high" else 5,
                 source="gap_detector",
             )
+
+            if empty_backfill_suppressed(request):
+                logger.debug(
+                    "Skipping backfill in empty-result cooldown for %s %s: %s to %s",
+                    symbol,
+                    timeframe,
+                    gap.start_time,
+                    gap.end_time,
+                )
+                return
 
             logger.info(
                 f"Auto-triggering backfill for {symbol} {timeframe}: "
@@ -253,9 +282,6 @@ class GapDetector:
                     # Update metrics
                     auto_backfill_triggered_counter.labels(
                         symbol=symbol, timeframe=timeframe, reason="gap_detected"
-                    ).inc()
-                    gaps_filled_auto_total.labels(
-                        symbol=symbol, timeframe=timeframe
                     ).inc()
                     return
                 except Exception as e:
