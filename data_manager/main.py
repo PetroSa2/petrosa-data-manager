@@ -236,6 +236,22 @@ class DataManagerApp:
         for timeframe in constants.SUPPORTED_INTERVALS:
             await adapter.ensure_indexes(f"klines_{timeframe}")
 
+    def _start_mysql_server_status_collector(self) -> None:
+        from data_manager.maintenance.mysql_server_status import (
+            mysql_server_status_loop,
+        )
+
+        self.mysql_server_status_task = asyncio.create_task(
+            mysql_server_status_loop(
+                lambda: (
+                    self.db_manager.mysql_adapter
+                    if self.db_manager is not None
+                    else None
+                ),
+                self._shutdown_event,
+            )
+        )
+
     async def start(self) -> None:
         """Start all application components."""
         logger.info(
@@ -602,21 +618,7 @@ class DataManagerApp:
 
         self.running = True
         logger.info("All components started successfully")
-
-        from data_manager.maintenance.mysql_server_status import (
-            mysql_server_status_loop,
-        )
-
-        self.mysql_server_status_task = asyncio.create_task(
-            mysql_server_status_loop(
-                lambda: (
-                    self.db_manager.mysql_adapter
-                    if self.db_manager is not None
-                    else None
-                ),
-                self._shutdown_event,
-            )
-        )
+        self._start_mysql_server_status_collector()
 
         # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
         # AFTER self.running=True so the `while self.running` loop runs its

@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import threading
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from data_manager.db.mysql_adapter import MySQLAdapter
+from data_manager.main import DataManagerApp
 from data_manager.maintenance import mysql_server_status as status
 
 
@@ -110,3 +112,33 @@ async def test_failure_increments_error_counter_without_raising():
     await status.mysql_server_status_loop(lambda: Adapter(), stop_event)
 
     assert status.mysql_server_status_errors_total._value.get() == before + 1
+
+
+def test_app_starts_collector_task_with_current_database_manager():
+    app = DataManagerApp()
+    app.db_manager = SimpleNamespace(mysql_adapter=object())
+    task = object()
+
+    with (
+        patch(
+            "data_manager.main.asyncio.create_task", return_value=task
+        ) as create_task,
+        patch.object(status, "mysql_server_status_loop") as collector,
+    ):
+        app._start_mysql_server_status_collector()
+
+    assert app.mysql_server_status_task is task
+    create_task.assert_called_once()
+    collector.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_app_stop_cancels_collector_before_database_shutdown():
+    app = DataManagerApp()
+    collector_task = asyncio.create_task(asyncio.sleep(60))
+    app.mysql_server_status_task = collector_task
+    app.running = True
+
+    await app.stop()
+
+    assert collector_task.cancelled()
