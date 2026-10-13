@@ -2,6 +2,7 @@ import asyncio
 import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -96,3 +97,47 @@ def test_pair_errors_are_isolated_and_counted():
 
 def test_import_does_not_export_zero_sample():
     assert INITIAL_COMPLETENESS_SAMPLES == []
+
+
+def test_loop_skips_without_mysql_adapter(monkeypatch):
+    stop = asyncio.Event()
+    stop.set()
+    update = MagicMock()
+    monkeypatch.setattr(completeness, "update_completeness", update)
+
+    asyncio.run(
+        completeness.completeness_loop(
+            SimpleNamespace(mysql_adapter=None),
+            stop,
+            interval_seconds=60,
+            symbols=("BTCUSDT",),
+            timeframes=("1h",),
+        )
+    )
+
+    update.assert_not_called()
+
+
+def test_loop_continues_after_interval_timeout(monkeypatch):
+    stop = asyncio.Event()
+    waits = []
+
+    async def timeout_once(waitable, timeout):
+        waits.append(timeout)
+        waitable.close()
+        stop.set()
+        raise TimeoutError
+
+    monkeypatch.setattr(completeness.asyncio, "wait_for", timeout_once)
+
+    asyncio.run(
+        completeness.completeness_loop(
+            SimpleNamespace(mysql_adapter=None),
+            stop,
+            interval_seconds=60,
+            symbols=("BTCUSDT",),
+            timeframes=("1h",),
+        )
+    )
+
+    assert waits == [60]
