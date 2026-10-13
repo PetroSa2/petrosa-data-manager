@@ -105,8 +105,9 @@ async def test_empty_range_cooldown_blocks_requeue_until_expiry(caplog):
         start_time=datetime(2026, 1, 1, tzinfo=UTC),
         end_time=datetime(2026, 1, 1, 1, tzinfo=UTC),
     )
-    with patch("constants.BACKFILL_EMPTY_COOLDOWN_THRESHOLD", 3), patch(
-        "constants.BACKFILL_EMPTY_COOLDOWN_SECONDS", 3600
+    with (
+        patch("constants.BACKFILL_EMPTY_COOLDOWN_THRESHOLD", 3),
+        patch("constants.BACKFILL_EMPTY_COOLDOWN_SECONDS", 3600),
     ):
         for _ in range(3):
             backfill_queue.record_empty_backfill(request)
@@ -130,7 +131,10 @@ async def test_empty_range_cooldown_blocks_requeue_until_expiry(caplog):
         detector.backfill_orchestrator.create_backfill_job.assert_not_awaited()
 
         key = backfill_queue.backfill_range_key(request)
-        backfill_queue._empty_ranges[key] = (3, datetime.now(UTC) - timedelta(seconds=1))
+        backfill_queue._empty_ranges[key] = (
+            3,
+            datetime.now(UTC) - timedelta(seconds=1),
+        )
         assert not backfill_queue.empty_backfill_suppressed(request)
 
     backfill_queue._empty_ranges.clear()
