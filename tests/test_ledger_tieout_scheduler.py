@@ -235,9 +235,7 @@ async def test_app_does_not_start_ledger_scheduler_without_database():
 
     app = DataManagerApp()
 
-    with patch(
-        "data_manager.main.constants.LEDGER_TIEOUT_SCHEDULER_ENABLED", True
-    ):
+    with patch("data_manager.main.constants.LEDGER_TIEOUT_SCHEDULER_ENABLED", True):
         await app._run_ledger_tieout_scheduler()
 
     assert app.ledger_tieout_scheduler is None

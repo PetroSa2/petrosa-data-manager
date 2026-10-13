@@ -70,8 +70,7 @@ class LedgerTieoutScheduler:
         if not constants.ENABLE_LEADER_ELECTION:
             return True
         return (
-            self.leader_election is not None
-            and self.leader_election.is_leader is True
+            self.leader_election is not None and self.leader_election.is_leader is True
         )
 
     async def _loop(self) -> None:
