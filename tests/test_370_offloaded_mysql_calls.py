@@ -253,6 +253,29 @@ class TestSignalsDualWriteTask:
         assert mysql_adapter.called_on_loop() == []
 
     @pytest.mark.asyncio
+    async def test_slow_signals_dual_write_does_not_block_event_loop(
+        self, db_manager, mysql_adapter
+    ):
+        mysql_adapter.delay_s = 0.5
+        before = set(generic._signal_dual_write_tasks)
+        generic._schedule_signals_mysql_copy([{"symbol": "BTCUSDT", "action": "buy"}])
+        pending = _dual_write_tasks_since(before)
+
+        assert await asyncio.to_thread(mysql_adapter.started.wait, 1)
+        peer_ran = threading.Event()
+
+        async def mark_peer() -> None:
+            peer_ran.set()
+
+        peer_setter = asyncio.create_task(mark_peer())
+        assert await asyncio.to_thread(peer_ran.wait, 0.1)
+        await peer_setter
+        await asyncio.gather(*pending)
+        assert peer_ran.is_set()
+
+        assert mysql_adapter.called_on_loop() == []
+
+    @pytest.mark.asyncio
     async def test_write_failure_is_logged_not_raised(self, db_manager, caplog):
         caplog.set_level(logging.ERROR, logger=generic.logger.name)
         db_manager.mysql_adapter = Mock()

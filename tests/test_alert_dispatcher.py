@@ -14,8 +14,11 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -266,6 +269,59 @@ async def test_alert_mysql_failure_does_not_block_mongo(dispatcher, mock_db_mana
     )
     assert event is not None
     mock_db_manager.mongodb_adapter.db[ALERTS_COLLECTION].replace_one.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_alert_mysql_write_runs_off_event_loop(dispatcher, mock_db_manager):
+    loop_thread = threading.get_ident()
+    write_threads: list[int] = []
+
+    def write(*_args):
+        write_threads.append(threading.get_ident())
+
+    mock_db_manager.mysql_adapter.write.side_effect = write
+    event = await dispatcher.dispatch(
+        subject="alerts.position.reconciliation.mismatch.pos-thread",
+        body=_body(),
+    )
+
+    assert event is not None
+    assert write_threads
+    assert all(thread_id != loop_thread for thread_id in write_threads)
+
+
+@pytest.mark.asyncio
+async def test_slow_alert_mysql_write_does_not_block_event_loop(
+    dispatcher, mock_db_manager
+):
+    started = threading.Event()
+    release = threading.Event()
+    peer_ran = threading.Event()
+
+    def slow_write(*_args):
+        started.set()
+        time.sleep(0.5)
+        release.set()
+
+    mock_db_manager.mysql_adapter.write.side_effect = slow_write
+    persist_task = asyncio.create_task(
+        dispatcher.dispatch(
+            subject="alerts.position.reconciliation.mismatch.pos-slow",
+            body=_body(),
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+
+    async def mark_peer() -> None:
+        peer_ran.set()
+
+    peer_task = asyncio.create_task(mark_peer())
+    assert await asyncio.to_thread(peer_ran.wait, 0.1)
+    await peer_task
+    await persist_task
+
+    assert peer_ran.is_set()
+    assert release.is_set()
 
 
 @pytest.mark.asyncio

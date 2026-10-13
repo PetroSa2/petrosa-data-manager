@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -61,3 +63,32 @@ async def test_funding_mysql_copy_runs_off_event_loop():
 
     assert await repo.insert(_rate()) is True
     assert on_loop == [False]
+
+
+@pytest.mark.asyncio
+async def test_slow_funding_mysql_copy_does_not_block_event_loop():
+    mongo = MagicMock()
+    mongo.write = AsyncMock(return_value=1)
+    mysql = MagicMock()
+    started = threading.Event()
+    peer_ran = threading.Event()
+
+    def slow_write(*_args):
+        started.set()
+        time.sleep(0.5)
+
+    mysql.write.side_effect = slow_write
+    repo = FundingRepository(mysql, mongo)
+
+    insert_task = asyncio.create_task(repo.insert(_rate()))
+    assert await asyncio.to_thread(started.wait, 1)
+
+    async def mark_peer() -> None:
+        peer_ran.set()
+
+    peer_task = asyncio.create_task(mark_peer())
+    assert await asyncio.to_thread(peer_ran.wait, 0.1)
+    await peer_task
+    await insert_task
+
+    assert peer_ran.is_set()
