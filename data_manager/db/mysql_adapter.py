@@ -1482,6 +1482,26 @@ class MySQLAdapter(BaseAdapter):
             raise DatabaseError("Database is not connected")
         return self.engine
 
+    def get_server_status(self) -> dict[str, int]:
+        """Read the connection counters needed for server-level monitoring."""
+        engine = self._ensure_connected()
+        with engine.connect() as conn:
+            status_rows = conn.execute(sa.text("SHOW GLOBAL STATUS")).mappings().all()
+            variable_rows = conn.execute(sa.text("SHOW VARIABLES")).mappings().all()
+
+        values = {
+            str(row["Variable_name"]): int(row["Value"])
+            for row in [*status_rows, *variable_rows]
+            if "Variable_name" in row and "Value" in row
+        }
+        return {
+            "Threads_connected": values["Threads_connected"],
+            "Max_used_connections": values["Max_used_connections"],
+            "Aborted_clients": values["Aborted_clients"],
+            "Aborted_connects": values["Aborted_connects"],
+            "max_user_connections": values["max_user_connections"],
+        }
+
 
 # ---------------------------------------------------------------------------
 # Read-only introspection helpers (petrosa_k8s#794 storage-inventory audit)
