@@ -81,7 +81,9 @@ class RegimeClassifier:
         """
         self.db_manager = db_manager
 
-    async def _held(self, symbol: str, regime: str) -> tuple[int, datetime | None]:
+    async def _held(
+        self, symbol: str, timeframe: str, regime: str
+    ) -> tuple[int, datetime | None]:
         """How many consecutive stored observations (this one included) read ``regime``, and since when.
 
         Best effort: a read failure or an empty history gives (1, None), never an error.
@@ -94,7 +96,12 @@ class RegimeClassifier:
             logger.warning(f"Regime history unavailable for {symbol}: {exc}")
             return 1, None
         held, since = 1, None
-        for row in history if isinstance(history, list) else []:
+        timeframe_history = [
+            row
+            for row in (history if isinstance(history, list) else [])
+            if isinstance(row, dict) and row.get("timeframe") == timeframe
+        ]
+        for row in timeframe_history:
             if not isinstance(row, dict) or row.get("regime") != regime:
                 break
             held += 1
@@ -204,7 +211,9 @@ class RegimeClassifier:
             volume_clarity = level_clarity(volume_spike_ratio, VOLUME_LOW, VOLUME_HIGH)
             if regime == "transitional":
                 confidence = transitional_confidence(vol_clarity, volume_clarity)
-            held_observations, held_since = await self._held(symbol, regime)
+            held_observations, held_since = await self._held(
+                symbol, timeframe, regime
+            )
             computed_at = datetime.now(UTC)
             inputs = {
                 "annualized_volatility": annualized_vol,

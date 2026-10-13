@@ -153,15 +153,59 @@ async def test_the_regime_carries_its_inputs_thresholds_and_clarity():
 async def test_how_long_the_regime_has_held_comes_from_the_stored_history():
     now = datetime.now(UTC)
     history = [
-        {"regime": "transitional", "timestamp": now - timedelta(hours=1)},
-        {"regime": "transitional", "timestamp": now - timedelta(hours=2)},
-        {"regime": "balanced_market", "timestamp": now - timedelta(hours=3)},
-        {"regime": "transitional", "timestamp": now - timedelta(hours=4)},
+        {
+            "timeframe": "1h",
+            "regime": "transitional",
+            "timestamp": now - timedelta(hours=1),
+        },
+        {
+            "timeframe": "1h",
+            "regime": "transitional",
+            "timestamp": now - timedelta(hours=2),
+        },
+        {
+            "timeframe": "1h",
+            "regime": "balanced_market",
+            "timestamp": now - timedelta(hours=3),
+        },
+        {
+            "timeframe": "1h",
+            "regime": "transitional",
+            "timestamp": now - timedelta(hours=4),
+        },
     ]
     c, _ = classifier(0.8, 1.1, history=history)
     regime = await c.classify_regime("BTCUSDT", "1h")
     assert regime.inputs["held_observations"] == 3  # this one and the two before it
     assert regime.inputs["held_since"] == (now - timedelta(hours=2)).isoformat()
+
+
+@pytest.mark.asyncio
+async def test_held_history_does_not_mix_timeframes():
+    now = datetime.now(UTC)
+    history = [
+        {
+            "timeframe": "1h",
+            "regime": "transitional",
+            "timestamp": now - timedelta(hours=1),
+        },
+        {
+            "timeframe": "4h",
+            "regime": "transitional",
+            "timestamp": now - timedelta(hours=2),
+        },
+        {
+            "timeframe": "1h",
+            "regime": "transitional",
+            "timestamp": now - timedelta(hours=3),
+        },
+    ]
+    c, _ = classifier(0.8, 1.1, history=history)
+
+    regime = await c.classify_regime("BTCUSDT", "1h")
+
+    assert regime.inputs["held_observations"] == 3
+    assert regime.inputs["held_since"] == (now - timedelta(hours=3)).isoformat()
 
 
 @pytest.mark.asyncio
