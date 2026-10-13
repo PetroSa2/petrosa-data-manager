@@ -2,7 +2,8 @@ import asyncio
 import importlib
 import threading
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -150,3 +151,44 @@ async def test_disabled_scheduler_does_not_start():
         scheduler = LedgerTieoutScheduler(MagicMock())
         await scheduler.start()
         assert scheduler._task is None
+
+
+@pytest.mark.asyncio
+async def test_scheduler_start_and_stop():
+    scheduler = LedgerTieoutScheduler(MagicMock())
+    await scheduler.start()
+    assert scheduler._task is not None
+    await scheduler.stop()
+    assert scheduler._task is None
+
+
+@pytest.mark.asyncio
+async def test_app_wires_ledger_scheduler():
+    from data_manager.main import DataManagerApp
+
+    app = DataManagerApp()
+    mysql_adapter = MagicMock()
+    app.db_manager = SimpleNamespace(
+        mysql_adapter=mysql_adapter,
+        mongodb_adapter=MagicMock(),
+    )
+    scheduler = MagicMock()
+    scheduler.start = AsyncMock()
+
+    with (
+        patch(
+            "data_manager.db.repositories.ledger_repository.LedgerRepository"
+        ) as repository,
+        patch(
+            "data_manager.services.ledger_tieout_scheduler.LedgerTieoutScheduler",
+            return_value=scheduler,
+        ),
+    ):
+        await app._run_ledger_tieout_scheduler()
+
+    repository.assert_called_once_with(
+        mysql_adapter=mysql_adapter,
+        mongodb_adapter=app.db_manager.mongodb_adapter,
+    )
+    scheduler.start.assert_awaited_once()
+    assert app.ledger_tieout_scheduler is scheduler
