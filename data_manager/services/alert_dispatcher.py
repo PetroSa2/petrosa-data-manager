@@ -489,7 +489,7 @@ class AlertDispatcher:
             mysql = getattr(self.db_manager, "mysql_adapter", None)
             if mysql is not None:
                 try:
-                    mysql.write([event], ALERTS_COLLECTION)
+                    await asyncio.to_thread(mysql.write, [event], ALERTS_COLLECTION)
                 except Exception:
                     try:
                         from data_manager.api.middleware.metrics import (
