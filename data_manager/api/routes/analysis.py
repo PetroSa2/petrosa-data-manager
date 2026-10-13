@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 import constants
 import data_manager.api.app as api_module
+from data_manager.observability_metrics import STRATEGY_SCORECARD_EVALUATE_TOTAL
 from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
@@ -882,6 +883,7 @@ async def evaluate_scorecard(
         )
     )
     if not configured:
+        STRATEGY_SCORECARD_EVALUATE_TOTAL.add(1, {"decision": "unconfigured"})
         return {"status": "unconfigured", "groups": [], "writes": 0}
     minimum = (
         minimum_trades
@@ -903,6 +905,7 @@ async def evaluate_scorecard(
             status = "disable"
         else:
             status = "keep"
+        STRATEGY_SCORECARD_EVALUATE_TOTAL.add(1, {"decision": status})
         evaluated.append(
             {"strategy_id": group["group"], "status": status, "metrics": group}
         )

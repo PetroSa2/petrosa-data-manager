@@ -11,12 +11,16 @@ from functools import wraps
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from prometheus_client import Counter
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import DuplicateKeyError
 
 import data_manager.api.app as api_module
 from data_manager.db.repositories.trading_state_repository import TradingStateRepository
+from data_manager.observability_metrics import (
+    TRADING_STATE_DEAD_LETTER_COUNT,
+    TRADING_STATE_MYSQL_COPY_FAILED,
+    TRADING_STATE_MYSQL_FIELDS_DROPPED,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/trading")
@@ -40,16 +44,6 @@ _DROPPED_FIELD_ALLOWLIST = frozenset(
         "closed_by_strategy_id",
         "status",
     }
-)
-MYSQL_COPY_FAILED = Counter(
-    "trading_state_mysql_copy_failed_total",
-    "Trading state MySQL copy failures",
-    ("operation", "reason"),
-)
-MYSQL_FIELDS_DROPPED = Counter(
-    "trading_state_mysql_fields_dropped_total",
-    "Trading state fields omitted from MySQL copies",
-    ("table", "field"),
 )
 
 
@@ -102,7 +96,7 @@ def _schedule_mysql_copy(operation: str, document: dict[str, Any]) -> None:
 def _record_failure(operation: str, reason: str) -> None:
     _copy_state["failed"] += 1
     _copy_state["last_failure_time"] = datetime.now(UTC).isoformat()
-    MYSQL_COPY_FAILED.labels(operation=operation, reason=reason).inc()
+    TRADING_STATE_MYSQL_COPY_FAILED.add(1, {"operation": operation, "reason": reason})
 
 
 def _dead_letter(
@@ -127,6 +121,7 @@ def _dead_letter(
         adapter.write([row], "trading_state_mysql_dead_letters")
     finally:
         _copy_state["dead_lettered"] += 1
+        TRADING_STATE_DEAD_LETTER_COUNT.set(_copy_state["dead_lettered"])
 
 
 def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
@@ -151,10 +146,15 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
             allowed = set(adapter.get_column_names(table))
             dropped = set(document) - allowed
             for field in dropped:
-                MYSQL_FIELDS_DROPPED.labels(
-                    table=table,
-                    field=field if field in _DROPPED_FIELD_ALLOWLIST else "other",
-                ).inc()
+                TRADING_STATE_MYSQL_FIELDS_DROPPED.add(
+                    1,
+                    {
+                        "table": table,
+                        "field": field
+                        if field in _DROPPED_FIELD_ALLOWLIST
+                        else "other",
+                    },
+                )
             data = {k: v for k, v in document.items() if k in allowed}
             key = "date" if table == "daily_pnl" else "position_id"
             updated = adapter.update(table, {key: document[key]}, data)

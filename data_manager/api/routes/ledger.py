@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,20 +27,14 @@ from data_manager.db.repositories.ledger_adjustments_repository import (
     LedgerAdjustmentsRepository,
 )
 from data_manager.db.repositories.ledger_repository import LedgerRepository
+from data_manager.observability_metrics import (
+    LEDGER_OPEN_POSITION_VARIANCE as OPEN_POSITION_VARIANCE,
+    LEDGER_TIEOUT_CUMULATIVE as TIEOUT_CUMULATIVE,
+    LEDGER_TIEOUT_LAST_COMPLETE_DAY as TIEOUT_LAST_COMPLETE_DAY,
+    LEDGER_TIEOUT_VARIANCE as TIEOUT_VARIANCE,
+)
 
 router = APIRouter(prefix="/api/v1/ledger")
-TIEOUT_VARIANCE = Gauge(
-    "ledger_tieout_variance_usd", "Latest ledger tie-out variance", ["window"]
-)
-TIEOUT_CUMULATIVE = Gauge(
-    "ledger_tieout_cumulative_variance_usd", "Cumulative ledger tie-out variance"
-)
-TIEOUT_LAST_COMPLETE_DAY = Gauge(
-    "ledger_tieout_last_complete_day", "Last complete UTC day included in tie-out"
-)
-OPEN_POSITION_VARIANCE = Gauge(
-    "ledger_open_positions_variance", "Ledger rows without exchange positions"
-)
 EXCEEDING_DAYS = Counter(
     "ledger_tieout_days_exceeding_total", "Tie-out days exceeding materiality"
 )
@@ -249,11 +243,12 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
     try:
         result = await asyncio.to_thread(_repo().tieout, from_, to)
         variances = [Decimal(day["unexplained"]) for day in result["days"]]
-        TIEOUT_VARIANCE.labels(window="latest").set(
-            float(variances[-1]) if variances else 0
+        TIEOUT_VARIANCE.set(
+            float(variances[-1]) if variances else 0, {"window": "latest"}
         )
-        TIEOUT_VARIANCE.labels(window="worst_in_window").set(
-            float(max(variances, key=lambda value: abs(value), default=Decimal("0")))
+        TIEOUT_VARIANCE.set(
+            float(max(variances, key=lambda value: abs(value), default=Decimal("0"))),
+            {"window": "worst_in_window"},
         )
         TIEOUT_CUMULATIVE.set(float(result["cumulative_variance"]))
         if variances:

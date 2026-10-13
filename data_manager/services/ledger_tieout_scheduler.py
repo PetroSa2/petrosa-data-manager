@@ -105,8 +105,8 @@ class LedgerTieoutScheduler:
         variances = [float(day["unexplained"]) for day in result["days"]]
         latest = variances[-1] if variances else 0.0
         worst = max(variances, key=abs, default=0.0)
-        TIEOUT_VARIANCE.labels(window="latest").set(latest)
-        TIEOUT_VARIANCE.labels(window="worst_in_window").set(worst)
+        TIEOUT_VARIANCE.set(latest, {"window": "latest"})
+        TIEOUT_VARIANCE.set(worst, {"window": "worst_in_window"})
         TIEOUT_CUMULATIVE.set(float(result["cumulative_variance"]))
         TIEOUT_LAST_COMPLETE_DAY.set(
             datetime.combine(
