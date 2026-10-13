@@ -84,9 +84,22 @@ def classifier(volatility, volume, history=None, trend=None):
             return [{"volume_spike_ratio": volume}]
         if collection.endswith("_trend"):
             return [{"rate_of_change": trend}] if trend is not None else []
-        return history or []
+        return []
+
+    async def find_filtered(collection, filters=None, limit=100, **_kwargs):
+        if collection.endswith("_regime"):
+            return [
+                row
+                for row in (history or [])
+                if all(
+                    key == "symbol" or row.get(key) == value
+                    for key, value in (filters or {}).items()
+                )
+            ][:limit]
+        return []
 
     adapter.query_latest = AsyncMock(side_effect=query_latest)
+    adapter.find_filtered = AsyncMock(side_effect=find_filtered)
     adapter.write = AsyncMock()
     db.mongodb_adapter = adapter
     return RegimeClassifier(db), adapter
@@ -209,16 +222,41 @@ async def test_held_history_does_not_mix_timeframes():
 
 
 @pytest.mark.asyncio
+async def test_held_history_limits_after_filtering_to_the_requested_timeframe():
+    now = datetime.now(UTC)
+    history = []
+    for index in range(120):
+        history.append(
+            {
+                "timeframe": "1h",
+                "regime": "balanced_market" if index == 96 else "transitional",
+                "timestamp": now - timedelta(hours=index * 2),
+            }
+        )
+        history.append(
+            {
+                "timeframe": "4h",
+                "regime": "transitional",
+                "timestamp": now - timedelta(hours=index * 2 + 1),
+            }
+        )
+
+    c, adapter = classifier(0.8, 1.1, history=history)
+    regime = await c.classify_regime("BTCUSDT", "1h")
+
+    assert regime.inputs["held_observations"] == 97  # current plus latest 96 1h rows
+    assert regime.inputs["held_since"] == (now - timedelta(hours=95 * 2)).isoformat()
+    adapter.find_filtered.assert_awaited_once_with(
+        "analytics_BTCUSDT_regime",
+        filters={"symbol": "BTCUSDT", "timeframe": "1h"},
+        limit=96,
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_history_failure_does_not_fail_the_classification():
     c, adapter = classifier(0.8, 1.1)
-    original = adapter.query_latest.side_effect
-
-    async def flaky(collection, symbol=None, limit=1):
-        if collection.endswith("_regime"):
-            raise RuntimeError("history unavailable")
-        return await original(collection, symbol=symbol, limit=limit)
-
-    adapter.query_latest = AsyncMock(side_effect=flaky)
+    adapter.find_filtered = AsyncMock(side_effect=RuntimeError("history unavailable"))
     regime = await c.classify_regime("BTCUSDT", "1h")
     assert regime is not None
     assert regime.inputs["held_observations"] == 1

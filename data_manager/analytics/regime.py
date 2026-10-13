@@ -89,18 +89,16 @@ class RegimeClassifier:
         Best effort: a read failure or an empty history gives (1, None), never an error.
         """
         try:
-            history = await self.db_manager.mongodb_adapter.query_latest(
-                f"analytics_{symbol}_regime", symbol=symbol, limit=HOLD_HISTORY
+            history = await self.db_manager.mongodb_adapter.find_filtered(
+                f"analytics_{symbol}_regime",
+                filters={"symbol": symbol, "timeframe": timeframe},
+                limit=HOLD_HISTORY,
             )
         except Exception as exc:
             logger.warning(f"Regime history unavailable for {symbol}: {exc}")
             return 1, None
         held, since = 1, None
-        timeframe_history = [
-            row
-            for row in (history if isinstance(history, list) else [])
-            if isinstance(row, dict) and row.get("timeframe") == timeframe
-        ]
+        timeframe_history = history if isinstance(history, list) else []
         for row in timeframe_history:
             if not isinstance(row, dict) or row.get("regime") != regime:
                 break
