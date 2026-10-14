@@ -130,3 +130,20 @@ async def test_empty_exchange_history_returns_empty_result(replay_environment):
     assert rows == []
     assert cut_over_ms == 1
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_failed_replay_is_removed_from_in_flight_cache(
+    replay_environment, monkeypatch
+):
+    def fail_build(rows, exchange_history):
+        raise RuntimeError("replay failed")
+
+    monkeypatch.setattr(
+        "data_manager.services.round_book.build_synthetic_exits", fail_build
+    )
+
+    with pytest.raises(RuntimeError, match="replay failed"):
+        await analysis._load_synthetic_exits("alpha")
+
+    assert analysis._SYNTHETIC_EXITS_IN_FLIGHT == {}
