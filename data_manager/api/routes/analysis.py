@@ -53,9 +53,9 @@ _REPLAY_BUDGET_ENV = "DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S"
 _REPLAY_BUDGET_FRACTION = 0.8
 _REPLAY_BUDGET_FALLBACK_SECONDS = 10.0
 
-_SYNTHETIC_EXITS_CACHE: tuple[
-    tuple[int | None, str | None], list[dict[str, Any]], int | None
-] | None = None
+_SYNTHETIC_EXITS_CACHE: (
+    tuple[tuple[int | None, str | None], list[dict[str, Any]], int | None] | None
+) = None
 _SYNTHETIC_EXITS_IN_FLIGHT: dict[
     tuple[int | None, str | None], asyncio.Task[list[dict[str, Any]]]
 ] = {}
@@ -416,7 +416,9 @@ async def _load_synthetic_exits(
     latest_fill_id = (
         str(newest_fill[0].get("_id"))
         if newest_fill and newest_fill[0].get("_id") is not None
-        else str(newest_fill[0].get("timestamp")) if newest_fill else None
+        else str(newest_fill[0].get("timestamp"))
+        if newest_fill
+        else None
     )
     version = (latest_snapshot, latest_fill_id)
     global _SYNTHETIC_EXITS_CACHE

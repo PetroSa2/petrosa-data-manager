@@ -13,7 +13,9 @@ class _Cursor:
         self.rows = rows
 
     def sort(self, field, direction):
-        self.rows = sorted(self.rows, key=lambda row: row.get(field), reverse=direction < 0)
+        self.rows = sorted(
+            self.rows, key=lambda row: row.get(field), reverse=direction < 0
+        )
         return self
 
     async def to_list(self, length=None):
@@ -92,7 +94,9 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_share_in_flight_replay(replay_environment, monkeypatch):
+async def test_concurrent_requests_share_in_flight_replay(
+    replay_environment, monkeypatch
+):
     _history, _fills, calls = replay_environment
     started = threading.Event()
     release = threading.Event()
