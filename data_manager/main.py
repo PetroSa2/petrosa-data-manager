@@ -33,6 +33,7 @@ from data_manager.consumer.pnl_consumer import PnlConsumer
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.migration_status import unapplied_migrations
 from data_manager.observability.write_metrics import SUMMARY, summary_loop
+from data_manager.observability_metrics import initialize_readiness_metrics
 from data_manager.services.alert_dispatcher import AlertDispatcher
 
 if TYPE_CHECKING:
@@ -255,6 +256,7 @@ class DataManagerApp:
 
     async def start(self) -> None:
         """Start all application components."""
+        initialize_readiness_metrics()
         logger.info(
             "Starting Petrosa Data Manager",
             extra={

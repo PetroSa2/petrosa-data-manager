@@ -53,8 +53,8 @@ async def test_cycle_uses_lookback_range_and_sets_gauges():
         datetime(2026, 10, 10, tzinfo=UTC).date(),
         datetime(2026, 10, 13, tzinfo=UTC).date(),
     )
-    variance.labels.assert_any_call(window="latest")
-    variance.labels.assert_any_call(window="worst_in_window")
+    variance.set.assert_any_call(3.0, {"window": "latest"})
+    variance.set.assert_any_call(3.0, {"window": "worst_in_window"})
     cumulative.set.assert_called_once_with(2.25)
     last_day.set.assert_called_once()
     positions.set.assert_called_once_with(1)
