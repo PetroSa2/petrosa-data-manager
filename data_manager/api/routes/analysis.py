@@ -53,6 +53,13 @@ _REPLAY_BUDGET_ENV = "DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S"
 _REPLAY_BUDGET_FRACTION = 0.8
 _REPLAY_BUDGET_FALLBACK_SECONDS = 10.0
 
+_SYNTHETIC_EXITS_CACHE: (
+    tuple[tuple[int | None, str | None], list[dict[str, Any]], int | None] | None
+) = None
+_SYNTHETIC_EXITS_IN_FLIGHT: dict[
+    tuple[int | None, str | None], asyncio.Task[list[dict[str, Any]]]
+] = {}
+
 
 def _replay_budget_seconds() -> tuple[float, str]:
     """Return the CIO-matching request budget and how it was resolved."""
@@ -365,10 +372,11 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
 async def _load_synthetic_exits(
     strategy_id: str,
 ) -> tuple[list[dict[str, Any]], int | None]:
-    """The synthetic exits of one strategy and the cut-over, from a global replay (petrosa-data-manager#603).
+    """Return one strategy's rows from a shared replay of the cut-over-to-latest window.
 
     The exchange quantity is the aggregate over all strategies, so the exits are computed on every fill and then
-    the strategy's own are returned. Empty when MySQL is unavailable.
+    the strategy's own are returned. Fills before the first snapshot seed the replay book. Empty when MySQL is
+    unavailable.
     """
     from data_manager.db.repositories.ledger_repository import LedgerRepository
     from data_manager.services.round_book import FILL_EVENT_TYPES, build_synthetic_exits
@@ -384,13 +392,56 @@ async def _load_synthetic_exits(
     cut_over_ms = history.get("cut_over_ms")
     if not history.get("snapshots"):
         return [], cut_over_ms
+    fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
     all_fills = (
         await mongodb.db["execution_events"]
-        .find({"event_type": {"$in": sorted(FILL_EVENT_TYPES)}})
+        .find(fill_filter)
         .sort("timestamp", 1)
         .to_list(length=_ROUND_MAX_FILLS)
     )
-    synthetic = build_synthetic_exits(all_fills, history)
+    newest_fill = (
+        await mongodb.db["execution_events"]
+        .find(fill_filter)
+        .sort("timestamp", -1)
+        .to_list(length=1)
+    )
+    latest_snapshot = max(
+        (
+            snapshot.get("as_of_ms")
+            for snapshot in history["snapshots"]
+            if snapshot.get("as_of_ms") is not None
+        ),
+        default=None,
+    )
+    latest_fill_id = (
+        str(newest_fill[0].get("_id"))
+        if newest_fill and newest_fill[0].get("_id") is not None
+        else str(newest_fill[0].get("timestamp"))
+        if newest_fill
+        else None
+    )
+    version = (latest_snapshot, latest_fill_id)
+    global _SYNTHETIC_EXITS_CACHE
+    cached = _SYNTHETIC_EXITS_CACHE
+    if cached is not None and cached[0] == version:
+        synthetic = cached[1]
+    else:
+        task = _SYNTHETIC_EXITS_IN_FLIGHT.get(version)
+        if task is None:
+            task = asyncio.create_task(
+                asyncio.to_thread(build_synthetic_exits, all_fills, history)
+            )
+            _SYNTHETIC_EXITS_IN_FLIGHT[version] = task
+        try:
+            synthetic = await task
+        except Exception:
+            if _SYNTHETIC_EXITS_IN_FLIGHT.get(version) is task:
+                _SYNTHETIC_EXITS_IN_FLIGHT.pop(version, None)
+            raise
+        else:
+            if _SYNTHETIC_EXITS_IN_FLIGHT.get(version) is task:
+                _SYNTHETIC_EXITS_IN_FLIGHT.pop(version, None)
+            _SYNTHETIC_EXITS_CACHE = (version, synthetic, cut_over_ms)
     return [
         row for row in synthetic if str(row.get("strategy_id")) == strategy_id
     ], cut_over_ms
