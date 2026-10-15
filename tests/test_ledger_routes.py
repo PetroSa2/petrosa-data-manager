@@ -178,6 +178,54 @@ async def test_tieout_routes_publish_metrics_and_validate_range(monkeypatch):
     assert error.value.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(
+    monkeypatch,
+):
+    class Repo:
+        def positions_tieout(self):
+            raise RuntimeError("ledger positions query failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_positions_tieout()
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Ledger database unavailable"
+
+
+@pytest.mark.asyncio
+async def test_positions_tieout_route_returns_matching_exchange_ledger_pairs(
+    monkeypatch,
+):
+    expected = {
+        "incomplete": False,
+        "source_status": {"exchange": "available", "ledger": "available"},
+        "quantity_tieout": [
+            {
+                "symbol": "BTCUSDT",
+                "position_side": "LONG",
+                "ledger_open_quantity": "1",
+                "exchange_quantity": "1",
+                "status": "tied",
+            }
+        ],
+        "phantom_rows": [],
+    }
+
+    class Repo:
+        def positions_tieout(self):
+            return expected
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+
+    result = await ledger.get_positions_tieout()
+
+    assert result["quantity_tieout"][0]["status"] == "tied"
+    assert result["quantity_tieout"][0]["ledger_open_quantity"] == "1"
+
+
 def test_tieout_returns_daily_components_and_cumulative_variance():
     repo = FakeLedgerRepository(
         [
@@ -234,6 +282,11 @@ def test_positions_tieout_maps_sides_and_reports_phantoms():
         ]
     )
     result = repo.positions_tieout()
+    assert result["incomplete"] is False
+    assert result["source_status"] == {
+        "exchange": "available",
+        "ledger": "available",
+    }
     assert result["ledger_open_rows"][0]["position_side"] == "LONG"
     assert len(result["phantom_rows"]) == 1
 
@@ -347,3 +400,14 @@ def test_positions_tieout_reports_missing_ledger_quantity_and_a_flat_exchange_si
     assert by_key[("BTCUSDT", "LONG")]["status"] == "exchange_exceeds_ledger"
     assert by_key[("ETHUSDT", "LONG")]["status"] == "ledger_exceeds_exchange"
     assert by_key[("ETHUSDT", "LONG")]["exchange_quantity"] == "0"
+
+
+def test_positions_tieout_marks_missing_exchange_snapshot_incomplete():
+    result = FakeLedgerRepository([Result(None)]).positions_tieout()
+
+    assert result["incomplete"] is True
+    assert result["source_status"] == {
+        "exchange": "unavailable",
+        "ledger": "not_read",
+    }
+    assert result["quantity_tieout"] == []

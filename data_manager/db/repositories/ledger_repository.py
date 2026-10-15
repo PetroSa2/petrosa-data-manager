@@ -435,6 +435,11 @@ class LedgerRepository(BaseRepository):
         )
         if not snapshot:
             return {
+                "incomplete": True,
+                "source_status": {
+                    "exchange": "unavailable",
+                    "ledger": "not_read",
+                },
                 "ledger_open_rows": [],
                 "exchange_positions": [],
                 "phantom_rows": [],
@@ -519,6 +524,11 @@ class LedgerRepository(BaseRepository):
                 }
             )
         return {
+            "incomplete": False,
+            "source_status": {
+                "exchange": "available",
+                "ledger": "available",
+            },
             "as_of_ms": snapshot["as_of_ms"],
             "ledger_open_rows": open_rows,
             "exchange_positions": exchange_rows,
