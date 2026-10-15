@@ -137,9 +137,17 @@ async def test_repeated_performance_requests_reuse_leg_replay(
     replay = AsyncMock(return_value={"outcomes": [], "realized": 0, "complete": False})
     monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
 
+    first_rows, first_version = await analysis._load_execution_events(
+        api_module.db_manager.mongodb_adapter
+    )
+    second_rows, second_version = await analysis._load_execution_events(
+        api_module.db_manager.mongodb_adapter
+    )
     first = await analysis.get_strategy_performance("alpha")
     second = await analysis.get_strategy_performance("alpha")
 
+    assert second_rows == first_rows
+    assert second_version == first_version
     assert first["stats"] == second["stats"]
     assert {
         key: value for key, value in first["metadata"].items() if key != "calculated_at"
