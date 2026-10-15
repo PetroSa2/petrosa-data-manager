@@ -54,10 +54,14 @@ _REPLAY_BUDGET_FRACTION = 0.8
 _REPLAY_BUDGET_FALLBACK_SECONDS = 10.0
 
 _SYNTHETIC_EXITS_CACHE: (
-    tuple[tuple[int | None, str | None], list[dict[str, Any]], int | None] | None
+    tuple[tuple[int | None, str | None, int], list[dict[str, Any]], int | None] | None
 ) = None
 _SYNTHETIC_EXITS_IN_FLIGHT: dict[
-    tuple[int | None, str | None], asyncio.Task[list[dict[str, Any]]]
+    tuple[int | None, str | None, int], asyncio.Task[list[dict[str, Any]]]
+] = {}
+_EXECUTION_EVENTS_CACHE: tuple[int, str | None, list[dict[str, Any]]] | None = None
+_LEG_REPLAY_CACHE: dict[
+    tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
 ] = {}
 
 
@@ -392,19 +396,7 @@ async def _load_synthetic_exits(
     cut_over_ms = history.get("cut_over_ms")
     if not history.get("snapshots"):
         return [], cut_over_ms
-    fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    all_fills = (
-        await mongodb.db["execution_events"]
-        .find(fill_filter)
-        .sort("timestamp", 1)
-        .to_list(length=_ROUND_MAX_FILLS)
-    )
-    newest_fill = (
-        await mongodb.db["execution_events"]
-        .find(fill_filter)
-        .sort("timestamp", -1)
-        .to_list(length=1)
-    )
+    all_fills, latest_fill_id = await _load_execution_events(mongodb)
     latest_snapshot = max(
         (
             snapshot.get("as_of_ms")
@@ -413,14 +405,7 @@ async def _load_synthetic_exits(
         ),
         default=None,
     )
-    latest_fill_id = (
-        str(newest_fill[0].get("_id"))
-        if newest_fill and newest_fill[0].get("_id") is not None
-        else str(newest_fill[0].get("timestamp"))
-        if newest_fill
-        else None
-    )
-    version = (latest_snapshot, latest_fill_id)
+    version = (latest_snapshot, latest_fill_id, id(mongodb.db["execution_events"]))
     global _SYNTHETIC_EXITS_CACHE
     cached = _SYNTHETIC_EXITS_CACHE
     if cached is not None and cached[0] == version:
@@ -445,6 +430,43 @@ async def _load_synthetic_exits(
     return [
         row for row in synthetic if str(row.get("strategy_id")) == strategy_id
     ], cut_over_ms
+
+
+async def _load_execution_events(
+    mongodb: Any,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Read fills once per newest fill-event version and filter them per caller."""
+    from data_manager.services.round_book import FILL_EVENT_TYPES
+
+    fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    newest_fill = (
+        await mongodb.db["execution_events"]
+        .find(fill_filter)
+        .sort("timestamp", -1)
+        .to_list(length=1)
+    )
+    latest_fill_id = (
+        str(newest_fill[0].get("_id"))
+        if newest_fill and newest_fill[0].get("_id") is not None
+        else str(newest_fill[0].get("timestamp"))
+        if newest_fill
+        else None
+    )
+    global _EXECUTION_EVENTS_CACHE
+    source_id = id(mongodb.db["execution_events"])
+    if _EXECUTION_EVENTS_CACHE is not None and _EXECUTION_EVENTS_CACHE[:2] == (
+        source_id,
+        latest_fill_id,
+    ):
+        return _EXECUTION_EVENTS_CACHE[2], latest_fill_id
+    all_fills = (
+        await mongodb.db["execution_events"]
+        .find(fill_filter)
+        .sort("timestamp", 1)
+        .to_list(length=_ROUND_MAX_FILLS)
+    )
+    _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, all_fills)
+    return all_fills, latest_fill_id
 
 
 def _leg_aware_pnl(
@@ -693,17 +715,8 @@ async def get_strategy_performance(strategy_id: str):
 
         mongodb = api_module.db_manager.mongodb_adapter
         try:
-            cursor = (
-                mongodb.db["execution_events"]
-                .find(
-                    {
-                        "strategy_id": strategy_id,
-                        "event_type": {"$in": ["filled", "partial_fill"]},
-                    }
-                )
-                .sort("timestamp", 1)
-            )
-            rows = await cursor.to_list(length=None)
+            all_rows, latest_fill_id = await _load_execution_events(mongodb)
+            rows = [row for row in all_rows if row.get("strategy_id") == strategy_id]
         except Exception as exc:
             # A misconfigured / mock adapter (or a transient MongoDB
             # error) degrades to the no-data payload rather than 500ing.
@@ -764,13 +777,27 @@ async def get_strategy_performance(strategy_id: str):
                     strategy_id,
                     exc,
                 )
-            leg_book = await _timed_leg_replay(
-                rows,
-                overlay,
-                strategy_id,
-                synthetic_rows=synthetic_rows,
-                cut_over_ms=cut_over_ms,
+            source_id = id(mongodb.db["execution_events"])
+            synthetic_version = (
+                _SYNTHETIC_EXITS_CACHE[0]
+                if _SYNTHETIC_EXITS_CACHE is not None
+                and _SYNTHETIC_EXITS_CACHE[0][2] == source_id
+                else (None, latest_fill_id, source_id)
             )
+            replay_key = (strategy_id, synthetic_version, repr(overlay))
+            leg_book = _LEG_REPLAY_CACHE.get(replay_key)
+            if leg_book is None:
+                for key in list(_LEG_REPLAY_CACHE):
+                    if key[0] == strategy_id and key != replay_key:
+                        _LEG_REPLAY_CACHE.pop(key, None)
+                leg_book = await _timed_leg_replay(
+                    rows,
+                    overlay,
+                    strategy_id,
+                    synthetic_rows=synthetic_rows,
+                    cut_over_ms=cut_over_ms,
+                )
+                _LEG_REPLAY_CACHE[replay_key] = leg_book
         if overlay is not None:
             assert leg_book is not None
             leg_pnl = leg_book if leg_book["complete"] else None
