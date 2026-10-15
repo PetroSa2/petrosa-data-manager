@@ -179,7 +179,9 @@ async def test_tieout_routes_publish_metrics_and_validate_range(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(monkeypatch):
+async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(
+    monkeypatch,
+):
     class Repo:
         def positions_tieout(self):
             raise RuntimeError("ledger positions query failed")
@@ -194,7 +196,9 @@ async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(mo
 
 
 @pytest.mark.asyncio
-async def test_positions_tieout_route_returns_matching_exchange_ledger_pairs(monkeypatch):
+async def test_positions_tieout_route_returns_matching_exchange_ledger_pairs(
+    monkeypatch,
+):
     expected = {
         "incomplete": False,
         "source_status": {"exchange": "available", "ledger": "available"},
