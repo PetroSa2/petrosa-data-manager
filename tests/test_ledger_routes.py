@@ -238,6 +238,39 @@ def test_positions_tieout_maps_sides_and_reports_phantoms():
     assert len(result["phantom_rows"]) == 1
 
 
+def test_positions_tieout_excludes_live_reconciler_closes():
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result([{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+            Result(
+                [
+                    {
+                        "entry_order_id": "reconciled-entry",
+                        "symbol": "BTCUSDT",
+                        "position_side": "BUY",
+                        "quantity": "1",
+                    },
+                    {
+                        "entry_order_id": "still-open",
+                        "symbol": "BTCUSDT",
+                        "position_side": "BUY",
+                        "quantity": "0.25",
+                    },
+                ]
+            ),
+        ]
+    )
+    repo._external_close_ids_for_tieout = lambda: {"reconciled-entry"}
+
+    result = repo.positions_tieout()
+
+    btc = next(row for row in result["quantity_tieout"] if row["symbol"] == "BTCUSDT")
+    assert btc["ledger_open_rows"] == 1
+    assert btc["ledger_open_quantity"] == "0.25"
+    assert btc["status"] == "exchange_exceeds_ledger"
+
+
 def test_positions_tieout_compares_open_quantity_with_the_exchange_quantity():
     # ETH LONG: 17 open ledger rows of 0.01 against one exchange position of 0.05
     eth_rows = [{"symbol": "ETHUSDT", "position_side": "BUY", "quantity": "0.01"}] * 17

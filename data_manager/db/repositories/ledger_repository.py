@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -45,6 +46,13 @@ class LedgerRepository(BaseRepository):
         engine = self.mysql._ensure_connected()
         with engine.begin() as connection:
             return connection.execute(text(statement), params or {})
+
+    def _external_close_ids_for_tieout(self) -> set[str]:
+        if self.mongodb is None:
+            if self.mysql is not None:
+                raise RuntimeError("MongoDB is not available")
+            return set()
+        return asyncio.run(self.live_closed_entry_order_ids())
 
     @staticmethod
     def economic_hash(payload: dict[str, Any]) -> str:
@@ -441,9 +449,11 @@ class LedgerRepository(BaseRepository):
             .mappings()
             .all()
         )
+        external_close_ids = self._external_close_ids_for_tieout()
         ledger = (
             self._run(
-                "SELECT symbol, position_side, quantity FROM positions WHERE status IN ('open','partially_closed')"
+                "SELECT entry_order_id, symbol, position_side, quantity "
+                "FROM positions WHERE status IN ('open','partially_closed')"
             )
             .mappings()
             .all()
@@ -452,6 +462,8 @@ class LedgerRepository(BaseRepository):
         grouped: dict[tuple[str, str], int] = {}
         ledger_quantity: dict[tuple[str, str], Decimal] = {}
         for row in ledger:
+            if str(row.get("entry_order_id") or "") in external_close_ids:
+                continue
             side = {"BUY": "LONG", "SELL": "SHORT"}.get(
                 str(row["position_side"]).upper(), str(row["position_side"]).upper()
             )
