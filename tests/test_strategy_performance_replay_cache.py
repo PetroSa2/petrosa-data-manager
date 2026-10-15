@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -65,9 +66,13 @@ def replay_environment(monkeypatch):
     monkeypatch.setattr(api_module, "db_manager", manager)
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
+    analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._LEG_REPLAY_CACHE.clear()
     yield history, fills, calls
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
+    analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._LEG_REPLAY_CACHE.clear()
     api_module.db_manager = None
 
 
@@ -120,6 +125,28 @@ async def test_concurrent_requests_share_in_flight_replay(
     assert len(calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_repeated_performance_requests_reuse_leg_replay(
+    replay_environment, monkeypatch
+):
+    _history, _fills, _calls = replay_environment
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
+    monkeypatch.setattr(
+        analysis, "_load_synthetic_exits", AsyncMock(return_value=([], None))
+    )
+    replay = AsyncMock(
+        return_value={"outcomes": [], "realized": 0, "complete": False}
+    )
+    monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
+
+    first = await analysis.get_strategy_performance("alpha")
+    second = await analysis.get_strategy_performance("alpha")
+
+    assert first["stats"] == second["stats"]
+    assert {key: value for key, value in first["metadata"].items() if key != "calculated_at"} == {
+        key: value for key, value in second["metadata"].items() if key != "calculated_at"
+    }
+    assert replay.await_count == 1
 @pytest.mark.asyncio
 async def test_empty_exchange_history_returns_empty_result(replay_environment):
     history, _fills, calls = replay_environment
