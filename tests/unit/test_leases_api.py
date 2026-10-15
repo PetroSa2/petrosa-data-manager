@@ -96,7 +96,8 @@ async def test_lease_get_and_renew_are_not_blocked_by_heavy_analytics(monkeypatc
         release.wait(timeout=2)
 
     futures = [
-        analysis._ANALYTICS_EXECUTOR.submit(long_analytics_job) for _ in range(workers)
+        asyncio.create_task(analysis._run_heavy(long_analytics_job))
+        for _ in range(workers)
     ]
     await asyncio.to_thread(barrier.wait, 1)
     try:
@@ -114,4 +115,4 @@ async def test_lease_get_and_renew_are_not_blocked_by_heavy_analytics(monkeypatc
         assert result[1]["renewed"] is True
     finally:
         release.set()
-        await asyncio.gather(*(asyncio.wrap_future(future) for future in futures))
+        await asyncio.gather(*futures)
