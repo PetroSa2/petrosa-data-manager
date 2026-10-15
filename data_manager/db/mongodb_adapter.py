@@ -739,7 +739,12 @@ class MongoDBAdapter(BaseAdapter):
             raise DatabaseError("Not connected to database")
 
         try:
-            coll = self.db[collection]
+            database = (
+                self.lease_db
+                if collection == "service_leases" and self.lease_db is not None
+                else self.db
+            )
+            coll = database[collection]
 
             # Create indexes based on collection type
             if collection == "schemas":
