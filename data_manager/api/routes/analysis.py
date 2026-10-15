@@ -436,7 +436,7 @@ async def _load_synthetic_exits(
     history_started = monotonic()
     version_reader = getattr(repo, "round_exchange_history_version", None)
     if version_reader is None:
-        history = await _run_heavy(repo.round_exchange_history)
+        history = await _run_bounded_heavy(repo.round_exchange_history)
         history_version = (
             history.get("cut_over_ms"),
             max(
@@ -695,14 +695,20 @@ async def _timed_leg_replay(
     budget_seconds, budget_source = _replay_budget_seconds()
     replay_started = perf_counter()
     try:
-        return await _run_heavy(
-            _leg_aware_pnl,
-            rows,
-            overlay_lots,
-            strategy_id,
-            synthetic_rows=synthetic_rows,
-            cut_over_ms=cut_over_ms,
-        )
+        try:
+            return await asyncio.wait_for(
+                _run_heavy(
+                    _leg_aware_pnl,
+                    rows,
+                    overlay_lots,
+                    strategy_id,
+                    synthetic_rows=synthetic_rows,
+                    cut_over_ms=cut_over_ms,
+                ),
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise _AnalyticsDependencyTimeout from exc
     finally:
         replay_duration = perf_counter() - replay_started
         ROUND_BOOK_REPLAY_DURATION.observe(replay_duration)
@@ -957,14 +963,26 @@ async def get_strategy_performance(strategy_id: str):
                     for key in list(_LEG_REPLAY_CACHE):
                         if key[0] == strategy_id and key != replay_key:
                             _LEG_REPLAY_CACHE.pop(key, None)
-                    leg_book = await _timed_leg_replay(
-                        rows,
-                        overlay,
-                        strategy_id,
-                        synthetic_rows=synthetic_rows,
-                        cut_over_ms=cut_over_ms,
-                    )
-                    _LEG_REPLAY_CACHE[replay_key] = leg_book
+                    try:
+                        leg_book = await _timed_leg_replay(
+                            rows,
+                            overlay,
+                            strategy_id,
+                            synthetic_rows=synthetic_rows,
+                            cut_over_ms=cut_over_ms,
+                        )
+                    except _AnalyticsDependencyTimeout:
+                        logger.warning(
+                            "performance: bounded dependency timeout stage=leg_replay "
+                            "strategy=%s timeout=%.3fs",
+                            strategy_id,
+                            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                        )
+                        exposure = _unavailable_exposure("timeout")
+                        overlay = None
+                        overlay_timeout = True
+                    else:
+                        _LEG_REPLAY_CACHE[replay_key] = leg_book
                 record_report_stage(
                     "performance", "overlay", monotonic() - overlay_started
                 )
