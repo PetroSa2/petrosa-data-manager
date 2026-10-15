@@ -454,9 +454,9 @@ async def _load_execution_events(
     )
     global _EXECUTION_EVENTS_CACHE
     source_id = id(mongodb.db["execution_events"])
-    if (
-        _EXECUTION_EVENTS_CACHE is not None
-        and _EXECUTION_EVENTS_CACHE[:2] == (source_id, latest_fill_id)
+    if _EXECUTION_EVENTS_CACHE is not None and _EXECUTION_EVENTS_CACHE[:2] == (
+        source_id,
+        latest_fill_id,
     ):
         return _EXECUTION_EVENTS_CACHE[2], latest_fill_id
     all_fills = (
@@ -716,11 +716,7 @@ async def get_strategy_performance(strategy_id: str):
         mongodb = api_module.db_manager.mongodb_adapter
         try:
             all_rows, latest_fill_id = await _load_execution_events(mongodb)
-            rows = [
-                row
-                for row in all_rows
-                if row.get("strategy_id") == strategy_id
-            ]
+            rows = [row for row in all_rows if row.get("strategy_id") == strategy_id]
         except Exception as exc:
             # A misconfigured / mock adapter (or a transient MongoDB
             # error) degrades to the no-data payload rather than 500ing.

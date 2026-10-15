@@ -134,19 +134,23 @@ async def test_repeated_performance_requests_reuse_leg_replay(
     monkeypatch.setattr(
         analysis, "_load_synthetic_exits", AsyncMock(return_value=([], None))
     )
-    replay = AsyncMock(
-        return_value={"outcomes": [], "realized": 0, "complete": False}
-    )
+    replay = AsyncMock(return_value={"outcomes": [], "realized": 0, "complete": False})
     monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
 
     first = await analysis.get_strategy_performance("alpha")
     second = await analysis.get_strategy_performance("alpha")
 
     assert first["stats"] == second["stats"]
-    assert {key: value for key, value in first["metadata"].items() if key != "calculated_at"} == {
-        key: value for key, value in second["metadata"].items() if key != "calculated_at"
+    assert {
+        key: value for key, value in first["metadata"].items() if key != "calculated_at"
+    } == {
+        key: value
+        for key, value in second["metadata"].items()
+        if key != "calculated_at"
     }
     assert replay.await_count == 1
+
+
 @pytest.mark.asyncio
 async def test_empty_exchange_history_returns_empty_result(replay_environment):
     history, _fills, calls = replay_environment
