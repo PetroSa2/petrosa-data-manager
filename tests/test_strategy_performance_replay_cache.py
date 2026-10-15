@@ -51,6 +51,14 @@ def replay_environment(monkeypatch):
         def round_exchange_history(self):
             return history
 
+        def round_exchange_history_version(self):
+            snapshots = history["snapshots"]
+            return (
+                history["cut_over_ms"],
+                max((row["as_of_ms"] for row in snapshots), default=None),
+                len(snapshots),
+            )
+
     def build(rows, exchange_history):
         calls.append(threading.get_ident())
         return [
@@ -67,11 +75,13 @@ def replay_environment(monkeypatch):
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
     yield history, fills, calls
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
     api_module.db_manager = None
 
@@ -96,6 +106,19 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
     fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled"})
     await analysis._load_synthetic_exits("alpha")
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_warm_request_does_not_replay_again(replay_environment, monkeypatch):
+    _history, _fills, _calls = replay_environment
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
+    replay = AsyncMock(return_value={"outcomes": [], "realized": 0, "complete": False})
+    monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
+
+    await analysis.get_strategy_performance("alpha")
+    await analysis.get_strategy_performance("alpha")
+
+    assert replay.await_count == 1
 
 
 @pytest.mark.asyncio

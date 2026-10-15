@@ -75,6 +75,9 @@ _SYNTHETIC_EXITS_IN_FLIGHT: dict[
     tuple[int | None, str | None, int], asyncio.Task[list[dict[str, Any]]]
 ] = {}
 _EXECUTION_EVENTS_CACHE: tuple[int, str | None, list[dict[str, Any]]] | None = None
+_EXCHANGE_HISTORY_CACHE: tuple[
+    int, tuple[int | None, int | None, int], dict[str, Any]
+] | None = None
 _LEG_REPLAY_CACHE: dict[
     tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
 ] = {}
@@ -407,11 +410,46 @@ async def _load_synthetic_exits(
     if mongodb is None:
         return [], None
     repo = LedgerRepository(mysql, mongodb)
-    history = await _run_heavy(repo.round_exchange_history)
+    history_started = monotonic()
+    version_reader = getattr(repo, "round_exchange_history_version", None)
+    if version_reader is None:
+        history = await _run_heavy(repo.round_exchange_history)
+        history_version = (
+            history.get("cut_over_ms"),
+            max(
+                (snapshot.get("as_of_ms") for snapshot in history.get("snapshots", [])),
+                default=None,
+            ),
+            len(history.get("snapshots", [])),
+        )
+    else:
+        history_version = await _run_heavy(version_reader)
+        global _EXCHANGE_HISTORY_CACHE
+        mysql_source_id = id(mysql)
+        if (
+            _EXCHANGE_HISTORY_CACHE is not None
+            and _EXCHANGE_HISTORY_CACHE[:2] == (mysql_source_id, history_version)
+        ):
+            history = _EXCHANGE_HISTORY_CACHE[2]
+        else:
+            history = await _run_heavy(repo.round_exchange_history)
+            _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
+    record_report_stage(
+        "performance", "exchange_history", monotonic() - history_started
+    )
+    logger.info(
+        "performance: stage=exchange_history snapshots=%d duration=%.3fs",
+        len(history.get("snapshots", [])),
+        monotonic() - history_started,
+    )
     cut_over_ms = history.get("cut_over_ms")
     if not history.get("snapshots"):
         return [], cut_over_ms
     all_fills, latest_fill_id = await _load_execution_events(mongodb)
+    logger.info(
+        "performance: stage=mongo_reads execution_events=%d duration=versioned",
+        len(all_fills),
+    )
     latest_snapshot = max(
         (
             snapshot.get("as_of_ms")
@@ -426,6 +464,7 @@ async def _load_synthetic_exits(
     if cached is not None and cached[0] == version:
         synthetic = cached[1]
     else:
+        synthetic_started = monotonic()
         task = _SYNTHETIC_EXITS_IN_FLIGHT.get(version)
         if task is None:
             task = asyncio.create_task(
@@ -442,6 +481,14 @@ async def _load_synthetic_exits(
             if _SYNTHETIC_EXITS_IN_FLIGHT.get(version) is task:
                 _SYNTHETIC_EXITS_IN_FLIGHT.pop(version, None)
             _SYNTHETIC_EXITS_CACHE = (version, synthetic, cut_over_ms)
+        record_report_stage(
+            "performance", "synthetic_exits", monotonic() - synthetic_started
+        )
+        logger.info(
+            "performance: stage=synthetic_exits rows=%d duration=%.3fs",
+            len(synthetic),
+            monotonic() - synthetic_started,
+        )
     return [
         row for row in synthetic if str(row.get("strategy_id")) == strategy_id
     ], cut_over_ms
@@ -453,6 +500,7 @@ async def _load_execution_events(
     """Read fills once per newest fill-event version and filter them per caller."""
     from data_manager.services.round_book import FILL_EVENT_TYPES
 
+    read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
     newest_fill = (
         await mongodb.db["execution_events"]
@@ -479,6 +527,12 @@ async def _load_execution_events(
         .find(fill_filter)
         .sort("timestamp", 1)
         .to_list(length=_ROUND_MAX_FILLS)
+    )
+    record_report_stage("performance", "mongo_reads", monotonic() - read_started)
+    logger.info(
+        "performance: stage=mongo_reads execution_events=%d duration=%.3fs",
+        len(all_fills),
+        monotonic() - read_started,
     )
     _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, all_fills)
     return all_fills, latest_fill_id
@@ -631,6 +685,7 @@ async def _timed_leg_replay(
                 budget_seconds,
                 budget_source,
             )
+        record_report_stage("performance", "leg_replay", replay_duration)
 
 
 def outcome_stats(outcomes: list[bool], *, known_book: bool = False) -> dict[str, Any]:
@@ -700,6 +755,7 @@ async def get_strategy_performance(strategy_id: str):
     the response degrades to a "no-data" payload rather than failing
     the request.
     """
+    request_started = monotonic()
     try:
         import data_manager.api.app as api_module
         from data_manager.services.pnl_calculator import PnlCalculator
@@ -782,6 +838,7 @@ async def get_strategy_performance(strategy_id: str):
         # Under apply the replay always runs: the outcomes (and realized) do not need the orphan cache, only the
         # orphan/unrealized split does, so a warming or stale cache must not bring the netting artifacts back.
         if overlay is not None or orphan_mode == "apply":
+            overlay_started = monotonic()
             synthetic_rows: list[dict[str, Any]] = []
             cut_over_ms: int | None = None
             try:
@@ -813,6 +870,7 @@ async def get_strategy_performance(strategy_id: str):
                     cut_over_ms=cut_over_ms,
                 )
                 _LEG_REPLAY_CACHE[replay_key] = leg_book
+            record_report_stage("performance", "overlay", monotonic() - overlay_started)
         if overlay is not None:
             assert leg_book is not None
             leg_pnl = leg_book if leg_book["complete"] else None
@@ -842,7 +900,7 @@ async def get_strategy_performance(strategy_id: str):
             else "neutral"
         )
 
-        return {
+        response = {
             "stats": {
                 "win_rate": outcome["win_rate"],
                 "win_rate_delta": outcome["win_rate_delta"],
@@ -913,6 +971,13 @@ async def get_strategy_performance(strategy_id: str):
                 ),
             },
         }
+        logger.info(
+            "performance: stage=total strategy=%s fills=%d duration=%.3fs",
+            strategy_id,
+            len(rows),
+            monotonic() - request_started,
+        )
+        return response
     except Exception as e:
         logger.error(
             f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
