@@ -64,6 +64,10 @@ ROUND_BOOK_REPLAY_DURATION = Histogram(
     "data_manager_round_book_replay_duration_seconds",
     "Duration of the leg-aware round-book replay",
 )
+STRATEGY_PERFORMANCE_DURATION = Histogram(
+    "data_manager_strategy_performance_duration_seconds",
+    "Strategy performance response duration",
+)
 
 _REPLAY_BUDGET_ENV = "DATA_MANAGER_CIO_CONTEXT_FETCH_TIMEOUT_S"
 _REPLAY_BUDGET_FRACTION = 0.8
@@ -86,6 +90,20 @@ _BASE_PERFORMANCE_CACHE: tuple[int, str | None, dict[str, Any]] | None = None
 _BASE_PERFORMANCE_IN_FLIGHT: dict[
     tuple[int, str | None], asyncio.Task[dict[str, Any]]
 ] = {}
+
+
+class _AnalyticsDependencyTimeout(TimeoutError):
+    """A bounded optional analytics dependency did not complete in time."""
+
+
+async def _run_bounded_heavy(func, *args, **kwargs):
+    try:
+        return await asyncio.wait_for(
+            _run_heavy(func, *args, **kwargs),
+            timeout=constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise _AnalyticsDependencyTimeout from exc
 
 
 def _replay_budget_seconds() -> tuple[float, str]:
@@ -428,7 +446,7 @@ async def _load_synthetic_exits(
             len(history.get("snapshots", [])),
         )
     else:
-        history_version = await _run_heavy(version_reader)
+        history_version = await _run_bounded_heavy(version_reader)
         global _EXCHANGE_HISTORY_CACHE
         mysql_source_id = id(mysql)
         if _EXCHANGE_HISTORY_CACHE is not None and _EXCHANGE_HISTORY_CACHE[:2] == (
@@ -437,7 +455,7 @@ async def _load_synthetic_exits(
         ):
             history = _EXCHANGE_HISTORY_CACHE[2]
         else:
-            history = await _run_heavy(repo.round_exchange_history)
+            history = await _run_bounded_heavy(repo.round_exchange_history)
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
     record_report_stage(
         "performance", "exchange_history", monotonic() - history_started
@@ -477,7 +495,12 @@ async def _load_synthetic_exits(
             )
             _SYNTHETIC_EXITS_IN_FLIGHT[version] = task
         try:
-            synthetic = await task
+            try:
+                synthetic = await asyncio.wait_for(
+                    task, constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
+                )
+            except TimeoutError as exc:
+                raise _AnalyticsDependencyTimeout from exc
         except Exception:
             if _SYNTHETIC_EXITS_IN_FLIGHT.get(version) is task:
                 _SYNTHETIC_EXITS_IN_FLIGHT.pop(version, None)
@@ -507,11 +530,12 @@ async def _load_execution_events(
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    newest_fill = (
-        await mongodb.db["execution_events"]
+    newest_fill = await asyncio.wait_for(
+        mongodb.db["execution_events"]
         .find(fill_filter)
         .sort("timestamp", -1)
-        .to_list(length=1)
+        .to_list(length=1),
+        constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
     )
     latest_fill_id = (
         str(newest_fill[0].get("_id"))
@@ -527,11 +551,12 @@ async def _load_execution_events(
         latest_fill_id,
     ):
         return _EXECUTION_EVENTS_CACHE[2], latest_fill_id
-    all_fills = (
-        await mongodb.db["execution_events"]
+    all_fills = await asyncio.wait_for(
+        mongodb.db["execution_events"]
         .find(fill_filter)
         .sort("timestamp", 1)
-        .to_list(length=_ROUND_MAX_FILLS)
+        .to_list(length=_ROUND_MAX_FILLS),
+        constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
     )
     record_report_stage("performance", "mongo_reads", monotonic() - read_started)
     logger.info(
@@ -890,6 +915,7 @@ async def get_strategy_performance(strategy_id: str):
         exposure = None
         leg_pnl = None
         leg_book = None
+        overlay_timeout = False
         if orphan_mode != "off":
             exposure = await _orphaned_lots_from_the_cache(strategy_id)
         overlay = exposure["entries"] if exposure is not None else None
@@ -901,34 +927,45 @@ async def get_strategy_performance(strategy_id: str):
             cut_over_ms: int | None = None
             try:
                 synthetic_rows, cut_over_ms = await _load_synthetic_exits(strategy_id)
+            except _AnalyticsDependencyTimeout:
+                logger.warning(
+                    "performance: bounded dependency timeout stage=exchange_history "
+                    "strategy=%s timeout=%.3fs",
+                    strategy_id,
+                    constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                )
+                exposure = _unavailable_exposure("timeout")
+                overlay = None
+                overlay_timeout = True
             except Exception as exc:
                 logger.warning(
                     "performance: synthetic exits unavailable for %s: %s",
                     strategy_id,
                     exc,
                 )
-            source_id = id(mongodb.db["execution_events"])
-            synthetic_version = (
-                _SYNTHETIC_EXITS_CACHE[0]
-                if _SYNTHETIC_EXITS_CACHE is not None
-                and _SYNTHETIC_EXITS_CACHE[0][2] == source_id
-                else (None, latest_fill_id, source_id)
-            )
-            replay_key = (strategy_id, synthetic_version, repr(overlay))
-            leg_book = _LEG_REPLAY_CACHE.get(replay_key)
-            if leg_book is None:
-                for key in list(_LEG_REPLAY_CACHE):
-                    if key[0] == strategy_id and key != replay_key:
-                        _LEG_REPLAY_CACHE.pop(key, None)
-                leg_book = await _timed_leg_replay(
-                    rows,
-                    overlay,
-                    strategy_id,
-                    synthetic_rows=synthetic_rows,
-                    cut_over_ms=cut_over_ms,
+            if not overlay_timeout:
+                source_id = id(mongodb.db["execution_events"])
+                synthetic_version = (
+                    _SYNTHETIC_EXITS_CACHE[0]
+                    if _SYNTHETIC_EXITS_CACHE is not None
+                    and _SYNTHETIC_EXITS_CACHE[0][2] == source_id
+                    else (None, latest_fill_id, source_id)
                 )
-                _LEG_REPLAY_CACHE[replay_key] = leg_book
-            record_report_stage("performance", "overlay", monotonic() - overlay_started)
+                replay_key = (strategy_id, synthetic_version, repr(overlay))
+                leg_book = _LEG_REPLAY_CACHE.get(replay_key)
+                if leg_book is None:
+                    for key in list(_LEG_REPLAY_CACHE):
+                        if key[0] == strategy_id and key != replay_key:
+                            _LEG_REPLAY_CACHE.pop(key, None)
+                    leg_book = await _timed_leg_replay(
+                        rows,
+                        overlay,
+                        strategy_id,
+                        synthetic_rows=synthetic_rows,
+                        cut_over_ms=cut_over_ms,
+                    )
+                    _LEG_REPLAY_CACHE[replay_key] = leg_book
+                record_report_stage("performance", "overlay", monotonic() - overlay_started)
         if overlay is not None:
             assert leg_book is not None
             leg_pnl = leg_book if leg_book["complete"] else None
@@ -948,6 +985,21 @@ async def get_strategy_performance(strategy_id: str):
             # never closed (dm#599).
             outcome = outcome_stats(leg_book["outcomes"], known_book=True)
         total_pnl = realized_pnl + unrealized_pnl
+        history_status = (
+            "computed"
+            if outcome.get("win_rate") is not None
+            and outcome.get("consecutive_losses") is not None
+            and (
+                outcome.get("win_rate_delta") is not None
+                or outcome.get("win_rate_delta_window") is not None
+            )
+            else "insufficient_history"
+        )
+        overlay_status = (
+            exposure.get("status")
+            if exposure is not None
+            else "disabled"
+        )
         recent_trend = (
             "positive"
             if total_pnl > 0
@@ -994,6 +1046,8 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
+                "history_status": history_status,
+                "overlay_status": overlay_status,
                 "legacy_exit_side_mapped": base.get("__legacy_exit_side_mapped__", 0),
                 **(
                     {
@@ -1041,6 +1095,15 @@ async def get_strategy_performance(strategy_id: str):
             f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
         )
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        duration = monotonic() - request_started
+        STRATEGY_PERFORMANCE_DURATION.observe(duration)
+        logger.info(
+            "performance: request strategy=%s duration=%.3fs endpoint_budget=%.3fs",
+            strategy_id,
+            duration,
+            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+        )
 
 
 @router.get("/scorecard")
