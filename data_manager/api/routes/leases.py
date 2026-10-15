@@ -137,17 +137,17 @@ def _diagnostic_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _store_diagnostic(
     *, op: str, queue_wait_ms: float, handler_ms: float, mongo_wait_ms: float,
-    error: BaseException | None, timestamp: datetime,
+    error: BaseException | None, timestamp: datetime, result_error_class: str | None = None,
 ) -> None:
     readiness = readiness_snapshot()
     loop = event_loop_snapshot()
-    error_class = _error_class(error)
+    error_class = result_error_class or _error_class(error)
     if error is not None and readiness["mongodb"] == "unknown":
         readiness["mongodb"] = "failed"
     record = {
         "timestamp": timestamp.isoformat(),
         "lease_op": op,
-        "lease_outcome": "error" if error is not None else "success",
+        "lease_outcome": "error" if error is not None or result_error_class else "success",
         "lease_error_class": error_class,
         "lease_queue_wait_ms": queue_wait_ms,
         "lease_handler_ms": handler_ms,
@@ -181,7 +181,7 @@ def _query_diagnostics(
     ]
 
 
-async def _run(request: Request | None, op: str, action):
+async def _run(request: Request | None, op: str, action, result_error_class=None):
     started = perf_counter()
     received_at = getattr(getattr(request, "state", None), "received_at", started)
     queue_wait = started - received_at
@@ -208,6 +208,9 @@ async def _run(request: Request | None, op: str, action):
             mongo_wait_ms=round(mongo_wait * 1000, 2),
             error=error,
             timestamp=datetime.now(UTC),
+            result_error_class=(
+                result_error_class(result) if error is None and result_error_class else None
+            ),
         )
     return result
 
@@ -275,6 +278,7 @@ async def renew(
         http_request,
         "renew",
         lambda: _repo().renew(name, request.owner, request.ttl_seconds),
+        lambda result: "renew_failed" if result is None else None,
     )
     if lease is None:
         lease_ops_total.labels(op="renew", result="lost").inc()

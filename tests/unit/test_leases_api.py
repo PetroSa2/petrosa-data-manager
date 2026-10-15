@@ -68,6 +68,10 @@ async def test_bad_name_and_renew_loss_are_rejected():
             "leader:data-manager", leases.LeaseRequest(owner="pod-b", ttl_seconds=30)
         )
     assert lost.value.status_code == 409
+    assert any(
+        record["lease_error_class"] == "renew_failed"
+        for record in leases._lease_diagnostics
+    )
 
 
 @pytest.mark.asyncio
