@@ -106,7 +106,9 @@ def _percentile(values: list[float], percentile: float) -> float:
 def _prune_diagnostics(now: datetime) -> None:
     cutoff = now.timestamp() - _LEASE_DIAGNOSTIC_WINDOW_SECONDS
     while _lease_diagnostics:
-        timestamp = datetime.fromisoformat(_lease_diagnostics[0]["timestamp"]).timestamp()
+        timestamp = datetime.fromisoformat(
+            _lease_diagnostics[0]["timestamp"]
+        ).timestamp()
         if timestamp >= cutoff:
             break
         _lease_diagnostics.popleft()
@@ -136,8 +138,14 @@ def _diagnostic_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _store_diagnostic(
-    *, op: str, queue_wait_ms: float, handler_ms: float, mongo_wait_ms: float,
-    error: BaseException | None, timestamp: datetime, result_error_class: str | None = None,
+    *,
+    op: str,
+    queue_wait_ms: float,
+    handler_ms: float,
+    mongo_wait_ms: float,
+    error: BaseException | None,
+    timestamp: datetime,
+    result_error_class: str | None = None,
 ) -> None:
     readiness = readiness_snapshot()
     loop = event_loop_snapshot()
@@ -147,7 +155,9 @@ def _store_diagnostic(
     record = {
         "timestamp": timestamp.isoformat(),
         "lease_op": op,
-        "lease_outcome": "error" if error is not None or result_error_class else "success",
+        "lease_outcome": "error"
+        if error is not None or result_error_class
+        else "success",
         "lease_error_class": error_class,
         "lease_queue_wait_ms": queue_wait_ms,
         "lease_handler_ms": handler_ms,
@@ -165,7 +175,9 @@ def _store_diagnostic(
 
 
 def _query_diagnostics(
-    since: datetime | None, until: datetime | None, operation: str | None,
+    since: datetime | None,
+    until: datetime | None,
+    operation: str | None,
     outcome: str | None,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
@@ -173,9 +185,16 @@ def _query_diagnostics(
     since_ts = since.timestamp() if since else None
     until_ts = until.timestamp() if until else None
     return [
-        record for record in _lease_diagnostics
-        if (since_ts is None or datetime.fromisoformat(record["timestamp"]).timestamp() >= since_ts)
-        and (until_ts is None or datetime.fromisoformat(record["timestamp"]).timestamp() <= until_ts)
+        record
+        for record in _lease_diagnostics
+        if (
+            since_ts is None
+            or datetime.fromisoformat(record["timestamp"]).timestamp() >= since_ts
+        )
+        and (
+            until_ts is None
+            or datetime.fromisoformat(record["timestamp"]).timestamp() <= until_ts
+        )
         and (operation is None or record["lease_op"] == operation)
         and (outcome is None or record["lease_outcome"] == outcome)
     ]
@@ -209,7 +228,9 @@ async def _run(request: Request | None, op: str, action, result_error_class=None
             error=error,
             timestamp=datetime.now(UTC),
             result_error_class=(
-                result_error_class(result) if error is None and result_error_class else None
+                result_error_class(result)
+                if error is None and result_error_class
+                else None
             ),
         )
     return result
@@ -231,7 +252,8 @@ async def diagnostics(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(
-            f"{record['lease_op']}:{record['lease_outcome']}:{record['lease_error_class']}", []
+            f"{record['lease_op']}:{record['lease_outcome']}:{record['lease_error_class']}",
+            [],
         ).append(record)
     return {
         "window_seconds": _LEASE_DIAGNOSTIC_WINDOW_SECONDS,
