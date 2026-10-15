@@ -113,11 +113,18 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                 manager = api_module.db_manager
                 mongo = getattr(manager, "mongodb_adapter", None) if manager else None
                 mysql = getattr(manager, "mysql_adapter", None) if manager else None
-                mysql_connected = (
-                    await asyncio.to_thread(mysql.is_connected)
-                    if mysql is not None
-                    else False
-                )
+                mysql_connected = False
+                if mysql is not None:
+                    try:
+                        mysql_connected = await asyncio.wait_for(
+                            asyncio.to_thread(mysql.is_connected),
+                            constants.READINESS_MYSQL_TIMEOUT_SECONDS,
+                        )
+                    except TimeoutError:
+                        logger.warning(
+                            "MySQL readiness status timed out after %.3fs",
+                            constants.READINESS_MYSQL_TIMEOUT_SECONDS,
+                        )
                 components["mysql"] = "healthy" if mysql_connected else "unavailable"
                 components["mongodb"] = "unavailable"
                 ready = False

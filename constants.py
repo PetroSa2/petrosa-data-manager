@@ -314,6 +314,9 @@ METRICS_PORT = int(os.getenv("METRICS_PORT", "9090"))
 READINESS_MONGO_TIMEOUT_SECONDS = float(
     os.getenv("READINESS_MONGO_TIMEOUT_SECONDS", "1.0")
 )
+READINESS_MYSQL_TIMEOUT_SECONDS = float(
+    os.getenv("READINESS_MYSQL_TIMEOUT_SECONDS", "1.0")
+)
 
 # OpenTelemetry Configuration
 OTEL_ENABLED = os.getenv("OTEL_ENABLED", "true").lower() == "true"

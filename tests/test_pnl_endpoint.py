@@ -387,6 +387,32 @@ def test_performance_warns_when_measured_replay_exceeds_budget_fraction(
     assert "budget_source=configured" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_performance_unavailable_response_preserves_assessor_contract(
+    monkeypatch,
+):
+    import data_manager.api.app as api_module
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.setattr(api_module, "db_manager", None)
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert {
+        "win_rate",
+        "win_rate_delta",
+        "win_rate_delta_window",
+        "win_rate_delta_se",
+        "wins",
+        "losses",
+        "consecutive_losses",
+        "recent_pnl_trend",
+        "realized_pnl",
+        "unrealized_pnl",
+    } <= response["stats"].keys()
+    assert response["metadata"]["fills_replayed"] == 0
+
+
 def test_performance_warning_uses_labelled_fallback_budget(monkeypatch, caplog):
     import data_manager.api.routes.analysis as analysis_route
 
