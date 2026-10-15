@@ -25,8 +25,24 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+_last_lag_ms: float | None = None
+_last_lag_at: float | None = None
+
 WATCHDOG_THREAD_NAME = "event-loop-lag-watchdog"
 _STACK_LIMIT = 20
+
+
+def event_loop_snapshot() -> dict[str, float | str | None]:
+    """Return the latest event-loop state without touching the event loop."""
+    if _last_lag_ms is None or _last_lag_at is None:
+        return {"state": "unknown", "lag_ms": None}
+    age_s = time.monotonic() - _last_lag_at
+    if age_s > 120:
+        return {"state": "stale", "lag_ms": _last_lag_ms}
+    return {
+        "state": "lagging" if _last_lag_ms >= 500 else "healthy",
+        "lag_ms": _last_lag_ms,
+    }
 
 
 class LoopWatchdog:
@@ -123,6 +139,9 @@ async def monitor_event_loop_lag(
             watchdog.beat(now)
             lag_ms = max(0.0, (now - expected) * 1000)
             expected = now + interval_s
+            global _last_lag_at, _last_lag_ms
+            _last_lag_at = now
+            _last_lag_ms = lag_ms
             if lag_ms >= warning_threshold_ms:
                 logger.warning("EVENT_LOOP_LAG ms=%.1f", lag_ms)
     finally:
