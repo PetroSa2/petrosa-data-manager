@@ -720,6 +720,31 @@ def outcome_stats(outcomes: list[bool], *, known_book: bool = False) -> dict[str
     }
 
 
+def _unavailable_performance(strategy_id: str) -> dict[str, Any]:
+    """Return the stable performance contract when history cannot be read."""
+    return {
+        "stats": {
+            "win_rate": None,
+            "win_rate_delta": None,
+            "win_rate_delta_window": None,
+            "win_rate_delta_se": None,
+            "wins": None,
+            "losses": None,
+            "consecutive_losses": None,
+            "recent_pnl_trend": "neutral",
+            "realized_pnl": None,
+            "unrealized_pnl": None,
+        },
+        "metadata": {
+            "strategy_id": strategy_id,
+            "calculated_at": datetime.now(UTC).isoformat(),
+            "source": "data-manager-analysis-no-db",
+            "fills_replayed": 0,
+            "history_status": "unavailable",
+        },
+    }
+
+
 def _calculate_base_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Replay fills once and return the strategy-scoped values used by requests."""
     rows_by_strategy: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -835,26 +860,7 @@ async def get_strategy_performance(strategy_id: str):
         if not api_module.db_manager or not getattr(
             api_module.db_manager, "mongodb_adapter", None
         ):
-            return {
-                "stats": {
-                    "win_rate": None,
-                    "win_rate_delta": None,
-                    "win_rate_delta_window": None,
-                    "win_rate_delta_se": None,
-                    "consecutive_losses": None,
-                    # "neutral" (not "unknown") — matches petrosa-cio's PnlTrend
-                    # enum vocabulary (positive|negative|neutral). Same bug
-                    # class as the zero-total "flat" fix in #306/#309; this
-                    # sentinel path was explicitly out of that PR's AC and is
-                    # closed by PetroSa2/petrosa-cio#194.
-                    "recent_pnl_trend": "neutral",
-                },
-                "metadata": {
-                    "strategy_id": strategy_id,
-                    "calculated_at": datetime.now(UTC).isoformat(),
-                    "source": "data-manager-analysis-no-db",
-                },
-            }
+            return _unavailable_performance(strategy_id)
 
         mongodb = api_module.db_manager.mongodb_adapter
         try:
@@ -869,23 +875,7 @@ async def get_strategy_performance(strategy_id: str):
                 strategy_id,
                 exc,
             )
-            return {
-                "stats": {
-                    "win_rate": None,
-                    "win_rate_delta": None,
-                    "win_rate_delta_window": None,
-                    "win_rate_delta_se": None,
-                    "consecutive_losses": None,
-                    # See comment on the no-DB sentinel above: "neutral", not
-                    # "unknown" — cio#194 sibling fix.
-                    "recent_pnl_trend": "neutral",
-                },
-                "metadata": {
-                    "strategy_id": strategy_id,
-                    "calculated_at": datetime.now(UTC).isoformat(),
-                    "source": "data-manager-analysis-no-db",
-                },
-            }
+            return _unavailable_performance(strategy_id)
 
         from data_manager.services.pnl_calculator import PnlBreakdown
 

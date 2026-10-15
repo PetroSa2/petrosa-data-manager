@@ -90,6 +90,25 @@ def test_ping_timeout_is_503_within_the_budget(client, mongo, monkeypatch):
     assert time.monotonic() - started < 2
 
 
+def test_mysql_status_timeout_is_bounded_and_does_not_gate_readiness(
+    client, mysql, monkeypatch
+):
+    monkeypatch.setattr(constants, "READINESS_MYSQL_TIMEOUT_SECONDS", 0.05)
+
+    def hang():
+        time.sleep(0.2)
+
+    mysql.is_connected.side_effect = hang
+    started = time.monotonic()
+
+    status, body = _readiness(client)
+
+    assert status == 200
+    assert body["ready"] is True
+    assert body["components"]["mysql"] == "unavailable"
+    assert time.monotonic() - started < 2
+
+
 @pytest.mark.asyncio
 async def test_concurrent_readiness_failures_share_one_database_ping(
     mock_db_manager, mongo, mysql
