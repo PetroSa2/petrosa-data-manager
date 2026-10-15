@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # within _READINESS_CACHE_SECONDS reuse it, so they never pile up pings.
 _READINESS_CACHE_SECONDS = 5.0
 _readiness_cache: tuple[float, bool, dict] | None = None
+_readiness_lock = asyncio.Lock()
 
 router = APIRouter()
 
@@ -96,29 +97,34 @@ async def readiness() -> ReadinessStatus | JSONResponse:
     if _readiness_cache and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
         ready, components = _readiness_cache[1], _readiness_cache[2]
     else:
-        components = {
-            "nats": "healthy",
-            "auditor": "healthy",
-            "analytics": "healthy",
-        }
-        manager = api_module.db_manager
-        mongo = getattr(manager, "mongodb_adapter", None) if manager else None
-        mysql = getattr(manager, "mysql_adapter", None) if manager else None
-        components["mysql"] = (
-            "healthy" if mysql is not None and mysql.is_connected() else "unavailable"
-        )
-        components["mongodb"] = "unavailable"
-        ready = False
-        if mongo and getattr(mongo, "db", None) is not None:
-            try:
-                await asyncio.wait_for(
-                    mongo.db.command("ping"), constants.READINESS_MONGO_TIMEOUT_SECONDS
+        async with _readiness_lock:
+            now = time.monotonic()
+            if _readiness_cache and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
+                ready, components = _readiness_cache[1], _readiness_cache[2]
+            else:
+                components = {
+                    "nats": "healthy",
+                    "auditor": "healthy",
+                    "analytics": "healthy",
+                }
+                manager = api_module.db_manager
+                mongo = getattr(manager, "mongodb_adapter", None) if manager else None
+                mysql = getattr(manager, "mysql_adapter", None) if manager else None
+                components["mysql"] = (
+                    "healthy" if mysql is not None and mysql.is_connected() else "unavailable"
                 )
-                components["mongodb"] = "healthy"
-                ready = True
-            except Exception:
-                logger.warning("MongoDB readiness ping failed", exc_info=True)
-        _readiness_cache = (now, ready, components)
+                components["mongodb"] = "unavailable"
+                ready = False
+                if mongo and getattr(mongo, "db", None) is not None:
+                    try:
+                        await asyncio.wait_for(
+                            mongo.db.command("ping"), constants.READINESS_MONGO_TIMEOUT_SECONDS
+                        )
+                        components["mongodb"] = "healthy"
+                        ready = True
+                    except Exception:
+                        logger.warning("MongoDB readiness ping failed", exc_info=True)
+                _readiness_cache = (now, ready, components)
     payload = ReadinessStatus(
         ready=ready, components=components, timestamp=datetime.now(UTC)
     )

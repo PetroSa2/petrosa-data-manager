@@ -90,6 +90,24 @@ def test_ping_timeout_is_503_within_the_budget(client, mongo, monkeypatch):
     assert time.monotonic() - started < 2
 
 
+@pytest.mark.asyncio
+async def test_concurrent_readiness_failures_share_one_database_ping(
+    mock_db_manager, mongo, mysql
+):
+    async def hang(_command):
+        await asyncio.sleep(5)
+
+    mongo.db.command.side_effect = hang
+    mock_db_manager.mongodb_adapter = mongo
+    mock_db_manager.mysql_adapter = mysql
+    api_module.db_manager = mock_db_manager
+
+    results = await asyncio.gather(health.readiness(), health.readiness(), health.readiness())
+
+    assert [result.status_code for result in results] == [503, 503, 503]
+    assert mongo.db.command.await_count == 1
+
+
 def test_no_database_manager_is_503(client):
     api_module.db_manager = None
 
