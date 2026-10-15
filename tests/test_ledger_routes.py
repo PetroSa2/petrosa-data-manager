@@ -275,8 +275,9 @@ def test_tieout_live_close_overlay_requires_mongo_when_mysql_is_available():
     repo = FakeLedgerRepository([])
     repo.mysql = object()
 
-    with pytest.raises(RuntimeError, match="MongoDB is not available"):
+    with pytest.raises(RuntimeError, match="MongoDB is not available") as error:
         repo._external_close_ids_for_tieout()
+    assert "MongoDB" in str(error.value)
 
 
 def test_tieout_live_close_overlay_reads_external_close_ids(monkeypatch):
