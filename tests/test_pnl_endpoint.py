@@ -388,7 +388,9 @@ def test_performance_warns_when_measured_replay_exceeds_budget_fraction(
 
 
 @pytest.mark.asyncio
-async def test_performance_unavailable_response_preserves_assessor_contract(monkeypatch):
+async def test_performance_unavailable_response_preserves_assessor_contract(
+    monkeypatch,
+):
     import data_manager.api.app as api_module
     import data_manager.api.routes.analysis as analysis_route
 
