@@ -605,6 +605,18 @@ class TestEnsureIndexes:
         assert ttl[0].document["expireAfterSeconds"] == constants.INTENTS_TTL_SECONDS
 
     @pytest.mark.asyncio
+    async def test_lease_indexes_use_isolated_database(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.lease_db = MagicMock()
+        adapter.lease_db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("service_leases")
+
+        adapter.lease_db.__getitem__.assert_called_once_with("service_leases")
+        coll.create_indexes.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_creates_cio_decisions_collection_indexes(self, adapter):
         coll = MagicMock()
         coll.create_indexes = AsyncMock()
