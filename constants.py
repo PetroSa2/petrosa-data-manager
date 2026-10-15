@@ -317,6 +317,9 @@ READINESS_MONGO_TIMEOUT_SECONDS = float(
 READINESS_MYSQL_TIMEOUT_SECONDS = float(
     os.getenv("READINESS_MYSQL_TIMEOUT_SECONDS", "1.0")
 )
+ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS = float(
+    os.getenv("ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", "2.0")
+)
 
 # OpenTelemetry Configuration
 OTEL_ENABLED = os.getenv("OTEL_ENABLED", "true").lower() == "true"

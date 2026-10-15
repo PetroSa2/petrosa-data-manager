@@ -413,6 +413,59 @@ async def test_performance_unavailable_response_preserves_assessor_contract(
     assert response["metadata"]["fills_replayed"] == 0
 
 
+@pytest.mark.asyncio
+async def test_performance_keeps_base_contract_when_overlay_times_out(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = [
+        _fill(side="buy", qty=1, price=100, seconds_before=200),
+        _fill(side="sell", qty=1, price=110, seconds_before=100),
+    ]
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
+    monkeypatch.setattr(
+        analysis_route,
+        "_load_synthetic_exits",
+        AsyncMock(side_effect=analysis_route._AnalyticsDependencyTimeout),
+    )
+    try:
+        _client_with_fills(rows)
+        response = await analysis_route.get_strategy_performance("S1")
+        assert response["stats"]["win_rate"] == 1.0
+        assert response["stats"]["consecutive_losses"] == 0
+        assert response["metadata"]["overlay_status"] == "timeout"
+        assert response["metadata"]["history_status"] in {
+            "computed",
+            "insufficient_history",
+        }
+    finally:
+        api_module.db_manager = None
+
+
+@pytest.mark.asyncio
+async def test_performance_bounds_leg_replay_timeout(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = [_fill(side="buy", qty=1, price=100)]
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
+    monkeypatch.setattr(
+        analysis_route,
+        "_load_synthetic_exits",
+        AsyncMock(return_value=([], None)),
+    )
+    monkeypatch.setattr(
+        analysis_route,
+        "_timed_leg_replay",
+        AsyncMock(side_effect=analysis_route._AnalyticsDependencyTimeout),
+    )
+    try:
+        _client_with_fills(rows)
+        response = await analysis_route.get_strategy_performance("S1")
+        assert response["metadata"]["overlay_status"] == "timeout"
+        assert response["stats"]["consecutive_losses"] is None
+    finally:
+        api_module.db_manager = None
+
+
 def test_performance_warning_uses_labelled_fallback_budget(monkeypatch, caplog):
     import data_manager.api.routes.analysis as analysis_route
 
