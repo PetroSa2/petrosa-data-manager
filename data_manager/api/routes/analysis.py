@@ -75,9 +75,9 @@ _SYNTHETIC_EXITS_IN_FLIGHT: dict[
     tuple[int | None, str | None, int], asyncio.Task[list[dict[str, Any]]]
 ] = {}
 _EXECUTION_EVENTS_CACHE: tuple[int, str | None, list[dict[str, Any]]] | None = None
-_EXCHANGE_HISTORY_CACHE: tuple[
-    int, tuple[int | None, int | None, int], dict[str, Any]
-] | None = None
+_EXCHANGE_HISTORY_CACHE: (
+    tuple[int, tuple[int | None, int | None, int], dict[str, Any]] | None
+) = None
 _LEG_REPLAY_CACHE: dict[
     tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
 ] = {}
@@ -426,9 +426,9 @@ async def _load_synthetic_exits(
         history_version = await _run_heavy(version_reader)
         global _EXCHANGE_HISTORY_CACHE
         mysql_source_id = id(mysql)
-        if (
-            _EXCHANGE_HISTORY_CACHE is not None
-            and _EXCHANGE_HISTORY_CACHE[:2] == (mysql_source_id, history_version)
+        if _EXCHANGE_HISTORY_CACHE is not None and _EXCHANGE_HISTORY_CACHE[:2] == (
+            mysql_source_id,
+            history_version,
         ):
             history = _EXCHANGE_HISTORY_CACHE[2]
         else:
