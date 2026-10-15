@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from time import perf_counter
 
 from fastapi import Request, Response
 from opentelemetry import trace
@@ -36,6 +37,7 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
 
         # Start timing
         start_time = time.time()
+        request.state.received_at = perf_counter()
 
         # Log request details
         await self._log_request(request, request_id)
