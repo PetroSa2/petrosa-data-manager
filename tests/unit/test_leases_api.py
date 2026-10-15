@@ -1,7 +1,9 @@
 import asyncio
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -66,6 +68,24 @@ async def test_release_and_unknown_get():
     with pytest.raises(HTTPException) as missing:
         await leases.get("leader:data-manager")
     assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_lease_timing_logs_queue_wait_and_handler_time(caplog):
+    request = SimpleNamespace(
+        state=SimpleNamespace(received_at=perf_counter() - 0.01)
+    )
+    with caplog.at_level(logging.INFO, logger=leases.__name__):
+        async def action():
+            return "lease"
+
+        result = await leases._run(request, "get", action)
+
+    assert result == "lease"
+    timing = next(record for record in caplog.records if record.message == "lease timing")
+    assert timing.lease_op == "get"
+    assert timing.lease_queue_wait_ms >= 0
+    assert timing.lease_handler_ms >= 0
 
 
 @pytest.mark.asyncio

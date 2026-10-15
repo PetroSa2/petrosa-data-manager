@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
-from fastapi import APIRouter, Body, HTTPException, Path
+from fastapi import APIRouter, Body, HTTPException, Path, Request
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,7 @@ import data_manager.api.app as api_module
 from data_manager.db.repositories.lease_repository import LeaseRepository
 
 router = APIRouter(prefix="/api/v1/leases")
+logger = logging.getLogger(__name__)
 _NAME_RE = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 lease_op_seconds = Histogram(
     "data_manager_lease_op_seconds", "Lease operation latency", ["op"]
@@ -50,8 +52,10 @@ def _iso(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-async def _run(op: str, action):  # type: ignore[no-untyped-def]
+async def _run(request: Request | None, op: str, action):
     started = perf_counter()
+    received_at = getattr(getattr(request, "state", None), "received_at", started)
+    queue_wait = started - received_at
     try:
         result = await action()
     except HTTPException:
@@ -60,17 +64,30 @@ async def _run(op: str, action):  # type: ignore[no-untyped-def]
         lease_ops_total.labels(op=op, result="error").inc()
         raise HTTPException(status_code=503, detail="MongoDB unavailable") from exc
     finally:
-        lease_op_seconds.labels(op=op).observe(perf_counter() - started)
+        handler_time = perf_counter() - started
+        lease_op_seconds.labels(op=op).observe(handler_time)
+        logger.info(
+            "lease timing",
+            extra={
+                "lease_op": op,
+                "lease_queue_wait_ms": round(queue_wait * 1000, 2),
+                "lease_handler_ms": round(handler_time * 1000, 2),
+            },
+        )
     return result
 
 
 @router.post("/{name}/acquire")
 async def acquire(
-    name: str = Path(...), request: LeaseRequest = Body(...)
+    name: str = Path(...),
+    request: LeaseRequest = Body(...),
+    http_request: Request = cast(Request, None),
 ) -> dict[str, Any]:
     name = _validate_name(name)
     lease = await _run(
-        "acquire", lambda: _repo().acquire(name, request.owner, request.ttl_seconds)
+        http_request,
+        "acquire",
+        lambda: _repo().acquire(name, request.owner, request.ttl_seconds),
     )
     lease_ops_total.labels(
         op="acquire", result="acquired" if lease["acquired"] else "contended"
@@ -86,15 +103,19 @@ async def acquire(
 
 @router.post("/{name}/renew")
 async def renew(
-    name: str = Path(...), request: LeaseRequest = Body(...)
+    name: str = Path(...),
+    request: LeaseRequest = Body(...),
+    http_request: Request = cast(Request, None),
 ) -> dict[str, Any]:
     name = _validate_name(name)
     lease = await _run(
-        "renew", lambda: _repo().renew(name, request.owner, request.ttl_seconds)
+        http_request,
+        "renew",
+        lambda: _repo().renew(name, request.owner, request.ttl_seconds),
     )
     if lease is None:
         lease_ops_total.labels(op="renew", result="lost").inc()
-        holder = await _run("get", lambda: _repo().get(name))
+        holder = await _run(http_request, "get", lambda: _repo().get(name))
         raise HTTPException(
             status_code=409,
             detail={"renewed": False, "owner": holder.get("owner") if holder else None},
@@ -109,18 +130,24 @@ async def renew(
 
 @router.post("/{name}/release")
 async def release(
-    name: str = Path(...), request: ReleaseRequest = Body(...)
+    name: str = Path(...),
+    request: ReleaseRequest = Body(...),
+    http_request: Request = cast(Request, None),
 ) -> dict[str, Any]:
     name = _validate_name(name)
-    released = await _run("release", lambda: _repo().release(name, request.owner))
+    released = await _run(
+        http_request, "release", lambda: _repo().release(name, request.owner)
+    )
     lease_ops_total.labels(op="release", result="released").inc()
     return {"released": released}
 
 
 @router.get("/{name}")
-async def get(name: str = Path(...)) -> dict[str, Any]:
+async def get(
+    name: str = Path(...), http_request: Request = cast(Request, None)
+) -> dict[str, Any]:
     name = _validate_name(name)
-    lease = await _run("get", lambda: _repo().get(name))
+    lease = await _run(http_request, "get", lambda: _repo().get(name))
     if lease is None:
         raise HTTPException(status_code=404, detail="lease not found")
     held = lease["expires_at"] >= datetime.now(UTC)
