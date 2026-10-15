@@ -102,7 +102,9 @@ async def test_concurrent_readiness_failures_share_one_database_ping(
     mock_db_manager.mysql_adapter = mysql
     api_module.db_manager = mock_db_manager
 
-    results = await asyncio.gather(health.readiness(), health.readiness(), health.readiness())
+    results = await asyncio.gather(
+        health.readiness(), health.readiness(), health.readiness()
+    )
 
     assert [result.status_code for result in results] == [503, 503, 503]
     assert mongo.db.command.await_count == 1

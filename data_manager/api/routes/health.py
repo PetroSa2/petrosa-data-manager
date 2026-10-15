@@ -99,7 +99,10 @@ async def readiness() -> ReadinessStatus | JSONResponse:
     else:
         async with _readiness_lock:
             now = time.monotonic()
-            if _readiness_cache and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
+            if (
+                _readiness_cache
+                and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS
+            ):
                 ready, components = _readiness_cache[1], _readiness_cache[2]
             else:
                 components = {
@@ -111,14 +114,17 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                 mongo = getattr(manager, "mongodb_adapter", None) if manager else None
                 mysql = getattr(manager, "mysql_adapter", None) if manager else None
                 components["mysql"] = (
-                    "healthy" if mysql is not None and mysql.is_connected() else "unavailable"
+                    "healthy"
+                    if mysql is not None and mysql.is_connected()
+                    else "unavailable"
                 )
                 components["mongodb"] = "unavailable"
                 ready = False
                 if mongo and getattr(mongo, "db", None) is not None:
                     try:
                         await asyncio.wait_for(
-                            mongo.db.command("ping"), constants.READINESS_MONGO_TIMEOUT_SECONDS
+                            mongo.db.command("ping"),
+                            constants.READINESS_MONGO_TIMEOUT_SECONDS,
                         )
                         components["mongodb"] = "healthy"
                         ready = True

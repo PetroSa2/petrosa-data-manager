@@ -508,7 +508,9 @@ class LedgerRepository(BaseRepository):
             difference = ledger_qty - exchange_qty
             if abs(difference) <= QUANTITY_TOLERANCE:
                 status = "tied"
-                explanation = "Ledger and exchange quantities match within the 0.01 tolerance."
+                explanation = (
+                    "Ledger and exchange quantities match within the 0.01 tolerance."
+                )
             elif difference > 0:
                 status = "ledger_exceeds_exchange"
                 explanation = "Ledger open quantity exceeds the exchange quantity."
