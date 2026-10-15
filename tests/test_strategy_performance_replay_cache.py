@@ -7,6 +7,7 @@ import pytest
 
 import data_manager.api.app as api_module
 import data_manager.api.routes.analysis as analysis
+from data_manager.db.repositories.ledger_repository import LedgerRepository
 
 
 class _Cursor:
@@ -106,6 +107,31 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
     fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled"})
     await analysis._load_synthetic_exits("alpha")
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_legacy_repository_without_version_probe_still_replays(
+    replay_environment, monkeypatch
+):
+    history, _fills, calls = replay_environment
+
+    class LegacyRepository:
+        def __init__(self, *_args):
+            pass
+
+        def round_exchange_history(self):
+            return history
+
+    monkeypatch.setattr(
+        "data_manager.db.repositories.ledger_repository.LedgerRepository",
+        LegacyRepository,
+    )
+
+    rows, cut_over_ms = await analysis._load_synthetic_exits("alpha")
+
+    assert rows == [{"strategy_id": "alpha", "event_type": "filled"}]
+    assert cut_over_ms == 1
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -209,3 +235,24 @@ async def test_failed_replay_is_removed_from_in_flight_cache(
         await analysis._load_synthetic_exits("alpha")
 
     assert analysis._SYNTHETIC_EXITS_IN_FLIGHT == {}
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"earliest": 1, "latest": 3, "snapshot_count": 2}, (1, 3, 2)),
+        ({"earliest": None, "latest": None, "snapshot_count": 0}, (None, None, 0)),
+    ],
+)
+def test_round_exchange_history_version(row, expected):
+    class Result:
+        def mappings(self):
+            return self
+
+        def first(self):
+            return row
+
+    repository = object.__new__(LedgerRepository)
+    repository._run = lambda _query: Result()
+
+    assert repository.round_exchange_history_version() == expected
