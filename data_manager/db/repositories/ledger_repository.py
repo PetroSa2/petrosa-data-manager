@@ -626,6 +626,21 @@ class LedgerRepository(BaseRepository):
             "snapshots": [snapshots[key] for key in sorted(snapshots)],
         }
 
+    def round_exchange_history_version(self) -> tuple[int | None, int | None, int]:
+        """Return the snapshot identity used to reuse the exchange-history read."""
+        row = (
+            self._run(
+                "SELECT MIN(as_of_ms) AS earliest, MAX(as_of_ms) AS latest, "
+                "COUNT(DISTINCT as_of_ms) AS snapshot_count "
+                "FROM ledger_exchange_positions_snapshot"
+            )
+            .mappings()
+            .first()
+        )
+        if not row or row["earliest"] is None:
+            return None, None, 0
+        return int(row["earliest"]), int(row["latest"]), int(row["snapshot_count"])
+
     async def live_closed_entry_order_ids(self) -> set[str]:
         """Entry order ids closed according to the LIVE position stores (Mongo ``positions`` and ``strategy_positions``).
 
