@@ -85,7 +85,7 @@ async def test_lease_timing_logs_queue_wait_and_handler_time(caplog):
         record for record in caplog.records if record.message == "lease timing"
     )
     assert timing.lease_op == "get"
-    assert timing.lease_queue_wait_ms >= 0
+    assert timing.lease_queue_wait_ms >= 5
     assert timing.lease_handler_ms >= 0
 
 
