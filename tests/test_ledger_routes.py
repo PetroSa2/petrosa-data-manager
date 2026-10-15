@@ -271,6 +271,26 @@ def test_positions_tieout_excludes_live_reconciler_closes():
     assert btc["status"] == "exchange_exceeds_ledger"
 
 
+def test_tieout_live_close_overlay_requires_mongo_when_mysql_is_available():
+    repo = FakeLedgerRepository([])
+    repo.mysql = object()
+
+    with pytest.raises(RuntimeError, match="MongoDB is not available"):
+        repo._external_close_ids_for_tieout()
+
+
+def test_tieout_live_close_overlay_reads_external_close_ids(monkeypatch):
+    repo = FakeLedgerRepository([])
+    repo.mongodb = object()
+
+    async def read_ids():
+        return {"external-entry"}
+
+    monkeypatch.setattr(repo, "live_closed_entry_order_ids", read_ids)
+
+    assert repo._external_close_ids_for_tieout() == {"external-entry"}
+
+
 def test_positions_tieout_compares_open_quantity_with_the_exchange_quantity():
     # ETH LONG: 17 open ledger rows of 0.01 against one exchange position of 0.05
     eth_rows = [{"symbol": "ETHUSDT", "position_side": "BUY", "quantity": "0.01"}] * 17
