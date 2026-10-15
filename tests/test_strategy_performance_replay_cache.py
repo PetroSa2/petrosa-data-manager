@@ -44,12 +44,14 @@ def replay_environment(monkeypatch):
         mysql_adapter=object(), mongodb_adapter=SimpleNamespace(db=_Mongo(fills))
     )
     calls = []
+    history_reads = []
 
     class Repository:
         def __init__(self, *_args):
             pass
 
         def round_exchange_history(self):
+            history_reads.append(1)
             return history
 
         def round_exchange_history_version(self):
@@ -78,7 +80,7 @@ def replay_environment(monkeypatch):
     analysis._EXECUTION_EVENTS_CACHE = None
     analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
-    yield history, fills, calls
+    yield history, fills, calls, history_reads
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
@@ -89,7 +91,7 @@ def replay_environment(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environment):
-    history, fills, calls = replay_environment
+    history, fills, calls, _history_reads = replay_environment
     event_loop_thread = threading.get_ident()
 
     alpha, _ = await analysis._load_synthetic_exits("alpha")
@@ -113,7 +115,7 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
 async def test_legacy_repository_without_version_probe_still_replays(
     replay_environment, monkeypatch
 ):
-    history, _fills, calls = replay_environment
+    history, _fills, calls, _history_reads = replay_environment
 
     class LegacyRepository:
         def __init__(self, *_args):
@@ -136,7 +138,7 @@ async def test_legacy_repository_without_version_probe_still_replays(
 
 @pytest.mark.asyncio
 async def test_warm_request_does_not_replay_again(replay_environment, monkeypatch):
-    _history, _fills, _calls = replay_environment
+    _history, _fills, _calls, history_reads = replay_environment
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
     replay = AsyncMock(return_value={"outcomes": [], "realized": 0, "complete": False})
     monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
@@ -145,13 +147,14 @@ async def test_warm_request_does_not_replay_again(replay_environment, monkeypatc
     await analysis.get_strategy_performance("alpha")
 
     assert replay.await_count == 1
+    assert len(history_reads) == 1
 
 
 @pytest.mark.asyncio
 async def test_concurrent_requests_share_in_flight_replay(
     replay_environment, monkeypatch
 ):
-    _history, _fills, calls = replay_environment
+    _history, _fills, calls, _history_reads = replay_environment
     started = threading.Event()
     release = threading.Event()
 
@@ -178,7 +181,7 @@ async def test_concurrent_requests_share_in_flight_replay(
 async def test_repeated_performance_requests_reuse_leg_replay(
     replay_environment, monkeypatch
 ):
-    _history, _fills, _calls = replay_environment
+    _history, _fills, _calls, _history_reads = replay_environment
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
     monkeypatch.setattr(
         analysis, "_load_synthetic_exits", AsyncMock(return_value=([], None))
@@ -210,7 +213,7 @@ async def test_repeated_performance_requests_reuse_leg_replay(
 
 @pytest.mark.asyncio
 async def test_empty_exchange_history_returns_empty_result(replay_environment):
-    history, _fills, calls = replay_environment
+    history, _fills, calls, _history_reads = replay_environment
     history["snapshots"] = []
 
     rows, cut_over_ms = await analysis._load_synthetic_exits("alpha")
