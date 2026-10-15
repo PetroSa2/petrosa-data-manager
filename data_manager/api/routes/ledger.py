@@ -20,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+import constants
 import data_manager.api.app as api_module
 from data_manager.db.repositories.ledger_adjustments_repository import (
     AdjustmentConflictError,
@@ -158,6 +159,27 @@ def _repo() -> LedgerRepository:
     return LedgerRepository(manager.mysql_adapter, None)
 
 
+_positions_tieout_task: asyncio.Task | None = None
+_positions_tieout_lock = asyncio.Lock()
+
+
+async def _read_positions_tieout() -> dict[str, Any]:
+    global _positions_tieout_task
+    async with _positions_tieout_lock:
+        if _positions_tieout_task is not None and _positions_tieout_task.done():
+            try:
+                _positions_tieout_task.exception()
+            except asyncio.CancelledError:
+                pass
+            _positions_tieout_task = None
+        if _positions_tieout_task is None:
+            _positions_tieout_task = asyncio.create_task(
+                asyncio.to_thread(_repo().positions_tieout)
+            )
+        task = _positions_tieout_task
+    return await asyncio.shield(task)
+
+
 def _adjustments_repo() -> LedgerAdjustmentsRepository:
     manager = api_module.db_manager
     if not manager or not getattr(manager, "mysql_adapter", None):
@@ -271,7 +293,9 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
 @router.get("/positions-tieout")
 async def get_positions_tieout():
     try:
-        result = await asyncio.to_thread(_repo().positions_tieout)
+        result = await asyncio.wait_for(
+            _read_positions_tieout(), timeout=constants.API_QUERY_TIMEOUT
+        )
         OPEN_POSITION_VARIANCE.set(len(result["phantom_rows"]))
         return result
     except HTTPException:

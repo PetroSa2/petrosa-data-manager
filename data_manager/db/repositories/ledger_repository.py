@@ -508,10 +508,15 @@ class LedgerRepository(BaseRepository):
             difference = ledger_qty - exchange_qty
             if abs(difference) <= QUANTITY_TOLERANCE:
                 status = "tied"
+                explanation = (
+                    "Ledger and exchange quantities match within the 0.01 tolerance."
+                )
             elif difference > 0:
                 status = "ledger_exceeds_exchange"
+                explanation = "Ledger open quantity exceeds the exchange quantity."
             else:
                 status = "exchange_exceeds_ledger"
+                explanation = "Exchange quantity exceeds the ledger open quantity."
             quantity_tieout.append(
                 {
                     "symbol": key[0],
@@ -521,6 +526,7 @@ class LedgerRepository(BaseRepository):
                     "exchange_quantity": str(exchange_qty),
                     "difference": str(difference),
                     "status": status,
+                    "explanation": explanation,
                 }
             )
         return {
