@@ -203,7 +203,11 @@ async def test_positions_tieout_returns_503_when_database_read_times_out(
     class Repo:
         def positions_tieout(self):
             time.sleep(0.05)
-            return {}
+            return {
+                "phantom_rows": [],
+                "ledger_open_rows": [],
+                "exchange_positions": [],
+            }
 
     monkeypatch.setattr(ledger, "_repo", lambda: Repo())
     monkeypatch.setattr("constants.API_QUERY_TIMEOUT", 0.001)
@@ -407,10 +411,19 @@ def test_positions_tieout_compares_open_quantity_with_the_exchange_quantity():
     assert eth["exchange_quantity"] == "0.05"
     assert eth["difference"] == "0.12"
     assert eth["status"] == "ledger_exceeds_exchange"
+    assert eth["explanation"] == "Ledger open quantity exceeds the exchange quantity."
     # two rows that add up to the exchange quantity are tied, however many rows there are
     assert by_key[("BTCUSDT", "LONG")]["status"] == "tied"
+    assert (
+        by_key[("BTCUSDT", "LONG")]["explanation"]
+        == "Ledger and exchange quantities match within the 0.01 tolerance."
+    )
     # a short exchange quantity is signed negative on the exchange; the comparison uses its size
     assert by_key[("XRPUSDT", "SHORT")]["status"] == "tied"
+    assert (
+        by_key[("XRPUSDT", "SHORT")]["explanation"]
+        == "Ledger and exchange quantities match within the 0.01 tolerance."
+    )
     assert [(r["symbol"], r["status"]) for r in result["quantity_mismatches"]] == [
         ("ETHUSDT", "ledger_exceeds_exchange")
     ]
