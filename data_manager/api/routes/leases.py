@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+from collections import deque
 from datetime import UTC, datetime
+from statistics import median
 from time import perf_counter
 from typing import Any, cast
 
@@ -15,7 +18,9 @@ from pydantic import BaseModel, Field
 from pymongo.errors import ExecutionTimeout, NetworkTimeout, ServerSelectionTimeoutError
 
 import data_manager.api.app as api_module
+from data_manager.api.routes.health import readiness_snapshot
 from data_manager.db.repositories.lease_repository import LeaseRepository
+from data_manager.utils.event_loop_monitor import event_loop_snapshot
 
 router = APIRouter(prefix="/api/v1/leases")
 logger = logging.getLogger(__name__)
@@ -26,6 +31,9 @@ lease_op_seconds = Histogram(
 lease_ops_total = Counter(
     "data_manager_lease_ops_total", "Lease operation outcomes", ["op", "result"]
 )
+_LEASE_DIAGNOSTIC_WINDOW_SECONDS = 3 * 60 * 60
+_LEASE_DIAGNOSTIC_MAX_RECORDS = 20_000
+_lease_diagnostics: deque[dict[str, Any]] = deque(maxlen=_LEASE_DIAGNOSTIC_MAX_RECORDS)
 
 
 class LeaseRequest(BaseModel):
@@ -74,7 +82,125 @@ def _diagnostic(
     return "handler_execution"
 
 
-async def _run(request: Request | None, op: str, action):
+def _error_class(error: BaseException | None) -> str:
+    if error is None:
+        return "success"
+    if isinstance(
+        error,
+        asyncio.TimeoutError
+        | ExecutionTimeout
+        | NetworkTimeout
+        | ServerSelectionTimeoutError,
+    ):
+        return "timeout"
+    if isinstance(error, RuntimeError) and "unavailable" in str(error).lower():
+        return "readiness_failure"
+    return "backend_failure"
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    ordered = sorted(values)
+    return ordered[round((len(ordered) - 1) * percentile)]
+
+
+def _prune_diagnostics(now: datetime) -> None:
+    cutoff = now.timestamp() - _LEASE_DIAGNOSTIC_WINDOW_SECONDS
+    while _lease_diagnostics:
+        timestamp = datetime.fromisoformat(
+            _lease_diagnostics[0]["timestamp"]
+        ).timestamp()
+        if timestamp >= cutoff:
+            break
+        _lease_diagnostics.popleft()
+
+
+def _diagnostic_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    queue_wait = [float(record["lease_queue_wait_ms"]) for record in records]
+    handler = [float(record["lease_handler_ms"]) for record in records]
+    if not queue_wait:
+        empty = {"count": 0, "min": None, "p50": None, "p95": None, "max": None}
+        return {"count": 0, "queue_wait_ms": empty, "handler_ms": empty}
+
+    def stats(values: list[float]) -> dict[str, float | int]:
+        return {
+            "count": len(values),
+            "min": min(values),
+            "p50": median(values),
+            "p95": _percentile(values, 0.95),
+            "max": max(values),
+        }
+
+    return {
+        "count": len(records),
+        "queue_wait_ms": stats(queue_wait),
+        "handler_ms": stats(handler),
+    }
+
+
+def _store_diagnostic(
+    *,
+    op: str,
+    queue_wait_ms: float,
+    handler_ms: float,
+    mongo_wait_ms: float,
+    error: BaseException | None,
+    timestamp: datetime,
+    result_error_class: str | None = None,
+) -> None:
+    readiness = readiness_snapshot()
+    loop = event_loop_snapshot()
+    error_class = result_error_class or _error_class(error)
+    if error is not None and readiness["mongodb"] == "unknown":
+        readiness["mongodb"] = "failed"
+    record = {
+        "timestamp": timestamp.isoformat(),
+        "lease_op": op,
+        "lease_outcome": "error"
+        if error is not None or result_error_class
+        else "success",
+        "lease_error_class": error_class,
+        "lease_queue_wait_ms": queue_wait_ms,
+        "lease_handler_ms": handler_ms,
+        "lease_mongo_wait_ms": mongo_wait_ms,
+        "lease_timed_out": error_class == "timeout",
+        "lease_diagnostic": _diagnostic(error, queue_wait_ms, handler_ms),
+        "lease_mongo_readiness": readiness["mongodb"],
+        "lease_mysql_backend": readiness["mysql"],
+        "lease_event_loop_state": loop["state"],
+        "lease_event_loop_lag_ms": loop["lag_ms"],
+    }
+    _prune_diagnostics(timestamp)
+    _lease_diagnostics.append(record)
+    logger.info(json.dumps({"event": "lease_timing", **record}, sort_keys=True))
+
+
+def _query_diagnostics(
+    since: datetime | None,
+    until: datetime | None,
+    operation: str | None,
+    outcome: str | None,
+) -> list[dict[str, Any]]:
+    now = datetime.now(UTC)
+    _prune_diagnostics(now)
+    since_ts = since.timestamp() if since else None
+    until_ts = until.timestamp() if until else None
+    return [
+        record
+        for record in _lease_diagnostics
+        if (
+            since_ts is None
+            or datetime.fromisoformat(record["timestamp"]).timestamp() >= since_ts
+        )
+        and (
+            until_ts is None
+            or datetime.fromisoformat(record["timestamp"]).timestamp() <= until_ts
+        )
+        and (operation is None or record["lease_op"] == operation)
+        and (outcome is None or record["lease_outcome"] == outcome)
+    ]
+
+
+async def _run(request: Request | None, op: str, action, result_error_class=None):
     started = perf_counter()
     received_at = getattr(getattr(request, "state", None), "received_at", started)
     queue_wait = started - received_at
@@ -94,24 +220,49 @@ async def _run(request: Request | None, op: str, action):
         queue_wait_ms = round(queue_wait * 1000, 2)
         handler_ms = round(handler_time * 1000, 2)
         lease_op_seconds.labels(op=op).observe(handler_time)
-        logger.info(
-            "lease timing",
-            extra={
-                "lease_op": op,
-                "lease_queue_wait_ms": queue_wait_ms,
-                "lease_handler_ms": handler_ms,
-                "lease_mongo_wait_ms": round(mongo_wait * 1000, 2),
-                "lease_timed_out": isinstance(
-                    error,
-                    asyncio.TimeoutError
-                    | ExecutionTimeout
-                    | NetworkTimeout
-                    | ServerSelectionTimeoutError,
-                ),
-                "lease_diagnostic": _diagnostic(error, queue_wait_ms, handler_ms),
-            },
+        _store_diagnostic(
+            op=op,
+            queue_wait_ms=queue_wait_ms,
+            handler_ms=handler_ms,
+            mongo_wait_ms=round(mongo_wait * 1000, 2),
+            error=error,
+            timestamp=datetime.now(UTC),
+            result_error_class=(
+                result_error_class(result)
+                if error is None and result_error_class
+                else None
+            ),
         )
     return result
+
+
+@router.get("/diagnostics")
+async def diagnostics(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    operation: str | None = None,
+    outcome: str | None = None,
+) -> dict[str, Any]:
+    """Return bounded lease timing records and latency summaries."""
+    if since and until and since > until:
+        raise HTTPException(status_code=422, detail="since must not be after until")
+    records = _query_diagnostics(since, until, operation, outcome)
+    window_end = datetime.now(UTC)
+    window_start = window_end.timestamp() - _LEASE_DIAGNOSTIC_WINDOW_SECONDS
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        grouped.setdefault(
+            f"{record['lease_op']}:{record['lease_outcome']}:{record['lease_error_class']}",
+            [],
+        ).append(record)
+    return {
+        "window_seconds": _LEASE_DIAGNOSTIC_WINDOW_SECONDS,
+        "window_start": datetime.fromtimestamp(window_start, UTC).isoformat(),
+        "window_end": window_end.isoformat(),
+        "count": len(records),
+        "records": records,
+        "summary": {key: _diagnostic_summary(value) for key, value in grouped.items()},
+    }
 
 
 @router.post("/{name}/acquire")
@@ -149,6 +300,7 @@ async def renew(
         http_request,
         "renew",
         lambda: _repo().renew(name, request.owner, request.ttl_seconds),
+        lambda result: "renew_failed" if result is None else None,
     )
     if lease is None:
         lease_ops_total.labels(op="renew", result="lost").inc()

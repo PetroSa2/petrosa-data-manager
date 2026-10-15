@@ -33,6 +33,17 @@ _readiness_lock = asyncio.Lock()
 router = APIRouter()
 
 
+def readiness_snapshot() -> dict[str, str]:
+    """Return the latest readiness state without performing a probe."""
+    if _readiness_cache is None:
+        return {"mongodb": "unknown", "mysql": "unknown"}
+    components = _readiness_cache[2]
+    return {
+        "mongodb": str(components.get("mongodb", "unknown")),
+        "mysql": str(components.get("mysql", "unknown")),
+    }
+
+
 def _get_health_repo() -> "HealthRepository | None":
     """Build a HealthRepository from the shared db_manager, or None if unavailable."""
     if api_module.db_manager and getattr(api_module.db_manager, "mysql_adapter", None):

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import threading
 from datetime import UTC, datetime, timedelta
@@ -67,6 +68,10 @@ async def test_bad_name_and_renew_loss_are_rejected():
             "leader:data-manager", leases.LeaseRequest(owner="pod-b", ttl_seconds=30)
         )
     assert lost.value.status_code == 409
+    assert any(
+        record["lease_error_class"] == "renew_failed"
+        for record in leases._lease_diagnostics
+    )
 
 
 @pytest.mark.asyncio
@@ -90,15 +95,17 @@ async def test_lease_timing_logs_queue_wait_and_handler_time(caplog):
         result = await leases._run(request, "get", action)
 
     assert result == "lease"
-    timing = next(
-        record for record in caplog.records if record.message == "lease timing"
-    )
-    assert timing.lease_op == "get"
-    assert timing.lease_queue_wait_ms >= 5
-    assert timing.lease_handler_ms >= 0
-    assert timing.lease_mongo_wait_ms >= 0
-    assert timing.lease_timed_out is False
-    assert timing.lease_diagnostic in {"handler_execution", "event_loop_queueing"}
+    timing = json.loads(next(record.message for record in caplog.records))
+    assert timing["event"] == "lease_timing"
+    assert timing["lease_op"] == "get"
+    assert timing["lease_queue_wait_ms"] >= 5
+    assert timing["lease_handler_ms"] >= 0
+    assert timing["lease_mongo_wait_ms"] >= 0
+    assert timing["lease_outcome"] == "success"
+    assert timing["lease_error_class"] == "success"
+    assert "lease_mongo_readiness" in timing
+    assert "lease_mysql_backend" in timing
+    assert "lease_event_loop_state" in timing
 
 
 @pytest.mark.asyncio
@@ -114,15 +121,14 @@ async def test_timed_out_lease_logs_bounded_backend_diagnostics(caplog):
     ):
         await leases._run(request, "renew", action)
 
-    timing = next(
-        record for record in caplog.records if record.message == "lease timing"
-    )
-    assert timing.lease_op == "renew"
-    assert timing.lease_queue_wait_ms >= 0
-    assert timing.lease_handler_ms >= 0
-    assert timing.lease_mongo_wait_ms >= 0
-    assert timing.lease_timed_out is True
-    assert timing.lease_diagnostic == "mongo_wait_timeout"
+    timing = json.loads(next(record.message for record in caplog.records))
+    assert timing["lease_op"] == "renew"
+    assert timing["lease_queue_wait_ms"] >= 0
+    assert timing["lease_handler_ms"] >= 0
+    assert timing["lease_mongo_wait_ms"] >= 0
+    assert timing["lease_outcome"] == "error"
+    assert timing["lease_error_class"] == "timeout"
+    assert timing["lease_mongo_readiness"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -138,11 +144,52 @@ async def test_unready_backend_logs_readiness_stall(caplog):
     ):
         await leases._run(request, "get", action)
 
-    timing = next(
-        record for record in caplog.records if record.message == "lease timing"
-    )
-    assert timing.lease_timed_out is False
-    assert timing.lease_diagnostic == "readiness_backend_stall"
+    timing = json.loads(next(record.message for record in caplog.records))
+    assert timing["lease_outcome"] == "error"
+    assert timing["lease_error_class"] == "readiness_failure"
+    assert timing["lease_mongo_readiness"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_backend_failure_is_queryable(caplog):
+    request = SimpleNamespace(state=SimpleNamespace(received_at=perf_counter()))
+
+    async def action():
+        raise ValueError("backend rejected request")
+
+    with (
+        caplog.at_level(logging.INFO, logger=leases.__name__),
+        pytest.raises(HTTPException),
+    ):
+        await leases._run(request, "release", action)
+
+    timing = json.loads(next(record.message for record in caplog.records))
+    assert timing["lease_error_class"] == "backend_failure"
+    assert timing["lease_mysql_backend"] in {"unknown", "healthy", "unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_lease_diagnostics_query_returns_bounded_summary(caplog):
+    leases._lease_diagnostics.clear()
+    request = SimpleNamespace(state=SimpleNamespace(received_at=perf_counter()))
+
+    async def action():
+        return "lease"
+
+    with caplog.at_level(logging.INFO, logger=leases.__name__):
+        await leases._run(request, "get", action)
+    result = await leases.diagnostics(operation="get", outcome="success")
+
+    assert result["count"] == 1
+    summary = next(iter(result["summary"].values()))
+    assert summary["queue_wait_ms"]["count"] == 1
+    assert summary["handler_ms"]["p95"] >= 0
+
+    with pytest.raises(HTTPException) as invalid:
+        await leases.diagnostics(
+            since=datetime.now(UTC), until=datetime.now(UTC) - timedelta(seconds=1)
+        )
+    assert invalid.value.status_code == 422
 
 
 @pytest.mark.asyncio
