@@ -6,8 +6,10 @@ import asyncio
 import logging
 import math
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from functools import partial
 from time import monotonic, perf_counter
 from typing import Any
 
@@ -28,6 +30,19 @@ from data_manager.observability_metrics import STRATEGY_SCORECARD_EVALUATE_TOTAL
 from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
+
+_ANALYTICS_EXECUTOR_WORKERS = 4
+_ANALYTICS_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_ANALYTICS_EXECUTOR_WORKERS, thread_name_prefix="data-manager-analytics"
+)
+
+
+async def _run_heavy(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _ANALYTICS_EXECUTOR, partial(func, *args, **kwargs)
+    )
+
 
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
@@ -392,7 +407,7 @@ async def _load_synthetic_exits(
     if mongodb is None:
         return [], None
     repo = LedgerRepository(mysql, mongodb)
-    history = await asyncio.to_thread(repo.round_exchange_history)
+    history = await _run_heavy(repo.round_exchange_history)
     cut_over_ms = history.get("cut_over_ms")
     if not history.get("snapshots"):
         return [], cut_over_ms
@@ -414,7 +429,7 @@ async def _load_synthetic_exits(
         task = _SYNTHETIC_EXITS_IN_FLIGHT.get(version)
         if task is None:
             task = asyncio.create_task(
-                asyncio.to_thread(build_synthetic_exits, all_fills, history)
+                _run_heavy(build_synthetic_exits, all_fills, history)
             )
             _SYNTHETIC_EXITS_IN_FLIGHT[version] = task
         try:
@@ -596,7 +611,7 @@ async def _timed_leg_replay(
     budget_seconds, budget_source = _replay_budget_seconds()
     replay_started = perf_counter()
     try:
-        return await asyncio.to_thread(
+        return await _run_heavy(
             _leg_aware_pnl,
             rows,
             overlay_lots,
@@ -1072,7 +1087,7 @@ async def compute_slippage_by_regime(
         logger.error("slippage-by-regime: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     compute_started = monotonic()
-    report = await asyncio.to_thread(build_report, fills, regimes, role=role)
+    report = await _run_heavy(build_report, fills, regimes, role=role)
     record_report_stage(
         "slippage_by_regime", "compute", monotonic() - compute_started, source=source
     )
@@ -1208,7 +1223,7 @@ async def compute_closed_rounds(
         if global_read and not truncated:
             try:
                 # Synthetic exits: the exchange snapshot series after the cut-over (petrosa-data-manager#603).
-                exchange_history = await asyncio.to_thread(repo.round_exchange_history)
+                exchange_history = await _run_heavy(repo.round_exchange_history)
             except Exception as exc:
                 logger.warning("rounds: exchange history unavailable: %s", exc)
                 exchange_history = None
@@ -1217,8 +1232,8 @@ async def compute_closed_rounds(
                 # Closed entry orders: the live Mongo position stores AND the MySQL history (dm#603 F1: the MySQL
                 # tables stop at 2026-09-26, so the reconciler's closures were invisible to the orphan overlay).
                 exchange, closed_historic, closed_live = await asyncio.gather(
-                    asyncio.to_thread(repo.round_overlay_snapshot),
-                    asyncio.to_thread(repo.closed_entry_order_ids),
+                    _run_heavy(repo.round_overlay_snapshot),
+                    _run_heavy(repo.closed_entry_order_ids),
                     repo.live_closed_entry_order_ids(),
                 )
                 closed_entry_orders = closed_historic | closed_live
@@ -1228,7 +1243,7 @@ async def compute_closed_rounds(
     if overlay_possible and exchange is None:
         exchange, closed_entry_orders = {"as_of_ms": None, "rows": []}, set()
     compute_started = monotonic()
-    report = await asyncio.to_thread(
+    report = await _run_heavy(
         build_report,
         rows,
         window_days=window_days,

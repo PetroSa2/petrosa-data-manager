@@ -1,9 +1,12 @@
+import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+from time import perf_counter
 
 import pytest
 from fastapi import HTTPException
 
+import data_manager.api.routes.analysis as analysis
 from data_manager.api.routes import leases
 
 
@@ -63,3 +66,48 @@ async def test_release_and_unknown_get():
     with pytest.raises(HTTPException) as missing:
         await leases.get("leader:data-manager")
     assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_lease_get_and_renew_are_not_blocked_by_heavy_analytics(monkeypatch):
+    lease = {
+        "owner": "pod-a",
+        "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        "fencing_token": 7,
+    }
+
+    class ResponsiveRepository:
+        async def get(self, _name):
+            return lease
+
+        async def renew(self, _name, _owner, _ttl):
+            return lease
+
+    monkeypatch.setattr(leases, "_repo", lambda: ResponsiveRepository())
+    workers = analysis._ANALYTICS_EXECUTOR_WORKERS
+    barrier = threading.Barrier(workers + 1)
+    release = threading.Event()
+
+    def long_analytics_job():
+        barrier.wait(timeout=2)
+        release.wait(timeout=2)
+
+    futures = [
+        analysis._ANALYTICS_EXECUTOR.submit(long_analytics_job) for _ in range(workers)
+    ]
+    await asyncio.to_thread(barrier.wait, 1)
+    try:
+        started = perf_counter()
+        result = await asyncio.gather(
+            leases.get("leader:data-manager"),
+            leases.renew(
+                "leader:data-manager",
+                leases.LeaseRequest(owner="pod-a", ttl_seconds=30),
+            ),
+        )
+        assert perf_counter() - started < 1
+        assert result[0]["owner"] == "pod-a"
+        assert result[1]["renewed"] is True
+    finally:
+        release.set()
+        await asyncio.gather(*(asyncio.wrap_future(future) for future in futures))
