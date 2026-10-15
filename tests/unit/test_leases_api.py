@@ -96,6 +96,53 @@ async def test_lease_timing_logs_queue_wait_and_handler_time(caplog):
     assert timing.lease_op == "get"
     assert timing.lease_queue_wait_ms >= 5
     assert timing.lease_handler_ms >= 0
+    assert timing.lease_mongo_wait_ms >= 0
+    assert timing.lease_timed_out is False
+    assert timing.lease_diagnostic in {"handler_execution", "event_loop_queueing"}
+
+
+@pytest.mark.asyncio
+async def test_timed_out_lease_logs_bounded_backend_diagnostics(caplog):
+    request = SimpleNamespace(state=SimpleNamespace(received_at=perf_counter()))
+
+    async def action():
+        raise TimeoutError("backend timeout")
+
+    with (
+        caplog.at_level(logging.INFO, logger=leases.__name__),
+        pytest.raises(HTTPException),
+    ):
+        await leases._run(request, "renew", action)
+
+    timing = next(
+        record for record in caplog.records if record.message == "lease timing"
+    )
+    assert timing.lease_op == "renew"
+    assert timing.lease_queue_wait_ms >= 0
+    assert timing.lease_handler_ms >= 0
+    assert timing.lease_mongo_wait_ms >= 0
+    assert timing.lease_timed_out is True
+    assert timing.lease_diagnostic == "mongo_wait_timeout"
+
+
+@pytest.mark.asyncio
+async def test_unready_backend_logs_readiness_stall(caplog):
+    request = SimpleNamespace(state=SimpleNamespace(received_at=perf_counter()))
+
+    async def action():
+        raise RuntimeError("MongoDB unavailable")
+
+    with (
+        caplog.at_level(logging.INFO, logger=leases.__name__),
+        pytest.raises(HTTPException),
+    ):
+        await leases._run(request, "get", action)
+
+    timing = next(
+        record for record in caplog.records if record.message == "lease timing"
+    )
+    assert timing.lease_timed_out is False
+    assert timing.lease_diagnostic == "readiness_backend_stall"
 
 
 @pytest.mark.asyncio

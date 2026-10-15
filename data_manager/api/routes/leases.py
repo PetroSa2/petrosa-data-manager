@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Body, HTTPException, Path, Request
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
+from pymongo.errors import ExecutionTimeout, NetworkTimeout, ServerSelectionTimeoutError
 
 import data_manager.api.app as api_module
 from data_manager.db.repositories.lease_repository import LeaseRepository
@@ -52,26 +54,61 @@ def _iso(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
+def _diagnostic(
+    error: BaseException | None, queue_wait_ms: float, handler_ms: float
+) -> str:
+    if error is not None:
+        if isinstance(
+            error,
+            asyncio.TimeoutError
+            | ExecutionTimeout
+            | NetworkTimeout
+            | ServerSelectionTimeoutError,
+        ):
+            return "mongo_wait_timeout"
+        if isinstance(error, RuntimeError) and "unavailable" in str(error).lower():
+            return "readiness_backend_stall"
+        return "mongo_backend_error"
+    if queue_wait_ms > handler_ms:
+        return "event_loop_queueing"
+    return "handler_execution"
+
+
 async def _run(request: Request | None, op: str, action):
     started = perf_counter()
     received_at = getattr(getattr(request, "state", None), "received_at", started)
     queue_wait = started - received_at
+    mongo_started = perf_counter()
+    error: BaseException | None = None
     try:
         result = await action()
     except HTTPException:
         raise
     except Exception as exc:
+        error = exc
         lease_ops_total.labels(op=op, result="error").inc()
         raise HTTPException(status_code=503, detail="MongoDB unavailable") from exc
     finally:
         handler_time = perf_counter() - started
+        mongo_wait = perf_counter() - mongo_started
+        queue_wait_ms = round(queue_wait * 1000, 2)
+        handler_ms = round(handler_time * 1000, 2)
         lease_op_seconds.labels(op=op).observe(handler_time)
         logger.info(
             "lease timing",
             extra={
                 "lease_op": op,
-                "lease_queue_wait_ms": round(queue_wait * 1000, 2),
-                "lease_handler_ms": round(handler_time * 1000, 2),
+                "lease_queue_wait_ms": queue_wait_ms,
+                "lease_handler_ms": handler_ms,
+                "lease_mongo_wait_ms": round(mongo_wait * 1000, 2),
+                "lease_timed_out": isinstance(
+                    error,
+                    asyncio.TimeoutError
+                    | ExecutionTimeout
+                    | NetworkTimeout
+                    | ServerSelectionTimeoutError,
+                ),
+                "lease_diagnostic": _diagnostic(error, queue_wait_ms, handler_ms),
             },
         )
     return result
