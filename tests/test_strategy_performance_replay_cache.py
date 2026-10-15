@@ -80,12 +80,16 @@ def replay_environment(monkeypatch):
     analysis._EXECUTION_EVENTS_CACHE = None
     analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
+    analysis._BASE_PERFORMANCE_CACHE = None
+    analysis._BASE_PERFORMANCE_IN_FLIGHT.clear()
     yield history, fills, calls, history_reads
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
     analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
+    analysis._BASE_PERFORMANCE_CACHE = None
+    analysis._BASE_PERFORMANCE_IN_FLIGHT.clear()
     api_module.db_manager = None
 
 
@@ -209,6 +213,27 @@ async def test_repeated_performance_requests_reuse_leg_replay(
         if key != "calculated_at"
     }
     assert replay.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_base_performance_replay_runs_off_event_loop_and_is_cached(
+    replay_environment, monkeypatch
+):
+    _history, fills, _calls, _history_reads = replay_environment
+    event_loop_thread = threading.get_ident()
+    threads = []
+
+    def calculate(rows):
+        threads.append(threading.get_ident())
+        return {"alpha": {"outcome": {}, "breakdown": object()}}
+
+    monkeypatch.setattr(analysis, "_calculate_base_performance", calculate)
+    mongodb = api_module.db_manager.mongodb_adapter
+    await analysis._base_performance(mongodb, fills, "fill-1")
+    await analysis._base_performance(mongodb, fills, "fill-1")
+
+    assert len(threads) == 1
+    assert threads[0] != event_loop_thread
 
 
 @pytest.mark.asyncio

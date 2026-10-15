@@ -86,6 +86,8 @@ class MongoDBAdapter(BaseAdapter):
 
         self.client = None
         self.db = None
+        self.lease_client = None
+        self.lease_db = None
         self.db_name = database_name or self._extract_db_name(connection_string)
 
     def _extract_db_name(self, connection_string: str) -> str:
@@ -116,6 +118,12 @@ class MongoDBAdapter(BaseAdapter):
                 self.connection_string, tz_aware=True
             )
             self.db = self.client[self.db_name]
+            self.lease_client = motor_asyncio.AsyncIOMotorClient(
+                self.connection_string,
+                tz_aware=True,
+                maxPoolSize=constants.MONGODB_LEASE_MAX_POOL_SIZE,
+            )
+            self.lease_db = self.lease_client[self.db_name]
             self._connected = True
             logger.info(f"Connected to MongoDB database: {self.db_name}")
         except Exception as e:
@@ -125,8 +133,12 @@ class MongoDBAdapter(BaseAdapter):
         """Close MongoDB connection."""
         if self.client:
             self.client.close()
-            self._connected = False
-            logger.info("Disconnected from MongoDB")
+        if self.lease_client:
+            self.lease_client.close()
+            self.lease_client = None
+            self.lease_db = None
+        self._connected = False
+        logger.info("Disconnected from MongoDB")
 
     async def write(
         self, model_instances: list[BaseModel], collection: str

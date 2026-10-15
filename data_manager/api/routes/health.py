@@ -113,11 +113,12 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                 manager = api_module.db_manager
                 mongo = getattr(manager, "mongodb_adapter", None) if manager else None
                 mysql = getattr(manager, "mysql_adapter", None) if manager else None
-                components["mysql"] = (
-                    "healthy"
-                    if mysql is not None and mysql.is_connected()
-                    else "unavailable"
+                mysql_connected = (
+                    await asyncio.to_thread(mysql.is_connected)
+                    if mysql is not None
+                    else False
                 )
+                components["mysql"] = "healthy" if mysql_connected else "unavailable"
                 components["mongodb"] = "unavailable"
                 ready = False
                 if mongo and getattr(mongo, "db", None) is not None:

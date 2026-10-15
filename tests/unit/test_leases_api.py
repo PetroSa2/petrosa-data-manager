@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 import data_manager.api.routes.analysis as analysis
 from data_manager.api.routes import leases
+from data_manager.db.repositories.lease_repository import LeaseRepository
 
 
 class FakeRepository:
@@ -35,6 +36,14 @@ class FakeRepository:
 @pytest.fixture(autouse=True)
 def fake_repo(monkeypatch):
     monkeypatch.setattr(leases, "_repo", lambda: FakeRepository())
+
+
+def test_lease_repository_prefers_isolated_database():
+    isolated = {"service_leases": object()}
+    shared = {"service_leases": object()}
+    repository = LeaseRepository(SimpleNamespace(lease_db=isolated, db=shared))
+
+    assert repository._collection() is isolated["service_leases"]
 
 
 @pytest.mark.asyncio

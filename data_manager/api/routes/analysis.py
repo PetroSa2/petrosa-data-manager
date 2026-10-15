@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import os
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -80,6 +81,10 @@ _EXCHANGE_HISTORY_CACHE: (
 ) = None
 _LEG_REPLAY_CACHE: dict[
     tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
+] = {}
+_BASE_PERFORMANCE_CACHE: tuple[int, str | None, dict[str, Any]] | None = None
+_BASE_PERFORMANCE_IN_FLIGHT: dict[
+    tuple[int, str | None], asyncio.Task[dict[str, Any]]
 ] = {}
 
 
@@ -715,6 +720,74 @@ def outcome_stats(outcomes: list[bool], *, known_book: bool = False) -> dict[str
     }
 
 
+def _calculate_base_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Replay fills once and return the strategy-scoped values used by requests."""
+    rows_by_strategy: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("strategy_id"):
+            rows_by_strategy[str(row["strategy_id"])].append(row)
+    result = {
+        strategy_id: _calculate_strategy_performance(strategy_rows)
+        for strategy_id, strategy_rows in rows_by_strategy.items()
+    }
+    result["__legacy_exit_side_mapped__"] = sum(
+        values["legacy_exit_side_mapped"]
+        for values in result.values()
+        if isinstance(values, dict)
+    )
+    return {
+        "__legacy_exit_side_mapped__": result["__legacy_exit_side_mapped__"],
+        **{
+            strategy_id: {
+                "outcome": values["outcome"],
+                "breakdown": values["breakdown"],
+            }
+            for strategy_id, values in result.items()
+            if isinstance(values, dict)
+        },
+    }
+
+
+def _calculate_strategy_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    from data_manager.services.pnl_calculator import PnlCalculator
+
+    calculator = PnlCalculator()
+    outcomes: list[bool] = []
+    for row in rows:
+        impact = calculator.apply_fill(row)
+        if impact is not None and impact.realized_pnl != 0:
+            outcomes.append(impact.realized_pnl > 0)
+    return {
+        "outcome": outcome_stats(outcomes),
+        "breakdown": calculator.strategy_pnl(str(rows[0]["strategy_id"])),
+        "legacy_exit_side_mapped": calculator.legacy_exit_side_mapped,
+    }
+
+
+async def _base_performance(
+    mongodb: Any, rows: list[dict[str, Any]], latest_fill_id: str | None
+) -> dict[str, Any]:
+    """Return version-stable base values without replaying fills on the event loop."""
+    global _BASE_PERFORMANCE_CACHE
+    version = (id(mongodb.db["execution_events"]), latest_fill_id)
+    if _BASE_PERFORMANCE_CACHE is not None and _BASE_PERFORMANCE_CACHE[:2] == version:
+        return _BASE_PERFORMANCE_CACHE[2]
+    task = _BASE_PERFORMANCE_IN_FLIGHT.get(version)
+    if task is None:
+        task = asyncio.create_task(_run_heavy(_calculate_base_performance, rows))
+        _BASE_PERFORMANCE_IN_FLIGHT[version] = task
+    try:
+        result = await task
+    except Exception:
+        if _BASE_PERFORMANCE_IN_FLIGHT.get(version) is task:
+            _BASE_PERFORMANCE_IN_FLIGHT.pop(version, None)
+        raise
+    if _BASE_PERFORMANCE_IN_FLIGHT.get(version) is task:
+        _BASE_PERFORMANCE_IN_FLIGHT.pop(version, None)
+    _BASE_PERFORMANCE_CACHE = (version[0], version[1], result)
+    return result
+
+
 def win_rate_delta_with_noise_floor(
     outcomes: list[bool],
 ) -> tuple[float | None, int | None, float | None]:
@@ -758,7 +831,6 @@ async def get_strategy_performance(strategy_id: str):
     request_started = monotonic()
     try:
         import data_manager.api.app as api_module
-        from data_manager.services.pnl_calculator import PnlCalculator
 
         if not api_module.db_manager or not getattr(
             api_module.db_manager, "mongodb_adapter", None
@@ -815,16 +887,12 @@ async def get_strategy_performance(strategy_id: str):
                 },
             }
 
-        calc = PnlCalculator()
-        outcomes: list[bool] = []
-        for row in rows:
-            impact = calc.apply_fill(row)
-            if impact is None or impact.realized_pnl == 0:
-                continue
-            outcomes.append(impact.realized_pnl > 0)
+        from data_manager.services.pnl_calculator import PnlBreakdown
 
-        outcome = outcome_stats(outcomes)
-        breakdown = calc.strategy_pnl(strategy_id)
+        base = await _base_performance(mongodb, all_rows, latest_fill_id)
+        values = base.get(strategy_id, {})
+        outcome = values.get("outcome", outcome_stats([]))
+        breakdown = values.get("breakdown", PnlBreakdown(realized=0.0, unrealized=0.0))
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
         # orphaned lots left out of unrealized, so the trend total describes one book at one time.
@@ -936,7 +1004,7 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
-                "legacy_exit_side_mapped": calc.legacy_exit_side_mapped,
+                "legacy_exit_side_mapped": base.get("__legacy_exit_side_mapped__", 0),
                 **(
                     {
                         "orphan_overlay": exposure["status"],
