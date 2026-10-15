@@ -965,7 +965,9 @@ async def get_strategy_performance(strategy_id: str):
                         cut_over_ms=cut_over_ms,
                     )
                     _LEG_REPLAY_CACHE[replay_key] = leg_book
-                record_report_stage("performance", "overlay", monotonic() - overlay_started)
+                record_report_stage(
+                    "performance", "overlay", monotonic() - overlay_started
+                )
         if overlay is not None:
             assert leg_book is not None
             leg_pnl = leg_book if leg_book["complete"] else None
@@ -995,11 +997,7 @@ async def get_strategy_performance(strategy_id: str):
             )
             else "insufficient_history"
         )
-        overlay_status = (
-            exposure.get("status")
-            if exposure is not None
-            else "disabled"
-        )
+        overlay_status = exposure.get("status") if exposure is not None else "disabled"
         recent_trend = (
             "positive"
             if total_pnl > 0
