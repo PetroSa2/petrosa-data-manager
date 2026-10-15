@@ -85,10 +85,13 @@ async def test_lease_get_and_renew_are_not_blocked_by_heavy_analytics(monkeypatc
 
     monkeypatch.setattr(leases, "_repo", lambda: ResponsiveRepository())
     workers = analysis._ANALYTICS_EXECUTOR_WORKERS
+    assert workers >= 2
     barrier = threading.Barrier(workers + 1)
     release = threading.Event()
+    thread_names = []
 
     def long_analytics_job():
+        thread_names.append(threading.current_thread().name)
         barrier.wait(timeout=2)
         release.wait(timeout=2)
 
@@ -97,6 +100,7 @@ async def test_lease_get_and_renew_are_not_blocked_by_heavy_analytics(monkeypatc
     ]
     await asyncio.to_thread(barrier.wait, 1)
     try:
+        assert all(name.startswith("data-manager-analytics") for name in thread_names)
         started = perf_counter()
         result = await asyncio.gather(
             leases.get("leader:data-manager"),
