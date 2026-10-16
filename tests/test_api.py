@@ -100,7 +100,8 @@ def test_strategy_performance_endpoint(client):
     assert "stats" in data
     assert data["metadata"]["strategy_id"] == strategy_id
     if data.get("degraded"):
-        assert data["stats"] is None
+        assert isinstance(data["stats"], dict)
+        assert data["stats"]["win_rate"] is None
         assert data["error"]["type"]
         assert data["error"]["message"]
         assert data["metadata"]["history_status"] == "unavailable"
