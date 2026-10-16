@@ -136,6 +136,10 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                             "MySQL readiness status timed out after %.3fs",
                             constants.READINESS_MYSQL_TIMEOUT_SECONDS,
                         )
+                    except Exception:
+                        logger.warning(
+                            "MySQL readiness status check failed", exc_info=True
+                        )
                 components["mysql"] = "healthy" if mysql_connected else "unavailable"
                 components["mongodb"] = "unavailable"
                 ready = False

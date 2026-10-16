@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -439,6 +440,29 @@ async def test_performance_unavailable_response_preserves_assessor_contract(
         "unrealized_pnl",
     } <= response["stats"].keys()
     assert response["metadata"]["fills_replayed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_performance_read_failure_returns_iterable_degraded_stats(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(mongodb_adapter=object()),
+    )
+    monkeypatch.setattr(
+        analysis_route,
+        "_load_execution_events",
+        AsyncMock(side_effect=ValueError("execution events unavailable")),
+    )
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert response["degraded"] is True
+    assert isinstance(response["stats"], dict)
+    assert response["stats"]["win_rate"] is None
+    assert response["metadata"]["history_status"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -1134,7 +1158,8 @@ def test_performance_degrades_to_neutral_when_execution_events_read_fails():
         assert r.status_code == 200
         body = r.json()
         assert body["degraded"] is True
-        assert body["stats"] is None
+        assert isinstance(body["stats"], dict)
+        assert body["stats"]["win_rate"] is None
         assert body["error"] == {"type": "RuntimeError", "message": "boom"}
         assert body["metadata"]["history_status"] == "unavailable"
         assert body["metadata"]["source"] == (

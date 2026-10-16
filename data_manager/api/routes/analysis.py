@@ -106,6 +106,14 @@ async def _run_bounded_heavy(func, *args, **kwargs):
         raise _AnalyticsDependencyTimeout from exc
 
 
+def _filter_strategy_rows(
+    rows: list[dict[str, Any]], strategy_id: str, *, stringify: bool = False
+) -> list[dict[str, Any]]:
+    if stringify:
+        return [row for row in rows if str(row.get("strategy_id")) == strategy_id]
+    return [row for row in rows if row.get("strategy_id") == strategy_id]
+
+
 def _replay_budget_seconds() -> tuple[float, str]:
     """Return the CIO-matching request budget and how it was resolved."""
     configured = os.getenv(_REPLAY_BUDGET_ENV)
@@ -517,9 +525,13 @@ async def _load_synthetic_exits(
             len(synthetic),
             monotonic() - synthetic_started,
         )
-    return [
-        row for row in synthetic if str(row.get("strategy_id")) == strategy_id
-    ], cut_over_ms
+    strategy_rows = await _run_heavy(
+        _filter_strategy_rows,
+        synthetic,
+        strategy_id,
+        stringify=True,
+    )
+    return strategy_rows, cut_over_ms
 
 
 async def _load_execution_events(
@@ -782,10 +794,11 @@ def _degraded_performance(strategy_id: str, exc: BaseException) -> dict[str, Any
         "type": type(exc).__name__,
         "message": str(exc) or repr(exc),
     }
+    stats = _unavailable_performance(strategy_id)["stats"]
     return {
         "degraded": True,
         "error": error,
-        "stats": None,
+        "stats": stats,
         "metadata": {
             "strategy_id": strategy_id,
             "calculated_at": datetime.now(UTC).isoformat(),
@@ -918,7 +931,7 @@ async def get_strategy_performance(strategy_id: str):
         mongodb = api_module.db_manager.mongodb_adapter
         try:
             all_rows, latest_fill_id = await _load_execution_events(mongodb)
-            rows = [row for row in all_rows if row.get("strategy_id") == strategy_id]
+            rows = await _run_heavy(_filter_strategy_rows, all_rows, strategy_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

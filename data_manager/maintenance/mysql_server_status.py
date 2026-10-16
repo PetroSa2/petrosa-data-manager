@@ -51,8 +51,19 @@ def collect_mysql_server_status(adapter: Any) -> None:
     """Read server counters through the adapter and update their gauges."""
     try:
         values = adapter.get_server_status()
+        missing = []
         for name, gauge in _GAUGES.items():
-            gauge.set(float(values[name]))
+            value = values.get(name)
+            if value is None:
+                missing.append(name)
+                continue
+            gauge.set(float(value))
+        if missing:
+            mysql_server_status_errors_total.inc()
+            logger.warning(
+                "MySQL server status collection skipped invalid values fields=%s",
+                missing,
+            )
     except Exception as exc:
         mysql_server_status_errors_total.inc()
         logger.exception(

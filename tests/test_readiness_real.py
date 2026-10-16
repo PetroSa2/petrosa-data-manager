@@ -172,6 +172,16 @@ def test_mysql_disconnected_is_reported_but_does_not_gate(client, mysql):
     assert body["components"]["mysql"] == "unavailable"
 
 
+def test_mysql_status_exception_is_reported_but_does_not_gate(client, mysql):
+    mysql.is_connected.side_effect = RuntimeError("status unavailable")
+
+    status, body = _readiness(client)
+
+    assert status == 200
+    assert body["ready"] is True
+    assert body["components"]["mysql"] == "unavailable"
+
+
 def test_result_is_cached_so_probes_do_not_pile_up(client, mongo):
     for _ in range(3):
         status, _body = _readiness(client)

@@ -70,6 +70,47 @@ def test_adapter_returns_stubbed_values_and_only_read_only_statements():
     assert connection.statements == ["SHOW GLOBAL STATUS", "SHOW VARIABLES"]
 
 
+def test_adapter_skips_empty_status_values_without_aborting_valid_values():
+    connection = _Connection()
+    original_execute = connection.execute
+
+    def execute_with_empty_value(statement):
+        result = original_execute(statement)
+        if str(statement) == "SHOW GLOBAL STATUS":
+            for row in result.rows:
+                if row["Variable_name"] == "Aborted_clients":
+                    row["Value"] = ""
+        return result
+
+    connection.execute = execute_with_empty_value
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    adapter.engine = SimpleNamespace(connect=lambda: connection)
+    adapter._connected = True
+
+    values = adapter.get_server_status()
+
+    assert values["Threads_connected"] == 7
+    assert "Aborted_clients" not in values
+
+
+@pytest.mark.asyncio
+async def test_collection_skips_invalid_status_field_without_raising(caplog):
+    before = status.mysql_server_status_errors_total._value.get()
+    stop_event = asyncio.Event()
+
+    class Adapter:
+        def get_server_status(self):
+            stop_event.set()
+            return {"Threads_connected": 7}
+
+    await status.mysql_server_status_loop(lambda: Adapter(), stop_event)
+
+    assert status.mysql_server_status_errors_total._value.get() == before + 1
+    assert "invalid values" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_collection_sets_five_gauges_and_runs_in_worker_thread():
     event_loop_thread = threading.get_ident()
