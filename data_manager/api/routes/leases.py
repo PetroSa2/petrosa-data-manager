@@ -172,8 +172,10 @@ def _store_diagnostic(
     readiness = readiness_snapshot()
     loop = event_loop_snapshot()
     error_class = result_error_class or _error_class(error)
-    error_category = _error_category(error) if error is not None else (
-        result_error_class or "success"
+    error_category = (
+        _error_category(error)
+        if error is not None
+        else (result_error_class or "success")
     )
     context = _lease_context()
     if error is not None and readiness["mongodb"] == "unknown":
