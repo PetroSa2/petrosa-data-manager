@@ -43,6 +43,7 @@ from data_manager.api.routes import (
     raw,
     risk,
     schemas,
+    scorecard,
     service_config,
     signals,
     strategies,
@@ -166,6 +167,8 @@ def create_app() -> FastAPI:
         schemas.router, prefix="/schemas", tags=["Schema Registry (legacy)"]
     )
     app.include_router(data.router, prefix="/data", tags=["Data"])
+    app.include_router(scorecard.router, prefix="/analysis", tags=["Analysis"])
+    app.include_router(scorecard.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(

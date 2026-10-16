@@ -54,63 +54,23 @@ _MAX_FILLS = 200_000
 
 
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
-    mongodb = api_module.db_manager.mongodb_adapter
-    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    if end is not None:
-        query["timestamp"] = {"$lt": end}
-    return (
-        await mongodb.db["execution_events"]
-        .find(query)
-        .sort("timestamp", 1)
-        .to_list(length=_MAX_FILLS)
-    )
+    from data_manager.api.routes import strategy_net_r
+
+    return await strategy_net_r._load_fills(end)
 
 
 async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
     """position id -> the stop fraction the position carried, from its row."""
-    if not position_ids:
-        return {}
-    mongodb = api_module.db_manager.mongodb_adapter
-    rows = (
-        await mongodb.db["positions"]
-        .find({"position_id": {"$in": position_ids}})
-        .to_list(length=len(position_ids))
-    )
-    out: dict[str, Decimal] = {}
-    for row in rows:
-        stop = stop_fraction_of(
-            row.get("entry_price") or row.get("avg_price"), row.get("stop_loss")
-        )
-        if stop is not None and row.get("position_id"):
-            out[str(row["position_id"])] = stop
-    return out
+    from data_manager.api.routes import strategy_net_r
+
+    return await strategy_net_r._load_stops(position_ids)
 
 
 async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
     """decision id -> {"source", "stop_fraction"} from ``cio_decisions``."""
-    if not decision_ids:
-        return {}
-    mongodb = api_module.db_manager.mongodb_adapter
-    rows = (
-        await mongodb.db["cio_decisions"]
-        .find({"decision_id": {"$in": decision_ids}})
-        .to_list(length=len(decision_ids))
-    )
-    out: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        payload = row.get("payload") or {}
-        price = payload.get("entry_price") or payload.get("price") or row.get("price")
-        stop = stop_fraction_of(price, payload.get("stop_loss"))
-        if stop is None and payload.get("stop_loss_pct") is not None:
-            try:
-                stop = Decimal(str(payload["stop_loss_pct"]))
-            except InvalidOperation:
-                stop = None
-        out[str(row["decision_id"])] = {
-            "source": row.get("source"),
-            "stop_fraction": stop,
-        }
-    return out
+    from data_manager.api.routes import strategy_net_r
+
+    return await strategy_net_r._load_decisions(decision_ids)
 
 
 @dataclass

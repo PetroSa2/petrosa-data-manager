@@ -765,6 +765,14 @@ class RoundBook:
             and (book.cycle.fills > 0 or book.long or book.short)
         ]
 
+    def open_rounds(self) -> list[tuple[str, str]]:
+        return [
+            (strategy_id, symbol)
+            for (strategy_id, symbol, _leg), book in self._books.items()
+            if book.cycle is not None
+            and (book.cycle.fills > 0 or book.long or book.short)
+        ]
+
     def report(
         self,
         *,
