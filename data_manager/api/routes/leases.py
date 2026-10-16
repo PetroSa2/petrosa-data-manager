@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import traceback
 from collections import deque
 from datetime import UTC, datetime
 from statistics import median
@@ -19,12 +20,16 @@ from pymongo.errors import ExecutionTimeout, NetworkTimeout, ServerSelectionTime
 
 import data_manager.api.app as api_module
 from data_manager.api.routes.health import readiness_snapshot
-from data_manager.db.repositories.lease_repository import LeaseRepository
+from data_manager.db.repositories.lease_repository import (
+    LEASES_COLLECTION,
+    LeaseRepository,
+)
 from data_manager.utils.event_loop_monitor import event_loop_snapshot
 
 router = APIRouter(prefix="/api/v1/leases")
 logger = logging.getLogger(__name__)
 _NAME_RE = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
+_MONGODB_CREDENTIALS_RE = re.compile(r"(mongodb(?:\+srv)?://)[^/@]+@")
 lease_op_seconds = Histogram(
     "data_manager_lease_op_seconds", "Lease operation latency", ["op"]
 )
@@ -82,7 +87,7 @@ def _diagnostic(
     return "handler_execution"
 
 
-def _error_class(error: BaseException | None) -> str:
+def _error_category(error: BaseException | None) -> str:
     if error is None:
         return "success"
     if isinstance(
@@ -96,6 +101,23 @@ def _error_class(error: BaseException | None) -> str:
     if isinstance(error, RuntimeError) and "unavailable" in str(error).lower():
         return "readiness_failure"
     return "backend_failure"
+
+
+def _error_class(error: BaseException | None) -> str:
+    return type(error).__name__ if error is not None else "success"
+
+
+def _lease_context() -> dict[str, str]:
+    manager = api_module.db_manager
+    adapter = getattr(manager, "mongodb_adapter", None)
+    return {
+        "lease_collection": LEASES_COLLECTION,
+        "lease_database": str(getattr(adapter, "db_name", "unknown")),
+    }
+
+
+def _safe_error_text(error: BaseException | str) -> str:
+    return _MONGODB_CREDENTIALS_RE.sub(r"\1<redacted>@", str(error))
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -150,6 +172,12 @@ def _store_diagnostic(
     readiness = readiness_snapshot()
     loop = event_loop_snapshot()
     error_class = result_error_class or _error_class(error)
+    error_category = (
+        _error_category(error)
+        if error is not None
+        else (result_error_class or "success")
+    )
+    context = _lease_context()
     if error is not None and readiness["mongodb"] == "unknown":
         readiness["mongodb"] = "failed"
     record = {
@@ -162,7 +190,17 @@ def _store_diagnostic(
         "lease_queue_wait_ms": queue_wait_ms,
         "lease_handler_ms": handler_ms,
         "lease_mongo_wait_ms": mongo_wait_ms,
-        "lease_timed_out": error_class == "timeout",
+        "lease_error_category": error_category,
+        "lease_error_message": (
+            _safe_error_text(error)[:1000] if error is not None else None
+        ),
+        "lease_error_traceback": (
+            _safe_error_text("".join(traceback.format_exception(error)))[-4000:]
+            if error is not None
+            else None
+        ),
+        **context,
+        "lease_timed_out": error_category == "timeout",
         "lease_diagnostic": _diagnostic(error, queue_wait_ms, handler_ms),
         "lease_mongo_readiness": readiness["mongodb"],
         "lease_mysql_backend": readiness["mysql"],
@@ -213,6 +251,18 @@ async def _run(request: Request | None, op: str, action, result_error_class=None
     except Exception as exc:
         error = exc
         lease_ops_total.labels(op=op, result="error").inc()
+        context = _lease_context()
+        logger.error(
+            "Lease operation failed op=%s collection=%s database=%s "
+            "exception=%s message=%s",
+            op,
+            context["lease_collection"],
+            context["lease_database"],
+            type(exc).__name__,
+            _safe_error_text(exc),
+            extra=context,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         raise HTTPException(status_code=503, detail="MongoDB unavailable") from exc
     finally:
         handler_time = perf_counter() - started
