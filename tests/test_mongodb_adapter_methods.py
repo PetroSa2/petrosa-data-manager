@@ -586,6 +586,36 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_klines_count_filter_matches_explain_index_contract(self, adapter):
+        coll = MagicMock()
+        coll.create_index = AsyncMock()
+        coll.count_documents = AsyncMock(return_value=7)
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("klines_1h")
+        count = await adapter.get_record_count(
+            "klines_1h",
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 2, tzinfo=UTC),
+            symbol="BTCUSDT",
+        )
+
+        assert count == 7
+        coll.count_documents.assert_awaited_once_with(
+            {
+                "timestamp": {
+                    "$gte": datetime(2026, 1, 1, tzinfo=UTC),
+                    "$lt": datetime(2026, 1, 2, tzinfo=UTC),
+                },
+                "symbol": "BTCUSDT",
+            }
+        )
+        assert coll.create_index.await_args.args[0] == [
+            ("symbol", 1),
+            ("timestamp", 1),
+        ]
+
+    @pytest.mark.asyncio
     async def test_creates_intents_collection_indexes(self, adapter):
         coll = MagicMock()
         coll.create_indexes = AsyncMock()
@@ -603,6 +633,13 @@ class TestEnsureIndexes:
         assert len(ttl) == 1
         assert ttl[0].document["name"] == "received_at_ttl_1d"
         assert ttl[0].document["expireAfterSeconds"] == constants.INTENTS_TTL_SECONDS
+        timestamp = [
+            ix
+            for ix in indexes
+            if ix.document["key"] == {"timestamp": 1}
+        ]
+        assert len(timestamp) == 1
+        assert "expireAfterSeconds" not in timestamp[0].document
 
     @pytest.mark.asyncio
     async def test_lease_indexes_use_isolated_database(self, adapter):
