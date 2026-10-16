@@ -50,6 +50,12 @@ def _client_with_fills(rows: list[dict[str, Any]]) -> TestClient:
     cursor.sort.return_value = cursor
     cursor.limit.return_value = cursor
     cursor.to_list = AsyncMock(return_value=rows)
+
+    def sort_rows(field, direction):
+        rows.sort(key=lambda row: row[field], reverse=direction < 0)
+        return cursor
+
+    cursor.sort.side_effect = sort_rows
     coll = MagicMock()
     coll.find = MagicMock(return_value=cursor)
     mongodb = MagicMock()
@@ -463,6 +469,37 @@ async def test_performance_read_failure_returns_iterable_degraded_stats(monkeypa
     assert isinstance(response["stats"], dict)
     assert response["stats"]["win_rate"] is None
     assert response["metadata"]["history_status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_performance_execution_event_timeout_preserves_assessor_contract(
+    monkeypatch,
+):
+    import data_manager.api.routes.analysis as analysis_route
+
+    monkeypatch.setattr(
+        analysis_route,
+        "_load_execution_events",
+        AsyncMock(side_effect=TimeoutError("execution events timed out")),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(mongodb_adapter=object()),
+    )
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert response["degraded"] is True
+    assert response["error"] == {
+        "type": "TimeoutError",
+        "message": "execution events timed out",
+    }
+    assert {
+        "win_rate",
+        "win_rate_delta",
+        "consecutive_losses",
+    } <= response["stats"].keys()
 
 
 @pytest.mark.asyncio

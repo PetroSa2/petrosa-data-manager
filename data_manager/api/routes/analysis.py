@@ -542,13 +542,15 @@ async def _load_execution_events(
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    newest_fill = await asyncio.wait_for(
+    fills_descending = await asyncio.wait_for(
         mongodb.db["execution_events"]
         .find(fill_filter)
         .sort("timestamp", -1)
-        .to_list(length=1),
+        .to_list(length=_ROUND_MAX_FILLS),
         constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
     )
+    all_fills = list(reversed(fills_descending))
+    newest_fill = fills_descending[:1]
     latest_fill_id = (
         str(newest_fill[0].get("_id"))
         if newest_fill and newest_fill[0].get("_id") is not None
@@ -563,13 +565,6 @@ async def _load_execution_events(
         latest_fill_id,
     ):
         return _EXECUTION_EVENTS_CACHE[2], latest_fill_id
-    all_fills = await asyncio.wait_for(
-        mongodb.db["execution_events"]
-        .find(fill_filter)
-        .sort("timestamp", 1)
-        .to_list(length=_ROUND_MAX_FILLS),
-        constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
-    )
     record_report_stage("performance", "mongo_reads", monotonic() - read_started)
     logger.info(
         "performance: stage=mongo_reads execution_events=%d duration=%.3fs",
