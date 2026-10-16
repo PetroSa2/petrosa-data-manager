@@ -100,7 +100,7 @@ async def test_collection_sets_five_gauges_and_runs_in_worker_thread():
 
 
 @pytest.mark.asyncio
-async def test_failure_increments_error_counter_without_raising():
+async def test_failure_increments_error_counter_without_raising(caplog):
     before = status.mysql_server_status_errors_total._value.get()
     stop_event = asyncio.Event()
 
@@ -112,6 +112,8 @@ async def test_failure_increments_error_counter_without_raising():
     await status.mysql_server_status_loop(lambda: Adapter(), stop_event)
 
     assert status.mysql_server_status_errors_total._value.get() == before + 1
+    assert "RuntimeError" in caplog.text
+    assert "database unavailable" in caplog.text
 
 
 def test_app_starts_collector_task_with_current_database_manager():

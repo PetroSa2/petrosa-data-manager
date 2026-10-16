@@ -88,21 +88,25 @@ def test_catalog_datasets_endpoint(client):
 def test_strategy_performance_endpoint(client):
     """Test strategy performance analytics endpoint.
 
-    Per #601 the stub at `/analysis/performance/{strategy_id}` now
-    replays persisted `execution_events` through the FIFO P&L
-    calculator. The shared `mock_db_manager` fixture does not wire a
-    fully-functional Mongo adapter, so the endpoint should degrade to
-    the no-db payload (200 / source=data-manager-analysis-no-db)
-    OR succeed with the calculator source — either is acceptable.
+    Per #601 the endpoint replays persisted `execution_events` through
+    the FIFO P&L calculator. The shared `mock_db_manager` fixture does
+    not wire a fully-functional Mongo adapter, so the endpoint may
+    return an explicit degraded response or calculator results.
     """
     strategy_id = "test_momentum_v1"
     response = client.get(f"/analysis/performance/{strategy_id}")
     assert response.status_code == 200
     data = response.json()
     assert "stats" in data
-    assert "win_rate" in data["stats"]
     assert data["metadata"]["strategy_id"] == strategy_id
-    assert data["metadata"]["source"] in {
-        "data-manager-pnl-calculator",
-        "data-manager-analysis-no-db",
-    }
+    if data.get("degraded"):
+        assert data["stats"] is None
+        assert data["error"]["type"]
+        assert data["error"]["message"]
+        assert data["metadata"]["history_status"] == "unavailable"
+    else:
+        assert "win_rate" in data["stats"]
+        assert data["metadata"]["source"] in {
+            "data-manager-pnl-calculator",
+            "data-manager-analysis-no-db",
+        }

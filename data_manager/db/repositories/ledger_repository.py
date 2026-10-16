@@ -463,7 +463,24 @@ class LedgerRepository(BaseRepository):
             .mappings()
             .all()
         )
-        exchange_keys = {(r["symbol"], r["position_side"]): r for r in exchange}
+        exchange_quantities: dict[tuple[str, str], Decimal] = {}
+        exchange_rows = []
+        for row in exchange:
+            side = {"BUY": "LONG", "SELL": "SHORT"}.get(
+                str(row["position_side"]).upper(), str(row["position_side"]).upper()
+            )
+            key = (row["symbol"], side)
+            exchange_quantities[key] = exchange_quantities.get(key, Decimal("0")) + abs(
+                Decimal(str(row["quantity"] or 0))
+            )
+            exchange_rows.append(
+                {
+                    "symbol": row["symbol"],
+                    "position_side": side,
+                    "exchange_positions": 1,
+                    "quantity": str(row["quantity"]),
+                }
+            )
         grouped: dict[tuple[str, str], int] = {}
         ledger_quantity: dict[tuple[str, str], Decimal] = {}
         for row in ledger:
@@ -480,31 +497,18 @@ class LedgerRepository(BaseRepository):
             {"symbol": s, "position_side": side, "ledger_open_rows": count}
             for (s, side), count in grouped.items()
         ]
-        exchange_rows = [
-            {
-                "symbol": s,
-                "position_side": side,
-                "exchange_positions": 1,
-                "quantity": str(r["quantity"]),
-            }
-            for (s, side), r in exchange_keys.items()
-        ]
         phantom = [
             row
             for row in open_rows
-            if (row["symbol"], row["position_side"]) not in exchange_keys
+            if (row["symbol"], row["position_side"]) not in exchange_quantities
         ]
         # Quantities, not only row counts (petrosa-tradeengine#739): tradeengine writes one row per entry
         # while the exchange holds one netted position per (symbol, side), so counts always differ; the
         # open quantity of the rows has to equal the exchange quantity.
         quantity_tieout = []
-        for key in sorted(set(ledger_quantity) | set(exchange_keys)):
+        for key in sorted(set(ledger_quantity) | set(exchange_quantities)):
             ledger_qty = ledger_quantity.get(key, Decimal("0"))
-            exchange_qty = (
-                abs(Decimal(str(exchange_keys[key]["quantity"])))
-                if key in exchange_keys
-                else Decimal("0")
-            )
+            exchange_qty = exchange_quantities.get(key, Decimal("0"))
             difference = ledger_qty - exchange_qty
             if abs(difference) <= QUANTITY_TOLERANCE:
                 status = "tied"

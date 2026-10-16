@@ -184,6 +184,34 @@ def test_performance_returns_real_win_rate_and_pnl():
         api_module.db_manager = None
 
 
+def test_performance_matches_reference_fixture_for_core_stats():
+    rows = [
+        _fill(side="buy", qty=1, price=100, seconds_before=300),
+        _fill(side="sell", qty=1, price=110, seconds_before=250),
+        _fill(side="buy", qty=1, price=100, seconds_before=200),
+        _fill(side="sell", qty=1, price=90, seconds_before=150),
+        _fill(side="buy", qty=1, price=100, seconds_before=100),
+        _fill(side="sell", qty=1, price=130, seconds_before=50),
+    ]
+    try:
+        response = _client_with_fills(rows).get("/analysis/performance/S1")
+        assert response.status_code == 200
+        stats = response.json()["stats"]
+        assert {
+            key: stats[key]
+            for key in ("wins", "losses", "win_rate", "realized_pnl", "unrealized_pnl")
+        } == {
+            "wins": 2,
+            "losses": 1,
+            "win_rate": pytest.approx(2 / 3),
+            "realized_pnl": 30,
+            "unrealized_pnl": 0,
+        }
+        assert all(stats[key] is not None for key in ("wins", "losses", "win_rate"))
+    finally:
+        api_module.db_manager = None
+
+
 def _alternating_fills(results: list[bool]) -> list[dict[str, Any]]:
     """One buy/sell pair per outcome, oldest first (a win sells above, a loss below the entry)."""
     rows = []
@@ -1105,14 +1133,13 @@ def test_performance_degrades_to_neutral_when_execution_events_read_fails():
         r = client.get("/analysis/performance/S1")
         assert r.status_code == 200
         body = r.json()
-        assert body["stats"]["win_rate"] is None
-        assert body["stats"]["win_rate_delta"] is None
-        assert "win_rate_delta_window" in body["stats"]
-        assert body["stats"]["win_rate_delta_window"] is None
-        assert body["stats"]["win_rate_delta_se"] is None
-        assert body["stats"]["consecutive_losses"] is None
-        assert body["stats"]["recent_pnl_trend"] == "neutral"
-        assert body["metadata"]["source"] == "data-manager-analysis-no-db"
+        assert body["degraded"] is True
+        assert body["stats"] is None
+        assert body["error"] == {"type": "RuntimeError", "message": "boom"}
+        assert body["metadata"]["history_status"] == "unavailable"
+        assert body["metadata"]["source"] == (
+            "data-manager-analysis-execution-events-unavailable"
+        )
     finally:
         api_module.db_manager = None
 

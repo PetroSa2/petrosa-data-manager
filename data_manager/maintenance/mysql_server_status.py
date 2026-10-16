@@ -53,9 +53,13 @@ def collect_mysql_server_status(adapter: Any) -> None:
         values = adapter.get_server_status()
         for name, gauge in _GAUGES.items():
             gauge.set(float(values[name]))
-    except Exception:
+    except Exception as exc:
         mysql_server_status_errors_total.inc()
-        logger.warning("MySQL server status collection failed")
+        logger.exception(
+            "MySQL server status collection failed exception=%s message=%r",
+            type(exc).__name__,
+            str(exc),
+        )
 
 
 async def mysql_server_status_loop(
