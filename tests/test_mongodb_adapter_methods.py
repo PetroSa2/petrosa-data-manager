@@ -633,11 +633,7 @@ class TestEnsureIndexes:
         assert len(ttl) == 1
         assert ttl[0].document["name"] == "received_at_ttl_1d"
         assert ttl[0].document["expireAfterSeconds"] == constants.INTENTS_TTL_SECONDS
-        timestamp = [
-            ix
-            for ix in indexes
-            if ix.document["key"] == {"timestamp": 1}
-        ]
+        timestamp = [ix for ix in indexes if ix.document["key"] == {"timestamp": 1}]
         assert len(timestamp) == 1
         assert "expireAfterSeconds" not in timestamp[0].document
 
