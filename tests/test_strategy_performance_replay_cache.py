@@ -28,11 +28,13 @@ class _Mongo:
     def __init__(self, fills):
         self.db = {"execution_events": self}
         self.fills = fills
+        self.find_calls = 0
 
     def __getitem__(self, _name):
         return self
 
     def find(self, *_args, **_kwargs):
+        self.find_calls += 1
         return _Cursor(self.fills)
 
 
@@ -113,6 +115,16 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
     fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled"})
     await analysis._load_synthetic_exits("alpha")
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_execution_events_are_read_once_per_version(replay_environment):
+    _history, _fills, _calls, _history_reads = replay_environment
+    mongodb = api_module.db_manager.mongodb_adapter
+
+    await analysis._load_execution_events(mongodb)
+
+    assert mongodb.db["execution_events"].find_calls == 1
 
 
 @pytest.mark.asyncio
