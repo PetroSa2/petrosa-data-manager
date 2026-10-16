@@ -9,7 +9,7 @@ from data_manager.db.repositories.lease_repository import LeaseRepository
 
 
 def _repo(collection):
-    return LeaseRepository(SimpleNamespace(db={"service_leases": collection}))
+    return LeaseRepository(SimpleNamespace(lease_db={"service_leases": collection}))
 
 
 @pytest.mark.asyncio
@@ -60,3 +60,9 @@ async def test_renew_non_owner_returns_none_and_release_filters_owner():
     assert await repo.renew("x", "pod-b", 10) is None
     assert await repo.release("x", "pod-b") is True
     assert collection.delete_one.call_args.args[0] == {"name": "x", "owner": "pod-b"}
+
+
+def test_collection_rejects_missing_isolated_database():
+    with pytest.raises(RuntimeError, match="isolated lease database") as raised:
+        LeaseRepository(SimpleNamespace(db={"service_leases": object()}))._collection()
+    assert "isolated lease database" in str(raised.value)

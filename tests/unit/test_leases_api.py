@@ -95,7 +95,13 @@ async def test_lease_timing_logs_queue_wait_and_handler_time(caplog):
         result = await leases._run(request, "get", action)
 
     assert result == "lease"
-    timing = json.loads(next(record.message for record in caplog.records))
+    timing = json.loads(
+        next(
+            record.message
+            for record in caplog.records
+            if record.name == leases.__name__ and "event" in record.message
+        )
+    )
     assert timing["event"] == "lease_timing"
     assert timing["lease_op"] == "get"
     assert timing["lease_queue_wait_ms"] >= 5
@@ -121,13 +127,20 @@ async def test_timed_out_lease_logs_bounded_backend_diagnostics(caplog):
     ):
         await leases._run(request, "renew", action)
 
-    timing = json.loads(next(record.message for record in caplog.records))
+    timing = json.loads(
+        next(
+            record.message
+            for record in caplog.records
+            if record.name == leases.__name__ and "event" in record.message
+        )
+    )
     assert timing["lease_op"] == "renew"
     assert timing["lease_queue_wait_ms"] >= 0
     assert timing["lease_handler_ms"] >= 0
     assert timing["lease_mongo_wait_ms"] >= 0
     assert timing["lease_outcome"] == "error"
-    assert timing["lease_error_class"] == "timeout"
+    assert timing["lease_error_category"] == "timeout"
+    assert timing["lease_error_class"] == "TimeoutError"
     assert timing["lease_mongo_readiness"] == "failed"
 
 
@@ -144,9 +157,16 @@ async def test_unready_backend_logs_readiness_stall(caplog):
     ):
         await leases._run(request, "get", action)
 
-    timing = json.loads(next(record.message for record in caplog.records))
+    timing = json.loads(
+        next(
+            record.message
+            for record in caplog.records
+            if record.name == leases.__name__ and "event" in record.message
+        )
+    )
     assert timing["lease_outcome"] == "error"
-    assert timing["lease_error_class"] == "readiness_failure"
+    assert timing["lease_error_category"] == "readiness_failure"
+    assert timing["lease_error_class"] == "RuntimeError"
     assert timing["lease_mongo_readiness"] == "failed"
 
 
@@ -163,9 +183,49 @@ async def test_backend_failure_is_queryable(caplog):
     ):
         await leases._run(request, "release", action)
 
-    timing = json.loads(next(record.message for record in caplog.records))
-    assert timing["lease_error_class"] == "backend_failure"
+    timing = json.loads(
+        next(
+            record.message
+            for record in caplog.records
+            if record.name == leases.__name__ and "event" in record.message
+        )
+    )
+    assert timing["lease_error_category"] == "backend_failure"
+    assert timing["lease_error_class"] == "ValueError"
+    assert timing["lease_error_message"] == "backend rejected request"
+    assert "ValueError: backend rejected request" in timing["lease_error_traceback"]
+    assert timing["lease_collection"] == "service_leases"
+    assert timing["lease_database"] == "unknown"
     assert timing["lease_mysql_backend"] in {"unknown", "healthy", "unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_backend_failure_logs_exception_context(caplog, monkeypatch):
+    request = SimpleNamespace(state=SimpleNamespace(received_at=perf_counter()))
+    monkeypatch.setattr(
+        leases.api_module,
+        "db_manager",
+        SimpleNamespace(
+            mongodb_adapter=SimpleNamespace(db_name="petrosa_data_manager")
+        ),
+    )
+
+    async def action():
+        raise ValueError("invalid lease write")
+
+    with (
+        caplog.at_level(logging.ERROR, logger=leases.__name__),
+        pytest.raises(HTTPException) as raised,
+    ):
+        await leases._run(request, "acquire", action)
+
+    assert raised.value.status_code == 503
+    failure = next(
+        record for record in caplog.records if record.levelno == logging.ERROR
+    )
+    assert failure.exc_info[0] is ValueError
+    assert failure.lease_collection == "service_leases"
+    assert failure.lease_database == "petrosa_data_manager"
 
 
 @pytest.mark.asyncio

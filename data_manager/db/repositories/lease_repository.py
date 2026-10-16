@@ -28,11 +28,11 @@ class LeaseRepository(BaseRepository):
         super().__init__(mysql_adapter=None, mongodb_adapter=mongodb_adapter)
 
     def _collection(self):  # type: ignore[no-untyped-def]
-        database = getattr(self.mongodb, "lease_db", None) or getattr(
-            self.mongodb, "db", None
-        )
-        if self.mongodb is None or database is None:
+        if self.mongodb is None:
             raise RuntimeError("LeaseRepository requires a connected MongoDB adapter")
+        database = getattr(self.mongodb, "lease_db", None)
+        if database is None:
+            raise RuntimeError("LeaseRepository requires an isolated lease database")
         return database[LEASES_COLLECTION]
 
     @staticmethod
