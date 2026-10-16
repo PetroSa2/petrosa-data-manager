@@ -111,6 +111,23 @@ read cost trivial. Lower it if the metrics below show a persistent backlog.
 source table is unhealthy; conflating it with "already warm" would hide exactly
 the staleness this ticket exists to catch.
 
+### Readiness gate metrics
+
+The readiness evaluator exports these Prometheus gauges for every evaluated
+`pair` and `timeframe`:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `data_manager_candle_readiness_depth` | gauge | `pair`, `timeframe` | Number of candles found, capped at the required depth |
+| `data_manager_candle_readiness_required_depth` | gauge | `pair`, `timeframe` | Minimum candle count required for readiness |
+| `data_manager_candle_readiness_age_seconds` | gauge | `pair`, `timeframe` | Age in seconds of the newest candle |
+| `data_manager_candle_readiness_max_age_seconds` | gauge | `pair`, `timeframe` | Maximum permitted age in seconds |
+
+An age gauge is `-1` when the value cannot be calculated, such as an empty
+collection, a query failure, or an unparseable timeframe. The readiness verdict
+remains fail-closed in those cases; the gauges are diagnostic inputs, not a
+replacement for the gate result.
+
 ## Alerts (AC5)
 
 Add to the data-manager alert rules in `petrosa_k8s`. Both conditions the AC

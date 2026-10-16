@@ -41,6 +41,12 @@ from datetime import UTC, datetime
 import constants
 from data_manager.db.mongodb_adapter import MongoDBAdapter
 from data_manager.db.repositories.candle_repository import mongo_collection_name
+from data_manager.observability_metrics import (
+    CANDLE_READINESS_AGE_SECONDS,
+    CANDLE_READINESS_DEPTH,
+    CANDLE_READINESS_MAX_AGE_SECONDS,
+    CANDLE_READINESS_REQUIRED_DEPTH,
+)
 from data_manager.utils.time_utils import parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
@@ -106,6 +112,19 @@ def _max_age_seconds(timeframe: str, freshness_intervals: float) -> float | None
         return None
 
 
+def _record_readiness_metrics(verdict: CollectionReadiness) -> None:
+    """Publish the latest gate inputs for one pair/timeframe."""
+    labels = {"pair": verdict.pair, "timeframe": verdict.timeframe}
+    CANDLE_READINESS_DEPTH.labels(**labels).set(verdict.count)
+    CANDLE_READINESS_REQUIRED_DEPTH.labels(**labels).set(verdict.required_count)
+    CANDLE_READINESS_AGE_SECONDS.labels(**labels).set(
+        verdict.age_seconds if verdict.age_seconds is not None else -1
+    )
+    CANDLE_READINESS_MAX_AGE_SECONDS.labels(**labels).set(
+        verdict.max_age_seconds if verdict.max_age_seconds is not None else -1
+    )
+
+
 async def evaluate_collection(
     adapter: MongoDBAdapter,
     pair: str,
@@ -134,6 +153,7 @@ async def evaluate_collection(
 
     if max_age is None:
         verdict.reasons.append(f"unparseable timeframe {timeframe!r}")
+        _record_readiness_metrics(verdict)
         return verdict
 
     try:
@@ -143,6 +163,7 @@ async def evaluate_collection(
         latest = await adapter.query_latest(coll, pair, 1)
     except Exception as exc:  # fail closed on any backend error
         verdict.reasons.append(f"query failed: {exc}")
+        _record_readiness_metrics(verdict)
         return verdict
 
     if verdict.count < required_count:
@@ -150,11 +171,13 @@ async def evaluate_collection(
 
     if not latest:
         verdict.reasons.append("no candles present")
+        _record_readiness_metrics(verdict)
         return verdict
 
     newest = latest[0].get("timestamp")
     if not isinstance(newest, datetime):
         verdict.reasons.append(f"newest candle has non-datetime timestamp {newest!r}")
+        _record_readiness_metrics(verdict)
         return verdict
 
     newest = _ensure_aware(newest)
@@ -167,6 +190,7 @@ async def evaluate_collection(
         )
 
     verdict.ready = not verdict.reasons
+    _record_readiness_metrics(verdict)
     return verdict
 
 
