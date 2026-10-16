@@ -33,6 +33,10 @@ mysql_server_max_user_connections = Gauge(
     "data_manager_mysql_server_max_user_connections",
     "Configured MySQL server user connection limit",
 )
+mysql_server_wait_timeout = Gauge(
+    "data_manager_mysql_server_wait_timeout",
+    "Configured MySQL server wait timeout",
+)
 mysql_server_status_errors_total = Counter(
     "data_manager_mysql_server_status_errors_total",
     "MySQL server status collection errors",
@@ -44,6 +48,7 @@ _GAUGES: dict[str, Gauge] = {
     "Aborted_clients": mysql_server_aborted_clients,
     "Aborted_connects": mysql_server_aborted_connects,
     "max_user_connections": mysql_server_max_user_connections,
+    "wait_timeout": mysql_server_wait_timeout,
 }
 
 
@@ -52,17 +57,21 @@ def collect_mysql_server_status(adapter: Any) -> None:
     try:
         values = adapter.get_server_status()
         missing = []
+        invalid = []
         for name, gauge in _GAUGES.items():
             value = values.get(name)
             if value is None:
                 missing.append(name)
                 continue
-            gauge.set(float(value))
-        if missing:
+            try:
+                gauge.set(float(value))
+            except (TypeError, ValueError):
+                invalid.append(name)
+        if missing or invalid:
             mysql_server_status_errors_total.inc()
             logger.warning(
                 "MySQL server status collection skipped invalid values fields=%s",
-                missing,
+                [*missing, *invalid],
             )
     except Exception as exc:
         mysql_server_status_errors_total.inc()

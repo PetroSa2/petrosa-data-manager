@@ -7,7 +7,7 @@ Based on petrosa-binance-data-extractor patterns.
 import logging
 import threading
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -1489,12 +1489,25 @@ class MySQLAdapter(BaseAdapter):
             status_rows = conn.execute(sa.text("SHOW GLOBAL STATUS")).mappings().all()
             variable_rows = conn.execute(sa.text("SHOW VARIABLES")).mappings().all()
 
+        required_fields = {
+            "Threads_connected",
+            "Max_used_connections",
+            "Aborted_clients",
+            "Aborted_connects",
+            "max_user_connections",
+            "wait_timeout",
+        }
         values: dict[str, int] = {}
         invalid_values: list[tuple[str, object]] = []
         for row in [*status_rows, *variable_rows]:
-            if "Variable_name" not in row or "Value" not in row:
+            if not isinstance(row, Mapping):
                 continue
-            name = str(row["Variable_name"])
+            name_value = row.get("Variable_name")
+            if name_value is None or "Value" not in row:
+                continue
+            name = str(name_value)
+            if name not in required_fields:
+                continue
             try:
                 values[name] = int(row["Value"])
             except (TypeError, ValueError):
@@ -1512,6 +1525,7 @@ class MySQLAdapter(BaseAdapter):
                 "Aborted_clients",
                 "Aborted_connects",
                 "max_user_connections",
+                "wait_timeout",
             )
             if name in values
         }

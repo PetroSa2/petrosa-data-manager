@@ -41,7 +41,12 @@ class _Connection:
                     {"Variable_name": "Aborted_connects", "Value": "3"},
                 ]
             )
-        return _Result([{"Variable_name": "max_user_connections", "Value": "30"}])
+        return _Result(
+            [
+                {"Variable_name": "max_user_connections", "Value": "30"},
+                {"Variable_name": "wait_timeout", "Value": "15"},
+            ]
+        )
 
     def __enter__(self):
         return self
@@ -66,6 +71,7 @@ def test_adapter_returns_stubbed_values_and_only_read_only_statements():
         "Aborted_clients": 41,
         "Aborted_connects": 3,
         "max_user_connections": 30,
+        "wait_timeout": 15,
     }
     assert connection.statements == ["SHOW GLOBAL STATUS", "SHOW VARIABLES"]
 
@@ -93,6 +99,51 @@ def test_adapter_skips_empty_status_values_without_aborting_valid_values():
 
     assert values["Threads_connected"] == 7
     assert "Aborted_clients" not in values
+
+
+def test_adapter_ignores_malformed_unrelated_status_values():
+    connection = _Connection()
+    original_execute = connection.execute
+
+    def execute_with_unrelated_value(statement):
+        result = original_execute(statement)
+        if str(statement) == "SHOW GLOBAL STATUS":
+            result.rows.append(
+                {"Variable_name": "Max_used_connections_time", "Value": "0.5"}
+            )
+        return result
+
+    connection.execute = execute_with_unrelated_value
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    adapter.engine = SimpleNamespace(connect=lambda: connection)
+    adapter._connected = True
+
+    values = adapter.get_server_status()
+
+    assert values["Max_used_connections"] == 22
+    assert values["Aborted_clients"] == 41
+    assert values["wait_timeout"] == 15
+
+
+def test_collection_retains_valid_gauges_when_required_value_is_malformed():
+    status.collect_mysql_server_status(
+        SimpleNamespace(
+            get_server_status=lambda: {
+                "Threads_connected": 7,
+                "Max_used_connections": "not-a-number",
+                "Aborted_clients": 41,
+                "Aborted_connects": 3,
+                "max_user_connections": 30,
+                "wait_timeout": 15,
+            }
+        )
+    )
+
+    assert status.mysql_server_threads_connected._value.get() == 7
+    assert status.mysql_server_aborted_clients._value.get() == 41
+    assert status.mysql_server_wait_timeout._value.get() == 15
 
 
 @pytest.mark.asyncio
@@ -128,6 +179,7 @@ async def test_collection_sets_five_gauges_and_runs_in_worker_thread():
                 "Aborted_clients": 41,
                 "Aborted_connects": 3,
                 "max_user_connections": 30,
+                "wait_timeout": 15,
             }
 
     await status.mysql_server_status_loop(lambda: Adapter(), stop_event)
@@ -138,6 +190,7 @@ async def test_collection_sets_five_gauges_and_runs_in_worker_thread():
     assert status.mysql_server_aborted_clients._value.get() == 41
     assert status.mysql_server_aborted_connects._value.get() == 3
     assert status.mysql_server_max_user_connections._value.get() == 30
+    assert status.mysql_server_wait_timeout._value.get() == 15
 
 
 @pytest.mark.asyncio
