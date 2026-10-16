@@ -119,12 +119,14 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
 
 @pytest.mark.asyncio
 async def test_execution_events_are_read_once_per_version(replay_environment):
-    _history, _fills, _calls, _history_reads = replay_environment
+    _history, fills, _calls, _history_reads = replay_environment
+    fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled"})
     mongodb = api_module.db_manager.mongodb_adapter
 
-    await analysis._load_execution_events(mongodb)
+    rows, _latest_fill_id = await analysis._load_execution_events(mongodb)
 
     assert mongodb.db["execution_events"].find_calls == 1
+    assert [row["_id"] for row in rows] == ["fill-1", "fill-2"]
 
 
 @pytest.mark.asyncio
