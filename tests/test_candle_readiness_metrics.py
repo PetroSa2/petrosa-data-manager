@@ -60,7 +60,10 @@ async def test_readiness_metrics_use_unavailable_age_sentinel_on_query_failure()
         _metric_value("data_manager_candle_readiness_required_depth", "ETHUSDT", "5m")
         == 400
     )
-    assert _metric_value("data_manager_candle_readiness_age_seconds", "ETHUSDT", "5m") == -1
+    assert (
+        _metric_value("data_manager_candle_readiness_age_seconds", "ETHUSDT", "5m")
+        == -1
+    )
     assert (
         _metric_value("data_manager_candle_readiness_max_age_seconds", "ETHUSDT", "5m")
         == 900
