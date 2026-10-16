@@ -158,7 +158,10 @@ def _repo() -> LedgerRepository:
     manager = api_module.db_manager
     if not manager or not getattr(manager, "mysql_adapter", None):
         raise HTTPException(status_code=503, detail="Database not available")
-    return LedgerRepository(manager.mysql_adapter, None)
+    return LedgerRepository(
+        manager.mysql_adapter,
+        getattr(manager, "mongodb_adapter", None),
+    )
 
 
 def _ledger_unavailable(exc: BaseException) -> HTTPException:
@@ -191,7 +194,13 @@ async def _read_positions_tieout() -> dict[str, Any]:
                 asyncio.to_thread(_repo().positions_tieout)
             )
         task = _positions_tieout_task
-    return await asyncio.shield(task)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), constants.API_QUERY_TIMEOUT)
+    except BaseException:
+        async with _positions_tieout_lock:
+            if _positions_tieout_task is task:
+                _positions_tieout_task = None
+        raise
 
 
 def _adjustments_repo() -> LedgerAdjustmentsRepository:
@@ -307,9 +316,7 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
 @router.get("/positions-tieout")
 async def get_positions_tieout():
     try:
-        result = await asyncio.wait_for(
-            _read_positions_tieout(), timeout=constants.API_QUERY_TIMEOUT
-        )
+        result = await _read_positions_tieout()
         OPEN_POSITION_VARIANCE.set(len(result["phantom_rows"]))
         return result
     except HTTPException:
