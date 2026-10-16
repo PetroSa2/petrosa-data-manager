@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -36,6 +37,7 @@ from data_manager.observability_metrics import (
 )
 
 router = APIRouter(prefix="/api/v1/ledger")
+logger = logging.getLogger(__name__)
 EXCEEDING_DAYS = Counter(
     "ledger_tieout_days_exceeding_total", "Tie-out days exceeding materiality"
 )
@@ -157,6 +159,18 @@ def _repo() -> LedgerRepository:
     if not manager or not getattr(manager, "mysql_adapter", None):
         raise HTTPException(status_code=503, detail="Database not available")
     return LedgerRepository(manager.mysql_adapter, None)
+
+
+def _ledger_unavailable(exc: BaseException) -> HTTPException:
+    """Build a safe error response that preserves the real failure class and message."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "Ledger database unavailable",
+            "exception": type(exc).__name__,
+            "message": str(exc) or repr(exc),
+        },
+    )
 
 
 _positions_tieout_task: asyncio.Task | None = None
@@ -301,9 +315,12 @@ async def get_positions_tieout():
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="Ledger database unavailable"
-        ) from exc
+        logger.exception(
+            "ledger positions tieout read failed exception=%s message=%r",
+            type(exc).__name__,
+            str(exc),
+        )
+        raise _ledger_unavailable(exc) from exc
 
 
 @router.post("/adjustments", status_code=201)

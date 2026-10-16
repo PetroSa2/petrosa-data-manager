@@ -776,6 +776,28 @@ def _unavailable_performance(strategy_id: str) -> dict[str, Any]:
     }
 
 
+def _degraded_performance(strategy_id: str, exc: BaseException) -> dict[str, Any]:
+    """Return an explicit non-success response when execution history cannot be read."""
+    error = {
+        "type": type(exc).__name__,
+        "message": str(exc) or repr(exc),
+    }
+    return {
+        "degraded": True,
+        "error": error,
+        "stats": None,
+        "metadata": {
+            "strategy_id": strategy_id,
+            "calculated_at": datetime.now(UTC).isoformat(),
+            "source": "data-manager-analysis-execution-events-unavailable",
+            "fills_replayed": 0,
+            "history_status": "unavailable",
+            "degraded": True,
+            "error": error,
+        },
+    }
+
+
 def _calculate_base_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Replay fills once and return the strategy-scoped values used by requests."""
     rows_by_strategy: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -897,16 +919,17 @@ async def get_strategy_performance(strategy_id: str):
         try:
             all_rows, latest_fill_id = await _load_execution_events(mongodb)
             rows = [row for row in all_rows if row.get("strategy_id") == strategy_id]
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            # A misconfigured / mock adapter (or a transient MongoDB
-            # error) degrades to the no-data payload rather than 500ing.
-            # Real errors still get logged for ops to investigate.
-            logger.warning(
-                "performance: execution_events read failed for %s: %s",
+            logger.exception(
+                "performance: execution_events read failed for %s "
+                "exception=%s message=%r",
                 strategy_id,
-                exc,
+                type(exc).__name__,
+                str(exc),
             )
-            return _unavailable_performance(strategy_id)
+            return _degraded_performance(strategy_id, exc)
 
         from data_manager.services.pnl_calculator import PnlBreakdown
 
@@ -944,11 +967,15 @@ async def get_strategy_performance(strategy_id: str):
                 overlay = None
                 overlay_timeout = True
             except Exception as exc:
-                logger.warning(
-                    "performance: synthetic exits unavailable for %s: %s",
+                logger.exception(
+                    "performance: execution_events read failed during synthetic exits "
+                    "for %s exception=%s message=%r",
                     strategy_id,
+                    type(exc).__name__,
                     exc,
                 )
+                exposure = _unavailable_exposure("unavailable")
+                overlay = None
             if not overlay_timeout:
                 source_id = id(mongodb.db["execution_events"])
                 synthetic_version = (

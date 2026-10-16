@@ -193,7 +193,11 @@ async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(
         await ledger.get_positions_tieout()
 
     assert error.value.status_code == 503
-    assert error.value.detail == "Ledger database unavailable"
+    assert error.value.detail == {
+        "error": "Ledger database unavailable",
+        "exception": "RuntimeError",
+        "message": "ledger positions query failed",
+    }
 
 
 @pytest.mark.asyncio
@@ -216,7 +220,9 @@ async def test_positions_tieout_returns_503_when_database_read_times_out(
         await ledger.get_positions_tieout()
 
     assert error.value.status_code == 503
-    assert error.value.detail == "Ledger database unavailable"
+    assert error.value.detail["error"] == "Ledger database unavailable"
+    assert error.value.detail["exception"] == "TimeoutError"
+    assert error.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -324,6 +330,38 @@ def test_positions_tieout_maps_sides_and_reports_phantoms():
     }
     assert result["ledger_open_rows"][0]["position_side"] == "LONG"
     assert len(result["phantom_rows"]) == 1
+
+
+def test_positions_tieout_lists_every_exchange_position():
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result(
+                [
+                    {"symbol": "BTCUSDT", "position_side": "BUY", "quantity": "1"},
+                    {"symbol": "ETHUSDT", "position_side": "SELL", "quantity": "2"},
+                ]
+            ),
+            Result([]),
+        ]
+    )
+
+    result = repo.positions_tieout()
+
+    assert result["exchange_positions"] == [
+        {
+            "symbol": "BTCUSDT",
+            "position_side": "LONG",
+            "exchange_positions": 1,
+            "quantity": "1",
+        },
+        {
+            "symbol": "ETHUSDT",
+            "position_side": "SHORT",
+            "exchange_positions": 1,
+            "quantity": "2",
+        },
+    ]
 
 
 def test_positions_tieout_excludes_live_reconciler_closes():
