@@ -36,7 +36,15 @@ class TestInit:
 
 class TestInitialize:
     @pytest.mark.asyncio
-    async def test_initialize_sets_both_adapters(self):
+    async def test_initialize_sets_both_adapters(self, monkeypatch):
+        monkeypatch.setattr(
+            database_manager_module.constants, "MONGODB_DB", "operational_db"
+        )
+        monkeypatch.setattr(
+            database_manager_module.constants,
+            "CANDLE_MONGO_DATABASE",
+            "candle_db",
+        )
         with patch("data_manager.db.database_manager.get_adapter") as get_adp:
             mysql_a = make_adapter()
             mongo_a = make_adapter()
