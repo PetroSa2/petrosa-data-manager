@@ -1489,17 +1489,31 @@ class MySQLAdapter(BaseAdapter):
             status_rows = conn.execute(sa.text("SHOW GLOBAL STATUS")).mappings().all()
             variable_rows = conn.execute(sa.text("SHOW VARIABLES")).mappings().all()
 
-        values = {
-            str(row["Variable_name"]): int(row["Value"])
-            for row in [*status_rows, *variable_rows]
-            if "Variable_name" in row and "Value" in row
-        }
+        values: dict[str, int] = {}
+        invalid_values: list[tuple[str, object]] = []
+        for row in [*status_rows, *variable_rows]:
+            if "Variable_name" not in row or "Value" not in row:
+                continue
+            name = str(row["Variable_name"])
+            try:
+                values[name] = int(row["Value"])
+            except (TypeError, ValueError):
+                invalid_values.append((name, row["Value"]))
+        if invalid_values:
+            logger.warning(
+                "MySQL server status contained non-numeric values fields=%s",
+                [name for name, _value in invalid_values],
+            )
         return {
-            "Threads_connected": values["Threads_connected"],
-            "Max_used_connections": values["Max_used_connections"],
-            "Aborted_clients": values["Aborted_clients"],
-            "Aborted_connects": values["Aborted_connects"],
-            "max_user_connections": values["max_user_connections"],
+            name: values[name]
+            for name in (
+                "Threads_connected",
+                "Max_used_connections",
+                "Aborted_clients",
+                "Aborted_connects",
+                "max_user_connections",
+            )
+            if name in values
         }
 
 
