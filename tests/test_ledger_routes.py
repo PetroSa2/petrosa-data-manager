@@ -3,6 +3,7 @@ import json
 import time
 from datetime import date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -31,6 +32,21 @@ def daily_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def test_ledger_repository_uses_mongodb_for_live_tieout_overlay(monkeypatch):
+    mysql = object()
+    mongo = object()
+    monkeypatch.setattr(
+        ledger.api_module,
+        "db_manager",
+        SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=mongo),
+    )
+
+    repository = ledger._repo()
+
+    assert repository.mysql is mysql
+    assert repository.mongodb is mongo
 
 
 def test_amounts_are_strict_strings_and_symbol_defaults():
@@ -223,6 +239,34 @@ async def test_positions_tieout_returns_503_when_database_read_times_out(
     assert error.value.detail["error"] == "Ledger database unavailable"
     assert error.value.detail["exception"] == "TimeoutError"
     assert error.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_positions_tieout_retries_after_failed_shared_read(monkeypatch):
+    calls = 0
+
+    class Repo:
+        def positions_tieout(self):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("temporary ledger failure")
+            return {
+                "phantom_rows": [],
+                "ledger_open_rows": [],
+                "exchange_positions": [],
+            }
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_positions_tieout()
+    assert error.value.status_code == 503
+
+    result = await ledger.get_positions_tieout()
+
+    assert result["phantom_rows"] == []
+    assert calls == 2
 
 
 @pytest.mark.asyncio
