@@ -297,6 +297,39 @@ class TestSignalsDualWriteTask:
 
         db_manager.mysql_adapter.write.assert_called_once()
 
+    def test_signal_copies_are_serialized(self):
+        entered = threading.Event()
+        release = threading.Event()
+        calls = 0
+        calls_lock = threading.Lock()
+
+        def copy(_data):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            entered.set()
+            release.wait(1)
+
+        with patch.object(
+            generic, "_dual_write_signals_to_mysql_locked", side_effect=copy
+        ):
+            first = threading.Thread(
+                target=generic._dual_write_signals_to_mysql, args=([{}],)
+            )
+            second = threading.Thread(
+                target=generic._dual_write_signals_to_mysql, args=([{}],)
+            )
+            first.start()
+            assert entered.wait(1)
+            second.start()
+            time.sleep(0.05)
+            assert calls == 1
+            release.set()
+            first.join(1)
+            second.join(1)
+
+        assert calls == 2
+
 
 def _mysql_adapter_double(connect=None) -> MagicMock:
     adapter = MagicMock()
