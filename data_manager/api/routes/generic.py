@@ -309,6 +309,7 @@ SIGNAL_DUAL_WRITE_DROPPED = Counter(
     "data_manager_signal_dual_write_dropped",
     "Signals whose historic MySQL copy was dropped because the worker bound was full",
 )
+_signal_dual_write_transaction_lock = threading.Lock()
 try:
     _SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT = max(
         1, int(os.environ.get("PETROSA_SIGNAL_DUAL_WRITE_MAX_IN_FLIGHT", "8"))
@@ -320,6 +321,11 @@ _signal_dual_write_slots = threading.BoundedSemaphore(_SIGNAL_DUAL_WRITE_MAX_IN_
 
 def _dual_write_signals_to_mysql(data_list: list[dict[str, Any]]) -> None:
     """Best-effort blocking MySQL copy, intended to run in a worker thread."""
+    with _signal_dual_write_transaction_lock:
+        _dual_write_signals_to_mysql_locked(data_list)
+
+
+def _dual_write_signals_to_mysql_locked(data_list: list[dict[str, Any]]) -> None:
     try:
         mysql_adapter = getattr(api_module.db_manager, "mysql_adapter", None)
         if mysql_adapter is None:

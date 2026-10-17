@@ -45,6 +45,15 @@ async def _run_heavy(func, *args, **kwargs):
     )
 
 
+def _chronological_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy and reverse database results outside the event-loop thread."""
+    return list(reversed(rows))
+
+
+def _analytics_database(mongodb: Any) -> Any:
+    return mongodb.__dict__.get("analytics_db") or mongodb.db
+
+
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
 _ROUND_MAX_FILLS = 50_000
@@ -489,7 +498,7 @@ async def _load_synthetic_exits(
         ),
         default=None,
     )
-    version = (latest_snapshot, latest_fill_id, id(mongodb.db["execution_events"]))
+    version = (latest_snapshot, latest_fill_id, id(_analytics_database(mongodb)["execution_events"]))
     global _SYNTHETIC_EXITS_CACHE
     cached = _SYNTHETIC_EXITS_CACHE
     if cached is not None and cached[0] == version:
@@ -542,7 +551,7 @@ async def _load_execution_events(
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    collection = mongodb.db["execution_events"]
+    collection = _analytics_database(mongodb)["execution_events"]
     try:
         fills_descending = await asyncio.wait_for(
             collection.find(fill_filter)
@@ -560,7 +569,7 @@ async def _load_execution_events(
             constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
         )
         raise _AnalyticsDependencyTimeout("execution_events read timed out") from exc
-    all_fills = list(reversed(fills_descending))
+    all_fills = await _run_bounded_heavy(_chronological_rows, fills_descending)
     newest_fill = fills_descending[:1]
     latest_fill_id = (
         str(newest_fill[0].get("_id"))
@@ -1013,7 +1022,7 @@ async def get_strategy_performance(strategy_id: str):
                 exposure = _unavailable_exposure("unavailable")
                 overlay = None
             if not overlay_timeout:
-                source_id = id(mongodb.db["execution_events"])
+                source_id = id(_analytics_database(mongodb)["execution_events"])
                 synthetic_version = (
                     _SYNTHETIC_EXITS_CACHE[0]
                     if _SYNTHETIC_EXITS_CACHE is not None
@@ -1312,7 +1321,7 @@ async def compute_slippage_by_regime(
     read_started = monotonic()
     try:
         fills = (
-            await mongodb.db["execution_events"]
+            await _analytics_database(mongodb)["execution_events"]
             .find(query, SLIPPAGE_FILL_PROJECTION)
             .sort("timestamp", 1)
             .to_list(length=_SLIPPAGE_MAX_FILLS)
@@ -1463,7 +1472,9 @@ async def compute_closed_rounds(
 
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         read_started = monotonic()
-        cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
+        cursor = _analytics_database(mongodb)["execution_events"].find(query).sort(
+            "timestamp", 1
+        )
         rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
         record_report_stage(
             "rounds", "read+decode", monotonic() - read_started, source=source
