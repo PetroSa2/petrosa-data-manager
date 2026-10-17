@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from data_manager.services.pnl_calculator import (
+    CLOSE_EVENT_TYPES,
     FILL_EVENT_TYPES,
     PnlCalculator,
 )
@@ -39,6 +40,7 @@ def _fill(
 def test_fill_event_types_constant():
     assert "filled" in FILL_EVENT_TYPES
     assert "partial_fill" in FILL_EVENT_TYPES
+    assert "position_closed" in CLOSE_EVENT_TYPES
 
 
 # ----------------------------------------------------------------------
@@ -59,6 +61,21 @@ def test_long_only_realized_pnl_via_sell():
     assert impact_sell.opened_qty == 0
     assert calc.strategy_pnl("S1").realized == 20
     assert calc.strategy_pnl("S1").unrealized == 0
+
+
+def test_position_closed_event_is_replayed_as_a_close():
+    calc = PnlCalculator()
+    calc.apply_fill(_fill(side="buy", qty=2, price=100))
+    impact = calc.apply_fill(
+        _fill(
+            side="sell",
+            qty=2,
+            price=110,
+            event_type="position_closed",
+        )
+    )
+    assert impact is not None
+    assert impact.realized_pnl == 20
 
 
 def test_long_only_partial_close_leaves_open_lot():

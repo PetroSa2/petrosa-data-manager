@@ -14,7 +14,15 @@ from pydantic import BaseModel, Field
 
 # `event_type` must match the publisher contract — kept as a constant set so
 # we can validate without coupling to an Enum (publishers may add new ones).
-KNOWN_EVENT_TYPES = {"placed", "filled", "rejected", "partial_fill"}
+KNOWN_EVENT_TYPES = {
+    "placed",
+    "filled",
+    "rejected",
+    "partial_fill",
+    "position_closed",
+    "position_force_closed_no_stops",
+    "unattributed_exchange_close",
+}
 
 
 class ExecutionEvent(BaseModel):

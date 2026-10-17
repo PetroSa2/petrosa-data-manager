@@ -12,7 +12,7 @@ from data_manager.consumer.execution_events_consumer import (
     ExecutionEventsConsumer,
 )
 from data_manager.consumer.nats_client import NATSClient
-from data_manager.models.execution_event import ExecutionEvent
+from data_manager.models.execution_event import KNOWN_EVENT_TYPES, ExecutionEvent
 
 try:
     from datetime import UTC
@@ -107,6 +107,40 @@ def test_execution_event_accepts_strategy_alias():
     event = ExecutionEvent.from_nats_message(data)
     assert event is not None
     assert event.strategy_id == "strat_momentum_v1"
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "position_closed",
+        "position_force_closed_no_stops",
+        "unattributed_exchange_close",
+    ],
+)
+def test_execution_event_accepts_close_event_types(event_type):
+    event = ExecutionEvent.from_nats_message(_exec_payload(event_type=event_type))
+    assert event is not None
+    assert event.event_type in KNOWN_EVENT_TYPES
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "position_closed",
+        "position_force_closed_no_stops",
+        "unattributed_exchange_close",
+    ],
+)
+async def test_process_message_persists_close_event(
+    execution_events_consumer, mock_db_manager, event_type
+):
+    await execution_events_consumer._process_message(
+        _build_msg(_exec_payload(event_type=event_type))
+    )
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_awaited_once()
+    assert collection.insert_one.await_args.args[0]["event_type"] == event_type
 
 
 def test_execution_event_rejects_missing_required_fields():

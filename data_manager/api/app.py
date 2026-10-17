@@ -49,6 +49,7 @@ from data_manager.api.routes import (
     strategies,
     strategy_lifecycle,
     strategy_net_r,
+    strategy_performance,
     strategy_timeline,
     system_trades,
     trading_state,
@@ -202,6 +203,9 @@ def create_app() -> FastAPI:
     app.include_router(risk.router, prefix="/api/v1/risk", tags=["Risk"])
     # System trade audit trail from execution_events (#529).
     app.include_router(system_trades.router, prefix="/api/v1", tags=["System Trades"])
+    app.include_router(
+        strategy_performance.router, prefix="/api/v1", tags=["Strategy Performance"]
+    )
     # Cross-service decision audit-trail (#605 P4.5).
     app.include_router(audit.router, prefix="/api/v1", tags=["Audit Trail"])
     # Lifecycle reconstruction join (#603 P4.3).
