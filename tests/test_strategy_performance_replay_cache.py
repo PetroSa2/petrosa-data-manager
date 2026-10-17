@@ -142,6 +142,23 @@ async def test_execution_events_are_read_once_per_version(replay_environment):
 
 
 @pytest.mark.asyncio
+async def test_execution_events_use_the_dedicated_analytics_pool(replay_environment):
+    _history, fills, _calls, _history_reads = replay_environment
+    primary = _Mongo([])
+    analytics = _Mongo(fills)
+    mongodb = SimpleNamespace(
+        db={"execution_events": primary},
+        analytics_db={"execution_events": analytics},
+    )
+
+    rows, _latest_fill_id = await analysis._load_execution_events(mongodb)
+
+    assert [row["_id"] for row in rows] == ["fill-1"]
+    assert analytics.find_calls == 1
+    assert primary.find_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_execution_events_read_is_capped_and_restores_chronological_order(
     replay_environment, monkeypatch
 ):

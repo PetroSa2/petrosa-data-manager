@@ -86,6 +86,8 @@ class MongoDBAdapter(BaseAdapter):
 
         self.client = None
         self.db = None
+        self.analytics_client = None
+        self.analytics_db = None
         self.lease_client = None
         self.lease_db = None
         self.db_name = database_name or self._extract_db_name(connection_string)
@@ -118,10 +120,19 @@ class MongoDBAdapter(BaseAdapter):
                 self.connection_string, tz_aware=True
             )
             self.db = self.client[self.db_name]
+            self.analytics_client = motor_asyncio.AsyncIOMotorClient(
+                self.connection_string,
+                tz_aware=True,
+                maxPoolSize=constants.MONGODB_ANALYTICS_MAX_POOL_SIZE,
+            )
+            self.analytics_db = self.analytics_client[self.db_name]
             self.lease_client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_LEASE_MAX_POOL_SIZE,
+                serverSelectionTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
+                connectTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
+                socketTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
             )
             self.lease_db = self.lease_client[self.db_name]
             self._connected = True
@@ -133,6 +144,10 @@ class MongoDBAdapter(BaseAdapter):
         """Close MongoDB connection."""
         if self.client:
             self.client.close()
+        if self.analytics_client:
+            self.analytics_client.close()
+            self.analytics_client = None
+            self.analytics_db = None
         if self.lease_client:
             self.lease_client.close()
             self.lease_client = None

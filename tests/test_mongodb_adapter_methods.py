@@ -61,6 +61,12 @@ class TestConnectDisconnect:
             assert a._connected is True
             assert a.client is mock_client
 
+            lease_call = Cli.call_args_list[2]
+            assert lease_call.kwargs["maxPoolSize"] == 10
+            assert lease_call.kwargs["serverSelectionTimeoutMS"] == 1000
+            assert lease_call.kwargs["connectTimeoutMS"] == 1000
+            assert lease_call.kwargs["socketTimeoutMS"] == 1000
+
     def test_connect_wraps_exception(self):
         with patch(
             "data_manager.db.mongodb_adapter.motor_asyncio.AsyncIOMotorClient",
