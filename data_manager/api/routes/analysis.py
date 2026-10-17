@@ -498,7 +498,11 @@ async def _load_synthetic_exits(
         ),
         default=None,
     )
-    version = (latest_snapshot, latest_fill_id, id(_analytics_database(mongodb)["execution_events"]))
+    version = (
+        latest_snapshot,
+        latest_fill_id,
+        id(_analytics_database(mongodb)["execution_events"]),
+    )
     global _SYNTHETIC_EXITS_CACHE
     cached = _SYNTHETIC_EXITS_CACHE
     if cached is not None and cached[0] == version:
@@ -1472,8 +1476,10 @@ async def compute_closed_rounds(
 
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         read_started = monotonic()
-        cursor = _analytics_database(mongodb)["execution_events"].find(query).sort(
-            "timestamp", 1
+        cursor = (
+            _analytics_database(mongodb)["execution_events"]
+            .find(query)
+            .sort("timestamp", 1)
         )
         rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
         record_report_stage(
