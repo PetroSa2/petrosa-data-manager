@@ -70,6 +70,40 @@ async def test_daily_route_rejects_path_mismatch():
     assert error.value.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_daily_route_returns_explicit_error_when_database_write_fails(monkeypatch):
+    class Repo:
+        def insert_day(self, _payload, _received_at):
+            raise RuntimeError("daily ledger write failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    body = ledger.DailyLedger.model_validate(daily_payload())
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.put_exchange_daily(date(2026, 9, 30), body)
+
+    assert error.value.status_code == 503
+    assert error.value.detail["message"] == "daily ledger write failed"
+
+
+@pytest.mark.asyncio
+async def test_positions_route_returns_explicit_error_when_database_write_fails(
+    monkeypatch,
+):
+    class Repo:
+        def put_positions(self, _payload, _received_at):
+            raise RuntimeError("positions write failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    body = ledger.PositionsSnapshot(as_of_ms=10, source_run_id="run")
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.put_exchange_positions(10, body)
+
+    assert error.value.status_code == 503
+    assert error.value.detail["message"] == "positions write failed"
+
+
 def test_economic_hash_ignores_balance_and_source_run():
     first = daily_payload()
     second = daily_payload(balance_as_of_ms=999, source_run_id="run-2")
