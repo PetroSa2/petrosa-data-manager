@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -160,6 +161,32 @@ async def test_execution_events_read_is_capped_and_restores_chronological_order(
     assert [row["timestamp"] for row in result] == list(range(1024, 2048))
     assert latest_id == "fill-2047"
     assert mongodb.to_list_lengths == [1024]
+
+
+@pytest.mark.asyncio
+async def test_production_sized_execution_event_read_records_duration(
+    replay_environment, caplog
+):
+    _history, _fills, _calls, _history_reads = replay_environment
+    rows = [
+        {"_id": f"fill-{index}", "timestamp": index, "event_type": "filled"}
+        for index in range(analysis._ROUND_MAX_FILLS)
+    ]
+    mongodb = _Mongo(rows)
+    started = monotonic()
+
+    with caplog.at_level("INFO", logger=analysis.logger.name):
+        result, latest_id = await analysis._load_execution_events(
+            SimpleNamespace(db={"execution_events": mongodb})
+        )
+
+    elapsed = monotonic() - started
+    assert len(result) == analysis._ROUND_MAX_FILLS
+    assert latest_id == f"fill-{analysis._ROUND_MAX_FILLS - 1}"
+    assert elapsed >= 0
+    assert "operation=find_sort_to_list" in caplog.text
+    assert f"limit={analysis._ROUND_MAX_FILLS}" in caplog.text
+    assert "duration=" in caplog.text
 
 
 @pytest.mark.asyncio
