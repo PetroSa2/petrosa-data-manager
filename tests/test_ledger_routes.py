@@ -217,6 +217,25 @@ async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(
 
 
 @pytest.mark.asyncio
+async def test_tieout_returns_explicit_error_when_database_read_fails(monkeypatch):
+    class Repo:
+        def tieout(self, _first, _last):
+            raise RuntimeError("closed range read failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_tieout(date(2026, 9, 30), date(2026, 9, 30))
+
+    assert error.value.status_code == 503
+    assert error.value.detail == {
+        "error": "Ledger database unavailable",
+        "exception": "RuntimeError",
+        "message": "closed range read failed",
+    }
+
+
+@pytest.mark.asyncio
 async def test_positions_tieout_returns_503_when_database_read_times_out(
     monkeypatch,
 ):
@@ -537,3 +556,23 @@ def test_positions_tieout_marks_missing_exchange_snapshot_incomplete():
         "ledger": "not_read",
     }
     assert result["quantity_tieout"] == []
+
+
+def test_positions_tieout_does_not_match_empty_sources():
+    result = FakeLedgerRepository(
+        [Result({"as_of_ms": 100}), Result([]), Result([])]
+    ).positions_tieout()
+
+    assert result["incomplete"] is True
+    assert result["source_status"] == {"exchange": "empty", "ledger": "empty"}
+    assert result["quantity_tieout"] == []
+
+
+def test_tieout_marks_empty_closed_range_incomplete():
+    result = FakeLedgerRepository([Result([]), Result([]), Result([])]).tieout(
+        date(2026, 9, 30), date(2026, 9, 30)
+    )
+
+    assert result["incomplete"] is True
+    assert result["source_status"] == {"exchange": "empty", "ledger": "empty"}
+    assert result["days"][0]["status"] == "incomplete"

@@ -51,7 +51,8 @@ def _chronological_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _analytics_database(mongodb: Any) -> Any:
-    return mongodb.__dict__.get("analytics_db") or mongodb.db
+    analytics_db = mongodb.__dict__.get("analytics_db")
+    return analytics_db if analytics_db is not None else mongodb.db
 
 
 _SLIPPAGE_MAX_FILLS = 50_000
