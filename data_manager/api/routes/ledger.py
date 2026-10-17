@@ -258,9 +258,7 @@ async def put_exchange_daily(day: date, body: DailyLedger):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="Ledger database unavailable"
-        ) from exc
+        raise _ledger_unavailable(exc) from exc
 
 
 @router.put("/exchange-positions/{as_of_ms}")
@@ -276,9 +274,7 @@ async def put_exchange_positions(as_of_ms: int, body: PositionsSnapshot):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="Ledger database unavailable"
-        ) from exc
+        raise _ledger_unavailable(exc) from exc
 
 
 @router.get("/tieout")
@@ -308,9 +304,7 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="Ledger database unavailable"
-        ) from exc
+        raise _ledger_unavailable(exc) from exc
 
 
 @router.get("/positions-tieout")

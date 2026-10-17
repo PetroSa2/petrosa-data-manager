@@ -409,8 +409,8 @@ class LedgerRepository(BaseRepository):
                 ),
             )
             status = (
-                "ledger_missing"
-                if ledger is None and exchange
+                "incomplete"
+                if row is None or ledger is None
                 else ("tied" if variance == 0 else "unconfigured")
             )
             is_break = abs(variance) > Decimal(tolerance["amount"])
@@ -463,6 +463,11 @@ class LedgerRepository(BaseRepository):
         return {
             "from": first.isoformat(),
             "to": last.isoformat(),
+            "incomplete": not days or not pnl,
+            "source_status": {
+                "exchange": "available" if days else "empty",
+                "ledger": "available" if pnl else "empty",
+            },
             "days": result,
             "cumulative_variance": str(cumulative),
         }
@@ -577,10 +582,10 @@ class LedgerRepository(BaseRepository):
                 }
             )
         return {
-            "incomplete": False,
+            "incomplete": not exchange and not ledger,
             "source_status": {
-                "exchange": "available",
-                "ledger": "available",
+                "exchange": "available" if exchange else "empty",
+                "ledger": "available" if ledger else "empty",
             },
             "as_of_ms": snapshot["as_of_ms"],
             "ledger_open_rows": open_rows,

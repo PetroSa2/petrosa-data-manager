@@ -70,6 +70,42 @@ async def test_daily_route_rejects_path_mismatch():
     assert error.value.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_daily_route_returns_explicit_error_when_database_write_fails(
+    monkeypatch,
+):
+    class Repo:
+        def insert_day(self, _payload, _received_at):
+            raise RuntimeError("daily ledger write failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    body = ledger.DailyLedger.model_validate(daily_payload())
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.put_exchange_daily(date(2026, 9, 30), body)
+
+    assert error.value.status_code == 503
+    assert error.value.detail["message"] == "daily ledger write failed"
+
+
+@pytest.mark.asyncio
+async def test_positions_route_returns_explicit_error_when_database_write_fails(
+    monkeypatch,
+):
+    class Repo:
+        def put_positions(self, _payload, _received_at):
+            raise RuntimeError("positions write failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    body = ledger.PositionsSnapshot(as_of_ms=10, source_run_id="run")
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.put_exchange_positions(10, body)
+
+    assert error.value.status_code == 503
+    assert error.value.detail["message"] == "positions write failed"
+
+
 def test_economic_hash_ignores_balance_and_source_run():
     first = daily_payload()
     second = daily_payload(balance_as_of_ms=999, source_run_id="run-2")
@@ -213,6 +249,25 @@ async def test_positions_tieout_returns_explicit_error_when_ledger_read_fails(
         "error": "Ledger database unavailable",
         "exception": "RuntimeError",
         "message": "ledger positions query failed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tieout_returns_explicit_error_when_database_read_fails(monkeypatch):
+    class Repo:
+        def tieout(self, _first, _last):
+            raise RuntimeError("closed range read failed")
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_tieout(date(2026, 9, 30), date(2026, 9, 30))
+
+    assert error.value.status_code == 503
+    assert error.value.detail == {
+        "error": "Ledger database unavailable",
+        "exception": "RuntimeError",
+        "message": "closed range read failed",
     }
 
 
@@ -537,3 +592,23 @@ def test_positions_tieout_marks_missing_exchange_snapshot_incomplete():
         "ledger": "not_read",
     }
     assert result["quantity_tieout"] == []
+
+
+def test_positions_tieout_does_not_match_empty_sources():
+    result = FakeLedgerRepository(
+        [Result({"as_of_ms": 100}), Result([]), Result([])]
+    ).positions_tieout()
+
+    assert result["incomplete"] is True
+    assert result["source_status"] == {"exchange": "empty", "ledger": "empty"}
+    assert result["quantity_tieout"] == []
+
+
+def test_tieout_marks_empty_closed_range_incomplete():
+    result = FakeLedgerRepository([Result([]), Result([]), Result([])]).tieout(
+        date(2026, 9, 30), date(2026, 9, 30)
+    )
+
+    assert result["incomplete"] is True
+    assert result["source_status"] == {"exchange": "empty", "ledger": "empty"}
+    assert result["days"][0]["status"] == "incomplete"
