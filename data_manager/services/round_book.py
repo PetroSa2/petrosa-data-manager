@@ -234,12 +234,16 @@ class RoundBook:
             row = dict(row)
             row["event_type"] = "filled"
             row.setdefault("fill_qty", row.get("closed_quantity") or row.get("qty"))
-            row.setdefault(
-                "fill_price", row.get("exit_price") or row.get("price")
-            )
+            row.setdefault("fill_price", row.get("exit_price") or row.get("price"))
             if not row.get("side"):
                 position = str(row.get("position_side") or "").upper()
-                row["side"] = "sell" if position == "LONG" else "buy" if position == "SHORT" else None
+                row["side"] = (
+                    "sell"
+                    if position == "LONG"
+                    else "buy"
+                    if position == "SHORT"
+                    else None
+                )
         strategy_id = str(row.get("strategy_id") or "").strip()
         if strategy_id.lower() in PLACEHOLDER_STRATEGIES:
             reason = "no_strategy_id" if not strategy_id else "placeholder_strategy_id"

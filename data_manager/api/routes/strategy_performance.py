@@ -16,7 +16,9 @@ router = APIRouter()
 
 @router.get("/strategy/performance")
 async def get_strategy_performance(
-    from_: datetime = Query(..., alias="from", description="Inclusive UTC window start"),
+    from_: datetime = Query(
+        ..., alias="from", description="Inclusive UTC window start"
+    ),
     to: datetime = Query(..., description="Exclusive UTC window end"),
 ) -> dict[str, Any]:
     if from_ >= to:
@@ -35,7 +37,9 @@ async def get_strategy_performance(
         cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
         rows = await cursor.to_list(length=50_000)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="strategy performance read failed") from exc
+        raise HTTPException(
+            status_code=500, detail="strategy performance read failed"
+        ) from exc
 
     return {
         "strategies": build_strategy_performance(rows, start=from_, end=to),

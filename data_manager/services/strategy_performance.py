@@ -17,14 +17,23 @@ def _number(value: Any) -> float | None:
 
 
 def _event_pnl(row: dict[str, Any]) -> float | None:
-    return _number(row.get("pnl") if row.get("pnl") is not None else row.get("realized_pnl"))
+    return _number(
+        row.get("pnl") if row.get("pnl") is not None else row.get("realized_pnl")
+    )
 
 
 def _event_net_r(row: dict[str, Any]) -> float:
-    return _number(row.get("net_r") if row.get("net_r") is not None else row.get("net_r_total")) or 0.0
+    return (
+        _number(
+            row.get("net_r") if row.get("net_r") is not None else row.get("net_r_total")
+        )
+        or 0.0
+    )
 
 
-def build_strategy_performance(rows: list[dict[str, Any]], *, start: datetime, end: datetime) -> list[dict[str, Any]]:
+def build_strategy_performance(
+    rows: list[dict[str, Any]], *, start: datetime, end: datetime
+) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         strategy_id = str(row.get("strategy_id") or "").strip()
@@ -33,7 +42,9 @@ def build_strategy_performance(rows: list[dict[str, Any]], *, start: datetime, e
 
     result: list[dict[str, Any]] = []
     for strategy_id, strategy_rows in sorted(grouped.items()):
-        close_rows = [row for row in strategy_rows if row.get("event_type") in CLOSE_EVENT_TYPES]
+        close_rows = [
+            row for row in strategy_rows if row.get("event_type") in CLOSE_EVENT_TYPES
+        ]
         realized = 0.0
         wins = 0
         losses = 0
@@ -50,7 +61,11 @@ def build_strategy_performance(rows: list[dict[str, Any]], *, start: datetime, e
         else:
             calculator = PnlCalculator()
             trade_count = 0
-            for row in sorted(strategy_rows, key=lambda item: item.get("timestamp") or datetime.min.replace(tzinfo=UTC)):
+            for row in sorted(
+                strategy_rows,
+                key=lambda item: item.get("timestamp")
+                or datetime.min.replace(tzinfo=UTC),
+            ):
                 impact = calculator.apply_fill(row)
                 if impact is not None and impact.realized_pnl != 0:
                     trade_count += 1

@@ -111,7 +111,11 @@ def test_execution_event_accepts_strategy_alias():
 
 @pytest.mark.parametrize(
     "event_type",
-    ["position_closed", "position_force_closed_no_stops", "unattributed_exchange_close"],
+    [
+        "position_closed",
+        "position_force_closed_no_stops",
+        "unattributed_exchange_close",
+    ],
 )
 def test_execution_event_accepts_close_event_types(event_type):
     event = ExecutionEvent.from_nats_message(_exec_payload(event_type=event_type))
@@ -122,7 +126,11 @@ def test_execution_event_accepts_close_event_types(event_type):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "event_type",
-    ["position_closed", "position_force_closed_no_stops", "unattributed_exchange_close"],
+    [
+        "position_closed",
+        "position_force_closed_no_stops",
+        "unattributed_exchange_close",
+    ],
 )
 async def test_process_message_persists_close_event(
     execution_events_consumer, mock_db_manager, event_type
