@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import data_manager.api.app as api_module
 from data_manager.api.app import create_app
+from data_manager.services.strategy_performance import build_strategy_performance
 
 
 def test_strategy_performance_aggregates_close_events():
@@ -49,5 +50,49 @@ def test_strategy_performance_aggregates_close_events():
         assert row["trade_count"] == 2
         assert row["net_r_total"] == 1.0
         assert response.json()["source"] == "execution_events"
+    finally:
+        api_module.db_manager = None
+
+
+def test_strategy_performance_replays_fill_only_history():
+    rows = [
+        {
+            "event_type": "filled",
+            "strategy_id": "S1",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "fill_qty": 1,
+            "price": 100,
+            "timestamp": datetime(2026, 10, 1, tzinfo=UTC),
+        },
+        {
+            "event_type": "partial_fill",
+            "strategy_id": "S1",
+            "symbol": "BTCUSDT",
+            "side": "sell",
+            "fill_qty": 1,
+            "price": 110,
+            "timestamp": datetime(2026, 10, 1, 1, tzinfo=UTC),
+        },
+    ]
+    report = build_strategy_performance(
+        rows,
+        start=datetime(2026, 10, 1, tzinfo=UTC),
+        end=datetime(2026, 10, 2, tzinfo=UTC),
+    )
+    assert report[0]["realized_pnl_usd"] == 10
+    assert report[0]["trade_count"] == 1
+    assert report[0]["win_rate"] == 1
+
+
+def test_strategy_performance_rejects_invalid_window():
+    api_module.db_manager = MagicMock()
+    try:
+        client = TestClient(create_app())
+        response = client.get(
+            "/api/v1/strategy/performance",
+            params={"from": "2026-10-02T00:00:00Z", "to": "2026-10-01T00:00:00Z"},
+        )
+        assert response.status_code == 422
     finally:
         api_module.db_manager = None
