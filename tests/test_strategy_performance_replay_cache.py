@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,16 +12,21 @@ from data_manager.db.repositories.ledger_repository import LedgerRepository
 
 
 class _Cursor:
-    def __init__(self, rows):
+    def __init__(self, rows, owner=None):
         self.rows = rows
+        self.owner = owner
 
     def sort(self, field, direction):
+        if self.owner is not None:
+            self.owner.sort_calls.append((field, direction))
         self.rows = sorted(
             self.rows, key=lambda row: row.get(field), reverse=direction < 0
         )
         return self
 
     async def to_list(self, length=None):
+        if self.owner is not None:
+            self.owner.to_list_lengths.append(length)
         return self.rows[:length] if length is not None else self.rows
 
 
@@ -29,13 +35,17 @@ class _Mongo:
         self.db = {"execution_events": self}
         self.fills = fills
         self.find_calls = 0
+        self.find_filters = []
+        self.sort_calls = []
+        self.to_list_lengths = []
 
     def __getitem__(self, _name):
         return self
 
     def find(self, *_args, **_kwargs):
         self.find_calls += 1
-        return _Cursor(self.fills)
+        self.find_filters.append((_args, _kwargs))
+        return _Cursor(self.fills, self)
 
 
 @pytest.fixture
@@ -127,6 +137,87 @@ async def test_execution_events_are_read_once_per_version(replay_environment):
 
     assert mongodb.db["execution_events"].find_calls == 1
     assert [row["_id"] for row in rows] == ["fill-1", "fill-2"]
+    assert mongodb.db["execution_events"].sort_calls == [("timestamp", -1)]
+    assert mongodb.db["execution_events"].to_list_lengths == [analysis._ROUND_MAX_FILLS]
+
+
+@pytest.mark.asyncio
+async def test_execution_events_read_is_capped_and_restores_chronological_order(
+    replay_environment, monkeypatch
+):
+    _history, _fills, _calls, _history_reads = replay_environment
+    rows = [
+        {"_id": f"fill-{index}", "timestamp": index, "event_type": "filled"}
+        for index in range(2048)
+    ]
+    mongodb = _Mongo(rows)
+    monkeypatch.setattr(analysis, "_ROUND_MAX_FILLS", 1024)
+
+    result, latest_id = await analysis._load_execution_events(
+        SimpleNamespace(db={"execution_events": mongodb})
+    )
+
+    assert len(result) == 1024
+    assert [row["timestamp"] for row in result] == list(range(1024, 2048))
+    assert latest_id == "fill-2047"
+    assert mongodb.to_list_lengths == [1024]
+
+
+@pytest.mark.asyncio
+async def test_production_sized_execution_event_read_records_duration(
+    replay_environment, caplog
+):
+    _history, _fills, _calls, _history_reads = replay_environment
+    rows = [
+        {"_id": f"fill-{index}", "timestamp": index, "event_type": "filled"}
+        for index in range(analysis._ROUND_MAX_FILLS)
+    ]
+    mongodb = _Mongo(rows)
+    started = monotonic()
+
+    with caplog.at_level("INFO", logger=analysis.logger.name):
+        result, latest_id = await analysis._load_execution_events(
+            SimpleNamespace(db={"execution_events": mongodb})
+        )
+
+    elapsed = monotonic() - started
+    assert len(result) == analysis._ROUND_MAX_FILLS
+    assert latest_id == f"fill-{analysis._ROUND_MAX_FILLS - 1}"
+    assert elapsed >= 0
+    assert "operation=find_sort_to_list" in caplog.text
+    assert f"limit={analysis._ROUND_MAX_FILLS}" in caplog.text
+    assert "duration=" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execution_events_timeout_is_bounded_and_structured(
+    replay_environment, monkeypatch, caplog
+):
+    _history, fills, _calls, _history_reads = replay_environment
+    mongodb = _Mongo(fills)
+
+    async def slow_to_list(length=None):
+        await asyncio.sleep(0.05)
+        return mongodb.fills[:length]
+
+    cursor = _Cursor(mongodb.fills, mongodb)
+    cursor.to_list = slow_to_list
+    mongodb.find = lambda *_args, **_kwargs: cursor
+    monkeypatch.setattr(
+        analysis.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.001
+    )
+
+    with caplog.at_level("WARNING", logger=analysis.logger.name):
+        with pytest.raises(
+            analysis._AnalyticsDependencyTimeout, match="read timed out"
+        ):
+            await analysis._load_execution_events(
+                SimpleNamespace(db={"execution_events": mongodb})
+            )
+
+    assert "stage=execution_events_read" in caplog.text
+    assert "outcome=timeout" in caplog.text
+    assert "limit=50000" in caplog.text
 
 
 @pytest.mark.asyncio

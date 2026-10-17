@@ -542,13 +542,24 @@ async def _load_execution_events(
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
-    fills_descending = await asyncio.wait_for(
-        mongodb.db["execution_events"]
-        .find(fill_filter)
-        .sort("timestamp", -1)
-        .to_list(length=_ROUND_MAX_FILLS),
-        constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
-    )
+    collection = mongodb.db["execution_events"]
+    try:
+        fills_descending = await asyncio.wait_for(
+            collection.find(fill_filter)
+            .sort("timestamp", -1)
+            .to_list(length=_ROUND_MAX_FILLS),
+            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        duration = monotonic() - read_started
+        logger.warning(
+            "performance: stage=execution_events_read outcome=timeout "
+            "operation=find_sort_to_list duration=%.3fs limit=%d timeout=%.3fs",
+            duration,
+            _ROUND_MAX_FILLS,
+            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+        )
+        raise _AnalyticsDependencyTimeout("execution_events read timed out") from exc
     all_fills = list(reversed(fills_descending))
     newest_fill = fills_descending[:1]
     latest_fill_id = (
@@ -559,7 +570,7 @@ async def _load_execution_events(
         else None
     )
     global _EXECUTION_EVENTS_CACHE
-    source_id = id(mongodb.db["execution_events"])
+    source_id = id(collection)
     if _EXECUTION_EVENTS_CACHE is not None and _EXECUTION_EVENTS_CACHE[:2] == (
         source_id,
         latest_fill_id,
@@ -567,9 +578,12 @@ async def _load_execution_events(
         return _EXECUTION_EVENTS_CACHE[2], latest_fill_id
     record_report_stage("performance", "mongo_reads", monotonic() - read_started)
     logger.info(
-        "performance: stage=mongo_reads execution_events=%d duration=%.3fs",
+        "performance: stage=execution_events_read outcome=success "
+        "operation=find_sort_to_list execution_events=%d duration=%.3fs "
+        "limit=%d order=chronological",
         len(all_fills),
         monotonic() - read_started,
+        _ROUND_MAX_FILLS,
     )
     _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, all_fills)
     return all_fills, latest_fill_id
@@ -915,6 +929,7 @@ async def get_strategy_performance(strategy_id: str):
     the request.
     """
     request_started = monotonic()
+    stage = "initialization"
     try:
         import data_manager.api.app as api_module
 
@@ -924,21 +939,34 @@ async def get_strategy_performance(strategy_id: str):
             return _unavailable_performance(strategy_id)
 
         mongodb = api_module.db_manager.mongodb_adapter
+        stage = "execution_events_read"
         try:
             all_rows, latest_fill_id = await _load_execution_events(mongodb)
             rows = await _run_heavy(_filter_strategy_rows, all_rows, strategy_id)
         except asyncio.CancelledError:
             raise
+        except _AnalyticsDependencyTimeout as exc:
+            logger.warning(
+                "performance: stage=execution_events_read outcome=timeout "
+                "strategy=%s duration=%.3fs error_type=%s error=%r",
+                strategy_id,
+                monotonic() - request_started,
+                type(exc).__name__,
+                str(exc),
+            )
+            return _degraded_performance(strategy_id, exc)
         except Exception as exc:
             logger.exception(
-                "performance: execution_events read failed for %s "
-                "exception=%s message=%r",
+                "performance: stage=execution_events_read outcome=error "
+                "strategy=%s duration=%.3fs exception=%s message=%r",
                 strategy_id,
+                monotonic() - request_started,
                 type(exc).__name__,
                 str(exc),
             )
             return _degraded_performance(strategy_id, exc)
 
+        stage = "analytics_compute"
         from data_manager.services.pnl_calculator import PnlBreakdown
 
         base = await _base_performance(mongodb, all_rows, latest_fill_id)
@@ -1061,6 +1089,7 @@ async def get_strategy_performance(strategy_id: str):
             else "neutral"
         )
 
+        stage = "response_build"
         response = {
             "stats": {
                 "win_rate": outcome["win_rate"],
@@ -1143,7 +1172,14 @@ async def get_strategy_performance(strategy_id: str):
         return response
     except Exception as e:
         logger.error(
-            f"Error getting strategy performance for {strategy_id}: {e}", exc_info=True
+            "performance: stage=%s outcome=error strategy=%s duration=%.3fs "
+            "exception=%s message=%r",
+            stage,
+            strategy_id,
+            monotonic() - request_started,
+            type(e).__name__,
+            str(e),
+            exc_info=True,
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
