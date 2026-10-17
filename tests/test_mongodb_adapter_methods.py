@@ -728,6 +728,28 @@ class TestEnsureIndexes:
         assert ttl[0].document["expireAfterSeconds"] == constants.TRADES_TTL_SECONDS
 
     @pytest.mark.asyncio
+    async def test_execution_events_index_supports_filter_and_descending_timestamp(
+        self, adapter
+    ):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("execution_events")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        matching = [
+            index
+            for index in indexes
+            if index.document.get("name") == "event_type_timestamp_desc"
+        ]
+        assert len(matching) == 1
+        assert matching[0].document["key"] == {
+            "event_type": 1,
+            "timestamp": -1,
+        }
+
+    @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):
         coll = MagicMock()
         coll.create_indexes = AsyncMock(side_effect=PyMongoError("x"))
