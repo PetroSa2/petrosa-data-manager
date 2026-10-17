@@ -42,6 +42,10 @@ from data_manager.services.fill_side import order_side
 
 # Event types that count as fills for the realized-P&L calculation.
 FILL_EVENT_TYPES = frozenset({"filled", "partial_fill"})
+CLOSE_EVENT_TYPES = frozenset(
+    {"position_closed", "position_force_closed_no_stops", "unattributed_exchange_close"}
+)
+REPLAY_EVENT_TYPES = FILL_EVENT_TYPES | CLOSE_EVENT_TYPES
 SIDE_BUY = "buy"
 SIDE_SELL = "sell"
 
@@ -109,15 +113,22 @@ class PnlCalculator:
         Returns ``None`` when the row is not a usable fill (wrong type,
         missing required field, or zero-quantity).
         """
-        if fill.get("event_type") not in FILL_EVENT_TYPES:
+        if fill.get("event_type") not in REPLAY_EVENT_TYPES:
             return None
         side, mapped = order_side(fill)
         if side not in (SIDE_BUY, SIDE_SELL):
             return None
         strategy_id = fill.get("strategy_id")
         symbol = fill.get("symbol")
-        qty = _maybe_float(fill.get("fill_qty") or fill.get("qty"))
-        price = _maybe_float(fill.get("price"))
+        qty = _maybe_float(
+            fill.get("fill_qty")
+            or fill.get("fill_quantity")
+            or fill.get("closed_quantity")
+            or fill.get("qty")
+        )
+        price = _maybe_float(
+            fill.get("price") or fill.get("fill_price") or fill.get("exit_price")
+        )
         if not strategy_id or not symbol or qty is None or price is None:
             return None
         if qty <= 0 or price <= 0:

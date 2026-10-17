@@ -28,6 +28,10 @@ from typing import Any
 from data_manager.services.fill_side import legacy_exit_side, order_side
 
 FILL_EVENT_TYPES = frozenset({"filled", "partial_fill"})
+CLOSE_EVENT_TYPES = frozenset(
+    {"position_closed", "position_force_closed_no_stops", "unattributed_exchange_close"}
+)
+REPLAY_EVENT_TYPES = FILL_EVENT_TYPES | CLOSE_EVENT_TYPES
 NET = "NET"  # the leg of fills netted without a position side
 UNATTRIBUTED = "_unattributed"
 #: Strategy ids that are placeholders, not strategies.
@@ -224,8 +228,18 @@ class RoundBook:
 
     def apply(self, row: dict[str, Any]) -> None:
         """Account for one fill row (other event types are not fills and are ignored)."""
-        if row.get("event_type") not in FILL_EVENT_TYPES:
+        if row.get("event_type") not in REPLAY_EVENT_TYPES:
             return
+        if row.get("event_type") in CLOSE_EVENT_TYPES:
+            row = dict(row)
+            row["event_type"] = "filled"
+            row.setdefault("fill_qty", row.get("closed_quantity") or row.get("qty"))
+            row.setdefault(
+                "fill_price", row.get("exit_price") or row.get("price")
+            )
+            if not row.get("side"):
+                position = str(row.get("position_side") or "").upper()
+                row["side"] = "sell" if position == "LONG" else "buy" if position == "SHORT" else None
         strategy_id = str(row.get("strategy_id") or "").strip()
         if strategy_id.lower() in PLACEHOLDER_STRATEGIES:
             reason = "no_strategy_id" if not strategy_id else "placeholder_strategy_id"
@@ -1107,7 +1121,7 @@ def replay_book(
     book = RoundBook()
     if exchange_history:
         book.set_cut_over(exchange_history.get("cut_over_ms"))
-    fills = [row for row in rows if row.get("event_type") in FILL_EVENT_TYPES]
+    fills = [row for row in rows if row.get("event_type") in REPLAY_EVENT_TYPES]
     merged = fills + build_synthetic_exits(fills, exchange_history)
     for row in sorted(
         merged, key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC)
