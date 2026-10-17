@@ -71,7 +71,9 @@ async def test_daily_route_rejects_path_mismatch():
 
 
 @pytest.mark.asyncio
-async def test_daily_route_returns_explicit_error_when_database_write_fails(monkeypatch):
+async def test_daily_route_returns_explicit_error_when_database_write_fails(
+    monkeypatch,
+):
     class Repo:
         def insert_day(self, _payload, _received_at):
             raise RuntimeError("daily ledger write failed")
