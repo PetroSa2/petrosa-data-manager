@@ -87,6 +87,7 @@ def test_scorecard_fees_and_funding_conserve() -> None:
     )
     group = result["groups"][0]
     assert group["net_pnl"] == "8.65"
+    assert group["uncertainty"]["expectancy_per_trade"]["n"] == 1
     assert result["total_funding"] == "1.25"
     assert result["funding_unallocated"] == "0.00"
 
