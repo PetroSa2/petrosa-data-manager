@@ -1371,9 +1371,9 @@ class DataManagerApp:
 
         if not self.db_manager.mongo_healthy():
             logger.warning(
-                "Candle warm-up scheduler not started: database connections not healthy"
+                "Candle warm-up scheduler starting while database connections are "
+                "unhealthy; the scheduler will retry warm-up cycles"
             )
-            return
 
         from data_manager.maintenance.candle_warmup_scheduler import (
             CandleWarmupScheduler,
