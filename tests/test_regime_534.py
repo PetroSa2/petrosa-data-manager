@@ -127,6 +127,29 @@ async def test_a_clear_transitional_reading_is_confident():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("volatility", "volume", "trend", "name", "confidence"),
+    [
+        (0.8, 2.0, 2.1, "bullish_acceleration", "0.85"),
+        (0.8, 2.0, -2.1, "bearish_acceleration", "0.85"),
+        (0.8, 2.0, 0.0, "breakout_phase", "0.9"),
+        (0.8, 0.5, None, "turbulent_illiquidity", "0.8"),
+        (0.1, 2.0, None, "stable_accumulation", "0.85"),
+        (0.1, 0.5, None, "consolidation", "0.75"),
+        (0.35, 1.0, None, "balanced_market", "0.7"),
+        (0.8, 1.1, None, "transitional", "0.74"),
+    ],
+)
+async def test_reachable_regimes_include_directional_high_high_cases(
+    volatility, volume, trend, name, confidence
+):
+    c, _ = classifier(volatility, volume, trend=trend)
+    regime = await c.classify_regime("BTCUSDT", "1h")
+    assert regime.regime == name
+    assert regime.confidence == Decimal(confidence)
+
+
+@pytest.mark.asyncio
 async def test_the_other_regimes_keep_their_rule_confidence():
     for volatility, volume, name, confidence in (
         (0.8, 0.5, "turbulent_illiquidity", "0.8"),

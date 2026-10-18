@@ -188,18 +188,18 @@ class RegimeClassifier:
             elif vol_low and volume_high:
                 regime = "stable_accumulation"
                 confidence = 0.85
-            elif vol_high and volume_high:
-                regime = "breakout_phase"
-                confidence = 0.9
-            elif vol_low and volume_low:
-                regime = "consolidation"
-                confidence = 0.75
             elif vol_high and volume_high and trend_bullish:
                 regime = "bullish_acceleration"
                 confidence = 0.85
             elif vol_high and volume_high and trend_bearish:
                 regime = "bearish_acceleration"
                 confidence = 0.85
+            elif vol_high and volume_high:
+                regime = "breakout_phase"
+                confidence = 0.9
+            elif vol_low and volume_low:
+                regime = "consolidation"
+                confidence = 0.75
             elif volatility_level == "medium" and volume_level == "medium":
                 regime = "balanced_market"
                 confidence = 0.7
