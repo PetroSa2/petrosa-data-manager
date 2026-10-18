@@ -437,6 +437,37 @@ async def test_scorecard_source_failure_is_explicit_and_evaluation_has_no_decisi
     assert evaluation["groups"] == {}
 
 
+@pytest.mark.asyncio
+async def test_partial_scorecard_source_failures_are_incomplete(monkeypatch):
+    rows = _round_rows("A", 100, 110, 0, position_id="p1", decision_id="d1")
+
+    async def fills(end):
+        return rows
+
+    async def fail_stops(ids):
+        raise RuntimeError("positions read failed")
+
+    async def fail_decisions(ids):
+        raise RuntimeError("decisions read failed")
+
+    async def fail_funding(first, last):
+        raise RuntimeError("funding read failed")
+
+    monkeypatch.setattr(route, "_load_fills", fills)
+    monkeypatch.setattr(route, "_load_stops", fail_stops)
+    monkeypatch.setattr(route, "_load_decisions", fail_decisions)
+    monkeypatch.setattr(route, "_load_funding", fail_funding)
+    api_module.db_manager = MagicMock()
+    try:
+        result = await route.get_scorecard(from_=None, to=None, group_by="strategy")
+    finally:
+        api_module.db_manager = None
+
+    assert result["status"] == "incomplete"
+    assert set(result["source_errors"]) == {"positions", "cio_decisions", "funding"}
+    assert result["funding"]["error"] == "funding read failed"
+
+
 def test_evaluation_rejects_zero_trade_or_incomplete_statistics():
     zero = scorecard([], "strategy", 1, {"empty": 0})["groups"]
     incomplete = {"broken": {"n_trades": 4, "sample_ok": True}}
