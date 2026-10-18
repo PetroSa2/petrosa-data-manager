@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -171,12 +172,128 @@ async def test_scorecard_service_reads_all_audit_collections() -> None:
         "positions",
     ]
     assert mongodb.calls[0][1] == {
+        "filters": {"event_type": {"$in": ["filled", "partial_fill"]}},
         "start": start,
         "end": end,
         "limit": 10000,
         "sort_order": 1,
     }
     assert mongodb.calls[-1][1] == {"limit": 10000, "sort_order": 1}
+
+
+@pytest.mark.asyncio
+async def test_scorecard_read_timeout_is_explicit_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            if collection == "execution_events":
+                await asyncio.sleep(0.05)
+            return []
+
+    import data_manager.services.scorecard_service as scorecard_module
+
+    monkeypatch.setattr(
+        scorecard_module.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.001
+    )
+    result = await ScorecardService(Mongo()).calculate(minimum_trades=1)
+
+    assert result["status"] == "incomplete"
+    assert result["source_errors"] == {"execution_events": "read timed out"}
+
+
+@pytest.mark.asyncio
+async def test_scorecard_reads_are_concurrent_within_the_shared_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            await asyncio.sleep(0.01)
+            return []
+
+    import data_manager.services.scorecard_service as scorecard_module
+
+    monkeypatch.setattr(
+        scorecard_module.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.05
+    )
+    started = time.monotonic()
+    result = await ScorecardService(Mongo()).calculate(minimum_trades=1)
+
+    assert result["groups"] == []
+    assert time.monotonic() - started < 0.05
+
+
+@pytest.mark.asyncio
+async def test_scorecard_all_source_failures_are_unavailable() -> None:
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            raise RuntimeError(f"{collection} unavailable")
+
+    result = await ScorecardService(Mongo()).calculate(minimum_trades=1)
+
+    assert result["status"] == "unavailable"
+    assert set(result["source_errors"]) == {
+        "execution_events",
+        "pnl_events",
+        "cio_decisions",
+        "funding_events",
+        "positions",
+    }
+
+
+@pytest.mark.asyncio
+async def test_evaluation_does_not_decide_from_unavailable_scorecard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Configuration:
+        async def get_app_config(self) -> dict:
+            return {
+                "parameters": {
+                    "scorecard_min_trades": 1,
+                    "scorecard_min_expectancy_net": "0",
+                    "scorecard_max_dd_fraction": "0.5",
+                }
+            }
+
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(mongodb_adapter=object(), configuration=Configuration()),
+    )
+
+    async def unavailable_scorecard(*args: object, **kwargs: object) -> dict:
+        return {
+            "status": "unavailable",
+            "source_errors": {"execution_events": "read timed out"},
+            "groups": [],
+        }
+
+    monkeypatch.setattr(analysis_route, "get_scorecard", unavailable_scorecard)
+
+    result = await evaluate_scorecard()
+
+    assert result["status"] == "unavailable"
+    assert result["groups"] == []
+    assert result["writes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scorecard_production_sized_read_stays_within_budget() -> None:
+    import time
+
+    rows = [_close("1", position_id=f"p{index}") for index in range(10_000)]
+
+    class Mongo:
+        async def find_filtered(self, collection: str, **kwargs: object) -> list[dict]:
+            return rows if collection == "execution_events" else []
+
+    started = time.monotonic()
+    result = await ScorecardService(Mongo())._read_collections(None, None)
+
+    assert len(result["execution_events"]) == 10_000
+    assert time.monotonic() - started < 2.0
 
 
 @pytest.mark.asyncio
