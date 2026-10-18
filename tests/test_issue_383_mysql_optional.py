@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -44,5 +44,10 @@ async def test_candle_warmup_uses_mongo_health():
     app.leader_election = Mock()
     app.candle_warmup_scheduler = None
     with patch("data_manager.main.constants.ENABLE_CANDLE_WARMUP_SCHEDULER", True):
-        await app._run_candle_warmup_scheduler()
+        with patch(
+            "data_manager.maintenance.candle_warmup_scheduler.CandleWarmupScheduler"
+        ) as scheduler_cls:
+            scheduler_cls.return_value.start = AsyncMock()
+            await app._run_candle_warmup_scheduler()
     assert app.db_manager.mongo_healthy.called
+    scheduler_cls.return_value.start.assert_awaited_once()
