@@ -111,6 +111,7 @@ def _metric(
     )
     return {
         "n_trades": n,
+        "trade_count": n,
         "gross_pnl": decimal_string(gross),
         "fees": decimal_string(fees),
         "funding_allocated": decimal_string(funding),
@@ -129,8 +130,19 @@ def _metric(
         "max_drawdown": decimal_string(drawdown),
         "fee_share_of_gross": decimal_string(fees / abs(gross)) if gross else None,
         "sample_ok": n >= minimum,
+        "sample_size": {"n": n, "minimum": minimum, "ok": n >= minimum},
         "win_rate_interval": _intervals(values, len(wins)),
         "expectancy_interval": _bootstrap(values),
+        "uncertainty": {
+            "win_rate": _intervals(values, len(wins)),
+            "expectancy_per_trade": _bootstrap(values),
+        },
+        "net_of_cost": {
+            "pnl": decimal_string(net),
+            "fees": decimal_string(fees),
+            "funding": decimal_string(funding),
+            "formula": "gross_pnl - fees - funding_allocated",
+        },
     }
 
 

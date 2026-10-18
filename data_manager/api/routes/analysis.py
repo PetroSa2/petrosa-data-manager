@@ -1272,7 +1272,40 @@ async def evaluate_scorecard(
     )
     scorecard = await get_scorecard(from_, to, "strategy", minimum)
     evaluated = []
+    incomplete = False
+    required = {
+        "n_trades",
+        "sample_ok",
+        "net_pnl",
+        "fees",
+        "funding_allocated",
+        "expectancy_per_trade",
+        "max_drawdown",
+        "uncertainty",
+    }
     for group in scorecard["groups"]:
+        intervals = group.get("uncertainty")
+        if (
+            not required.issubset(group)
+            or not isinstance(group.get("n_trades"), int)
+            or group["n_trades"] == 0
+            or not isinstance(group.get("sample_ok"), bool)
+            or not isinstance(intervals, dict)
+            or not all(
+                isinstance(intervals.get(name), dict)
+                for name in ("win_rate", "expectancy_per_trade")
+            )
+        ):
+            incomplete = True
+            evaluated.append(
+                {
+                    "strategy_id": group.get("group"),
+                    "status": "incomplete",
+                    "reason": "scorecard_statistics_incomplete",
+                    "metrics": group,
+                }
+            )
+            continue
         if not group["sample_ok"]:
             status = "watch"
         elif Decimal(str(group["expectancy_per_trade"] or "0")) < Decimal(
@@ -1290,7 +1323,7 @@ async def evaluate_scorecard(
             {"strategy_id": group["group"], "status": status, "metrics": group}
         )
     return {
-        "status": "configured",
+        "status": "incomplete" if incomplete else "configured",
         "thresholds": parameters,
         "groups": evaluated,
         "writes": 0,

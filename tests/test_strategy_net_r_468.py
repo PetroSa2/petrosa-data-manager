@@ -225,7 +225,7 @@ def test_the_route_503s_without_a_database():
     assert TestClient(create_app()).get("/analysis/strategy-net-r").status_code == 503
 
 
-def test_a_read_failure_is_a_500(monkeypatch):
+def test_a_read_failure_is_explicitly_unavailable(monkeypatch):
     async def broken(end):
         raise RuntimeError("mongo down")
 
@@ -235,7 +235,9 @@ def test_a_read_failure_is_a_500(monkeypatch):
         response = TestClient(create_app()).get("/analysis/strategy-net-r")
     finally:
         api_module.db_manager = None
-    assert response.status_code == 500 and "mongo down" in response.text
+    assert response.status_code == 200
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["source_errors"] == {"execution_events": "mongo down"}
 
 
 # --- the loaders against the audit collections -----------------------------------------------------
