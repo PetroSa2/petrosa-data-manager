@@ -12,7 +12,8 @@ except ImportError:
 
     UTC = timezone.utc  # noqa: UP017
 
-from prometheus_client import Gauge
+from prometheus_client import Counter, Gauge
+from pydantic import ValidationError
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository, HealthRepository
@@ -24,6 +25,16 @@ logger = logging.getLogger(__name__)
 MONGO_CANDLES_COMPLETENESS = Gauge(
     "data_manager_mongo_candles_completeness_ratio",
     "Closed MongoDB candles present versus expected within the TTL window",
+    ["symbol", "timeframe"],
+)
+HEALTH_METRICS_VALIDATION_ERRORS = Counter(
+    "data_manager_health_metrics_validation_errors_total",
+    "DataHealthMetrics validation failures during audit calculations",
+    ["symbol", "timeframe"],
+)
+HEALTH_METRICS_VALIDATION_CHECKS = Counter(
+    "data_manager_health_metrics_validation_checks_total",
+    "Successful DataHealthMetrics validation checks during audit calculations",
     ["symbol", "timeframe"],
 )
 
@@ -158,6 +169,9 @@ class HealthScorer:
                 consistency_score=consistency_score,
                 quality_score=quality_score,
             )
+            HEALTH_METRICS_VALIDATION_CHECKS.labels(
+                symbol=symbol, timeframe=timeframe
+            ).inc()
 
             # Store health metrics
             dataset_id = f"candles_{symbol}_{timeframe}"
@@ -175,6 +189,25 @@ class HealthScorer:
 
             return metrics
 
+        except ValidationError as e:
+            HEALTH_METRICS_VALIDATION_ERRORS.labels(
+                symbol=symbol, timeframe=timeframe
+            ).inc()
+            logger.warning(
+                "data_health_metrics_validation_error symbol=%s timeframe=%s: %s",
+                symbol,
+                timeframe,
+                e,
+                exc_info=True,
+            )
+            return DataHealthMetrics(
+                completeness=0.0,
+                freshness_seconds=86400,
+                gaps_count=0,
+                duplicates_count=0,
+                consistency_score=0.0,
+                quality_score=0.0,
+            )
         except Exception as e:
             logger.error(
                 f"Error calculating health for {symbol} {timeframe}: {e}",

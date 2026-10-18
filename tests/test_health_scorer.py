@@ -12,8 +12,14 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
-from data_manager.auditor.health_scorer import HealthScorer
+from data_manager.auditor.health_scorer import (
+    HEALTH_METRICS_VALIDATION_CHECKS,
+    HEALTH_METRICS_VALIDATION_ERRORS,
+    HealthScorer,
+)
+from data_manager.models.health import DataHealthMetrics
 
 
 def _make_db_manager():
@@ -24,6 +30,76 @@ def _make_db_manager():
 
 
 class TestHealthScorerCompletenessClamp:
+    @pytest.mark.asyncio
+    async def test_validation_error_emits_dedicated_evidence(self, monkeypatch, caplog):
+        db_manager = _make_db_manager()
+        scorer = HealthScorer(db_manager)
+        scorer.candle_repo.count = AsyncMock(return_value=1)
+        scorer.candle_repo.get_latest = AsyncMock(
+            return_value=[{"timestamp": datetime.now(UTC) - timedelta(seconds=30)}]
+        )
+
+        with pytest.raises(ValidationError) as error:
+            DataHealthMetrics(
+                completeness=101.0,
+                freshness_seconds=1,
+                gaps_count=0,
+                duplicates_count=0,
+                consistency_score=100.0,
+                quality_score=100.0,
+            )
+        original_model = DataHealthMetrics
+        calls = 0
+
+        def fail_once(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise error.value
+            return original_model(**kwargs)
+
+        monkeypatch.setattr(
+            "data_manager.auditor.health_scorer.DataHealthMetrics", fail_once
+        )
+
+        before = HEALTH_METRICS_VALIDATION_ERRORS.labels(
+            symbol="ADAUSDT", timeframe="1h"
+        )._value.get()
+        with caplog.at_level("WARNING"):
+            metrics = await scorer.calculate_health("ADAUSDT", "1h")
+
+        assert metrics.quality_score == 0.0
+        assert (
+            HEALTH_METRICS_VALIDATION_ERRORS.labels(
+                symbol="ADAUSDT", timeframe="1h"
+            )._value.get()
+            == before + 1
+        )
+        assert "data_health_metrics_validation_error" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_repository_error_does_not_emit_validation_evidence(self, caplog):
+        db_manager = _make_db_manager()
+        scorer = HealthScorer(db_manager)
+        scorer.candle_repo.count = AsyncMock(
+            side_effect=RuntimeError("database unavailable")
+        )
+        before = HEALTH_METRICS_VALIDATION_ERRORS.labels(
+            symbol="ADAUSDT", timeframe="1h"
+        )._value.get()
+
+        with caplog.at_level("ERROR"):
+            metrics = await scorer.calculate_health("ADAUSDT", "1h")
+
+        assert metrics.quality_score == 0.0
+        assert (
+            HEALTH_METRICS_VALIDATION_ERRORS.labels(
+                symbol="ADAUSDT", timeframe="1h"
+            )._value.get()
+            == before
+        )
+        assert "Error calculating health" in caplog.text
+
     @pytest.mark.asyncio
     async def test_duplicate_inflated_count_does_not_raise(self):
         """actual_count > expected_count (duplicate timestamp) must not
@@ -65,9 +141,18 @@ class TestHealthScorerCompletenessClamp:
         )
         scorer.health_repo.insert = AsyncMock(return_value=True)
 
+        before = HEALTH_METRICS_VALIDATION_CHECKS.labels(
+            symbol="XRPUSDT", timeframe="1d"
+        )._value.get()
         metrics = await scorer.calculate_health(
             "XRPUSDT", "1d", lookback_hours=24, duplicates_count=0
         )
 
         assert metrics.completeness == 100.0
         assert metrics.quality_score <= 100.0
+        assert (
+            HEALTH_METRICS_VALIDATION_CHECKS.labels(
+                symbol="XRPUSDT", timeframe="1d"
+            )._value.get()
+            == before + 1
+        )
