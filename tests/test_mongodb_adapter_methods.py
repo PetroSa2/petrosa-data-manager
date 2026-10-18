@@ -61,11 +61,23 @@ class TestConnectDisconnect:
             assert a._connected is True
             assert a.client is mock_client
 
+            analytics_call = Cli.call_args_list[1]
+            assert analytics_call.kwargs["maxPoolSize"] == 20
+            assert analytics_call.kwargs["serverSelectionTimeoutMS"] == 2000
+            assert analytics_call.kwargs["connectTimeoutMS"] == 2000
+            assert analytics_call.kwargs["socketTimeoutMS"] == 2000
+
             lease_call = Cli.call_args_list[2]
             assert lease_call.kwargs["maxPoolSize"] == 10
             assert lease_call.kwargs["serverSelectionTimeoutMS"] == 1000
             assert lease_call.kwargs["connectTimeoutMS"] == 1000
             assert lease_call.kwargs["socketTimeoutMS"] == 1000
+
+            readiness_call = Cli.call_args_list[3]
+            assert readiness_call.kwargs["maxPoolSize"] == 2
+            assert readiness_call.kwargs["serverSelectionTimeoutMS"] == 1000
+            assert readiness_call.kwargs["connectTimeoutMS"] == 1000
+            assert readiness_call.kwargs["socketTimeoutMS"] == 1000
 
     def test_connect_wraps_exception(self):
         with patch(
@@ -82,10 +94,13 @@ class TestConnectDisconnect:
     def test_disconnect_clears_state(self):
         a = MongoDBAdapter("mongodb://localhost:27017/test_db")
         a.client = MagicMock()
+        a.readiness_client = MagicMock()
+        readiness_client = a.readiness_client
         a._connected = True
         a.disconnect()
         assert a._connected is False
         a.client.close.assert_called_once()
+        readiness_client.close.assert_called_once()
 
     def test_disconnect_when_never_connected(self):
         a = MongoDBAdapter("mongodb://localhost:27017/test_db")

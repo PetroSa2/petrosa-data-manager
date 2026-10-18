@@ -30,6 +30,8 @@ def mongo():
     adapter = Mock()
     adapter.db = Mock()
     adapter.db.command = AsyncMock(return_value={"ok": 1.0})
+    adapter.readiness_db = Mock()
+    adapter.readiness_db.command = AsyncMock(return_value={"ok": 1.0})
     return adapter
 
 
@@ -60,11 +62,12 @@ def test_successful_ping_is_ready(client, mongo):
     assert body["ready"] is True
     assert body["components"]["mongodb"] == "healthy"
     assert body["components"]["mysql"] == "healthy"
-    mongo.db.command.assert_awaited_once_with("ping")
+    mongo.readiness_db.command.assert_awaited_once_with("ping")
+    mongo.db.command.assert_not_awaited()
 
 
 def test_failing_ping_is_503_with_the_same_body_shape(client, mongo):
-    mongo.db.command.side_effect = ConnectionError("no primary")
+    mongo.readiness_db.command.side_effect = ConnectionError("no primary")
 
     status, body = _readiness(client)
 
@@ -80,7 +83,7 @@ def test_ping_timeout_is_503_within_the_budget(client, mongo, monkeypatch):
     async def hang(_command):
         await asyncio.sleep(5)
 
-    mongo.db.command.side_effect = hang
+    mongo.readiness_db.command.side_effect = hang
 
     started = time.monotonic()
     status, body = _readiness(client)
@@ -116,7 +119,7 @@ async def test_concurrent_readiness_failures_share_one_database_ping(
     async def hang(_command):
         await asyncio.sleep(5)
 
-    mongo.db.command.side_effect = hang
+    mongo.readiness_db.command.side_effect = hang
     mock_db_manager.mongodb_adapter = mongo
     mock_db_manager.mysql_adapter = mysql
     api_module.db_manager = mock_db_manager
@@ -126,7 +129,7 @@ async def test_concurrent_readiness_failures_share_one_database_ping(
     )
 
     assert [result.status_code for result in results] == [503, 503, 503]
-    assert mongo.db.command.await_count == 1
+    assert mongo.readiness_db.command.await_count == 1
 
 
 def test_no_database_manager_is_503(client):
@@ -146,6 +149,7 @@ def test_mongo_not_connected_is_503(client, mongo, missing):
         api_module.db_manager.mongodb_adapter = None
     else:
         mongo.db = None
+        mongo.readiness_db = None
 
     status, body = _readiness(client)
 
@@ -203,14 +207,14 @@ def test_result_is_cached_so_probes_do_not_pile_up(client, mongo):
         status, _body = _readiness(client)
         assert status == 200
 
-    assert mongo.db.command.await_count == 1
+    assert mongo.readiness_db.command.await_count == 1
 
 
 def test_cache_expires_and_readiness_recovers(client, mongo):
-    mongo.db.command.side_effect = ConnectionError("no primary")
+    mongo.readiness_db.command.side_effect = ConnectionError("no primary")
     assert _readiness(client)[0] == 503
 
-    mongo.db.command.side_effect = None
+    mongo.readiness_db.command.side_effect = None
     # Still inside the cache window: the failure is served from cache.
     assert _readiness(client)[0] == 503
 
@@ -221,4 +225,4 @@ def test_cache_expires_and_readiness_recovers(client, mongo):
         components,
     )
     assert _readiness(client)[0] == 200
-    assert mongo.db.command.await_count == 2
+    assert mongo.readiness_db.command.await_count == 2
