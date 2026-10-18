@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from data_manager.api.routes import analysis
+from data_manager.api.routes import analysis, strategy_net_r
 
 
 class MotorLikeDatabase:
@@ -29,6 +29,13 @@ def test_analytics_database_falls_back_only_when_missing():
     mongodb = SimpleNamespace(analytics_db=None, db=primary)
 
     assert analysis._analytics_database(mongodb) is primary
+
+
+def test_strategy_scorecard_uses_configured_database_without_truth_testing():
+    configured = MotorLikeDatabase()
+    mongodb = SimpleNamespace(analytics_db=configured, db=object())
+
+    assert strategy_net_r._analytics_database(mongodb) is configured
 
 
 @pytest.mark.asyncio

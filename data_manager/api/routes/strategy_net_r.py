@@ -30,13 +30,19 @@ router = APIRouter()
 _MAX_FILLS = 200_000
 
 
+def _analytics_database(mongodb: Any) -> Any:
+    analytics_db = getattr(mongodb, "__dict__", {}).get("analytics_db")
+    return analytics_db if analytics_db is not None else mongodb.db
+
+
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
     mongodb = api_module.db_manager.mongodb_adapter
+    database = _analytics_database(mongodb)
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
     if end is not None:
         query["timestamp"] = {"$lt": end}
     return (
-        await mongodb.db["execution_events"]
+        await database["execution_events"]
         .find(query)
         .sort("timestamp", 1)
         .to_list(length=_MAX_FILLS)
@@ -48,8 +54,9 @@ async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
     if not position_ids:
         return {}
     mongodb = api_module.db_manager.mongodb_adapter
+    database = _analytics_database(mongodb)
     rows = (
-        await mongodb.db["positions"]
+        await database["positions"]
         .find({"position_id": {"$in": position_ids}})
         .to_list(length=len(position_ids))
     )
@@ -68,8 +75,9 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
     if not decision_ids:
         return {}
     mongodb = api_module.db_manager.mongodb_adapter
+    database = _analytics_database(mongodb)
     rows = (
-        await mongodb.db["cio_decisions"]
+        await database["cio_decisions"]
         .find({"decision_id": {"$in": decision_ids}})
         .to_list(length=len(decision_ids))
     )

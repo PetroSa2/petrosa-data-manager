@@ -85,8 +85,12 @@ def _metric(
     n = len(values)
     gross = sum(values, ZERO)
     net = gross - fees - funding
-    wins = [value for value in values if value > ZERO]
-    losses = [value for value in values if value < ZERO]
+    net_observations = [
+        value - funding / Decimal(n)
+        for value in (net_values if net_values is not None else values)
+    ]
+    wins = [value for value in net_observations if value > ZERO]
+    losses = [value for value in net_observations if value < ZERO]
     payoff = (sum(wins, ZERO) / abs(sum(losses, ZERO))) if losses else None
     expectancy = net / Decimal(n) if n else None
     ex_top1 = None
@@ -105,12 +109,18 @@ def _metric(
         peak = max(peak, running)
         drawdown = max(drawdown, peak - running)
     median = (
-        sorted(values)[n // 2]
+        sorted(net_observations)[n // 2]
         if n and n % 2
-        else ((sorted(values)[n // 2 - 1] + sorted(values)[n // 2]) / 2 if n else None)
+        else (
+            (sorted(net_observations)[n // 2 - 1] + sorted(net_observations)[n // 2])
+            / 2
+            if n
+            else None
+        )
     )
     return {
         "n_trades": n,
+        "trade_count": n,
         "gross_pnl": decimal_string(gross),
         "fees": decimal_string(fees),
         "funding_allocated": decimal_string(funding),
@@ -129,8 +139,19 @@ def _metric(
         "max_drawdown": decimal_string(drawdown),
         "fee_share_of_gross": decimal_string(fees / abs(gross)) if gross else None,
         "sample_ok": n >= minimum,
-        "win_rate_interval": _intervals(values, len(wins)),
-        "expectancy_interval": _bootstrap(values),
+        "sample_size": {"n": n, "minimum": minimum, "ok": n >= minimum},
+        "win_rate_interval": _intervals(net_observations, len(wins)),
+        "expectancy_interval": _bootstrap(net_observations),
+        "uncertainty": {
+            "win_rate": _intervals(net_observations, len(wins)),
+            "expectancy_per_trade": _bootstrap(net_observations),
+        },
+        "net_of_cost": {
+            "pnl": decimal_string(net),
+            "fees": decimal_string(fees),
+            "funding": decimal_string(funding),
+            "formula": "gross_pnl - fees - funding_allocated",
+        },
     }
 
 

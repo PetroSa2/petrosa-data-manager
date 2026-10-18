@@ -221,6 +221,7 @@ def metrics(rounds: list[ScoredRound], minimum: int | None) -> dict[str, Any]:
     r_values = [r.net_r for r in rounds if r.net_r is not None]
     return {
         "n_trades": n,
+        "trade_count": n,
         "gross_pnl": s(gross),
         "fees": s(fees),
         "funding_allocated": s(sum((r.funding for r in rounds), ZERO)),
@@ -235,8 +236,23 @@ def metrics(rounds: list[ScoredRound], minimum: int | None) -> dict[str, Any]:
         "max_drawdown": s(drawdown),
         "fee_share_of_gross": s(fees / abs(gross)) if gross else None,
         "sample_ok": None if minimum is None else n >= minimum,
+        "sample_size": {
+            "n": n,
+            "minimum": minimum,
+            "ok": None if minimum is None else n >= minimum,
+        },
         "win_rate_interval": wilson(len(wins), n),
         "expectancy_interval": bootstrap_mean(nets),
+        "uncertainty": {
+            "win_rate": wilson(len(wins), n),
+            "expectancy_per_trade": bootstrap_mean(nets),
+        },
+        "net_of_cost": {
+            "pnl": s(net),
+            "fees": s(fees),
+            "funding": s(sum((r.funding for r in rounds), ZERO)),
+            "formula": "gross_pnl - fees - funding_allocated",
+        },
         "net_r": {
             "n": len(r_values),
             "mean": s(sum(r_values, ZERO) / len(r_values)) if r_values else None,
@@ -310,7 +326,38 @@ def evaluate(
             "groups": {},
         }
     result: dict[str, Any] = {}
+    required = {
+        "n_trades",
+        "sample_ok",
+        "net_pnl",
+        "fees",
+        "funding_allocated",
+        "expectancy_per_trade",
+        "max_drawdown",
+        "uncertainty",
+    }
+    incomplete = False
     for key, m in groups.items():
+        intervals = m.get("uncertainty")
+        if (
+            not required.issubset(m)
+            or not isinstance(m.get("n_trades"), int)
+            or m["n_trades"] == 0
+            or not isinstance(m.get("sample_ok"), bool)
+            or not isinstance(intervals, Mapping)
+            or not all(
+                isinstance(intervals.get(name), Mapping)
+                for name in ("win_rate", "expectancy_per_trade")
+            )
+        ):
+            incomplete = True
+            result[key] = {
+                "status": "incomplete",
+                "reason": "scorecard_statistics_incomplete",
+                "n": m.get("n_trades"),
+                "expectancy_per_trade": m.get("expectancy_per_trade"),
+            }
+            continue
         n = m["n_trades"]
         expectancy = (
             Decimal(m["expectancy_per_trade"])
@@ -332,4 +379,4 @@ def evaluate(
             "n": n,
             "expectancy_per_trade": m["expectancy_per_trade"],
         }
-    return {"status": "evaluated", "groups": result}
+    return {"status": "incomplete" if incomplete else "evaluated", "groups": result}

@@ -84,6 +84,8 @@ class Scored:
     allocation: FundingAllocation | None
     days_missing: list[str]
     funding_error: str | None
+    status: str = "complete"
+    source_errors: dict[str, str] | None = None
 
 
 async def _load_funding(
@@ -98,25 +100,46 @@ async def _load_funding(
 
 
 async def _scored(start: datetime | None, end: datetime | None) -> Scored:
-    if not api_module.db_manager or not getattr(
-        api_module.db_manager, "mongodb_adapter", None
-    ):
+    manager = api_module.db_manager
+    mongodb = getattr(manager, "mongodb_adapter", None) if manager is not None else None
+    if mongodb is None:
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
+    source_errors: dict[str, str] = {}
     try:
         fills = await _load_fills(end)
         fills.sort(key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC))
         book = RoundBook()
         for row in fills:
             book.apply(row)
-        position_ids = sorted({p for r in book.closed for p in r.position_ids})
-        decision_ids = sorted({d for r in book.closed for d in r.decision_ids})
-        stops = await _load_stops(position_ids)
-        decisions = await _load_decisions(decision_ids)
     except HTTPException:
         raise
     except Exception as exc:
         logger.error("scorecard: read failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return Scored(
+            [],
+            RoundBook(),
+            [],
+            None,
+            None,
+            [],
+            str(exc),
+            "unavailable",
+            {"execution_events": str(exc)},
+        )
+    position_ids = sorted({p for r in book.closed for p in r.position_ids})
+    decision_ids = sorted({d for r in book.closed for d in r.decision_ids})
+    try:
+        stops = await _load_stops(position_ids)
+    except Exception as exc:
+        logger.error("scorecard: positions read failed: %s", exc, exc_info=True)
+        stops = {}
+        source_errors["positions"] = str(exc)
+    try:
+        decisions = await _load_decisions(decision_ids)
+    except Exception as exc:
+        logger.error("scorecard: decisions read failed: %s", exc, exc_info=True)
+        decisions = {}
+        source_errors["cio_decisions"] = str(exc)
     open_rounds = book.open_cycles()
     exposures = [
         Exposure(
@@ -153,6 +176,7 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
         except Exception as exc:  # the scorecard still serves, without funding
             logger.warning("scorecard: funding unavailable: %s", exc)
             funding_error = str(exc)
+            source_errors["funding"] = funding_error
     else:
         funding_income, allocation = {}, FundingAllocation()
     income = allocation.income_by_round() if allocation else {}
@@ -168,6 +192,8 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
         allocation,
         days_missing,
         funding_error,
+        "incomplete" if source_errors else "complete",
+        source_errors,
     )
 
 
@@ -229,6 +255,17 @@ async def get_scorecard(
     """Metrics per group, net of fees, by the close time of each round. Open rounds are counted apart."""
     assert group_by in GROUP_BYS
     data = await _scored(from_, to)
+    if data.status == "unavailable":
+        return {
+            "status": data.status,
+            "reason": "required scorecard source is unavailable",
+            "groups": {},
+            "source_errors": data.source_errors or {},
+            "period": {
+                "from": from_.isoformat() if from_ else None,
+                "to": to.isoformat() if to else None,
+            },
+        }
     selected = in_period(data.rounds, from_, to)
     body = scorecard(
         selected,
@@ -256,6 +293,8 @@ async def get_scorecard(
     body["funding"] = _funding_block(data, ledger)
     ledger.pop("funding")
     body["conservation"] = ledger
+    body["status"] = data.status
+    body["source_errors"] = data.source_errors or {}
     body["period"] = {
         "from": from_.isoformat() if from_ else None,
         "to": to.isoformat() if to else None,
@@ -281,6 +320,14 @@ async def get_scorecard_evaluation(
         minimum,
         _open_counts(data.book, group_by),
     )
+    if data.status != "complete":
+        return {
+            "status": data.status,
+            "reason": "scorecard sources are incomplete",
+            "groups": {},
+            "source_errors": data.source_errors or {},
+            "writes": 0,
+        }
     return evaluate(
         card["groups"],
         min_trades=minimum,
@@ -295,4 +342,10 @@ async def get_strategy_net_r() -> dict[str, Any]:
     """Per strategy: net R per closed round (oldest first), the cumulative net loss and the closed-round count:
     the keep/kill input of the CIO (petrosa-cio#299)."""
     data = await _scored(None, None)
+    if data.status != "complete":
+        return {
+            "status": data.status,
+            "strategies": {},
+            "source_errors": data.source_errors or {},
+        }
     return strategy_net_r(data.rounds)
