@@ -1271,6 +1271,15 @@ async def evaluate_scorecard(
         else int(parameters["scorecard_min_trades"])
     )
     scorecard = await get_scorecard(from_, to, "strategy", minimum)
+    if scorecard.get("status") in {"unavailable", "incomplete"}:
+        STRATEGY_SCORECARD_EVALUATE_TOTAL.add(1, {"decision": scorecard["status"]})
+        return {
+            "status": scorecard["status"],
+            "thresholds": parameters,
+            "groups": [],
+            "source_errors": scorecard.get("source_errors", {}),
+            "writes": 0,
+        }
     evaluated = []
     incomplete = False
     required = {

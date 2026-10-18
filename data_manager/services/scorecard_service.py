@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+import constants
 
 ZERO = Decimal("0")
 MARK_HOURS = (0, 8, 16)
@@ -341,7 +344,8 @@ class ScorecardService:
         collections = await self._read_collections(
             kwargs.get("start"), kwargs.get("end")
         )
-        return calculate_scorecard(
+        source_errors = collections.pop("__source_errors", {})
+        result = calculate_scorecard(
             **collections,
             **{
                 key: value
@@ -349,24 +353,61 @@ class ScorecardService:
                 if key not in {"start", "end"}
             },
         )
+        if source_errors:
+            result.update(
+                {
+                    "status": "unavailable"
+                    if len(source_errors) == 5
+                    else "incomplete",
+                    "source_errors": source_errors,
+                }
+            )
+        return result
 
     async def _read_collections(
         self, start: datetime | None, end: datetime | None
-    ) -> dict[str, list[dict[str, Any]]]:
-        return {
-            "execution_events": await self.mongodb.find_filtered(
-                "execution_events", start=start, end=end, limit=10000, sort_order=1
+    ) -> dict[str, Any]:
+        reads = {
+            "execution_events": self.mongodb.find_filtered(
+                "execution_events",
+                filters={"event_type": {"$in": ["filled", "partial_fill"]}},
+                start=start,
+                end=end,
+                limit=10000,
+                sort_order=1,
             ),
-            "pnl_events": await self.mongodb.find_filtered(
+            "pnl_events": self.mongodb.find_filtered(
                 "pnl_events", start=start, end=end, limit=10000, sort_order=1
             ),
-            "cio_decisions": await self.mongodb.find_filtered(
+            "cio_decisions": self.mongodb.find_filtered(
                 "cio_decisions", start=start, end=end, limit=10000, sort_order=1
             ),
-            "funding_events": await self.mongodb.find_filtered(
+            "funding_events": self.mongodb.find_filtered(
                 "funding_rates", start=start, end=end, limit=10000, sort_order=1
             ),
-            "positions": await self.mongodb.find_filtered(
+            "positions": self.mongodb.find_filtered(
                 "positions", limit=10000, sort_order=1
             ),
         }
+        results = await asyncio.gather(
+            *(
+                asyncio.wait_for(read, constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
+                for read in reads.values()
+            ),
+            return_exceptions=True,
+        )
+        collections: dict[str, list[dict[str, Any]]] = {}
+        source_errors: dict[str, str] = {}
+        for name, result in zip(reads, results, strict=True):
+            if isinstance(result, BaseException):
+                source_errors[name] = (
+                    "read timed out"
+                    if isinstance(result, TimeoutError)
+                    else str(result)
+                )
+                collections[name] = []
+            else:
+                collections[name] = result
+        if source_errors:
+            collections["__source_errors"] = source_errors
+        return collections
