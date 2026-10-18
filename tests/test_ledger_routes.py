@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import json
+import threading
 import time
 from datetime import date, datetime
 from decimal import Decimal
@@ -272,6 +274,25 @@ async def test_tieout_returns_explicit_error_when_database_read_fails(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_tieout_returns_503_when_database_read_times_out(monkeypatch):
+    class Repo:
+        def tieout(self, _first, _last):
+            time.sleep(0.05)
+            return {"days": [], "cumulative_variance": "0"}
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    monkeypatch.setattr("constants.API_QUERY_TIMEOUT", 0.001)
+
+    with pytest.raises(HTTPException) as error:
+        await ledger.get_tieout(date(2026, 9, 30), date(2026, 9, 30))
+
+    assert error.value.status_code == 503
+    assert error.value.detail["error"] == "Ledger database unavailable"
+    assert error.value.detail["exception"] == "TimeoutError"
+    assert error.value.detail["message"]
+
+
+@pytest.mark.asyncio
 async def test_positions_tieout_returns_503_when_database_read_times_out(
     monkeypatch,
 ):
@@ -294,6 +315,37 @@ async def test_positions_tieout_returns_503_when_database_read_times_out(
     assert error.value.detail["error"] == "Ledger database unavailable"
     assert error.value.detail["exception"] == "TimeoutError"
     assert error.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_positions_tieout_timeout_reuses_inflight_read(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    class Repo:
+        def positions_tieout(self):
+            nonlocal calls
+            calls += 1
+            started.set()
+            release.wait(1)
+            return {
+                "phantom_rows": [],
+                "ledger_open_rows": [],
+                "exchange_positions": [],
+            }
+
+    monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    monkeypatch.setattr("constants.API_QUERY_TIMEOUT", 0.001)
+
+    with pytest.raises(HTTPException):
+        await ledger.get_positions_tieout()
+    assert await asyncio.to_thread(started.wait, 1)
+
+    with pytest.raises(HTTPException):
+        await ledger.get_positions_tieout()
+    assert calls == 1
+    release.set()
 
 
 @pytest.mark.asyncio

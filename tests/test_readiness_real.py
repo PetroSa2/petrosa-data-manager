@@ -153,6 +153,22 @@ def test_mongo_not_connected_is_503(client, mongo, missing):
     assert body["ready"] is False
 
 
+def test_mongo_adapter_presence_does_not_require_boolean_truth(client, mongo):
+    class Adapter:
+        db = mongo.db
+
+        def __bool__(self):
+            raise TypeError("database adapter has no truth value")
+
+    api_module.db_manager.mongodb_adapter = Adapter()
+
+    status, body = _readiness(client)
+
+    assert status == 200
+    assert body["ready"] is True
+    assert body["components"]["mongodb"] == "healthy"
+
+
 def test_mysql_unavailable_with_mongo_up_is_still_ready(client):
     api_module.db_manager.mysql_adapter = None
 

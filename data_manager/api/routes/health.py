@@ -143,7 +143,7 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                 components["mysql"] = "healthy" if mysql_connected else "unavailable"
                 components["mongodb"] = "unavailable"
                 ready = False
-                if mongo and getattr(mongo, "db", None) is not None:
+                if mongo is not None and getattr(mongo, "db", None) is not None:
                     try:
                         await asyncio.wait_for(
                             mongo.db.command("ping"),

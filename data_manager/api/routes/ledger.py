@@ -176,13 +176,47 @@ def _ledger_unavailable(exc: BaseException) -> HTTPException:
     )
 
 
+_tieout_tasks: dict[tuple[date, date], asyncio.Task] = {}
 _positions_tieout_task: asyncio.Task | None = None
+_tieout_lock = asyncio.Lock()
 _positions_tieout_lock = asyncio.Lock()
+
+
+async def _read_tieout(
+    key: tuple[date, date], first: date, last: date
+) -> dict[str, Any]:
+    async with _tieout_lock:
+        task = _tieout_tasks.get(key)
+        if task is not None and task.get_loop() is not asyncio.get_running_loop():
+            task = None
+            _tieout_tasks.pop(key, None)
+        if task is not None and task.done():
+            try:
+                task.exception()
+            except asyncio.CancelledError:
+                pass
+            task = None
+        if task is None:
+            task = asyncio.create_task(asyncio.to_thread(_repo().tieout, first, last))
+            _tieout_tasks[key] = task
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), constants.API_QUERY_TIMEOUT)
+    except BaseException:
+        if task.done():
+            async with _tieout_lock:
+                if _tieout_tasks.get(key) is task:
+                    del _tieout_tasks[key]
+        raise
 
 
 async def _read_positions_tieout() -> dict[str, Any]:
     global _positions_tieout_task
     async with _positions_tieout_lock:
+        if (
+            _positions_tieout_task is not None
+            and _positions_tieout_task.get_loop() is not asyncio.get_running_loop()
+        ):
+            _positions_tieout_task = None
         if _positions_tieout_task is not None and _positions_tieout_task.done():
             try:
                 _positions_tieout_task.exception()
@@ -197,9 +231,10 @@ async def _read_positions_tieout() -> dict[str, Any]:
     try:
         return await asyncio.wait_for(asyncio.shield(task), constants.API_QUERY_TIMEOUT)
     except BaseException:
-        async with _positions_tieout_lock:
-            if _positions_tieout_task is task:
-                _positions_tieout_task = None
+        if task.done():
+            async with _positions_tieout_lock:
+                if _positions_tieout_task is task:
+                    _positions_tieout_task = None
         raise
 
 
@@ -282,7 +317,7 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
     if from_ > to or (to - from_).days > 366:
         raise HTTPException(status_code=422, detail="invalid tie-out range")
     try:
-        result = await asyncio.to_thread(_repo().tieout, from_, to)
+        result = await _read_tieout((from_, to), from_, to)
         variances = [Decimal(day["unexplained"]) for day in result["days"]]
         TIEOUT_VARIANCE.set(
             float(variances[-1]) if variances else 0, {"window": "latest"}
