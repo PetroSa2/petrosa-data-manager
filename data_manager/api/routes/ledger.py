@@ -187,6 +187,9 @@ async def _read_tieout(
 ) -> dict[str, Any]:
     async with _tieout_lock:
         task = _tieout_tasks.get(key)
+        if task is not None and task.get_loop() is not asyncio.get_running_loop():
+            task = None
+            _tieout_tasks.pop(key, None)
         if task is not None and task.done():
             try:
                 task.exception()
@@ -209,6 +212,11 @@ async def _read_tieout(
 async def _read_positions_tieout() -> dict[str, Any]:
     global _positions_tieout_task
     async with _positions_tieout_lock:
+        if (
+            _positions_tieout_task is not None
+            and _positions_tieout_task.get_loop() is not asyncio.get_running_loop()
+        ):
+            _positions_tieout_task = None
         if _positions_tieout_task is not None and _positions_tieout_task.done():
             try:
                 _positions_tieout_task.exception()
