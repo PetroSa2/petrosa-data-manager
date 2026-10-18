@@ -90,6 +90,8 @@ class MongoDBAdapter(BaseAdapter):
         self.analytics_db = None
         self.lease_client = None
         self.lease_db = None
+        self.readiness_client = None
+        self.readiness_db = None
         self.db_name = database_name or self._extract_db_name(connection_string)
 
     def _extract_db_name(self, connection_string: str) -> str:
@@ -124,6 +126,9 @@ class MongoDBAdapter(BaseAdapter):
                 self.connection_string,
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_ANALYTICS_MAX_POOL_SIZE,
+                serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
+                connectTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
+                socketTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
             )
             self.analytics_db = self.analytics_client[self.db_name]
             self.lease_client = motor_asyncio.AsyncIOMotorClient(
@@ -135,6 +140,15 @@ class MongoDBAdapter(BaseAdapter):
                 socketTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
             )
             self.lease_db = self.lease_client[self.db_name]
+            self.readiness_client = motor_asyncio.AsyncIOMotorClient(
+                self.connection_string,
+                tz_aware=True,
+                maxPoolSize=constants.MONGODB_READINESS_MAX_POOL_SIZE,
+                serverSelectionTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
+                connectTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
+                socketTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
+            )
+            self.readiness_db = self.readiness_client[self.db_name]
             self._connected = True
             logger.info(f"Connected to MongoDB database: {self.db_name}")
         except Exception as e:
@@ -152,6 +166,10 @@ class MongoDBAdapter(BaseAdapter):
             self.lease_client.close()
             self.lease_client = None
             self.lease_db = None
+        if self.readiness_client:
+            self.readiness_client.close()
+            self.readiness_client = None
+            self.readiness_db = None
         self._connected = False
         logger.info("Disconnected from MongoDB")
 
