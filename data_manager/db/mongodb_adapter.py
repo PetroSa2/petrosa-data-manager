@@ -893,6 +893,14 @@ class MongoDBAdapter(BaseAdapter):
                         [("event_type", ASCENDING), ("timestamp", DESCENDING)],
                         name="event_type_timestamp_desc",
                     ),
+                    IndexModel(
+                        [
+                            ("strategy_id", ASCENDING),
+                            ("event_type", ASCENDING),
+                            ("timestamp", DESCENDING),
+                        ],
+                        name="strategy_event_type_timestamp_desc",
+                    ),
                 ]
                 if constants.HISTORIC_COPY_PROOF_ENABLED:
                     indexes.append(

@@ -457,11 +457,8 @@ async def test_performance_read_failure_returns_iterable_degraded_stats(monkeypa
         "db_manager",
         SimpleNamespace(mongodb_adapter=object()),
     )
-    monkeypatch.setattr(
-        analysis_route,
-        "_load_execution_events",
-        AsyncMock(side_effect=ValueError("execution events unavailable")),
-    )
+    loader = AsyncMock(side_effect=ValueError("execution events unavailable"))
+    monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
 
     response = await analysis_route.get_strategy_performance("S1")
 
@@ -469,6 +466,7 @@ async def test_performance_read_failure_returns_iterable_degraded_stats(monkeypa
     assert isinstance(response["stats"], dict)
     assert response["stats"]["win_rate"] is None
     assert response["metadata"]["history_status"] == "unavailable"
+    loader.assert_awaited_once_with(api_module.db_manager.mongodb_adapter, "S1")
 
 
 @pytest.mark.asyncio

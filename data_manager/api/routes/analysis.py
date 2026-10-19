@@ -89,16 +89,20 @@ _SYNTHETIC_EXITS_CACHE: (
 _SYNTHETIC_EXITS_IN_FLIGHT: dict[
     tuple[int | None, str | None, int], asyncio.Task[list[dict[str, Any]]]
 ] = {}
-_EXECUTION_EVENTS_CACHE: tuple[int, str | None, list[dict[str, Any]]] | None = None
+_EXECUTION_EVENTS_CACHE: tuple[
+    int, str | None, str | None, list[dict[str, Any]]
+] | None = None
 _EXCHANGE_HISTORY_CACHE: (
     tuple[int, tuple[int | None, int | None, int], dict[str, Any]] | None
 ) = None
 _LEG_REPLAY_CACHE: dict[
     tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
 ] = {}
-_BASE_PERFORMANCE_CACHE: tuple[int, str | None, dict[str, Any]] | None = None
+_BASE_PERFORMANCE_CACHE: tuple[
+    int, str | None, str, dict[str, Any]
+] | None = None
 _BASE_PERFORMANCE_IN_FLIGHT: dict[
-    tuple[int, str | None], asyncio.Task[dict[str, Any]]
+    tuple[int, str | None, str], asyncio.Task[dict[str, Any]]
 ] = {}
 
 
@@ -550,12 +554,15 @@ async def _load_synthetic_exits(
 
 async def _load_execution_events(
     mongodb: Any,
+    strategy_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Read fills once per newest fill-event version and filter them per caller."""
     from data_manager.services.round_book import FILL_EVENT_TYPES
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    if strategy_id is not None:
+        fill_filter["strategy_id"] = strategy_id
     collection = _analytics_database(mongodb)["execution_events"]
     try:
         fills_descending = await asyncio.wait_for(
@@ -585,11 +592,12 @@ async def _load_execution_events(
     )
     global _EXECUTION_EVENTS_CACHE
     source_id = id(collection)
-    if _EXECUTION_EVENTS_CACHE is not None and _EXECUTION_EVENTS_CACHE[:2] == (
+    if _EXECUTION_EVENTS_CACHE is not None and _EXECUTION_EVENTS_CACHE[:3] == (
         source_id,
         latest_fill_id,
+        strategy_id,
     ):
-        return _EXECUTION_EVENTS_CACHE[2], latest_fill_id
+        return _EXECUTION_EVENTS_CACHE[3], latest_fill_id
     record_report_stage("performance", "mongo_reads", monotonic() - read_started)
     logger.info(
         "performance: stage=execution_events_read outcome=success "
@@ -599,7 +607,7 @@ async def _load_execution_events(
         monotonic() - read_started,
         _ROUND_MAX_FILLS,
     )
-    _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, all_fills)
+    _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, strategy_id, all_fills)
     return all_fills, latest_fill_id
 
 
@@ -879,13 +887,16 @@ def _calculate_strategy_performance(rows: list[dict[str, Any]]) -> dict[str, Any
 
 
 async def _base_performance(
-    mongodb: Any, rows: list[dict[str, Any]], latest_fill_id: str | None
+    mongodb: Any,
+    rows: list[dict[str, Any]],
+    latest_fill_id: str | None,
+    strategy_id: str,
 ) -> dict[str, Any]:
     """Return version-stable base values without replaying fills on the event loop."""
     global _BASE_PERFORMANCE_CACHE
-    version = (id(mongodb.db["execution_events"]), latest_fill_id)
-    if _BASE_PERFORMANCE_CACHE is not None and _BASE_PERFORMANCE_CACHE[:2] == version:
-        return _BASE_PERFORMANCE_CACHE[2]
+    version = (id(mongodb.db["execution_events"]), latest_fill_id, strategy_id)
+    if _BASE_PERFORMANCE_CACHE is not None and _BASE_PERFORMANCE_CACHE[:3] == version:
+        return _BASE_PERFORMANCE_CACHE[3]
     task = _BASE_PERFORMANCE_IN_FLIGHT.get(version)
     if task is None:
         task = asyncio.create_task(_run_heavy(_calculate_base_performance, rows))
@@ -898,7 +909,7 @@ async def _base_performance(
         raise
     if _BASE_PERFORMANCE_IN_FLIGHT.get(version) is task:
         _BASE_PERFORMANCE_IN_FLIGHT.pop(version, None)
-    _BASE_PERFORMANCE_CACHE = (version[0], version[1], result)
+    _BASE_PERFORMANCE_CACHE = (version[0], version[1], version[2], result)
     return result
 
 
@@ -955,8 +966,7 @@ async def get_strategy_performance(strategy_id: str):
         mongodb = api_module.db_manager.mongodb_adapter
         stage = "execution_events_read"
         try:
-            all_rows, latest_fill_id = await _load_execution_events(mongodb)
-            rows = await _run_heavy(_filter_strategy_rows, all_rows, strategy_id)
+            rows, latest_fill_id = await _load_execution_events(mongodb, strategy_id)
         except asyncio.CancelledError:
             raise
         except _AnalyticsDependencyTimeout as exc:
@@ -983,7 +993,7 @@ async def get_strategy_performance(strategy_id: str):
         stage = "analytics_compute"
         from data_manager.services.pnl_calculator import PnlBreakdown
 
-        base = await _base_performance(mongodb, all_rows, latest_fill_id)
+        base = await _base_performance(mongodb, rows, latest_fill_id, strategy_id)
         values = base.get(strategy_id, {})
         outcome = values.get("outcome", outcome_stats([]))
         breakdown = values.get("breakdown", PnlBreakdown(realized=0.0, unrealized=0.0))
