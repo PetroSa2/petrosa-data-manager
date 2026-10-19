@@ -89,18 +89,16 @@ _SYNTHETIC_EXITS_CACHE: (
 _SYNTHETIC_EXITS_IN_FLIGHT: dict[
     tuple[int | None, str | None, int], asyncio.Task[list[dict[str, Any]]]
 ] = {}
-_EXECUTION_EVENTS_CACHE: tuple[
-    int, str | None, str | None, list[dict[str, Any]]
-] | None = None
+_EXECUTION_EVENTS_CACHE: (
+    tuple[int, str | None, str | None, list[dict[str, Any]]] | None
+) = None
 _EXCHANGE_HISTORY_CACHE: (
     tuple[int, tuple[int | None, int | None, int], dict[str, Any]] | None
 ) = None
 _LEG_REPLAY_CACHE: dict[
     tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
 ] = {}
-_BASE_PERFORMANCE_CACHE: tuple[
-    int, str | None, str, dict[str, Any]
-] | None = None
+_BASE_PERFORMANCE_CACHE: tuple[int, str | None, str, dict[str, Any]] | None = None
 _BASE_PERFORMANCE_IN_FLIGHT: dict[
     tuple[int, str | None, str], asyncio.Task[dict[str, Any]]
 ] = {}

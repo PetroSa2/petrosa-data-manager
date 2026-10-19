@@ -166,10 +166,14 @@ async def test_execution_events_use_the_dedicated_analytics_pool(replay_environm
 
 
 @pytest.mark.asyncio
-async def test_strategy_performance_reads_only_the_requested_strategy(replay_environment):
+async def test_strategy_performance_reads_only_the_requested_strategy(
+    replay_environment,
+):
     _history, fills, _calls, _history_reads = replay_environment
     fills[0]["strategy_id"] = "alpha"
-    fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled", "strategy_id": "beta"})
+    fills.append(
+        {"_id": "fill-2", "timestamp": 2, "event_type": "filled", "strategy_id": "beta"}
+    )
     mongodb = api_module.db_manager.mongodb_adapter
 
     rows, _latest_fill_id = await analysis._load_execution_events(mongodb, "alpha")
