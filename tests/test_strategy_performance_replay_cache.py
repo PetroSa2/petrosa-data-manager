@@ -183,6 +183,30 @@ async def test_strategy_performance_reads_only_the_requested_strategy(
 
 
 @pytest.mark.asyncio
+async def test_strategy_performance_projection_keeps_replay_fields(
+    replay_environment,
+):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    mongodb = api_module.db_manager.mongodb_adapter
+
+    await analysis._load_execution_events(mongodb, "alpha")
+
+    projection = mongodb.db.find_filters[-1][1]["projection"]
+    assert projection == analysis._EXECUTION_EVENT_PROJECTION
+    assert {
+        "event_type",
+        "strategy_id",
+        "side",
+        "position_side",
+        "fill_qty",
+        "price",
+        "order_id",
+        "payload",
+    } <= set(projection)
+
+
+@pytest.mark.asyncio
 async def test_execution_events_read_is_capped_and_restores_chronological_order(
     replay_environment, monkeypatch
 ):

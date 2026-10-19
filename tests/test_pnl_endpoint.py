@@ -501,6 +501,34 @@ async def test_performance_execution_event_timeout_preserves_assessor_contract(
 
 
 @pytest.mark.asyncio
+async def test_performance_timeout_reuses_last_good_strategy_response(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = [
+        _fill(side="buy", qty=1, price=100, seconds_before=200),
+        _fill(side="sell", qty=1, price=110, seconds_before=100),
+    ]
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
+    analysis_route._LAST_GOOD_PERFORMANCE.clear()
+    _client_with_fills(rows)
+    loader = AsyncMock(
+        side_effect=[(rows, "fill-2"), TimeoutError("execution events timed out")]
+    )
+    monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
+    try:
+        fresh = await analysis_route.get_strategy_performance("S1")
+        stale = await analysis_route.get_strategy_performance("S1")
+        assert fresh["stats"]["win_rate"] == 1.0
+        assert stale["degraded"] is True
+        assert stale["stale"] is True
+        assert stale["stats"] == fresh["stats"]
+        assert stale["metadata"]["source"] == "data-manager-analysis-last-known-good"
+    finally:
+        analysis_route._LAST_GOOD_PERFORMANCE.clear()
+        api_module.db_manager = None
+
+
+@pytest.mark.asyncio
 async def test_performance_keeps_base_contract_when_overlay_times_out(monkeypatch):
     import data_manager.api.routes.analysis as analysis_route
 

@@ -8,6 +8,7 @@ import math
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from functools import partial
@@ -102,6 +103,32 @@ _BASE_PERFORMANCE_CACHE: tuple[int, str | None, str, dict[str, Any]] | None = No
 _BASE_PERFORMANCE_IN_FLIGHT: dict[
     tuple[int, str | None, str], asyncio.Task[dict[str, Any]]
 ] = {}
+_LAST_GOOD_PERFORMANCE: dict[str, tuple[int, dict[str, Any]]] = {}
+
+_EXECUTION_EVENT_PROJECTION = {
+    "timestamp": 1,
+    "decision_id": 1,
+    "order_id": 1,
+    "strategy_id": 1,
+    "event_type": 1,
+    "symbol": 1,
+    "side": 1,
+    "position_side": 1,
+    "position_id": 1,
+    "qty": 1,
+    "fill_qty": 1,
+    "fill_quantity": 1,
+    "closed_quantity": 1,
+    "price": 1,
+    "fill_price": 1,
+    "exit_price": 1,
+    "fill_time": 1,
+    "reason": 1,
+    "close_reason": 1,
+    "position_status": 1,
+    "reduce_only": 1,
+    "payload": 1,
+}
 
 
 class _AnalyticsDependencyTimeout(TimeoutError):
@@ -564,7 +591,7 @@ async def _load_execution_events(
     collection = _analytics_database(mongodb)["execution_events"]
     try:
         fills_descending = await asyncio.wait_for(
-            collection.find(fill_filter)
+            collection.find(fill_filter, projection=_EXECUTION_EVENT_PROJECTION)
             .sort("timestamp", -1)
             .to_list(length=_ROUND_MAX_FILLS),
             constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
@@ -840,6 +867,31 @@ def _degraded_performance(strategy_id: str, exc: BaseException) -> dict[str, Any
     }
 
 
+def _stale_performance(
+    strategy_id: str, mongodb: Any, exc: BaseException
+) -> dict[str, Any] | None:
+    cached = _LAST_GOOD_PERFORMANCE.get(strategy_id)
+    if cached is None or cached[0] != id(mongodb):
+        return None
+    response = deepcopy(cached[1])
+    error = {
+        "type": type(exc).__name__,
+        "message": str(exc) or repr(exc),
+    }
+    response["degraded"] = True
+    response["stale"] = True
+    response["error"] = error
+    response["metadata"].update(
+        {
+            "source": "data-manager-analysis-last-known-good",
+            "degraded": True,
+            "stale": True,
+            "error": error,
+        }
+    )
+    return response
+
+
 def _calculate_base_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Replay fills once and return the strategy-scoped values used by requests."""
     rows_by_strategy: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -976,7 +1028,9 @@ async def get_strategy_performance(strategy_id: str):
                 type(exc).__name__,
                 str(exc),
             )
-            return _degraded_performance(strategy_id, exc)
+            return _stale_performance(
+                strategy_id, mongodb, exc
+            ) or _degraded_performance(strategy_id, exc)
         except Exception as exc:
             logger.exception(
                 "performance: stage=execution_events_read outcome=error "
@@ -986,7 +1040,9 @@ async def get_strategy_performance(strategy_id: str):
                 type(exc).__name__,
                 str(exc),
             )
-            return _degraded_performance(strategy_id, exc)
+            return _stale_performance(
+                strategy_id, mongodb, exc
+            ) or _degraded_performance(strategy_id, exc)
 
         stage = "analytics_compute"
         from data_manager.services.pnl_calculator import PnlBreakdown
@@ -1191,6 +1247,11 @@ async def get_strategy_performance(strategy_id: str):
             len(rows),
             monotonic() - request_started,
         )
+        stats = response["stats"]
+        if stats["win_rate"] is not None and stats["consecutive_losses"] is not None:
+            _LAST_GOOD_PERFORMANCE[strategy_id] = (id(mongodb), deepcopy(response))
+            if len(_LAST_GOOD_PERFORMANCE) > 64:
+                _LAST_GOOD_PERFORMANCE.pop(next(iter(_LAST_GOOD_PERFORMANCE)))
         return response
     except Exception as e:
         logger.error(
