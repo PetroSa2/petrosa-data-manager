@@ -511,7 +511,9 @@ async def test_performance_timeout_reuses_last_good_strategy_response(monkeypatc
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
     analysis_route._LAST_GOOD_PERFORMANCE.clear()
     _client_with_fills(rows)
-    loader = AsyncMock(side_effect=[(rows, "fill-2"), TimeoutError("execution events timed out")])
+    loader = AsyncMock(
+        side_effect=[(rows, "fill-2"), TimeoutError("execution events timed out")]
+    )
     monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
     try:
         fresh = await analysis_route.get_strategy_performance("S1")

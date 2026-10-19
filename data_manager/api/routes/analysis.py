@@ -1028,9 +1028,9 @@ async def get_strategy_performance(strategy_id: str):
                 type(exc).__name__,
                 str(exc),
             )
-            return _stale_performance(strategy_id, mongodb, exc) or _degraded_performance(
-                strategy_id, exc
-            )
+            return _stale_performance(
+                strategy_id, mongodb, exc
+            ) or _degraded_performance(strategy_id, exc)
         except Exception as exc:
             logger.exception(
                 "performance: stage=execution_events_read outcome=error "
@@ -1040,9 +1040,9 @@ async def get_strategy_performance(strategy_id: str):
                 type(exc).__name__,
                 str(exc),
             )
-            return _stale_performance(strategy_id, mongodb, exc) or _degraded_performance(
-                strategy_id, exc
-            )
+            return _stale_performance(
+                strategy_id, mongodb, exc
+            ) or _degraded_performance(strategy_id, exc)
 
         stage = "analytics_compute"
         from data_manager.services.pnl_calculator import PnlBreakdown
@@ -1248,10 +1248,7 @@ async def get_strategy_performance(strategy_id: str):
             monotonic() - request_started,
         )
         stats = response["stats"]
-        if (
-            stats["win_rate"] is not None
-            and stats["consecutive_losses"] is not None
-        ):
+        if stats["win_rate"] is not None and stats["consecutive_losses"] is not None:
             _LAST_GOOD_PERFORMANCE[strategy_id] = (id(mongodb), deepcopy(response))
             if len(_LAST_GOOD_PERFORMANCE) > 64:
                 _LAST_GOOD_PERFORMANCE.pop(next(iter(_LAST_GOOD_PERFORMANCE)))
