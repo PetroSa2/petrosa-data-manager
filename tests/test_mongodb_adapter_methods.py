@@ -769,6 +769,17 @@ class TestEnsureIndexes:
             "event_type": 1,
             "timestamp": -1,
         }
+        strategy_matching = [
+            index
+            for index in indexes
+            if index.document.get("name") == "strategy_event_type_timestamp_desc"
+        ]
+        assert len(strategy_matching) == 1
+        assert strategy_matching[0].document["key"] == {
+            "strategy_id": 1,
+            "event_type": 1,
+            "timestamp": -1,
+        }
 
     @pytest.mark.asyncio
     async def test_swallows_pymongo_error(self, adapter):

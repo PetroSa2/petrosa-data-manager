@@ -45,7 +45,14 @@ class _Mongo:
     def find(self, *_args, **_kwargs):
         self.find_calls += 1
         self.find_filters.append((_args, _kwargs))
-        return _Cursor(self.fills, self)
+        filters = _args[0] if _args else {}
+        strategy_id = filters.get("strategy_id")
+        rows = (
+            [row for row in self.fills if row.get("strategy_id") == strategy_id]
+            if strategy_id is not None
+            else self.fills
+        )
+        return _Cursor(rows, self)
 
 
 @pytest.fixture
@@ -156,6 +163,23 @@ async def test_execution_events_use_the_dedicated_analytics_pool(replay_environm
     assert [row["_id"] for row in rows] == ["fill-1"]
     assert analytics.find_calls == 1
     assert primary.find_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_strategy_performance_reads_only_the_requested_strategy(
+    replay_environment,
+):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    fills.append(
+        {"_id": "fill-2", "timestamp": 2, "event_type": "filled", "strategy_id": "beta"}
+    )
+    mongodb = api_module.db_manager.mongodb_adapter
+
+    rows, _latest_fill_id = await analysis._load_execution_events(mongodb, "alpha")
+
+    assert [row["strategy_id"] for row in rows] == ["alpha"]
+    assert mongodb.db.find_filters[-1][0][0]["strategy_id"] == "alpha"
 
 
 @pytest.mark.asyncio
@@ -351,8 +375,8 @@ async def test_base_performance_replay_runs_off_event_loop_and_is_cached(
 
     monkeypatch.setattr(analysis, "_calculate_base_performance", calculate)
     mongodb = api_module.db_manager.mongodb_adapter
-    await analysis._base_performance(mongodb, fills, "fill-1")
-    await analysis._base_performance(mongodb, fills, "fill-1")
+    await analysis._base_performance(mongodb, fills, "fill-1", "alpha")
+    await analysis._base_performance(mongodb, fills, "fill-1", "alpha")
 
     assert len(threads) == 1
     assert threads[0] != event_loop_thread
