@@ -4,7 +4,7 @@ Unit tests for AuditScheduler and AnalyticsScheduler.
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -244,6 +244,14 @@ class TestAnalyticsScheduler:
             scheduler.volatility_calc.calculate_volatility.assert_called()
             scheduler.regime_classifier.classify_regime.assert_called()
             scheduler.correlation_calc.calculate_correlation.assert_called()
+            assert scheduler.volume_calc.calculate_volume.call_args_list == [
+                call("BTCUSDT", "1h", window_hours=24),
+                call("BTCUSDT", "1d", window_hours=144),
+            ]
+            assert scheduler.trend_calc.calculate_trend.call_args_list == [
+                call("BTCUSDT", "1h", window_days=30),
+                call("BTCUSDT", "1d", window_days=51),
+            ]
 
 
 class TestAuditorNatsWiring:
