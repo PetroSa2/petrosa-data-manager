@@ -96,6 +96,9 @@ class AnalyticsScheduler:
                 # Focus on higher timeframes for analytics (1h, 1d)
                 for timeframe in ["1h", "1d"]:
                     try:
+                        volume_window_hours = 24 * 6 if timeframe == "1d" else 24
+                        trend_window_days = 51 if timeframe == "1d" else 30
+
                         # Calculate volatility
                         volatility = await self.volatility_calc.calculate_volatility(
                             symbol, timeframe, window_days=30
@@ -105,14 +108,14 @@ class AnalyticsScheduler:
 
                         # Calculate volume
                         volume = await self.volume_calc.calculate_volume(
-                            symbol, timeframe, window_hours=24
+                            symbol, timeframe, window_hours=volume_window_hours
                         )
                         if volume:
                             count += 1
 
                         # Calculate trend
                         trend = await self.trend_calc.calculate_trend(
-                            symbol, timeframe, window_days=30
+                            symbol, timeframe, window_days=trend_window_days
                         )
                         if trend:
                             count += 1
