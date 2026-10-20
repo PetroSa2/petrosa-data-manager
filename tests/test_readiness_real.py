@@ -55,7 +55,8 @@ def _readiness(client):
     return response.status_code, response.json()
 
 
-def test_successful_ping_is_ready(client, mongo):
+def test_successful_ping_is_ready(client, mongo, caplog):
+    caplog.set_level("INFO", logger=health.logger.name)
     status, body = _readiness(client)
 
     assert status == 200
@@ -64,6 +65,10 @@ def test_successful_ping_is_ready(client, mongo):
     assert body["components"]["mysql"] == "healthy"
     mongo.readiness_db.command.assert_awaited_once_with("ping")
     mongo.db.command.assert_not_awaited()
+    assert "stage=dependency_checks" in caplog.text
+    assert "mysql_duration=" in caplog.text
+    assert "mongo_duration=" in caplog.text
+    assert "event_loop_lag_ms=" in caplog.text
 
 
 def test_failing_ping_is_503_with_the_same_body_shape(client, mongo):

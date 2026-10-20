@@ -21,6 +21,7 @@ from pydantic import BaseModel
 import constants
 import data_manager.api.app as api_module
 from data_manager.db.repositories import HealthRepository
+from data_manager.utils.event_loop_monitor import event_loop_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,7 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                 mongo = getattr(manager, "mongodb_adapter", None) if manager else None
                 mysql = getattr(manager, "mysql_adapter", None) if manager else None
                 mysql_connected = False
+                mysql_started = time.monotonic()
                 if mysql is not None:
                     try:
                         mysql_connected = await asyncio.wait_for(
@@ -143,6 +145,7 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                 components["mysql"] = "healthy" if mysql_connected else "unavailable"
                 components["mongodb"] = "unavailable"
                 ready = False
+                mongo_started = time.monotonic()
                 readiness_db = (
                     getattr(mongo, "readiness_db", None) if mongo is not None else None
                 )
@@ -158,6 +161,17 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                         ready = True
                     except Exception:
                         logger.warning("MongoDB readiness ping failed", exc_info=True)
+                loop = event_loop_snapshot()
+                logger.info(
+                    "readiness: stage=dependency_checks outcome=%s "
+                    "mysql_duration=%.3fs mongo_duration=%.3fs "
+                    "event_loop_state=%s event_loop_lag_ms=%s",
+                    "healthy" if ready else "degraded",
+                    time.monotonic() - mysql_started,
+                    time.monotonic() - mongo_started,
+                    loop["state"],
+                    loop["lag_ms"],
+                )
                 _readiness_cache = (now, ready, components)
     payload = ReadinessStatus(
         ready=ready, components=components, timestamp=datetime.now(UTC)
