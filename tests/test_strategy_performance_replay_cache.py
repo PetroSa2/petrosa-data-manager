@@ -253,6 +253,9 @@ async def test_execution_event_timeout_clears_shared_read_for_retry(
     assert not analysis._EXECUTION_EVENTS_IN_FLIGHT
 
     mongodb.db.find = original_find
+    monkeypatch.setattr(
+        analysis.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 5.0
+    )
     rows, _latest = await analysis._load_execution_events(mongodb, "alpha")
     assert [row["strategy_id"] for row in rows] == ["alpha"]
     assert mongodb.db.find_calls == 2
