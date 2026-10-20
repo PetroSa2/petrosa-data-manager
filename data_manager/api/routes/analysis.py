@@ -1192,6 +1192,7 @@ async def get_strategy_performance(strategy_id: str):
         )
 
         stage = "response_build"
+        response_started = monotonic()
         response = {
             "stats": {
                 "win_rate": outcome["win_rate"],
@@ -1265,6 +1266,13 @@ async def get_strategy_performance(strategy_id: str):
                 ),
             },
         }
+        response_duration = monotonic() - response_started
+        record_report_stage("performance", "response_build", response_duration)
+        logger.info(
+            "performance: stage=response_build strategy=%s duration=%.3fs",
+            strategy_id,
+            response_duration,
+        )
         logger.info(
             "performance: stage=total strategy=%s fills=%d duration=%.3fs",
             strategy_id,

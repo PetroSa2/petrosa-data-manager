@@ -422,17 +422,22 @@ async def test_legacy_repository_without_version_probe_still_replays(
 
 
 @pytest.mark.asyncio
-async def test_warm_request_does_not_replay_again(replay_environment, monkeypatch):
+async def test_warm_request_does_not_replay_again(
+    replay_environment, monkeypatch, caplog
+):
     _history, _fills, _calls, history_reads = replay_environment
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "apply")
     replay = AsyncMock(return_value={"outcomes": [], "realized": 0, "complete": False})
     monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
 
-    await analysis.get_strategy_performance("alpha")
-    await analysis.get_strategy_performance("alpha")
+    with caplog.at_level("INFO", logger=analysis.logger.name):
+        await analysis.get_strategy_performance("alpha")
+        await analysis.get_strategy_performance("alpha")
 
     assert replay.await_count == 1
     assert len(history_reads) == 1
+    assert "stage=response_build" in caplog.text
+    assert "duration=" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -418,13 +418,20 @@ async def test_positions_tieout_route_returns_matching_exchange_ledger_pairs(
     assert result["quantity_tieout"][0]["ledger_open_quantity"] == "1"
 
 
-def test_tieout_returns_daily_components_and_cumulative_variance():
+@pytest.mark.parametrize(
+    "day_value,pnl_date",
+    [
+        (datetime(2026, 9, 30, 12, 0), datetime(2026, 9, 30, 12, 0)),
+        ("2026-09-30T00:00:00Z", "2026-09-30"),
+    ],
+)
+def test_tieout_normalizes_database_date_values(day_value, pnl_date):
     repo = FakeLedgerRepository(
         [
             Result(
                 [
                     {
-                        "day": date(2026, 9, 30),
+                        "day": day_value,
                         "realized_pnl": "-40",
                         "commission": "-2.92",
                         "funding_fee": "-4",
@@ -433,7 +440,7 @@ def test_tieout_returns_daily_components_and_cumulative_variance():
                     }
                 ]
             ),
-            Result([{"date": date(2026, 9, 30), "daily_pnl": "0"}]),
+            Result([{"date": pnl_date, "daily_pnl": "0"}]),
         ]
     )
     day = repo.tieout(date(2026, 9, 30), date(2026, 9, 30))["days"][0]

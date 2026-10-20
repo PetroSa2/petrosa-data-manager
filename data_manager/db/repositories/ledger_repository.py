@@ -22,6 +22,16 @@ from data_manager.services.ledger_tolerance import (
 
 _exchange_info = ExchangeInfoCache()
 
+
+def _as_day(value: Any) -> date:
+    """Normalize driver-native and ISO-8601 database dates for tie-out keys."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
 #: Position statuses that mean the entry order is closed (MySQL and Mongo position tables alike). The frozen MySQL
 #: ``positions`` table records both real strategy exits and the older reconciler's closures as ``closed``, so it keeps
 #: reading all three.
@@ -271,16 +281,9 @@ class LedgerRepository(BaseRepository):
     ) -> tuple[dict[tuple[str, date], Decimal], set[date]]:
         """Return latest-revision exchange funding by symbol and UTC day."""
 
-        def as_day(value: Any) -> date:
-            if isinstance(value, datetime):
-                return value.date()
-            if isinstance(value, date):
-                return value
-            return date.fromisoformat(str(value)[:10])
-
         params = {"first": first, "last": last}
         present = {
-            as_day(row["day"])
+            _as_day(row["day"])
             for row in self._run(
                 "SELECT DISTINCT day FROM ledger_exchange_day_revision "
                 "WHERE day BETWEEN :first AND :last",
@@ -303,7 +306,7 @@ class LedgerRepository(BaseRepository):
             .all()
         )
         funding = {
-            (str(row["symbol"]), as_day(row["day"])): Decimal(str(row["funding_fee"]))
+            (str(row["symbol"]), _as_day(row["day"])): Decimal(str(row["funding_fee"]))
             for row in rows
             if row["symbol"]
         }
@@ -331,7 +334,8 @@ class LedgerRepository(BaseRepository):
             .all()
         )
         pnl_by_day = {
-            row["date"].isoformat(): Decimal(str(row["daily_pnl"])) for row in pnl
+            _as_day(row["date"]).isoformat(): Decimal(str(row["daily_pnl"]))
+            for row in pnl
         }
         fills_by_day: dict[str, list[dict[str, Any]]] = {}
         try:
@@ -362,12 +366,12 @@ class LedgerRepository(BaseRepository):
                 if filters:
                     item.update(filters)
                 fills_by_day.setdefault(
-                    item["trade_time"].date().isoformat(), []
+                    _as_day(item["trade_time"]).isoformat(), []
                 ).append(item)
         result, cumulative = [], Decimal("0")
         trailing_variances: list[Decimal] = []
         fallback = fallback_limits()
-        known = {row["day"].isoformat(): row for row in days}
+        known = {_as_day(row["day"]).isoformat(): row for row in days}
         for offset in range((last - first).days + 1):
             day = first + timedelta(days=offset)
             key, row = day.isoformat(), known.get(day.isoformat())
