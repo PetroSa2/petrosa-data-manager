@@ -498,6 +498,8 @@ async def test_performance_execution_event_timeout_preserves_assessor_contract(
         "win_rate_delta",
         "consecutive_losses",
     } <= response["stats"].keys()
+    assert response["stats"]["win_rate_delta"] is None
+    assert response["stats"]["consecutive_losses"] is None
 
 
 @pytest.mark.asyncio

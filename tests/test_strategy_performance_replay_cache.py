@@ -150,6 +150,10 @@ async def test_execution_events_are_read_once_per_version(replay_environment):
     assert mongodb.db["execution_events"].to_list_lengths == [analysis._ROUND_MAX_FILLS]
 
 
+def test_strategy_performance_default_dependency_timeout_matches_production_budget():
+    assert analysis.constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS == 5.0
+
+
 @pytest.mark.asyncio
 async def test_concurrent_strategy_reads_share_one_mongo_query(replay_environment):
     _history, fills, _calls, _history_reads = replay_environment
