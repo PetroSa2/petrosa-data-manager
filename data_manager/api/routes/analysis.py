@@ -835,7 +835,7 @@ def outcome_stats(outcomes: list[bool], *, known_book: bool = False) -> dict[str
     return {
         "wins": wins,
         "losses": losses,
-        "win_rate": (wins / len(outcomes)) if outcomes else 0.0 if known_book else None,
+        "win_rate": (wins / len(outcomes)) if outcomes else None,
         "win_rate_delta": delta,
         "win_rate_delta_window": window,
         "win_rate_delta_se": standard_error,
@@ -1073,7 +1073,11 @@ async def get_strategy_performance(strategy_id: str):
 
         base = await _base_performance(mongodb, rows, latest_fill_id, strategy_id)
         values = base.get(strategy_id, {})
-        outcome = values.get("outcome", outcome_stats([], known_book=True))
+        outcome = values.get("outcome")
+        if outcome is None:
+            outcome = outcome_stats([], known_book=True)
+            if not rows:
+                outcome["win_rate"] = 0.0
         breakdown = values.get("breakdown", PnlBreakdown(realized=0.0, unrealized=0.0))
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
