@@ -63,9 +63,9 @@ class TestConnectDisconnect:
 
             analytics_call = Cli.call_args_list[1]
             assert analytics_call.kwargs["maxPoolSize"] == 20
-            assert analytics_call.kwargs["serverSelectionTimeoutMS"] == 2000
-            assert analytics_call.kwargs["connectTimeoutMS"] == 2000
-            assert analytics_call.kwargs["socketTimeoutMS"] == 2000
+            assert analytics_call.kwargs["serverSelectionTimeoutMS"] == 5000
+            assert analytics_call.kwargs["connectTimeoutMS"] == 5000
+            assert analytics_call.kwargs["socketTimeoutMS"] == 5000
 
             lease_call = Cli.call_args_list[2]
             assert lease_call.kwargs["maxPoolSize"] == 10
