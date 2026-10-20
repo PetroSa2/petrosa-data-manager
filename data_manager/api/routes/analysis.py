@@ -1073,7 +1073,11 @@ async def get_strategy_performance(strategy_id: str):
 
         base = await _base_performance(mongodb, rows, latest_fill_id, strategy_id)
         values = base.get(strategy_id, {})
-        outcome = values.get("outcome", outcome_stats([]))
+        outcome = values.get("outcome")
+        if outcome is None:
+            outcome = outcome_stats([], known_book=True)
+            if not rows:
+                outcome["win_rate"] = 0.0
         breakdown = values.get("breakdown", PnlBreakdown(realized=0.0, unrealized=0.0))
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
@@ -1171,14 +1175,18 @@ async def get_strategy_performance(strategy_id: str):
             outcome = outcome_stats(leg_book["outcomes"], known_book=True)
         total_pnl = realized_pnl + unrealized_pnl
         history_status = (
-            "computed"
-            if outcome.get("win_rate") is not None
-            and outcome.get("consecutive_losses") is not None
-            and (
-                outcome.get("win_rate_delta") is not None
-                or outcome.get("win_rate_delta_window") is not None
+            "zero_sample"
+            if not rows
+            else (
+                "computed"
+                if outcome.get("win_rate") is not None
+                and outcome.get("consecutive_losses") is not None
+                and (
+                    outcome.get("win_rate_delta") is not None
+                    or outcome.get("win_rate_delta_window") is not None
+                )
+                else "insufficient_history"
             )
-            else "insufficient_history"
         )
         overlay_status = exposure.get("status") if exposure is not None else "disabled"
         recent_trend = (
@@ -1229,6 +1237,7 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "fills_replayed": len(rows),
+                "sample_status": "zero_sample" if not rows else "sampled",
                 "history_status": history_status,
                 "overlay_status": overlay_status,
                 "legacy_exit_side_mapped": base.get("__legacy_exit_side_mapped__", 0),
