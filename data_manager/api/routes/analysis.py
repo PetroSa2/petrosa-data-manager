@@ -93,6 +93,9 @@ _SYNTHETIC_EXITS_IN_FLIGHT: dict[
 _EXECUTION_EVENTS_CACHE: (
     tuple[int, str | None, str | None, list[dict[str, Any]]] | None
 ) = None
+_EXECUTION_EVENTS_IN_FLIGHT: dict[
+    tuple[int, str | None], asyncio.Task[tuple[list[dict[str, Any]], str | None]]
+] = {}
 _EXCHANGE_HISTORY_CACHE: (
     tuple[int, tuple[int | None, int | None, int], dict[str, Any]] | None
 ) = None
@@ -577,7 +580,7 @@ async def _load_synthetic_exits(
     return strategy_rows, cut_over_ms
 
 
-async def _load_execution_events(
+async def _load_execution_events_once(
     mongodb: Any,
     strategy_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -634,6 +637,25 @@ async def _load_execution_events(
     )
     _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, strategy_id, all_fills)
     return all_fills, latest_fill_id
+
+
+async def _load_execution_events(
+    mongodb: Any,
+    strategy_id: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    collection = _analytics_database(mongodb)["execution_events"]
+    key = (id(collection), strategy_id)
+    task = _EXECUTION_EVENTS_IN_FLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(_load_execution_events_once(mongodb, strategy_id))
+        _EXECUTION_EVENTS_IN_FLIGHT[key] = task
+
+        def clear_completed(completed: asyncio.Task[Any]) -> None:
+            if _EXECUTION_EVENTS_IN_FLIGHT.get(key) is completed:
+                _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
+
+        task.add_done_callback(clear_completed)
+    return await asyncio.shield(task)
 
 
 def _leg_aware_pnl(
