@@ -1225,6 +1225,8 @@ def test_performance_degrades_to_neutral_when_execution_events_read_fails():
         assert body["degraded"] is True
         assert isinstance(body["stats"], dict)
         assert body["stats"]["win_rate"] is None
+        assert body["stats"]["win_rate_delta"] is None
+        assert body["stats"]["consecutive_losses"] is None
         assert body["error"] == {"type": "RuntimeError", "message": "boom"}
         assert body["metadata"]["history_status"] == "unavailable"
         assert body["metadata"]["source"] == (
