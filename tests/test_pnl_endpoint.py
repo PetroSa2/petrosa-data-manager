@@ -1258,6 +1258,29 @@ def test_performance_with_no_closing_fills_has_neutral_trend():
         api_module.db_manager = None
 
 
+def test_performance_with_no_execution_events_returns_zero_sample_stats():
+    """A successful empty history read is a known zero-sample result, not unavailable data."""
+    import data_manager.api.routes.analysis as analysis_route
+
+    try:
+        analysis_route._BASE_PERFORMANCE_CACHE = None
+        analysis_route._EXECUTION_EVENTS_CACHE = None
+        client = _client_with_fills([])
+        response = client.get("/analysis/performance/S1")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["stats"]["wins"] == 0
+        assert body["stats"]["losses"] == 0
+        assert body["stats"]["win_rate"] == 0.0
+        assert body["stats"]["consecutive_losses"] == 0
+        assert body["metadata"]["fills_replayed"] == 0
+        assert body["metadata"]["sample_status"] == "zero_sample"
+        assert body["metadata"]["history_status"] == "zero_sample"
+    finally:
+        api_module.db_manager = None
+
+
 # ----------------------------------------------------------------------
 # ExecutionEventsConsumer on_persisted hook.
 # ----------------------------------------------------------------------
