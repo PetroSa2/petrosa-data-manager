@@ -655,7 +655,11 @@ async def _load_execution_events(
                 _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
 
         task.add_done_callback(clear_completed)
-    return await asyncio.shield(task)
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if task.done() and _EXECUTION_EVENTS_IN_FLIGHT.get(key) is task:
+            _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
 
 
 def _leg_aware_pnl(

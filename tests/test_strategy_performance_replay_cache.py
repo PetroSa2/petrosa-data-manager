@@ -250,7 +250,6 @@ async def test_execution_event_timeout_clears_shared_read_for_retry(
     )
     with pytest.raises(analysis._AnalyticsDependencyTimeout):
         await analysis._load_execution_events(mongodb, "alpha")
-    await asyncio.sleep(0)
     assert not analysis._EXECUTION_EVENTS_IN_FLIGHT
 
     mongodb.db.find = original_find
