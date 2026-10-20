@@ -97,6 +97,7 @@ def replay_environment(monkeypatch):
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._EXECUTION_EVENTS_IN_FLIGHT.clear()
     analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
     analysis._BASE_PERFORMANCE_CACHE = None
@@ -105,6 +106,7 @@ def replay_environment(monkeypatch):
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._EXECUTION_EVENTS_IN_FLIGHT.clear()
     analysis._EXCHANGE_HISTORY_CACHE = None
     analysis._LEG_REPLAY_CACHE.clear()
     analysis._BASE_PERFORMANCE_CACHE = None
@@ -146,6 +148,111 @@ async def test_execution_events_are_read_once_per_version(replay_environment):
     assert [row["_id"] for row in rows] == ["fill-1", "fill-2"]
     assert mongodb.db["execution_events"].sort_calls == [("timestamp", -1)]
     assert mongodb.db["execution_events"].to_list_lengths == [analysis._ROUND_MAX_FILLS]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_strategy_reads_share_one_mongo_query(replay_environment):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    mongodb = api_module.db_manager.mongodb_adapter
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_find = mongodb.db.find
+
+    def slow_find(*args, **kwargs):
+        cursor = original_find(*args, **kwargs)
+        original_to_list = cursor.to_list
+
+        async def wait_for_release(length=None):
+            started.set()
+            await release.wait()
+            return await original_to_list(length)
+
+        cursor.to_list = wait_for_release
+        return cursor
+
+    mongodb.db.find = slow_find
+    first = asyncio.create_task(analysis._load_execution_events(mongodb, "alpha"))
+    await started.wait()
+    second = asyncio.create_task(analysis._load_execution_events(mongodb, "alpha"))
+    await asyncio.sleep(0)
+
+    assert mongodb.db.find_calls == 1
+    release.set()
+    assert await first == await second
+
+
+@pytest.mark.asyncio
+async def test_concurrent_different_strategy_reads_stay_isolated(replay_environment):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    fills.append(
+        {"_id": "fill-2", "timestamp": 2, "event_type": "filled", "strategy_id": "beta"}
+    )
+    mongodb = api_module.db_manager.mongodb_adapter
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_find = mongodb.db.find
+
+    def slow_find(*args, **kwargs):
+        cursor = original_find(*args, **kwargs)
+        original_to_list = cursor.to_list
+
+        async def wait_for_release(length=None):
+            started.set()
+            await release.wait()
+            return await original_to_list(length)
+
+        cursor.to_list = wait_for_release
+        return cursor
+
+    mongodb.db.find = slow_find
+    first = asyncio.create_task(analysis._load_execution_events(mongodb, "alpha"))
+    second = asyncio.create_task(analysis._load_execution_events(mongodb, "beta"))
+    await started.wait()
+    await asyncio.sleep(0)
+
+    assert mongodb.db.find_calls == 2
+    release.set()
+    alpha, _ = await first
+    beta, _ = await second
+    assert [row["strategy_id"] for row in alpha] == ["alpha"]
+    assert [row["strategy_id"] for row in beta] == ["beta"]
+
+
+@pytest.mark.asyncio
+async def test_execution_event_timeout_clears_shared_read_for_retry(
+    replay_environment, monkeypatch
+):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    mongodb = api_module.db_manager.mongodb_adapter
+    original_find = mongodb.db.find
+
+    def slow_find(*args, **kwargs):
+        cursor = original_find(*args, **kwargs)
+        original_to_list = cursor.to_list
+
+        async def timeout_to_list(length=None):
+            await asyncio.sleep(0.05)
+            return await original_to_list(length)
+
+        cursor.to_list = timeout_to_list
+        return cursor
+
+    mongodb.db.find = slow_find
+    monkeypatch.setattr(
+        analysis.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.001
+    )
+    with pytest.raises(analysis._AnalyticsDependencyTimeout):
+        await analysis._load_execution_events(mongodb, "alpha")
+    await asyncio.sleep(0)
+    assert not analysis._EXECUTION_EVENTS_IN_FLIGHT
+
+    mongodb.db.find = original_find
+    rows, _latest = await analysis._load_execution_events(mongodb, "alpha")
+    assert [row["strategy_id"] for row in rows] == ["alpha"]
+    assert mongodb.db.find_calls == 2
 
 
 @pytest.mark.asyncio
