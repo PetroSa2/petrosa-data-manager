@@ -647,19 +647,17 @@ async def _load_execution_events(
     key = (id(collection), strategy_id)
     task = _EXECUTION_EVENTS_IN_FLIGHT.get(key)
     if task is None:
-        task = asyncio.create_task(_load_execution_events_once(mongodb, strategy_id))
+
+        async def load_and_clear() -> tuple[list[dict[str, Any]], str | None]:
+            try:
+                return await _load_execution_events_once(mongodb, strategy_id)
+            finally:
+                if _EXECUTION_EVENTS_IN_FLIGHT.get(key) is asyncio.current_task():
+                    _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
+
+        task = asyncio.create_task(load_and_clear())
         _EXECUTION_EVENTS_IN_FLIGHT[key] = task
-
-        def clear_completed(completed: asyncio.Task[Any]) -> None:
-            if _EXECUTION_EVENTS_IN_FLIGHT.get(key) is completed:
-                _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
-
-        task.add_done_callback(clear_completed)
-    try:
-        return await asyncio.shield(task)
-    finally:
-        if task.done() and _EXECUTION_EVENTS_IN_FLIGHT.get(key) is task:
-            _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
+    return await asyncio.shield(task)
 
 
 def _leg_aware_pnl(
