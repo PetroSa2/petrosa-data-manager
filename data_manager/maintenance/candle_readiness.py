@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
@@ -82,6 +83,7 @@ class ReadinessReport:
     required_count: int
     freshness_intervals: float
     collections: list[CollectionReadiness]
+    required_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def not_ready(self) -> list[CollectionReadiness]:
@@ -93,8 +95,60 @@ class ReadinessReport:
             "checked_at": self.checked_at,
             "required_count": self.required_count,
             "freshness_intervals": self.freshness_intervals,
+            "required_counts": self.required_counts,
             "collections": [asdict(c) for c in self.collections],
         }
+
+
+def derive_required_counts(
+    timeframes: Sequence[str],
+    *,
+    active_strategies: Sequence[str] | None = None,
+    strategy_lookbacks: Mapping[str, Mapping[str, object]] | None = None,
+    margin_candles: int | None = None,
+    fallback_candles: int | None = None,
+) -> dict[str, int]:
+    """Resolve the candle depth required by active strategies per timeframe."""
+    active = set(
+        constants.CANDLE_WARMUP_ACTIVE_STRATEGIES
+        if active_strategies is None
+        else active_strategies
+    )
+    declarations = (
+        constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS
+        if strategy_lookbacks is None
+        else strategy_lookbacks
+    )
+    if not isinstance(declarations, Mapping):
+        declarations = {}
+    margin = (
+        constants.CANDLE_WARMUP_MARGIN_CANDLES
+        if margin_candles is None
+        else max(0, margin_candles)
+    )
+    fallback = (
+        constants.CANDLE_WARMUP_FALLBACK_CANDLES
+        if fallback_candles is None
+        else max(1, fallback_candles)
+    )
+    required: dict[str, int] = {}
+    for timeframe in timeframes:
+        lookbacks = []
+        for strategy in active:
+            values = declarations.get(strategy, {})
+            if not isinstance(values, Mapping):
+                continue
+            value = values.get(timeframe)
+            if isinstance(value, bool):
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                lookbacks.append(parsed)
+        required[timeframe] = max(lookbacks) + margin if lookbacks else fallback
+    return required
 
 
 def _ensure_aware(value: datetime) -> datetime:
@@ -200,6 +254,7 @@ async def evaluate_readiness(
     pairs: list[str] | None = None,
     timeframes: list[str] | None = None,
     required_count: int | None = None,
+    required_counts: Mapping[str, int] | None = None,
     freshness_intervals: float | None = None,
     now: datetime | None = None,
 ) -> ReadinessReport:
@@ -209,11 +264,14 @@ async def evaluate_readiness(
     effective_timeframes = (
         timeframes if timeframes is not None else list(constants.SUPPORTED_INTERVALS)
     )
-    required = (
-        required_count
+    resolved_counts = (
+        {timeframe: required_count for timeframe in effective_timeframes}
         if required_count is not None
-        else constants.CANDLE_WARMUP_MIN_CANDLES
+        else dict(required_counts)
+        if required_counts is not None
+        else derive_required_counts(effective_timeframes)
     )
+    required = max(resolved_counts.values(), default=constants.CANDLE_WARMUP_FALLBACK_CANDLES)
     freshness = (
         freshness_intervals
         if freshness_intervals is not None
@@ -230,7 +288,9 @@ async def evaluate_readiness(
                         adapter,
                         pair,
                         timeframe,
-                        required_count=required,
+                        required_count=resolved_counts.get(
+                            timeframe, constants.CANDLE_WARMUP_FALLBACK_CANDLES
+                        ),
                         freshness_intervals=freshness,
                         now=effective_now,
                     ),
@@ -270,6 +330,7 @@ async def evaluate_readiness(
         required_count=required,
         freshness_intervals=freshness,
         collections=results,
+        required_counts=resolved_counts,
     )
 
     if overall:

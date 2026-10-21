@@ -28,12 +28,41 @@ from data_manager.db.repositories.candle_repository import (
 from data_manager.maintenance import candle_warmup_backfill as warmup
 from data_manager.maintenance.candle_readiness import (
     ReadinessReport,
+    derive_required_counts,
     evaluate_collection,
     evaluate_readiness,
 )
 from data_manager.models.market_data import Candle, MySQLKlineRow
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
+
+
+def test_required_depth_uses_active_strategy_maximum_and_margin() -> None:
+    required = derive_required_counts(
+        ["1d", "1h"],
+        active_strategies=["slow", "fast"],
+        strategy_lookbacks={
+            "slow": {"1d": 265, "1h": 40},
+            "fast": {"1d": 100, "1h": 60},
+        },
+        margin_candles=25,
+        fallback_candles=400,
+    )
+    assert required == {"1d": 290, "1h": 85}
+
+
+def test_required_depth_uses_fallback_for_inactive_or_invalid_declarations() -> None:
+    required = derive_required_counts(
+        ["1d", "5m"],
+        active_strategies=[],
+        strategy_lookbacks={
+            "inactive": {"1d": 265},
+            "invalid": {"5m": "not-a-number"},
+        },
+        margin_candles=25,
+        fallback_candles=400,
+    )
+    assert required == {"1d": 400, "5m": 400}
 
 
 def klines_row(ts: datetime, symbol: str = "BTCUSDT") -> dict:
