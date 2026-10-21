@@ -592,9 +592,17 @@ async def _load_execution_events_once(
     if mysql is not None:
         from data_manager.services.historic_analytics import read_execution_events
 
-        rows, latest_fill_id = await asyncio.to_thread(
-            read_execution_events, mysql, strategy_id=strategy_id
-        )
+        try:
+            rows, latest_fill_id = await asyncio.wait_for(
+                asyncio.to_thread(
+                    read_execution_events, mysql, strategy_id=strategy_id
+                ),
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise _AnalyticsDependencyTimeout(
+                "execution_events MySQL read timed out"
+            ) from exc
         return rows, latest_fill_id
 
     read_started = monotonic()
@@ -653,8 +661,13 @@ async def _load_execution_events(
     mongodb: Any,
     strategy_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    collection = _analytics_database(mongodb)["execution_events"]
-    key = (id(collection), strategy_id)
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(api_module.db_manager)
+    source = (
+        mysql if mysql is not None else _analytics_database(mongodb)["execution_events"]
+    )
+    key = (id(source), strategy_id)
     task = _EXECUTION_EVENTS_IN_FLIGHT.get(key)
     if task is None:
 
@@ -902,10 +915,10 @@ def _degraded_performance(strategy_id: str, exc: BaseException) -> dict[str, Any
 
 
 def _stale_performance(
-    strategy_id: str, mongodb: Any, exc: BaseException
+    strategy_id: str, source: Any, exc: BaseException
 ) -> dict[str, Any] | None:
     cached = _LAST_GOOD_PERFORMANCE.get(strategy_id)
-    if cached is None or cached[0] != id(mongodb):
+    if cached is None or cached[0] != id(source):
         return None
     response = deepcopy(cached[1])
     error = {
@@ -978,8 +991,13 @@ async def _base_performance(
 ) -> dict[str, Any]:
     """Return version-stable base values without replaying fills on the event loop."""
     global _BASE_PERFORMANCE_CACHE
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(api_module.db_manager)
     source = (
-        mongodb.db["execution_events"]
+        mysql
+        if mysql is not None
+        else mongodb.db["execution_events"]
         if mongodb is not None
         else getattr(api_module.db_manager, "__dict__", {}).get("mysql_adapter")
     )
@@ -1048,13 +1066,12 @@ async def get_strategy_performance(strategy_id: str):
         import data_manager.api.app as api_module
         from data_manager.services.historic_analytics import get_mysql_adapter
 
-        if not api_module.db_manager or (
-            get_mysql_adapter(api_module.db_manager) is None
-            and not getattr(api_module.db_manager, "mongodb_adapter", None)
-        ):
+        mysql = get_mysql_adapter(api_module.db_manager)
+        mongodb = getattr(api_module.db_manager, "mongodb_adapter", None)
+        if not api_module.db_manager or (mysql is None and mongodb is None):
             return _unavailable_performance(strategy_id)
 
-        mongodb = api_module.db_manager.mongodb_adapter
+        source = mysql if mysql is not None else mongodb
         stage = "execution_events_read"
         try:
             rows, latest_fill_id = await _load_execution_events(mongodb, strategy_id)
@@ -1070,7 +1087,7 @@ async def get_strategy_performance(strategy_id: str):
                 str(exc),
             )
             return _stale_performance(
-                strategy_id, mongodb, exc
+                strategy_id, source, exc
             ) or _degraded_performance(strategy_id, exc)
         except Exception as exc:
             logger.exception(
@@ -1082,7 +1099,7 @@ async def get_strategy_performance(strategy_id: str):
                 str(exc),
             )
             return _stale_performance(
-                strategy_id, mongodb, exc
+                strategy_id, source, exc
             ) or _degraded_performance(strategy_id, exc)
 
         stage = "analytics_compute"
@@ -1093,8 +1110,13 @@ async def get_strategy_performance(strategy_id: str):
         outcome = values.get("outcome")
         if outcome is None:
             outcome = outcome_stats([], known_book=True)
-            if not rows:
-                outcome["win_rate"] = 0.0
+        if not rows:
+            outcome.update(
+                win_rate=0.0,
+                wins=0,
+                losses=0,
+                consecutive_losses=0,
+            )
         breakdown = values.get("breakdown", PnlBreakdown(realized=0.0, unrealized=0.0))
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
@@ -1104,7 +1126,7 @@ async def get_strategy_performance(strategy_id: str):
         leg_pnl = None
         leg_book = None
         overlay_timeout = False
-        if orphan_mode != "off":
+        if orphan_mode != "off" and mongodb is not None:
             exposure = await _orphaned_lots_from_the_cache(strategy_id)
         overlay = exposure["entries"] if exposure is not None else None
         # Under apply the replay always runs: the outcomes (and realized) do not need the orphan cache, only the
@@ -1253,6 +1275,12 @@ async def get_strategy_performance(strategy_id: str):
                 "strategy_id": strategy_id,
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
+                "history_source": (
+                    "execution_events_mysql"
+                    if mysql is not None
+                    else "execution_events"
+                ),
+                "history_as_of": latest_fill_id,
                 "fills_replayed": len(rows),
                 "sample_status": "zero_sample" if not rows else "sampled",
                 "history_status": history_status,
@@ -1307,7 +1335,7 @@ async def get_strategy_performance(strategy_id: str):
         )
         stats = response["stats"]
         if stats["win_rate"] is not None and stats["consecutive_losses"] is not None:
-            _LAST_GOOD_PERFORMANCE[strategy_id] = (id(mongodb), deepcopy(response))
+            _LAST_GOOD_PERFORMANCE[strategy_id] = (id(source), deepcopy(response))
             if len(_LAST_GOOD_PERFORMANCE) > 64:
                 _LAST_GOOD_PERFORMANCE.pop(next(iter(_LAST_GOOD_PERFORMANCE)))
         return response
