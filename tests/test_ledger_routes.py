@@ -671,3 +671,27 @@ def test_tieout_marks_empty_closed_range_incomplete():
     assert result["incomplete"] is True
     assert result["source_status"] == {"exchange": "empty", "ledger": "empty"}
     assert result["days"][0]["status"] == "incomplete"
+
+
+def test_tieout_marks_missing_day_incomplete_when_sources_are_nonempty():
+    result = FakeLedgerRepository(
+        [
+            Result(
+                [
+                    {
+                        "day": date(2026, 9, 30),
+                        "realized_pnl": 0,
+                        "commission": 0,
+                        "funding_fee": 0,
+                        "other_income_total": 0,
+                        "is_final": True,
+                    }
+                ]
+            ),
+            Result([{"date": date(2026, 9, 30), "daily_pnl": 0}]),
+            Result([]),
+        ]
+    ).tieout(date(2026, 9, 30), date(2026, 10, 1))
+
+    assert result["incomplete"] is True
+    assert result["days"][-1]["status"] == "incomplete"

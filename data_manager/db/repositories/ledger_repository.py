@@ -467,7 +467,11 @@ class LedgerRepository(BaseRepository):
         return {
             "from": first.isoformat(),
             "to": last.isoformat(),
-            "incomplete": not days or not pnl,
+            "incomplete": (
+                not days
+                or not pnl
+                or any(day["status"] == "incomplete" for day in result)
+            ),
             "source_status": {
                 "exchange": "available" if days else "empty",
                 "ledger": "available" if pnl else "empty",
