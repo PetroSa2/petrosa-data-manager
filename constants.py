@@ -2,6 +2,7 @@
 Constants and configuration for the Petrosa Data Manager service.
 """
 
+import json
 import logging
 import os
 
@@ -387,7 +388,29 @@ SUPPORTED_INTERVALS = [
 # 265 candles (minervini_trend_template), 1.5x safety margin -> 400. Retention
 # (#274 AC3) must be at least as deep or a freshly cut-over collection would
 # shed candles it just backfilled.
-CANDLE_WARMUP_MIN_CANDLES = int(os.getenv("CANDLE_WARMUP_MIN_CANDLES", "400"))
+CANDLE_WARMUP_FALLBACK_CANDLES = int(
+    os.getenv(
+        "CANDLE_WARMUP_FALLBACK_CANDLES", os.getenv("CANDLE_WARMUP_MIN_CANDLES", "400")
+    )
+)
+CANDLE_WARMUP_MIN_CANDLES = CANDLE_WARMUP_FALLBACK_CANDLES
+CANDLE_WARMUP_MARGIN_CANDLES = int(os.getenv("CANDLE_WARMUP_MARGIN_CANDLES", "25"))
+CANDLE_WARMUP_ACTIVE_STRATEGIES = tuple(
+    strategy.strip()
+    for strategy in os.getenv("CANDLE_WARMUP_ACTIVE_STRATEGIES", "").split(",")
+    if strategy.strip()
+)
+try:
+    CANDLE_WARMUP_STRATEGY_LOOKBACKS = json.loads(
+        os.getenv(
+            "CANDLE_WARMUP_STRATEGY_LOOKBACKS",
+            '{"minervini_trend_template":{"1d":265}}',
+        )
+    )
+except (TypeError, ValueError, json.JSONDecodeError):
+    CANDLE_WARMUP_STRATEGY_LOOKBACKS = {}
+if not isinstance(CANDLE_WARMUP_STRATEGY_LOOKBACKS, dict):
+    CANDLE_WARMUP_STRATEGY_LOOKBACKS = {}
 
 # How stale the newest candle in a collection may be, expressed as a multiple
 # of the collection's own timeframe, before readiness fails. 3 intervals

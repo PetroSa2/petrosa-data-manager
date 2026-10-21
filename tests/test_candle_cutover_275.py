@@ -9,6 +9,8 @@ Coverage for the candle-store cutover safety net (petrosa-data-manager#275).
 """
 
 import asyncio
+import importlib
+import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
@@ -28,12 +30,74 @@ from data_manager.db.repositories.candle_repository import (
 from data_manager.maintenance import candle_warmup_backfill as warmup
 from data_manager.maintenance.candle_readiness import (
     ReadinessReport,
+    derive_required_counts,
     evaluate_collection,
     evaluate_readiness,
 )
 from data_manager.models.market_data import Candle, MySQLKlineRow
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
+
+
+def test_required_depth_uses_active_strategy_maximum_and_margin() -> None:
+    required = derive_required_counts(
+        ["1d", "1h"],
+        active_strategies=["slow", "fast"],
+        strategy_lookbacks={
+            "slow": {"1d": 265, "1h": 40},
+            "fast": {"1d": 100, "1h": 60},
+        },
+        margin_candles=25,
+        fallback_candles=400,
+    )
+    assert required == {"1d": 290, "1h": 85}
+
+
+def test_required_depth_uses_fallback_for_inactive_or_invalid_declarations() -> None:
+    required = derive_required_counts(
+        ["1d", "5m"],
+        active_strategies=[],
+        strategy_lookbacks={
+            "inactive": {"1d": 265},
+            "invalid": {"5m": "not-a-number"},
+        },
+        margin_candles=25,
+        fallback_candles=400,
+    )
+    assert required == {"1d": 400, "5m": 400}
+
+
+def test_required_depth_ignores_malformed_declaration_container() -> None:
+    required = derive_required_counts(
+        ["1d"], strategy_lookbacks=[], fallback_candles=400
+    )
+    assert required == {"1d": 400}
+
+
+def test_required_depth_uses_declared_strategy_ids_when_active_list_is_unset() -> None:
+    required = derive_required_counts(
+        ["1d"], strategy_lookbacks={"slow": {"1d": 265}}, margin_candles=25
+    )
+    assert required == {"1d": 290}
+
+
+def test_invalid_strategy_lookback_configuration_falls_back_safely(monkeypatch) -> None:
+    import constants
+
+    original = os.environ.get("CANDLE_WARMUP_STRATEGY_LOOKBACKS")
+    try:
+        monkeypatch.setenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", "{")
+        importlib.reload(constants)
+        assert constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS == {}
+        monkeypatch.setenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", "[]")
+        importlib.reload(constants)
+        assert constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS == {}
+    finally:
+        if original is None:
+            monkeypatch.delenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", raising=False)
+        else:
+            monkeypatch.setenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", original)
+        importlib.reload(constants)
 
 
 def klines_row(ts: datetime, symbol: str = "BTCUSDT") -> dict:
@@ -68,6 +132,44 @@ def mongo_adapter(*, count: int = 0, latest: list | None = None) -> Mock:
 
 
 class TestReadinessGate:
+    @pytest.mark.asyncio
+    async def test_timeout_keeps_the_timeframe_required_count(self, monkeypatch):
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(1)
+
+        adapter = mongo_adapter()
+        adapter.get_record_count = AsyncMock(side_effect=hang)
+        monkeypatch.setattr(
+            "constants.CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS", 0.001
+        )
+        report = await evaluate_readiness(
+            adapter,
+            pairs=["BTCUSDT"],
+            timeframes=["1d"],
+            required_counts={"1d": 290},
+            now=NOW,
+        )
+        assert report.collections[0].required_count == 290
+        assert report.collections[0].reasons == ["timeout"]
+
+    @pytest.mark.asyncio
+    async def test_report_uses_per_timeframe_required_count(self):
+        adapter = mongo_adapter(
+            count=290, latest=[{"timestamp": NOW - timedelta(days=1)}]
+        )
+        report = await evaluate_readiness(
+            adapter,
+            pairs=["BTCUSDT"],
+            timeframes=["1d"],
+            required_counts={"1d": 290},
+            now=NOW,
+        )
+        assert report.ready is True
+        assert report.required_counts == {"1d": 290}
+        adapter.get_record_count.assert_awaited_once_with(
+            "klines_1d", symbol="BTCUSDT", max_count=290
+        )
+
     @pytest.mark.asyncio
     async def test_deep_and_fresh_collection_is_ready(self):
         adapter = mongo_adapter(
