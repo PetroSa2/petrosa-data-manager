@@ -45,6 +45,24 @@ async def get_strategy_performance(
                 limit=50_000,
                 event_types=set(KNOWN_EVENT_TYPES),
             )
+            strategy_ids = {
+                str(row["strategy_id"]).strip()
+                for row in rows
+                if row.get("strategy_id")
+            }
+            try:
+                from data_manager.services.historic_analytics import read_table
+
+                strategy_rows = await asyncio.to_thread(
+                    read_table, mysql, "cio_decisions"
+                )
+            except Exception:
+                strategy_rows = []
+            strategy_ids.update(
+                str(row["strategy_id"]).strip()
+                for row in strategy_rows
+                if row.get("strategy_id")
+            )
             source = "execution_events_mysql"
         else:
             query = {
@@ -54,6 +72,11 @@ async def get_strategy_performance(
             cursor = mongodb.db["execution_events"].find(query).sort("timestamp", 1)
             rows = await cursor.to_list(length=50_000)
             as_of = None
+            strategy_ids = {
+                str(row["strategy_id"]).strip()
+                for row in rows
+                if row.get("strategy_id")
+            }
             source = "execution_events"
     except Exception as exc:
         raise HTTPException(
@@ -61,7 +84,9 @@ async def get_strategy_performance(
         ) from exc
 
     return {
-        "strategies": build_strategy_performance(rows, start=from_, end=to),
+        "strategies": build_strategy_performance(
+            rows, start=from_, end=to, strategy_ids=strategy_ids
+        ),
         "from": from_.isoformat(),
         "to": to.isoformat(),
         "generated_at": datetime.now(UTC).isoformat(),

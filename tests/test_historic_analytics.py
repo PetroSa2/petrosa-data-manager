@@ -11,6 +11,7 @@ from data_manager.services.historic_analytics import (
     read_execution_events,
     read_table,
 )
+from data_manager.services.strategy_performance import build_strategy_performance
 
 
 class MySQLFake:
@@ -76,6 +77,25 @@ def test_historic_event_reader_rejects_rows_outside_window_and_strategy():
 
     assert len(rows) == 1
     assert rows[0]["strategy_id"] == "s1"
+
+
+def test_strategy_performance_builds_explicit_zero_sample_for_active_strategy():
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    result = build_strategy_performance(
+        [], start=start, end=start + timedelta(hours=1), strategy_ids=["active"]
+    )
+
+    assert result == [
+        {
+            "strategy_id": "active",
+            "realized_pnl_usd": 0.0,
+            "win_rate": 0.0,
+            "trade_count": 0,
+            "net_r_total": 0.0,
+            "from": start.isoformat(),
+            "to": (start + timedelta(hours=1)).isoformat(),
+        }
+    ]
 
 
 @pytest.mark.asyncio
