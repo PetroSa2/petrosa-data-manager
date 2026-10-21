@@ -65,6 +65,13 @@ def test_required_depth_uses_fallback_for_inactive_or_invalid_declarations() -> 
     assert required == {"1d": 400, "5m": 400}
 
 
+def test_required_depth_ignores_malformed_declaration_container() -> None:
+    required = derive_required_counts(
+        ["1d"], strategy_lookbacks=[], fallback_candles=400
+    )
+    assert required == {"1d": 400}
+
+
 def klines_row(ts: datetime, symbol: str = "BTCUSDT") -> dict:
     return {
         "symbol": symbol,
@@ -97,6 +104,24 @@ def mongo_adapter(*, count: int = 0, latest: list | None = None) -> Mock:
 
 
 class TestReadinessGate:
+    @pytest.mark.asyncio
+    async def test_report_uses_per_timeframe_required_count(self):
+        adapter = mongo_adapter(
+            count=290, latest=[{"timestamp": NOW - timedelta(days=1)}]
+        )
+        report = await evaluate_readiness(
+            adapter,
+            pairs=["BTCUSDT"],
+            timeframes=["1d"],
+            required_counts={"1d": 290},
+            now=NOW,
+        )
+        assert report.ready is True
+        assert report.required_counts == {"1d": 290}
+        adapter.get_record_count.assert_awaited_once_with(
+            "klines_1d", symbol="BTCUSDT", max_count=290
+        )
+
     @pytest.mark.asyncio
     async def test_deep_and_fresh_collection_is_ready(self):
         adapter = mongo_adapter(
