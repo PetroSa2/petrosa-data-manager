@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import data_manager.api.app as api_module
-from data_manager.api.routes import strategy_performance
+from data_manager.api.routes import analysis, strategy_performance
 from data_manager.services.historic_analytics import (
     _as_datetime,
     get_mysql_adapter,
@@ -121,3 +121,18 @@ async def test_strategy_performance_uses_mysql_without_mongodb():
     assert result["source"] == "execution_events_mysql"
     assert result["as_of"] == (start + timedelta(minutes=1)).isoformat()
     assert result["strategies"][0]["strategy_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
+    mysql = MySQLFake([])
+    api_module.db_manager = SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None)
+    try:
+        result = await analysis.get_strategy_performance("active")
+    finally:
+        api_module.db_manager = None
+
+    assert result["stats"]["win_rate"] == 0.0
+    assert result["stats"]["consecutive_losses"] == 0
+    assert result["metadata"]["history_source"] == "execution_events_mysql"
+    assert result["metadata"]["history_status"] == "zero_sample"
