@@ -657,9 +657,7 @@ async def _load_execution_events(
 
     mysql = get_mysql_adapter(api_module.db_manager)
     source = (
-        mysql
-        if mysql is not None
-        else _analytics_database(mongodb)["execution_events"]
+        mysql if mysql is not None else _analytics_database(mongodb)["execution_events"]
     )
     key = (id(source), strategy_id)
     task = _EXECUTION_EVENTS_IN_FLIGHT.get(key)
@@ -1080,9 +1078,9 @@ async def get_strategy_performance(strategy_id: str):
                 type(exc).__name__,
                 str(exc),
             )
-            return _stale_performance(strategy_id, source, exc) or _degraded_performance(
-                strategy_id, exc
-            )
+            return _stale_performance(
+                strategy_id, source, exc
+            ) or _degraded_performance(strategy_id, exc)
         except Exception as exc:
             logger.exception(
                 "performance: stage=execution_events_read outcome=error "
@@ -1092,9 +1090,9 @@ async def get_strategy_performance(strategy_id: str):
                 type(exc).__name__,
                 str(exc),
             )
-            return _stale_performance(strategy_id, source, exc) or _degraded_performance(
-                strategy_id, exc
-            )
+            return _stale_performance(
+                strategy_id, source, exc
+            ) or _degraded_performance(strategy_id, exc)
 
         stage = "analytics_compute"
         from data_manager.services.pnl_calculator import PnlBreakdown
@@ -1270,7 +1268,9 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "history_source": (
-                    "execution_events_mysql" if mysql is not None else "execution_events"
+                    "execution_events_mysql"
+                    if mysql is not None
+                    else "execution_events"
                 ),
                 "history_as_of": latest_fill_id,
                 "fills_replayed": len(rows),
