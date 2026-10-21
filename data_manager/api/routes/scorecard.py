@@ -201,9 +201,7 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
         funding_error,
         "incomplete" if source_errors else "complete",
         source_errors,
-        "execution_events_mysql"
-        if mysql is not None
-        else "execution_events",
+        "execution_events_mysql" if mysql is not None else "execution_events",
         latest.isoformat() if latest is not None else None,
     )
 
