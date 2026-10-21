@@ -585,7 +585,17 @@ async def _load_execution_events_once(
     strategy_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Read fills once per newest fill-event version and filter them per caller."""
+    from data_manager.services.historic_analytics import get_mysql_adapter
     from data_manager.services.round_book import FILL_EVENT_TYPES
+
+    mysql = get_mysql_adapter(api_module.db_manager)
+    if mysql is not None:
+        from data_manager.services.historic_analytics import read_execution_events
+
+        rows, latest_fill_id = await asyncio.to_thread(
+            read_execution_events, mysql, strategy_id=strategy_id
+        )
+        return rows, latest_fill_id
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
@@ -968,7 +978,12 @@ async def _base_performance(
 ) -> dict[str, Any]:
     """Return version-stable base values without replaying fills on the event loop."""
     global _BASE_PERFORMANCE_CACHE
-    version = (id(mongodb.db["execution_events"]), latest_fill_id, strategy_id)
+    source = (
+        mongodb.db["execution_events"]
+        if mongodb is not None
+        else getattr(api_module.db_manager, "__dict__", {}).get("mysql_adapter")
+    )
+    version = (id(source), latest_fill_id, strategy_id)
     if _BASE_PERFORMANCE_CACHE is not None and _BASE_PERFORMANCE_CACHE[:3] == version:
         return _BASE_PERFORMANCE_CACHE[3]
     task = _BASE_PERFORMANCE_IN_FLIGHT.get(version)
@@ -1031,9 +1046,11 @@ async def get_strategy_performance(strategy_id: str):
     stage = "initialization"
     try:
         import data_manager.api.app as api_module
+        from data_manager.services.historic_analytics import get_mysql_adapter
 
-        if not api_module.db_manager or not getattr(
-            api_module.db_manager, "mongodb_adapter", None
+        if not api_module.db_manager or (
+            get_mysql_adapter(api_module.db_manager) is None
+            and not getattr(api_module.db_manager, "mongodb_adapter", None)
         ):
             return _unavailable_performance(strategy_id)
 

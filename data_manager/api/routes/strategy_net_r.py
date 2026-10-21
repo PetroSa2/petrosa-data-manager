@@ -36,6 +36,14 @@ def _analytics_database(mongodb: Any) -> Any:
 
 
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(api_module.db_manager)
+    if mysql is not None:
+        from data_manager.services.historic_analytics import read_execution_events
+
+        rows, _ = await asyncio.to_thread(read_execution_events, mysql, end=end)
+        return rows
     mongodb = api_module.db_manager.mongodb_adapter
     database = _analytics_database(mongodb)
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
@@ -53,13 +61,21 @@ async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
     """position id -> the stop fraction the position carried, from its row."""
     if not position_ids:
         return {}
-    mongodb = api_module.db_manager.mongodb_adapter
-    database = _analytics_database(mongodb)
-    rows = (
-        await database["positions"]
-        .find({"position_id": {"$in": position_ids}})
-        .to_list(length=len(position_ids))
-    )
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(api_module.db_manager)
+    if mysql is not None:
+        from data_manager.services.historic_analytics import read_table
+
+        rows = await asyncio.to_thread(read_table, mysql, "positions")
+    else:
+        mongodb = api_module.db_manager.mongodb_adapter
+        database = _analytics_database(mongodb)
+        rows = await (
+            database["positions"]
+            .find({"position_id": {"$in": position_ids}})
+            .to_list(length=len(position_ids))
+        )
     out: dict[str, Decimal] = {}
     for row in rows:
         stop = stop_fraction_of(
@@ -74,13 +90,21 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
     """decision id -> {"source", "stop_fraction"} from ``cio_decisions``."""
     if not decision_ids:
         return {}
-    mongodb = api_module.db_manager.mongodb_adapter
-    database = _analytics_database(mongodb)
-    rows = (
-        await database["cio_decisions"]
-        .find({"decision_id": {"$in": decision_ids}})
-        .to_list(length=len(decision_ids))
-    )
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(api_module.db_manager)
+    if mysql is not None:
+        from data_manager.services.historic_analytics import read_table
+
+        rows = await asyncio.to_thread(read_table, mysql, "cio_decisions")
+    else:
+        mongodb = api_module.db_manager.mongodb_adapter
+        database = _analytics_database(mongodb)
+        rows = await (
+            database["cio_decisions"]
+            .find({"decision_id": {"$in": decision_ids}})
+            .to_list(length=len(decision_ids))
+        )
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
         payload = row.get("payload") or {}
@@ -100,7 +124,9 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
 
 async def _load_exchange_history() -> dict[str, Any] | None:
     """The exchange snapshot series for the synthetic exits; None when MySQL is unavailable."""
-    mysql = getattr(api_module.db_manager, "mysql_adapter", None)
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is None:
         return None
     from data_manager.db.repositories.ledger_repository import LedgerRepository
@@ -112,8 +138,11 @@ async def _load_exchange_history() -> dict[str, Any] | None:
 
 
 async def _scored() -> list:
-    if not api_module.db_manager or not getattr(
-        api_module.db_manager, "mongodb_adapter", None
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    if not api_module.db_manager or (
+        get_mysql_adapter(api_module.db_manager) is None
+        and not getattr(api_module.db_manager, "mongodb_adapter", None)
     ):
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
     try:

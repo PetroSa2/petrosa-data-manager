@@ -164,6 +164,15 @@ def _repo() -> LedgerRepository:
     )
 
 
+def _historic_repo() -> LedgerRepository:
+    candidate = _repo()
+    if not isinstance(candidate, LedgerRepository):
+        return candidate
+    historic = LedgerRepository(candidate.mysql, None)
+    historic.historic_only = True
+    return historic
+
+
 def _ledger_unavailable(exc: BaseException) -> HTTPException:
     """Build a safe error response that preserves the real failure class and message."""
     return HTTPException(
@@ -197,7 +206,9 @@ async def _read_tieout(
                 pass
             task = None
         if task is None:
-            task = asyncio.create_task(asyncio.to_thread(_repo().tieout, first, last))
+            task = asyncio.create_task(
+                asyncio.to_thread(_historic_repo().tieout, first, last)
+            )
             _tieout_tasks[key] = task
     try:
         return await asyncio.wait_for(asyncio.shield(task), constants.API_QUERY_TIMEOUT)
@@ -225,7 +236,7 @@ async def _read_positions_tieout() -> dict[str, Any]:
             _positions_tieout_task = None
         if _positions_tieout_task is None:
             _positions_tieout_task = asyncio.create_task(
-                asyncio.to_thread(_repo().positions_tieout)
+                asyncio.to_thread(_historic_repo().positions_tieout)
             )
         task = _positions_tieout_task
     try:

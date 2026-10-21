@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,13 +33,21 @@ def _event_net_r(row: dict[str, Any]) -> float:
 
 
 def build_strategy_performance(
-    rows: list[dict[str, Any]], *, start: datetime, end: datetime
+    rows: list[dict[str, Any]],
+    *,
+    start: datetime,
+    end: datetime,
+    strategy_ids: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         strategy_id = str(row.get("strategy_id") or "").strip()
         if strategy_id:
             grouped[strategy_id].append(row)
+    for strategy_id in strategy_ids:
+        normalized = str(strategy_id or "").strip()
+        if normalized:
+            grouped.setdefault(normalized, [])
 
     result: list[dict[str, Any]] = []
     for strategy_id, strategy_rows in sorted(grouped.items()):
