@@ -57,11 +57,13 @@ class LedgerRepository(BaseRepository):
         with engine.begin() as connection:
             return connection.execute(text(statement), params or {})
 
-    def _external_close_ids_for_tieout(self) -> set[str]:
+    def _external_close_ids_for_tieout(
+        self, *, allow_missing: bool = False
+    ) -> set[str]:
         if self.mongodb is None:
-            if self.mysql is not None:
-                raise RuntimeError("MongoDB is not available")
-            return set()
+            if allow_missing or getattr(self, "historic_only", False):
+                return set()
+            raise RuntimeError("MongoDB is not available")
         return asyncio.run(self.live_closed_entry_order_ids())
 
     @staticmethod
@@ -510,7 +512,12 @@ class LedgerRepository(BaseRepository):
             .mappings()
             .all()
         )
-        external_close_ids = self._external_close_ids_for_tieout()
+        try:
+            external_close_ids = self._external_close_ids_for_tieout()
+        except RuntimeError:
+            if self.mongodb is not None:
+                raise
+            external_close_ids = set()
         ledger = (
             self._run(
                 "SELECT entry_order_id, symbol, position_side, quantity "

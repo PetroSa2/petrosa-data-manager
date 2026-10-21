@@ -86,6 +86,8 @@ class Scored:
     funding_error: str | None
     status: str = "complete"
     source_errors: dict[str, str] | None = None
+    source: str = "execution_events"
+    as_of: str | None = None
 
 
 async def _load_funding(
@@ -101,8 +103,11 @@ async def _load_funding(
 
 async def _scored(start: datetime | None, end: datetime | None) -> Scored:
     manager = api_module.db_manager
+    from data_manager.services.historic_analytics import get_mysql_adapter
+
+    mysql = get_mysql_adapter(manager)
     mongodb = getattr(manager, "mongodb_adapter", None) if manager is not None else None
-    if mongodb is None:
+    if mongodb is None and mysql is None:
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
     source_errors: dict[str, str] = {}
     try:
@@ -184,6 +189,8 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
     scored = score_rounds(
         book.closed, stops=stops, decisions=decisions, funding_cost=funding_cost
     )
+    timestamps = [_when(row) for row in fills]
+    latest = max((value for value in timestamps if value is not None), default=None)
     return Scored(
         scored,
         book,
@@ -194,6 +201,10 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
         funding_error,
         "incomplete" if source_errors else "complete",
         source_errors,
+        "execution_events_mysql"
+        if mysql is not None
+        else "execution_events",
+        latest.isoformat() if latest is not None else None,
     )
 
 
@@ -295,6 +306,8 @@ async def get_scorecard(
     body["conservation"] = ledger
     body["status"] = data.status
     body["source_errors"] = data.source_errors or {}
+    body["source"] = data.source
+    body["as_of"] = data.as_of
     body["period"] = {
         "from": from_.isoformat() if from_ else None,
         "to": to.isoformat() if to else None,
