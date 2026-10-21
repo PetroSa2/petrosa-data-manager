@@ -109,11 +109,6 @@ def derive_required_counts(
     fallback_candles: int | None = None,
 ) -> dict[str, int]:
     """Resolve the candle depth required by active strategies per timeframe."""
-    active = set(
-        constants.CANDLE_WARMUP_ACTIVE_STRATEGIES
-        if active_strategies is None
-        else active_strategies
-    )
     declarations = (
         constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS
         if strategy_lookbacks is None
@@ -121,6 +116,11 @@ def derive_required_counts(
     )
     if not isinstance(declarations, Mapping):
         declarations = {}
+    active = set(
+        active_strategies
+        if active_strategies is not None
+        else constants.CANDLE_WARMUP_ACTIVE_STRATEGIES or declarations.keys()
+    )
     margin = (
         constants.CANDLE_WARMUP_MARGIN_CANDLES
         if margin_candles is None
@@ -304,7 +304,9 @@ async def evaluate_readiness(
                     timeframe=timeframe,
                     collection=collection_name(pair, timeframe),
                     count=0,
-                    required_count=required,
+                    required_count=resolved_counts.get(
+                        timeframe, constants.CANDLE_WARMUP_FALLBACK_CANDLES
+                    ),
                     newest_timestamp=None,
                     age_seconds=None,
                     max_age_seconds=_max_age_seconds(timeframe, freshness),

@@ -72,6 +72,13 @@ def test_required_depth_ignores_malformed_declaration_container() -> None:
     assert required == {"1d": 400}
 
 
+def test_required_depth_uses_declared_strategy_ids_when_active_list_is_unset() -> None:
+    required = derive_required_counts(
+        ["1d"], strategy_lookbacks={"slow": {"1d": 265}}, margin_candles=25
+    )
+    assert required == {"1d": 290}
+
+
 def klines_row(ts: datetime, symbol: str = "BTCUSDT") -> dict:
     return {
         "symbol": symbol,
@@ -104,6 +111,26 @@ def mongo_adapter(*, count: int = 0, latest: list | None = None) -> Mock:
 
 
 class TestReadinessGate:
+    @pytest.mark.asyncio
+    async def test_timeout_keeps_the_timeframe_required_count(self, monkeypatch):
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(1)
+
+        adapter = mongo_adapter()
+        adapter.get_record_count = AsyncMock(side_effect=hang)
+        monkeypatch.setattr(
+            "constants.CANDLE_READINESS_COLLECTION_TIMEOUT_SECONDS", 0.001
+        )
+        report = await evaluate_readiness(
+            adapter,
+            pairs=["BTCUSDT"],
+            timeframes=["1d"],
+            required_counts={"1d": 290},
+            now=NOW,
+        )
+        assert report.collections[0].required_count == 290
+        assert report.collections[0].reasons == ["timeout"]
+
     @pytest.mark.asyncio
     async def test_report_uses_per_timeframe_required_count(self):
         adapter = mongo_adapter(

@@ -397,9 +397,7 @@ CANDLE_WARMUP_MIN_CANDLES = CANDLE_WARMUP_FALLBACK_CANDLES
 CANDLE_WARMUP_MARGIN_CANDLES = int(os.getenv("CANDLE_WARMUP_MARGIN_CANDLES", "25"))
 CANDLE_WARMUP_ACTIVE_STRATEGIES = tuple(
     strategy.strip()
-    for strategy in os.getenv(
-        "CANDLE_WARMUP_ACTIVE_STRATEGIES", "minervini_trend_template"
-    ).split(",")
+    for strategy in os.getenv("CANDLE_WARMUP_ACTIVE_STRATEGIES", "").split(",")
     if strategy.strip()
 )
 try:
