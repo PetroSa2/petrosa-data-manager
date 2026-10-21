@@ -9,6 +9,8 @@ Coverage for the candle-store cutover safety net (petrosa-data-manager#275).
 """
 
 import asyncio
+import importlib
+import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
@@ -77,6 +79,25 @@ def test_required_depth_uses_declared_strategy_ids_when_active_list_is_unset() -
         ["1d"], strategy_lookbacks={"slow": {"1d": 265}}, margin_candles=25
     )
     assert required == {"1d": 290}
+
+
+def test_invalid_strategy_lookback_configuration_falls_back_safely(monkeypatch) -> None:
+    import constants
+
+    original = os.environ.get("CANDLE_WARMUP_STRATEGY_LOOKBACKS")
+    try:
+        monkeypatch.setenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", "{")
+        importlib.reload(constants)
+        assert constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS == {}
+        monkeypatch.setenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", "[]")
+        importlib.reload(constants)
+        assert constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS == {}
+    finally:
+        if original is None:
+            monkeypatch.delenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", raising=False)
+        else:
+            monkeypatch.setenv("CANDLE_WARMUP_STRATEGY_LOOKBACKS", original)
+        importlib.reload(constants)
 
 
 def klines_row(ts: datetime, symbol: str = "BTCUSDT") -> dict:
