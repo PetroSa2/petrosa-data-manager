@@ -72,9 +72,7 @@ def test_historic_event_reader_rejects_rows_outside_window_and_strategy():
         ]
     )
 
-    rows, _ = read_execution_events(
-        mysql, start=start, end=end, strategy_id="s1"
-    )
+    rows, _ = read_execution_events(mysql, start=start, end=end, strategy_id="s1")
 
     assert len(rows) == 1
     assert rows[0]["strategy_id"] == "s1"
