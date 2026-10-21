@@ -5,7 +5,12 @@ import pytest
 
 import data_manager.api.app as api_module
 from data_manager.api.routes import strategy_performance
-from data_manager.services.historic_analytics import read_execution_events
+from data_manager.services.historic_analytics import (
+    _as_datetime,
+    get_mysql_adapter,
+    read_execution_events,
+    read_table,
+)
 
 
 class MySQLFake:
@@ -16,6 +21,10 @@ class MySQLFake:
     def query_range(self, table, start, end, **kwargs):
         self.calls.append((table, start, end, kwargs))
         return self.rows
+
+    def find_paginated(self, table, **kwargs):
+        self.calls.append((table, kwargs))
+        return self.rows, len(self.rows)
 
 
 @pytest.mark.asyncio
@@ -34,6 +43,41 @@ async def test_execution_event_reader_filters_fills_and_reports_mysql_watermark(
     assert [row["event_type"] for row in selected] == ["filled", "partial_fill"]
     assert as_of == (end - timedelta(minutes=2)).isoformat()
     assert mysql.calls[0][0] == "execution_events"
+
+
+def test_historic_read_helpers_normalize_inputs_and_use_bounded_pages():
+    naive = datetime(2026, 10, 1)
+    assert _as_datetime(naive).tzinfo is UTC
+    assert _as_datetime("2026-10-01T00:00:00Z").tzinfo is UTC
+    assert _as_datetime("not-a-date") is None
+    assert _as_datetime(3) is None
+    assert get_mysql_adapter(None) is None
+    assert get_mysql_adapter(SimpleNamespace(mysql_adapter=object())) is None
+
+    mysql = MySQLFake([{"event_type": "filled", "timestamp": naive}])
+    rows, _ = read_execution_events(mysql, strategy_id="missing")
+    assert rows == []
+    assert read_table(mysql, "positions") == mysql.rows
+
+
+def test_historic_event_reader_rejects_rows_outside_window_and_strategy():
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    mysql = MySQLFake(
+        [
+            {"event_type": "filled", "strategy_id": "s1", "timestamp": start},
+            {"event_type": "filled", "strategy_id": "s2", "timestamp": start},
+            {"event_type": "filled", "strategy_id": "s1", "timestamp": end},
+            {"event_type": "filled", "strategy_id": "s1", "timestamp": None},
+        ]
+    )
+
+    rows, _ = read_execution_events(
+        mysql, start=start, end=end, strategy_id="s1"
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["strategy_id"] == "s1"
 
 
 @pytest.mark.asyncio
