@@ -389,7 +389,9 @@ SUPPORTED_INTERVALS = [
 # (#274 AC3) must be at least as deep or a freshly cut-over collection would
 # shed candles it just backfilled.
 CANDLE_WARMUP_FALLBACK_CANDLES = int(
-    os.getenv("CANDLE_WARMUP_FALLBACK_CANDLES", os.getenv("CANDLE_WARMUP_MIN_CANDLES", "400"))
+    os.getenv(
+        "CANDLE_WARMUP_FALLBACK_CANDLES", os.getenv("CANDLE_WARMUP_MIN_CANDLES", "400")
+    )
 )
 CANDLE_WARMUP_MIN_CANDLES = CANDLE_WARMUP_FALLBACK_CANDLES
 CANDLE_WARMUP_MARGIN_CANDLES = int(os.getenv("CANDLE_WARMUP_MARGIN_CANDLES", "25"))

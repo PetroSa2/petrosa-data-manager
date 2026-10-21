@@ -271,7 +271,9 @@ async def evaluate_readiness(
         if required_counts is not None
         else derive_required_counts(effective_timeframes)
     )
-    required = max(resolved_counts.values(), default=constants.CANDLE_WARMUP_FALLBACK_CANDLES)
+    required = max(
+        resolved_counts.values(), default=constants.CANDLE_WARMUP_FALLBACK_CANDLES
+    )
     freshness = (
         freshness_intervals
         if freshness_intervals is not None
