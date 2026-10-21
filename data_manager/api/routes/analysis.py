@@ -592,9 +592,17 @@ async def _load_execution_events_once(
     if mysql is not None:
         from data_manager.services.historic_analytics import read_execution_events
 
-        rows, latest_fill_id = await asyncio.to_thread(
-            read_execution_events, mysql, strategy_id=strategy_id
-        )
+        try:
+            rows, latest_fill_id = await asyncio.wait_for(
+                asyncio.to_thread(
+                    read_execution_events, mysql, strategy_id=strategy_id
+                ),
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise _AnalyticsDependencyTimeout(
+                "execution_events MySQL read timed out"
+            ) from exc
         return rows, latest_fill_id
 
     read_started = monotonic()

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -136,3 +137,22 @@ async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
     assert result["stats"]["consecutive_losses"] == 0
     assert result["metadata"]["history_source"] == "execution_events_mysql"
     assert result["metadata"]["history_status"] == "zero_sample"
+
+
+@pytest.mark.asyncio
+async def test_legacy_strategy_performance_mysql_read_is_bounded(monkeypatch):
+    mysql = MySQLFake([])
+    api_module.db_manager = SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None)
+
+    async def slow_to_thread(*_args, **_kwargs):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(analysis.asyncio, "to_thread", slow_to_thread)
+    monkeypatch.setattr(
+        analysis.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.01
+    )
+    try:
+        with pytest.raises(analysis._AnalyticsDependencyTimeout):
+            await analysis._load_execution_events_once(None, "active")
+    finally:
+        api_module.db_manager = None
