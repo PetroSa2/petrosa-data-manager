@@ -8,7 +8,7 @@ from data_manager.db.mysql_adapter import MySQLAdapter
 MIGRATIONS = Path(__file__).parents[1] / "data_manager" / "scripts" / "migrations"
 
 
-def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_unchanged():
+def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_bounded():
     mysql = MySQLAdapter("mysql+pymysql://u:p@h:3306/db", role="serving")
     args = mysql.engine_options["connect_args"]
     assert all(
@@ -19,8 +19,8 @@ def test_mysql_session_mode_is_mysql_only_and_pool_budget_is_unchanged():
     assert (
         f"wait_timeout={constants.MYSQL_SESSION_WAIT_TIMEOUT}" in args["init_command"]
     )
-    assert mysql.pool_options["pool_size"] == 5
-    assert mysql.pool_options["max_overflow"] == 7
+    assert mysql.pool_options["pool_size"] == 3
+    assert mysql.pool_options["max_overflow"] == 1
     assert mysql.engine_options["pool_pre_ping"] is True
 
 

@@ -54,12 +54,12 @@ def _failing_connect(engine, message: str) -> list[int]:
 
 
 def test_role_defaults_and_suffix_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MYSQL_POOL_SIZE_CRON", "3")
+    monkeypatch.setenv("MYSQL_POOL_SIZE_CRON", "1")
     monkeypatch.setenv("MYSQL_MAX_OVERFLOW_CRON", "2")
     monkeypatch.setenv("MYSQL_POOL_TIMEOUT_CRON", "4")
     assert role_options("cron") == {
-        "pool_size": 3,
-        "max_overflow": 2,
+        "pool_size": 1,
+        "max_overflow": 0,
         "pool_timeout": 4,
     }
 
@@ -69,9 +69,27 @@ def test_invalid_role_env_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MYSQL_POOL_TIMEOUT_ADHOC", "invalid")
     assert role_options("adhoc") == {
         "pool_size": 1,
-        "max_overflow": 1,
+        "max_overflow": 0,
         "pool_timeout": 5,
     }
+
+
+@pytest.mark.parametrize("role", ["serving", "cron", "job", "adhoc"])
+def test_role_overrides_cannot_exceed_role_cap(
+    monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    monkeypatch.setenv(f"MYSQL_POOL_SIZE_{role.upper()}", "99")
+    monkeypatch.setenv(f"MYSQL_MAX_OVERFLOW_{role.upper()}", "99")
+    options = role_options(role)
+    assert (
+        options["pool_size"] + options["max_overflow"]
+        <= {
+            "serving": 4,
+            "cron": 1,
+            "job": 1,
+            "adhoc": 1,
+        }[role]
+    )
 
 
 def test_closing_engine_is_not_a_budget_error() -> None:
@@ -219,7 +237,7 @@ def test_connection_error_classification(message: str, kind: str) -> None:
     assert classify_connection_error(RuntimeError(message)) == kind
 
 
-def test_adhoc_stays_one_plus_one_under_serving_env(
+def test_adhoc_stays_one_connection_under_serving_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for name, value in {
@@ -231,12 +249,12 @@ def test_adhoc_stays_one_plus_one_under_serving_env(
         monkeypatch.setenv(name, value)
     assert role_options("adhoc") == {
         "pool_size": 1,
-        "max_overflow": 1,
+        "max_overflow": 0,
         "pool_timeout": 5,
     }
     engine = build_engine(MYSQL, "adhoc", pool_pre_ping=False)
-    assert (engine.pool.size(), engine.pool._max_overflow) == (1, 1)
-    assert _sample("data_manager_mysql_pool_cap", role="adhoc") == 2
+    assert (engine.pool.size(), engine.pool._max_overflow) == (1, 0)
+    assert _sample("data_manager_mysql_pool_cap", role="adhoc") == 1
 
 
 @pytest.mark.parametrize("role", sorted(ROLE_DEFAULTS))
@@ -249,10 +267,11 @@ def test_every_role_builds_its_declared_cap(role: str) -> None:
     assert _sample("data_manager_mysql_pool_cap", role=role) == size + overflow
 
 
-def test_stop_rule_caps_are_unchanged() -> None:
-    assert ROLE_DEFAULTS["serving"] == (5, 7, 5)
+def test_role_caps_leave_maintenance_headroom() -> None:
+    assert ROLE_DEFAULTS["serving"] == (3, 1, 5)
     assert ROLE_DEFAULTS["cron"] == (1, 0, 5)
     assert ROLE_DEFAULTS["job"] == (1, 0, 5)
+    assert ROLE_DEFAULTS["adhoc"] == (1, 0, 5)
 
 
 def test_adapter_rejects_unknown_kwargs() -> None:
