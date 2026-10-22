@@ -25,11 +25,12 @@ from data_manager.db.mysql_session import configure_utc_session
 logger = logging.getLogger(__name__)
 
 ROLE_DEFAULTS: dict[str, tuple[int, int, int]] = {
-    "serving": (5, 7, 5),
+    "serving": (3, 1, 5),
     "cron": (1, 0, 5),
     "job": (1, 0, 5),
-    "adhoc": (1, 1, 5),
+    "adhoc": (1, 0, 5),
 }
+ROLE_CAPS = {"serving": 4, "cron": 1, "job": 1, "adhoc": 1}
 ERROR_KINDS = ("max_user_connections", "too_many_connections", "pool_timeout")
 
 pool_in_use = Gauge(
@@ -80,9 +81,16 @@ def role_options(role: str) -> dict[str, int]:
     if role not in ROLE_DEFAULTS:
         raise ValueError(f"Unknown MySQL pool role: {role}")
     size, overflow, timeout = ROLE_DEFAULTS[role]
+    cap = ROLE_CAPS[role]
+    size = _setting(role, "POOL_SIZE", size, minimum=1)
+    overflow = _setting(role, "MAX_OVERFLOW", overflow)
+    if size >= cap:
+        size, overflow = cap, 0
+    elif size + overflow > cap:
+        overflow = cap - size
     return {
-        "pool_size": _setting(role, "POOL_SIZE", size, minimum=1),
-        "max_overflow": _setting(role, "MAX_OVERFLOW", overflow),
+        "pool_size": size,
+        "max_overflow": overflow,
         "pool_timeout": _setting(role, "POOL_TIMEOUT", timeout),
     }
 

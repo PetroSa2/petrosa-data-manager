@@ -51,7 +51,7 @@ def test_mysql_adapter_init():
 # and the shared max_user_connections=30 cap are external facts confirmed
 # live 2026-09-14 — the ecosystem budget below is derived from those.
 _HPA_MAX_REPLICAS = 2  # k8s/data-manager/hpa.yaml maxReplicas
-_ECOSYSTEM_MYSQL_BUDGET = 24  # ~24 conns, leaving headroom under the 30 cap
+_ECOSYSTEM_MYSQL_BUDGET = 8  # serving cap of 4 connections across two replicas
 _SESSION_WAIT_TIMEOUT = constants.MYSQL_SESSION_WAIT_TIMEOUT
 
 
@@ -72,9 +72,9 @@ def test_mysql_adapter_pool_recycle_below_server_wait_timeout():
 def test_mysql_adapter_pool_size_within_ecosystem_budget():
     """AC2 (#299): (pool_size + max_overflow) * HPA maxReplicas <= ~24.
 
-    Previously pool_size=5 + max_overflow=10 = 15/pod * 2 pods = 30 = the
-    ENTIRE shared max_user_connections cap, leaving zero headroom for peer
-    services still on direct MySQL during the gateway migration window.
+    The serving cap leaves headroom for concurrent maintenance processes and
+    prevents an environment override from restoring the former 24-connection
+    two-replica ceiling.
     """
     adapter = MySQLAdapter(
         connection_string="mysql+pymysql://user:pass@host/db", role="serving"
