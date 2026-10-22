@@ -19,6 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+import constants
 import data_manager.api.app as api_module
 from data_manager.db.repositories.ledger_repository import LedgerRepository
 from data_manager.services.round_book import (
@@ -111,8 +112,24 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
     source_errors: dict[str, str] = {}
     try:
-        fills = await _load_fills(end)
+        fills = await asyncio.wait_for(
+            _load_fills(end), constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
+        )
         fills.sort(key=lambda row: _when(row) or datetime.min.replace(tzinfo=UTC))
+        if not fills:
+            return Scored(
+                [],
+                RoundBook(),
+                [],
+                None,
+                None,
+                [],
+                "execution_events returned no usable rows",
+                "incomplete",
+                {"execution_events": "no usable rows"},
+                "execution_events_mysql" if mysql is not None else "execution_events",
+                None,
+            )
         book = RoundBook()
         for row in fills:
             book.apply(row)
@@ -134,13 +151,18 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
     position_ids = sorted({p for r in book.closed for p in r.position_ids})
     decision_ids = sorted({d for r in book.closed for d in r.decision_ids})
     try:
-        stops = await _load_stops(position_ids)
+        stops = await asyncio.wait_for(
+            _load_stops(position_ids), constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
+        )
     except Exception as exc:
         logger.error("scorecard: positions read failed: %s", exc, exc_info=True)
         stops = {}
         source_errors["positions"] = str(exc)
     try:
-        decisions = await _load_decisions(decision_ids)
+        decisions = await asyncio.wait_for(
+            _load_decisions(decision_ids),
+            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
         logger.error("scorecard: decisions read failed: %s", exc, exc_info=True)
         decisions = {}
@@ -171,7 +193,10 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
         first = min(opened).astimezone(UTC).date()
         last = (end or datetime.now(UTC)).astimezone(UTC).date()
         try:
-            funding_income, present = await _load_funding(first, last)
+            funding_income, present = await asyncio.wait_for(
+                _load_funding(first, last),
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            )
             allocation = allocate_funding(exposures, funding_income)
             days_missing = [
                 (first + timedelta(days=i)).isoformat()

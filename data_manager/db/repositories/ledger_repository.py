@@ -597,7 +597,7 @@ class LedgerRepository(BaseRepository):
                 }
             )
         return {
-            "incomplete": not exchange and not ledger,
+            "incomplete": not exchange or not ledger,
             "source_status": {
                 "exchange": "available" if exchange else "empty",
                 "ledger": "available" if ledger else "empty",
