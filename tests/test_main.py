@@ -239,7 +239,5 @@ async def test_ensure_mongodb_indexes_covers_operational_collections(monkeypatch
     awaited = [call.args[0] for call in adapter.ensure_indexes.await_args_list]
     assert "trades_btc" in awaited
     assert {"positions", "daily_pnl", "signals"}.issubset(awaited)
-    assert {"strategy_lifecycle_events", "strategy_lifecycle_states"}.issubset(
-        awaited
-    )
+    assert {"strategy_lifecycle_events", "strategy_lifecycle_states"}.issubset(awaited)
     adapter.ensure_indexes.assert_any_await("klines_1m")
