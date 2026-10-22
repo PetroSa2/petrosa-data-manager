@@ -1280,6 +1280,7 @@ class MySQLAdapter(BaseAdapter):
         cursor: dict[str, Any] | None = None,
         include_cursor: bool = False,
         unique_sort: bool = False,
+        include_total: bool = True,
     ) -> (
         tuple[list[dict[str, Any]], int]
         | tuple[list[dict[str, Any]], int, dict[str, Any] | None]
@@ -1318,7 +1319,8 @@ class MySQLAdapter(BaseAdapter):
 
         Returns:
             ``(records, total_count)`` — ``total_count`` reflects the full
-            filtered set, not just the page returned.
+            filtered set, not just the page returned. When ``include_total`` is
+            false, the total is ``0`` and only the bounded page query runs.
         """
         if not self._connected:
             raise DatabaseError("Not connected to database")
@@ -1383,10 +1385,12 @@ class MySQLAdapter(BaseAdapter):
             def read_attempt():
                 engine = self._ensure_connected()
                 with engine.connect() as conn:
-                    count_query = select(func.count()).select_from(table)
-                    if conditions:
-                        count_query = count_query.where(and_(*conditions))
-                    total = conn.execute(count_query).scalar()
+                    total = 0
+                    if include_total:
+                        count_query = select(func.count()).select_from(table)
+                        if conditions:
+                            count_query = count_query.where(and_(*conditions))
+                        total = conn.execute(count_query).scalar()
 
                     query = self._select_table_columns(table, columns)
                     if conditions:
