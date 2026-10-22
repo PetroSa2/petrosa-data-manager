@@ -125,6 +125,23 @@ async def test_strategy_performance_uses_mysql_without_mongodb():
 
 
 @pytest.mark.asyncio
+async def test_strategy_performance_empty_mysql_history_is_incomplete():
+    api_module.db_manager = SimpleNamespace(
+        mysql_adapter=MySQLFake([]), mongodb_adapter=None
+    )
+    try:
+        result = await strategy_performance.get_strategy_performance(
+            datetime(2026, 10, 1, tzinfo=UTC),
+            datetime(2026, 10, 2, tzinfo=UTC),
+        )
+    finally:
+        api_module.db_manager = None
+
+    assert result["status"] == "incomplete"
+    assert result["source_errors"]["execution_events"] == "no usable rows"
+
+
+@pytest.mark.asyncio
 async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
     mysql = MySQLFake([])
     api_module.db_manager = SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None)

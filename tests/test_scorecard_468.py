@@ -468,6 +468,22 @@ async def test_partial_scorecard_source_failures_are_incomplete(monkeypatch):
     assert result["funding"]["error"] == "funding read failed"
 
 
+@pytest.mark.asyncio
+async def test_empty_scorecard_history_is_incomplete(monkeypatch):
+    async def empty_fills(_end):
+        return []
+
+    monkeypatch.setattr(route, "_load_fills", empty_fills)
+    api_module.db_manager = MagicMock()
+    try:
+        result = await route.get_scorecard(from_=None, to=None, group_by="strategy")
+    finally:
+        api_module.db_manager = None
+
+    assert result["status"] == "incomplete"
+    assert result["source_errors"] == {"execution_events": "no usable rows"}
+
+
 def test_evaluation_rejects_zero_trade_or_incomplete_statistics():
     zero = scorecard([], "strategy", 1, {"empty": 0})["groups"]
     incomplete = {"broken": {"n_trades": 4, "sample_ok": True}}

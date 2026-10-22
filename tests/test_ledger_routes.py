@@ -158,6 +158,21 @@ def test_insert_day_is_idempotent_and_records_revision():
     assert same.insert_day(payload, datetime.now())["created"] is False
 
 
+def test_positions_tieout_marks_one_empty_source_incomplete():
+    repo = FakeLedgerRepository(
+        [
+            Result({"as_of_ms": 100}),
+            Result([]),
+            Result([{"symbol": "BTCUSDT", "position_side": "LONG", "quantity": "1"}]),
+        ]
+    )
+
+    result = repo.positions_tieout()
+
+    assert result["incomplete"] is True
+    assert result["source_status"] == {"exchange": "empty", "ledger": "available"}
+
+
 def test_insert_day_final_restatement_increments_metric():
     payload = daily_payload(is_final=True)
     previous = {"payload_hash": "different", "revision": 1, "is_final": True}

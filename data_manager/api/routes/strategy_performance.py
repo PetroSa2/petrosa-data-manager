@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+import constants
 import data_manager.api.app as api_module
 from data_manager.models.execution_event import KNOWN_EVENT_TYPES
 from data_manager.services.strategy_performance import build_strategy_performance
@@ -37,27 +38,28 @@ async def get_strategy_performance(
         if mysql is not None:
             from data_manager.services.historic_analytics import read_execution_events
 
-            rows, as_of = await asyncio.to_thread(
-                read_execution_events,
-                mysql,
-                start=from_,
-                end=to,
-                limit=50_000,
-                event_types=set(KNOWN_EVENT_TYPES),
+            rows, as_of = await asyncio.wait_for(
+                asyncio.to_thread(
+                    read_execution_events,
+                    mysql,
+                    start=from_,
+                    end=to,
+                    limit=50_000,
+                    event_types=set(KNOWN_EVENT_TYPES),
+                ),
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
             )
             strategy_ids = {
                 str(row["strategy_id"]).strip()
                 for row in rows
                 if row.get("strategy_id")
             }
-            try:
-                from data_manager.services.historic_analytics import read_table
+            from data_manager.services.historic_analytics import read_table
 
-                strategy_rows = await asyncio.to_thread(
-                    read_table, mysql, "cio_decisions"
-                )
-            except Exception:
-                strategy_rows = []
+            strategy_rows = await asyncio.wait_for(
+                asyncio.to_thread(read_table, mysql, "cio_decisions"),
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            )
             strategy_ids.update(
                 str(row["strategy_id"]).strip()
                 for row in strategy_rows
@@ -78,15 +80,52 @@ async def get_strategy_performance(
                 if row.get("strategy_id")
             }
             source = "execution_events"
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "reason": "strategy performance source timed out",
+                "source_errors": {"execution_events": "timeout"},
+            },
+        ) from exc
     except Exception as exc:
         raise HTTPException(
-            status_code=500, detail="strategy performance read failed"
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "reason": "strategy performance source failed",
+                "source_errors": {"execution_events": str(exc)},
+            },
         ) from exc
 
+    strategies = build_strategy_performance(
+        rows, start=from_, end=to, strategy_ids=strategy_ids
+    )
+    if not strategies:
+        return {
+            "status": "incomplete",
+            "reason": "no usable strategy history or strategy catalog",
+            "source_errors": {"execution_events": "no usable rows"},
+            "strategies": [],
+            "from": from_.isoformat(),
+            "to": to.isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "source": source,
+            "as_of": as_of,
+        }
+    for strategy in strategies:
+        sample_size = int(strategy["trade_count"])
+        strategy["sample_size"] = sample_size
+        strategy["sample_status"] = "sampled" if sample_size else "zero_sample"
+        strategy["uncertainty"] = {
+            "status": "measured" if sample_size >= 2 else "insufficient_sample",
+            "win_rate": None,
+            "net_r_total": None,
+        }
     return {
-        "strategies": build_strategy_performance(
-            rows, start=from_, end=to, strategy_ids=strategy_ids
-        ),
+        "status": "complete",
+        "strategies": strategies,
         "from": from_.isoformat(),
         "to": to.isoformat(),
         "generated_at": datetime.now(UTC).isoformat(),
