@@ -2,7 +2,7 @@
 
 import math
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +14,24 @@ from data_manager.services import risk_inputs as ri
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 DAY0 = datetime(2026, 8, 1, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_fill_loader_projects_only_round_book_fields():
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=[])
+    collection = MagicMock()
+    collection.find.return_value = cursor
+    adapter = MagicMock()
+    adapter.db.__getitem__.return_value = collection
+    manager = MagicMock(mongodb_adapter=adapter)
+
+    await risk_route._load_fills(NOW, manager)
+
+    query = collection.find.call_args.args[0]
+    assert query["timestamp"] == {"$lt": NOW}
+    assert collection.find.call_args.kwargs["projection"] == risk_route._FILL_PROJECTION
 
 
 def _candles(
