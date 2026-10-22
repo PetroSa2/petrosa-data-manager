@@ -51,6 +51,7 @@ from data_manager.db.repositories.candle_repository import (
 )
 from data_manager.maintenance.candle_readiness import (
     collection_name,
+    derive_required_counts,
     evaluate_collection,
 )
 from data_manager.models.market_data import Candle
@@ -84,6 +85,7 @@ class BackfillConfig:
     trim_factor: float = 1.5
     force: bool = False
     dry_run: bool = False
+    required_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -128,6 +130,7 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> BackfillConfi
         freshness_intervals=constants.CANDLE_WARMUP_FRESHNESS_INTERVALS,
         trim_enabled=constants.CANDLE_WARMUP_TRIM_ENABLED,
         trim_factor=constants.CANDLE_WARMUP_TRIM_FACTOR,
+        required_counts=derive_required_counts(list(constants.SUPPORTED_INTERVALS)),
     )
 
 
@@ -217,6 +220,7 @@ async def backfill_pair(
     """Warm one ``(pair, timeframe)`` collection. Never raises."""
     coll = collection_name(pair, timeframe)
     table = mysql_table_name(timeframe)
+    required_count = config.required_counts.get(timeframe, config.min_candles)
     result = BackfillResult(
         pair=pair,
         timeframe=timeframe,
@@ -231,7 +235,7 @@ async def backfill_pair(
                 mongo,
                 pair,
                 timeframe,
-                required_count=config.min_candles,
+                required_count=required_count,
                 freshness_intervals=config.freshness_intervals,
                 now=now,
             )
@@ -245,11 +249,21 @@ async def backfill_pair(
             mysql.query_latest,
             table,
             pair,
-            config.min_candles,
+            required_count,
             columns=MYSQL_CANDLE_COLUMNS
             + ("open_time", "quote_asset_volume", "number_of_trades"),
         )
         result.source_rows = len(rows)
+        if len(rows) < required_count:
+            logger.warning(
+                "candle_warmup: insufficient source depth pair=%s timeframe=%s "
+                "collection=%s observed_depth=%d required_depth=%d",
+                pair,
+                timeframe,
+                coll,
+                len(rows),
+                required_count,
+            )
         if not rows:
             result.skip_reason = f"no source rows in {table} for {pair}"
             logger.warning("candle_warmup: %s — %s", coll, result.skip_reason)
@@ -289,7 +303,7 @@ async def backfill_pair(
             )
 
         if config.trim_enabled:
-            keep = max(config.min_candles, int(config.min_candles * config.trim_factor))
+            keep = max(required_count, int(required_count * config.trim_factor))
             result.trimmed = await _trim_collection(
                 mongo, coll, pair, keep, dry_run=config.dry_run
             )
