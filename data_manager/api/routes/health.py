@@ -172,7 +172,7 @@ async def readiness() -> ReadinessStatus | JSONResponse:
                     loop["state"],
                     loop["lag_ms"],
                 )
-                _readiness_cache = (now, ready, components)
+                _readiness_cache = (time.monotonic(), ready, components)
     payload = ReadinessStatus(
         ready=ready, components=components, timestamp=datetime.now(UTC)
     )

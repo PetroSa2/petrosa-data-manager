@@ -119,7 +119,11 @@ class MongoDBAdapter(BaseAdapter):
         """Establish connection to MongoDB."""
         try:
             self.client = motor_asyncio.AsyncIOMotorClient(
-                self.connection_string, tz_aware=True
+                self.connection_string,
+                tz_aware=True,
+                serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
+                connectTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
+                socketTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
             )
             self.db = self.client[self.db_name]
             self.analytics_client = motor_asyncio.AsyncIOMotorClient(
@@ -844,6 +848,13 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel(
                         [("strategy_id", ASCENDING), ("transitioned_at", DESCENDING)],
                         name="strategy_id_transitioned_at",
+                    )
+                ]
+            elif collection == "strategy_lifecycle_states":
+                indexes = [
+                    IndexModel(
+                        [("strategy_id", ASCENDING), ("timestamp", DESCENDING)],
+                        name="strategy_id_timestamp_desc",
                     )
                 ]
             elif collection == "cio_auto_resume_registry":
