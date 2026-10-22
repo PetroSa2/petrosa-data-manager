@@ -59,6 +59,7 @@ def test_historic_read_helpers_normalize_inputs_and_use_bounded_pages():
     mysql = MySQLFake([{"event_type": "filled", "timestamp": naive}])
     rows, _ = read_execution_events(mysql, strategy_id="missing")
     assert rows == []
+    assert mysql.calls[-1][1]["include_total"] is False
     assert read_table(mysql, "positions") == mysql.rows
 
 

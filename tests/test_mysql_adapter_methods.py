@@ -62,6 +62,28 @@ def sqlite_adapter():
     return a
 
 
+def test_find_paginated_can_skip_full_table_count(sqlite_adapter):
+    statements = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement.lower())
+
+    sa.event.listen(sqlite_adapter.engine, "before_cursor_execute", capture)
+    try:
+        rows, total = sqlite_adapter.find_paginated(
+            "execution_events",
+            sort_list=[("timestamp", 1)],
+            limit=10,
+            include_total=False,
+        )
+    finally:
+        sa.event.remove(sqlite_adapter.engine, "before_cursor_execute", capture)
+
+    assert rows == []
+    assert total == 0
+    assert not any("count(" in statement for statement in statements)
+
+
 class TestBuildConnectionString:
     def test_falls_back_to_defaults_when_no_constants(self):
         with patch("data_manager.db.mysql_adapter.constants") as const:

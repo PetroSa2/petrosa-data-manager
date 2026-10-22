@@ -72,7 +72,10 @@ def read_execution_events(
         rows = mysql.query_range("execution_events", start, end, limit=limit)
     else:
         rows, _ = mysql.find_paginated(
-            "execution_events", sort_list=[("timestamp", 1)], limit=limit
+            "execution_events",
+            sort_list=[("timestamp", 1)],
+            limit=limit,
+            include_total=False,
         )
     selected = _filter_events(
         rows,
