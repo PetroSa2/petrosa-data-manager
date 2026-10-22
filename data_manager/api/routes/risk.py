@@ -54,20 +54,46 @@ async def _load_wallet_rows(
 
 
 _MAX_FILLS = 200_000
+_FILL_PROJECTION = {
+    "event_type": 1,
+    "strategy_id": 1,
+    "symbol": 1,
+    "timestamp": 1,
+    "fill_time": 1,
+    "closed_quantity": 1,
+    "qty": 1,
+    "fill_qty": 1,
+    "fill_quantity": 1,
+    "exit_price": 1,
+    "price": 1,
+    "fill_price": 1,
+    "side": 1,
+    "position_side": 1,
+    "synthetic": 1,
+    "payload": 1,
+    "fee": 1,
+    "fees": 1,
+    "fee_asset": 1,
+    "fee_status": 1,
+    "pnl": 1,
+    "realized_pnl": 1,
+    "order_id": 1,
+    "position_id": 1,
+    "decision_id": 1,
+}
 
 
 async def _load_fills(
-    end: datetime, db_manager: Any | None = None
+    end: datetime | None, db_manager: Any | None = None
 ) -> list[dict[str, Any]]:
     manager = db_manager or api_module.db_manager
     mongodb = manager.mongodb_adapter
-    query: dict[str, Any] = {
-        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
-        "timestamp": {"$lt": end},
-    }
+    query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    if end is not None:
+        query["timestamp"] = {"$lt": end}
     return (
         await mongodb.db["execution_events"]
-        .find(query)
+        .find(query, projection=_FILL_PROJECTION)
         .sort("timestamp", 1)
         .to_list(length=_MAX_FILLS)
     )
