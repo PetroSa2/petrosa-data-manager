@@ -43,6 +43,10 @@ TRADING_STATE_DEAD_LETTER_COUNT = _meter.create_gauge(
     "trading_state_dead_letter_count",
     description="Trading state MySQL copy dead letters",
 )
+TRADING_STATE_RECOVERY_EVENTS = _meter.create_counter(
+    "trading_state_recovery_events_total",
+    description="Trading state replay successes, fallback failures and task failures",
+)
 STRATEGY_SCORECARD_EVALUATE_TOTAL = _meter.create_counter(
     "strategy_scorecard_evaluate_total",
     description="Scorecard evaluation decisions",

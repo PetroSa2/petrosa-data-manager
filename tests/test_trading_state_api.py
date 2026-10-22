@@ -37,6 +37,9 @@ class FakeRepo:
     async def put_daily_pnl(self, value, data):
         return data
 
+    async def pending_copy_count(self):
+        return 0
+
 
 @pytest.fixture
 def fake_repo(monkeypatch):
@@ -108,10 +111,11 @@ async def test_database_failures_are_503(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mysql_copy_status_exposes_in_memory_state():
+async def test_mysql_copy_status_exposes_durable_state(fake_repo):
     result = await module.mysql_copy_status()
     assert "pending" in result
-    assert result["retry_state"] == "in_memory; lost on restart"
+    assert result["retry_state"] == "mongo_pending_version; restart_resumable"
+    assert result["durable_pending"] == 0
 
 
 def test_mysql_copy_is_best_effort(monkeypatch):
@@ -119,19 +123,24 @@ def test_mysql_copy_is_best_effort(monkeypatch):
         def get_column_names(self, table):
             return {"position_id", "status"}
 
-        def update(self, *args):
-            return 0
-
-        def write(self, rows, table):
+        def persist_trading_state(self, table, data, version):
             assert table == "positions"
-            assert rows
+            assert data == {"position_id": "p1", "status": "closed"}
+            assert version == 1
 
     monkeypatch.setattr(
         module.api_module, "db_manager", SimpleNamespace(mysql_adapter=Adapter())
     )
-    module._copy_to_mysql(
-        "positions", {"position_id": "p1", "status": "closed", "unknown": 1}
+    result = module._copy_to_mysql(
+        "positions",
+        {
+            "position_id": "p1",
+            "status": "closed",
+            "unknown": 1,
+            "_mysql_copy_version": 1,
+        },
     )
+    assert result is True
 
 
 def test_mysql_copy_missing_adapter_is_observable(monkeypatch):
@@ -147,12 +156,13 @@ def test_mysql_copy_rejects_unknown_status_and_dead_letters(monkeypatch):
         def get_column_names(self, table):
             return {"position_id", "status"}
 
-        def update(self, *args):
+        def persist_trading_state(self, *args):
             raise AssertionError("invalid values must not reach MySQL")
 
         def write(self, rows, table):
             assert table == "trading_state_mysql_dead_letters"
             assert rows
+            return 1
 
     monkeypatch.setattr(
         module.api_module, "db_manager", SimpleNamespace(mysql_adapter=Adapter())
@@ -163,21 +173,52 @@ def test_mysql_copy_rejects_unknown_status_and_dead_letters(monkeypatch):
 
 
 def test_mysql_copy_retries_and_dead_letters_after_failure(monkeypatch):
+    attempts = []
+
     class Adapter:
         def get_column_names(self, table):
             return {"position_id", "status"}
 
-        def update(self, *args):
+        def persist_trading_state(self, *args):
+            attempts.append(args)
             raise RuntimeError("database unavailable")
 
         def write(self, rows, table):
             assert table == "trading_state_mysql_dead_letters"
             assert rows
+            return 1
 
     monkeypatch.setattr(module, "time", SimpleNamespace(sleep=lambda _: None))
     monkeypatch.setattr(
         module.api_module, "db_manager", SimpleNamespace(mysql_adapter=Adapter())
     )
     before = module._copy_state["failed"]
-    module._copy_to_mysql("positions", {"position_id": "p1", "status": "closed"})
+    assert (
+        module._copy_to_mysql(
+            "positions",
+            {"position_id": "p1", "status": "closed", "_mysql_copy_version": 1},
+        )
+        is False
+    )
     assert module._copy_state["failed"] == before + 1
+    assert len(attempts) == module._COPY_RETRIES
+
+
+def test_double_failure_does_not_escape_or_count_success(monkeypatch):
+    from data_manager.db.base_adapter import DatabaseError
+    from data_manager.utils.circuit_breaker import CircuitBreakerOpenError
+
+    class Adapter:
+        def get_column_names(self, table):
+            raise CircuitBreakerOpenError("mysql", 60)
+
+        def write(self, rows, table):
+            raise DatabaseError("missing dead-letter table")
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(sleep=lambda _: None))
+    monkeypatch.setattr(
+        module.api_module, "db_manager", SimpleNamespace(mysql_adapter=Adapter())
+    )
+    before = module._copy_state["dead_lettered"]
+    module._copy_to_mysql("positions", {"position_id": "p1", "status": "closed"})
+    assert module._copy_state["dead_lettered"] == before
