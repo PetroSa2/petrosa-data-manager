@@ -18,6 +18,9 @@ from pydantic import ValidationError
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.db.repositories import CandleRepository, HealthRepository
 from data_manager.models.health import DataHealthMetrics
+from data_manager.observability.thin_data_evidence import (
+    record_thin_data_consumer_error,
+)
 from data_manager.utils.time_utils import as_aware_utc, calculate_expected_records
 
 logger = logging.getLogger(__name__)
@@ -193,6 +196,12 @@ class HealthScorer:
             HEALTH_METRICS_VALIDATION_ERRORS.labels(
                 symbol=symbol, timeframe=timeframe
             ).inc()
+            record_thin_data_consumer_error(
+                consumer="health_scorer",
+                error_type="validation",
+                symbol=symbol,
+                timeframe=timeframe,
+            )
             logger.warning(
                 "data_health_metrics_validation_error symbol=%s timeframe=%s: %s",
                 symbol,

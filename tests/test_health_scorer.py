@@ -20,6 +20,7 @@ from data_manager.auditor.health_scorer import (
     HealthScorer,
 )
 from data_manager.models.health import DataHealthMetrics
+from data_manager.observability.thin_data_evidence import THIN_DATA_CONSUMER_ERRORS
 
 
 def _make_db_manager():
@@ -65,6 +66,12 @@ class TestHealthScorerCompletenessClamp:
         before = HEALTH_METRICS_VALIDATION_ERRORS.labels(
             symbol="ADAUSDT", timeframe="1h"
         )._value.get()
+        evidence_before = THIN_DATA_CONSUMER_ERRORS.labels(
+            consumer="health_scorer",
+            error_type="validation",
+            symbol="ADAUSDT",
+            timeframe="1h",
+        )._value.get()
         with caplog.at_level("WARNING"):
             metrics = await scorer.calculate_health("ADAUSDT", "1h")
 
@@ -74,6 +81,15 @@ class TestHealthScorerCompletenessClamp:
                 symbol="ADAUSDT", timeframe="1h"
             )._value.get()
             == before + 1
+        )
+        assert (
+            THIN_DATA_CONSUMER_ERRORS.labels(
+                consumer="health_scorer",
+                error_type="validation",
+                symbol="ADAUSDT",
+                timeframe="1h",
+            )._value.get()
+            == evidence_before + 1
         )
         assert "data_health_metrics_validation_error" in caplog.text
 
@@ -87,6 +103,12 @@ class TestHealthScorerCompletenessClamp:
         before = HEALTH_METRICS_VALIDATION_ERRORS.labels(
             symbol="ADAUSDT", timeframe="1h"
         )._value.get()
+        evidence_before = THIN_DATA_CONSUMER_ERRORS.labels(
+            consumer="health_scorer",
+            error_type="validation",
+            symbol="ADAUSDT",
+            timeframe="1h",
+        )._value.get()
 
         with caplog.at_level("ERROR"):
             metrics = await scorer.calculate_health("ADAUSDT", "1h")
@@ -97,6 +119,15 @@ class TestHealthScorerCompletenessClamp:
                 symbol="ADAUSDT", timeframe="1h"
             )._value.get()
             == before
+        )
+        assert (
+            THIN_DATA_CONSUMER_ERRORS.labels(
+                consumer="health_scorer",
+                error_type="validation",
+                symbol="ADAUSDT",
+                timeframe="1h",
+            )._value.get()
+            == evidence_before
         )
         assert "Error calculating health" in caplog.text
 
@@ -144,6 +175,12 @@ class TestHealthScorerCompletenessClamp:
         before = HEALTH_METRICS_VALIDATION_CHECKS.labels(
             symbol="XRPUSDT", timeframe="1d"
         )._value.get()
+        evidence_before = THIN_DATA_CONSUMER_ERRORS.labels(
+            consumer="health_scorer",
+            error_type="validation",
+            symbol="XRPUSDT",
+            timeframe="1d",
+        )._value.get()
         metrics = await scorer.calculate_health(
             "XRPUSDT", "1d", lookback_hours=24, duplicates_count=0
         )
@@ -155,4 +192,13 @@ class TestHealthScorerCompletenessClamp:
                 symbol="XRPUSDT", timeframe="1d"
             )._value.get()
             == before + 1
+        )
+        assert (
+            THIN_DATA_CONSUMER_ERRORS.labels(
+                consumer="health_scorer",
+                error_type="validation",
+                symbol="XRPUSDT",
+                timeframe="1d",
+            )._value.get()
+            == evidence_before
         )

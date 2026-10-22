@@ -13,6 +13,7 @@ from data_manager.consumer.execution_events_consumer import (
 )
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.execution_event import KNOWN_EVENT_TYPES, ExecutionEvent
+from data_manager.observability.thin_data_evidence import THIN_DATA_CONSUMER_ERRORS
 
 try:
     from datetime import UTC
@@ -216,9 +217,24 @@ async def test_process_message_skips_invalid_payload(
     execution_events_consumer, mock_db_manager
 ):
     msg = _build_msg({"only": "garbage"})
+    before = THIN_DATA_CONSUMER_ERRORS.labels(
+        consumer="execution_events",
+        error_type="invalid_payload",
+        symbol="",
+        timeframe="",
+    )._value.get()
     await execution_events_consumer._process_message(msg)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_not_awaited()
+    assert (
+        THIN_DATA_CONSUMER_ERRORS.labels(
+            consumer="execution_events",
+            error_type="invalid_payload",
+            symbol="",
+            timeframe="",
+        )._value.get()
+        == before + 1
+    )
 
 
 @pytest.mark.asyncio
@@ -228,9 +244,24 @@ async def test_process_message_handles_invalid_json(
     msg = MagicMock()
     msg.data.decode.return_value = "{not-json}"
     msg.subject = "execution.events.strat_momentum_v1"
+    before = THIN_DATA_CONSUMER_ERRORS.labels(
+        consumer="execution_events",
+        error_type="json_decode",
+        symbol="",
+        timeframe="",
+    )._value.get()
     await execution_events_consumer._process_message(msg)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
     collection.insert_one.assert_not_awaited()
+    assert (
+        THIN_DATA_CONSUMER_ERRORS.labels(
+            consumer="execution_events",
+            error_type="json_decode",
+            symbol="",
+            timeframe="",
+        )._value.get()
+        == before + 1
+    )
 
 
 @pytest.mark.asyncio
