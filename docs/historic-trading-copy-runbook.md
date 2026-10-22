@@ -34,10 +34,21 @@ retention policy is enabled.
 The `/api/v1/trading` positions and daily-P&L writers store private
 `_mysql_copy_pending`, `_mysql_copy_version`, and `_mysql_copy_attempted_at`
 fields atomically with each Mongo mutation when the existing MySQL copy flag is enabled.
-The current complete Mongo document is the durable recovery payload, identified by
-its collection and position ID or date. Updates coalesce into the latest state;
+The Mongo document is the durable typed-state recovery payload, identified by
+its collection and immutable position ID or date. Updates coalesce into the latest typed state;
 this is a state projection, not a new per-operation event archive.
 Typed reads omit these internal fields, and clients cannot set them.
+Mismatched identities in typed PUT, PATCH, close, or close-by-side updates return 409.
+The Mongo `_id` is private; an existing `id` cannot be changed by typed updates.
+
+`trading_state_mysql_sequences` is a durable Mongo control catalog keyed by
+collection and logical ID, using Mongo's built-in unique `_id` index.
+Each mutation reserves a monotonically increasing version before the atomic state
+write, then conditionally writes only if no newer source version already won.
+A reversed allocation/write race returns 409 rather than overwriting newer state.
+Unused sequence numbers from failures or duplicate creates are harmless gaps.
+The catalog survives source-document recreation and process restart; do not reset,
+delete, or expire its rows. It is control metadata, not a second state/event archive.
 
 The API lifespan polls every five seconds and requests can wake one local worker.
 Each pass reads at most 25 pending documents per table, processes one at a time,
@@ -47,11 +58,21 @@ work using their last-attempt time; they remain queryable across process restart
 The existing positions and daily-P&L collections have no TTL; this change adds
 pending-scan indexes but does not add or change retention policies.
 
-MySQL `trading_state_mysql_versions` serializes each logical key with a row lock.
-The target state and committed version change in one InnoDB transaction.
+Replay locks the target row using SQL's actual equality and compares its stored
+identity exactly with the requested one before consulting a cursor.
+Case-, accent-, or space-equivalent aliases under that target's collation are
+rejected and remain pending in Mongo; no production collation is assumed.
+MySQL `trading_state_mysql_versions` then serializes each exact key with a row lock.
+The typed-owned target fields and committed version change in one InnoDB transaction.
 A repeated or older version has no effect. Mongo acknowledges only the version
 that committed, so concurrent newer writes cannot lose their pending marker.
-This guarantee covers these typed writers, not unrelated generic or external writers.
+A committed cursor whose target row is missing is an error, not a successful no-op.
+Existing SQL primary IDs cannot change. For a SQL position marked `superseded`,
+the ledger owns `status`, `close_reason`, and `pnl_unknown`; replay preserves all three
+even when stale Mongo values differ, while applying typed-owned fields such as quantity.
+The target row lock serializes this rule with the ledger's supersede transaction.
+Mongo is not universally authoritative over shared SQL rows; other generic or external
+writers do not acquire replay versions, and their ownership must not be inferred from this path.
 
 MySQL dead letters are diagnostic copies, not the recovery source. Missing tables,
 open circuits, or failed diagnostic writes do not discard Mongo pending state.
@@ -80,7 +101,8 @@ forward repair; `CREATE TABLE IF NOT EXISTS` does not repair incompatible column
 Never drop or truncate either recovery table or pending Mongo state to roll back.
 If application code must roll back, leave additive tables and private Mongo fields
 intact. Restore the fixed worker to resume; old code cannot replay pending markers.
-Never reset committed versions while pending work can exist.
+Never reset either the Mongo sequence catalog or committed MySQL versions while
+recovery work or retained target rows can exist.
 
 Deployment, production DDL, replay/reconciliation, and controlled outages require
 the operator's separate authorization. Offline fixture results do not establish

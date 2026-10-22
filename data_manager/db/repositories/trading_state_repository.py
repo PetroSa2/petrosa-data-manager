@@ -6,10 +6,14 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from pymongo import DESCENDING
+from pymongo import DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from data_manager.db.repositories.base_repository import BaseRepository
+
+
+class TradingStateConflictError(ValueError):
+    pass
 
 
 class TradingStateRepository(BaseRepository):
@@ -28,21 +32,47 @@ class TradingStateRepository(BaseRepository):
             if key != "_id" and not key.startswith("_mysql_copy_")
         }
 
-    def _update(self, data: dict[str, Any]) -> dict[str, Any]:
+    async def _update(
+        self, table: str, identity: dict[str, str], data: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if self.mongodb is None:
             raise RuntimeError("MongoDB is not available")
-        update = {"$set": self.mongodb._prepare_for_bson(self._public(data))}
+        if "_id" in data or any(
+            key in data and data[key] != value for key, value in identity.items()
+        ):
+            raise TradingStateConflictError("trading state identity is immutable")
+        if "id" in data:
+            existing = await self._collection(table).find_one(identity)
+            if existing and data["id"] != existing.get("id"):
+                raise TradingStateConflictError("trading state identity is immutable")
+        query: dict[str, Any] = dict(identity)
+        update = {
+            "$set": self.mongodb._prepare_for_bson({**self._public(data), **identity})
+        }
         if os.getenv("PETROSA_TRADING_MYSQL_COPY_ENABLED", "true").lower() == "true":
+            sequence = await self._collection(
+                "trading_state_mysql_sequences"
+            ).find_one_and_update(
+                {"_id": f"{table}:{next(iter(identity.values()))}"},
+                {"$inc": {"version": 1}},
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+            version = sequence["version"]
             update["$set"]["_mysql_copy_pending"] = True
             update["$set"]["_mysql_copy_attempted_at"] = datetime.min
-            update["$inc"] = {"_mysql_copy_version": 1}
-        return update
+            update["$set"]["_mysql_copy_version"] = version
+            query["$or"] = [
+                {"_mysql_copy_version": {"$lt": version}},
+                {"_mysql_copy_version": {"$exists": False}},
+            ]
+        return query, update
 
     async def create_position(self, document: dict[str, Any]) -> bool:
-        update = self._update(document)
+        _, update = await self._update(
+            "positions", {"position_id": document["position_id"]}, document
+        )
         row = update["$set"]
-        if "$inc" in update:
-            row["_mysql_copy_version"] = 1
         await self._collection("positions").insert_one(row)
         return True
 
@@ -53,21 +83,26 @@ class TradingStateRepository(BaseRepository):
     async def update_position(
         self, position_id: str, data: dict[str, Any], *, upsert: bool = False
     ) -> int:
-        result = await self._collection("positions").update_one(
-            {"position_id": position_id},
-            self._update(data),
-            upsert=upsert,
+        query, update = await self._update(
+            "positions", {"position_id": position_id}, data
         )
-        return int(result.modified_count or result.upserted_id is not None)
+        try:
+            result = await self._collection("positions").update_one(
+                query, update, upsert=upsert
+            )
+        except DuplicateKeyError as exc:
+            raise TradingStateConflictError("newer trading state write; retry") from exc
+        changed = int(result.modified_count or result.upserted_id is not None)
+        if not changed and "_mysql_copy_version" in update["$set"]:
+            raise TradingStateConflictError("newer trading state write; retry")
+        return changed
 
     async def close_position(self, position_id: str, data: dict[str, Any]) -> bool:
-        result = await self._collection("positions").update_one(
-            {
-                "position_id": position_id,
-                "status": {"$in": ["open", "partially_closed"]},
-            },
-            self._update({**data, "status": "closed"}),
+        query, update = await self._update(
+            "positions", {"position_id": position_id}, {**data, "status": "closed"}
         )
+        query["status"] = {"$in": ["open", "partially_closed"]}
+        result = await self._collection("positions").update_one(query, update)
         return bool(result.modified_count)
 
     async def close_by_side(
@@ -103,11 +138,18 @@ class TradingStateRepository(BaseRepository):
         return self._public(doc) if doc else None
 
     async def put_daily_pnl(self, date: str, data: dict[str, Any]) -> dict[str, Any]:
-        await self._collection("daily_pnl").update_one(
-            {"date": date},
-            self._update({"date": date, **data}),
-            upsert=True,
-        )
+        query, update = await self._update("daily_pnl", {"date": date}, data)
+        try:
+            result = await self._collection("daily_pnl").update_one(
+                query, update, upsert=True
+            )
+        except DuplicateKeyError as exc:
+            raise TradingStateConflictError("newer trading state write; retry") from exc
+        if (
+            not (result.modified_count or result.upserted_id is not None)
+            and "_mysql_copy_version" in update["$set"]
+        ):
+            raise TradingStateConflictError("newer trading state write; retry")
         return (await self.get_daily_pnl(date)) or {"date": date, **data}
 
     async def pending_copies(self, table: str, limit: int) -> list[dict[str, Any]]:

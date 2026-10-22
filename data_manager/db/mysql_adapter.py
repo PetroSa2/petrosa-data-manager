@@ -1029,6 +1029,10 @@ class MySQLAdapter(BaseAdapter):
     ) -> None:
         from sqlalchemy.dialects.mysql import insert as mysql_insert
 
+        from data_manager.db.repositories.ledger_adjustments_repository import (
+            POSITION_MUTABLE_COLUMNS,
+        )
+
         if collection not in {"positions", "daily_pnl"} or version < 1:
             raise ValueError("invalid trading state copy")
         table = self._get_table(collection)
@@ -1043,6 +1047,19 @@ class MySQLAdapter(BaseAdapter):
 
         def persist() -> None:
             with self._ensure_connected().begin() as conn:
+                condition = table.c[key] == values[key]
+                existing = (
+                    conn.execute(select(table).where(condition).with_for_update())
+                    .mappings()
+                    .first()
+                )
+                if existing and (
+                    existing[key] != values[key]
+                    or ("id" in values and values["id"] != existing.get("id"))
+                ):
+                    raise DatabaseError(
+                        "trading state identity conflicts with stored row"
+                    )
                 ins = mysql_insert(versions).values(copy_key=copy_key, version=0)
                 conn.execute(ins.on_duplicate_key_update(copy_key=versions.c.copy_key))
                 current = conn.execute(
@@ -1051,11 +1068,23 @@ class MySQLAdapter(BaseAdapter):
                     .with_for_update()
                 ).scalar_one()
                 if current >= version:
+                    if existing is None:
+                        raise DatabaseError("committed trading state target is missing")
                     return
-                condition = table.c[key] == values[key]
-                exists = conn.execute(select(table.c[key]).where(condition)).first()
-                if exists:
-                    conn.execute(table.update().where(condition).values(**values))
+                if existing:
+                    updates = {
+                        name: value
+                        for name, value in values.items()
+                        if name not in {key, "id"}
+                    }
+                    if (
+                        collection == "positions"
+                        and existing.get("status") == "superseded"
+                    ):
+                        for name in POSITION_MUTABLE_COLUMNS:
+                            updates.pop(name, None)
+                    if updates:
+                        conn.execute(table.update().where(condition).values(**updates))
                 else:
                     inserted = dict(values)
                     if (

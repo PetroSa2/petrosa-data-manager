@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import threading
 from copy import deepcopy
 from datetime import date
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from mongomock_motor import AsyncMongoMockClient
 from pydantic import ValidationError
 from sqlalchemy.exc import NoSuchTableError
@@ -387,3 +389,192 @@ def test_unconfirmed_fallback_write_is_not_counted(recovery):
     module._dead_letter(Rejected(), "positions", {"position_id": "p1"}, "copy_error")
     assert module._copy_state["dead_lettered"] == 0
     assert module._copy_state["fallback_failed"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["put", "patch", "close", "close_by_side"])
+async def test_position_identity_cannot_be_renamed(recovery, monkeypatch, operation):
+    mongo, mysql = recovery
+    monkeypatch.setattr(module, "_schedule_mysql_copy", lambda: None)
+    repo = TradingStateRepository(mysql, mongo)
+    await repo.create_position(
+        {
+            "position_id": "p1",
+            "status": "open",
+            "symbol": "BTCUSDT",
+            "position_side": "long",
+        }
+    )
+    body = module.TradingDocument(position_id="renamed")
+    with pytest.raises(HTTPException) as error:
+        if operation == "put":
+            await module.replace_position("p1", body)
+        elif operation == "patch":
+            await module.patch_position("p1", body)
+        elif operation == "close":
+            await module.close_position("p1", body)
+        else:
+            await module.close_by_side(
+                module.TradingDocument(
+                    symbol="BTCUSDT",
+                    position_side="long",
+                    update={"position_id": "renamed"},
+                )
+            )
+    assert error.value.status_code == 409
+    assert (await repo.get_position("p1"))["status"] == "open"
+    assert await repo.get_position("renamed") is None
+
+
+@pytest.mark.asyncio
+async def test_recreated_identity_keeps_version_order_and_old_ack_cannot_clear_it(
+    recovery,
+):
+    mongo, mysql = recovery
+    repo = TradingStateRepository(mysql, mongo)
+    await repo.create_position(
+        {"position_id": "p1", "status": "open", "risk_order_id": "prior"}
+    )
+    old = (await repo.pending_copies("positions", 1))[0]
+    mysql.unavailable = False
+    await module._replay_mysql_copies()
+    await mongo.db.positions.delete_one({"position_id": "p1"})
+    repo = TradingStateRepository(mysql, mongo)
+    await repo.create_position(
+        {"position_id": "p1", "status": "open", "risk_order_id": "new"}
+    )
+    await repo.acknowledge_copy("positions", old)
+    assert await repo.pending_copy_count() == 1
+    await module._replay_mysql_copies()
+    assert mysql.rows[("positions", "p1")]["risk_order_id"] == "new"
+    assert module._copy_to_mysql("positions", old)
+    assert mysql.rows[("positions", "p1")]["risk_order_id"] == "new"
+    assert await repo.pending_copy_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_poison_batch_rotates_so_later_valid_work_can_complete(recovery):
+    mongo, mysql = recovery
+    repo = TradingStateRepository(mysql, mongo)
+    for number in range(module._COPY_BATCH_SIZE):
+        await repo.create_position(
+            {"position_id": f"poison-{number}", "status": "invalid"}
+        )
+    await repo.create_position({"position_id": "valid", "status": "open"})
+    mysql.unavailable = False
+    await module._replay_mysql_copies()
+    assert ("positions", "valid") not in mysql.rows
+    await module._replay_mysql_copies()
+    assert mysql.rows[("positions", "valid")]["status"] == "open"
+    assert await repo.pending_copy_count() == module._COPY_BATCH_SIZE
+
+
+@pytest.mark.asyncio
+async def test_callback_retrieves_error_without_any_task_await(recovery, monkeypatch):
+    async def fail():
+        raise RuntimeError("injected background failure")
+
+    monkeypatch.setattr(module, "_replay_mysql_copies", fail)
+    reports = []
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, context: reports.append(context))
+    try:
+        module._schedule_mysql_copy()
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if not module._copy_tasks:
+                break
+        assert not module._copy_tasks
+        gc.collect()
+        await asyncio.sleep(0)
+        assert module._copy_state["pending"] == 0
+        assert module._copy_state["task_failed"] == 1
+        assert not reports
+    finally:
+        loop.set_exception_handler(previous)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("table", ["positions", "daily_pnl"])
+async def test_upsert_recreation_uses_retained_sequence(recovery, table):
+    mongo, mysql = recovery
+    repo = TradingStateRepository(mysql, mongo)
+    key, value = (
+        ("position_id", "p1") if table == "positions" else ("date", "2026-10-22")
+    )
+    if table == "positions":
+        await repo.update_position(value, {"status": "open"}, upsert=True)
+    else:
+        await repo.put_daily_pnl(value, {"daily_pnl": 1})
+    old = (await repo.pending_copies(table, 1))[0]
+    await mongo.db[table].delete_one({key: value})
+    repo = TradingStateRepository(mysql, mongo)
+    if table == "positions":
+        await repo.update_position(value, {"status": "closed"}, upsert=True)
+    else:
+        await repo.put_daily_pnl(value, {"daily_pnl": 99})
+    newer = (await repo.pending_copies(table, 1))[0]
+    assert newer["_mysql_copy_version"] > old["_mysql_copy_version"]
+    await repo.acknowledge_copy(table, old)
+    assert await repo.pending_copy_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_reversed_sequence_allocation_cannot_overwrite_newer_mongo_write(
+    recovery, monkeypatch
+):
+    from data_manager.db.repositories.trading_state_repository import (
+        TradingStateConflictError,
+    )
+
+    mongo, mysql = recovery
+    repo = TradingStateRepository(mysql, mongo)
+    await mongo.db.positions.create_index("position_id", unique=True)
+    await repo.create_position(
+        {"position_id": "p1", "status": "open", "risk_order_id": "initial"}
+    )
+    original = TradingStateRepository._update
+    ready = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def delayed(self, table, identity, data):
+        result = await original(self, table, identity, data)
+        if data.get("risk_order_id") == "older":
+            ready.set()
+            await resume.wait()
+        return result
+
+    monkeypatch.setattr(TradingStateRepository, "_update", delayed)
+    older = asyncio.create_task(
+        repo.update_position("p1", {"risk_order_id": "older"}, upsert=True)
+    )
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=2)
+        await repo.update_position("p1", {"risk_order_id": "newer"})
+        resume.set()
+        with pytest.raises(TradingStateConflictError) as error:
+            await older
+        assert "newer" in str(error.value)
+    finally:
+        resume.set()
+        await asyncio.gather(older, return_exceptions=True)
+    assert (await repo.get_position("p1"))["risk_order_id"] == "newer"
+    assert (await repo.pending_copies("positions", 1))[0]["_mysql_copy_version"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["id", "_id"])
+async def test_existing_storage_identity_cannot_be_changed(recovery, field):
+    from data_manager.db.repositories.trading_state_repository import (
+        TradingStateConflictError,
+    )
+
+    mongo, mysql = recovery
+    repo = TradingStateRepository(mysql, mongo)
+    await repo.create_position({"position_id": "p1", "id": 9, "status": "open"})
+    before = await mongo.db.positions.find_one({"position_id": "p1"})
+    with pytest.raises(TradingStateConflictError) as error:
+        await repo.update_position("p1", {field: 10})
+    assert "identity is immutable" in str(error.value)
+    assert await mongo.db.positions.find_one({"position_id": "p1"}) == before

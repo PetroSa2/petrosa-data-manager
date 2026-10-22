@@ -16,7 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pymongo.errors import DuplicateKeyError
 
 import data_manager.api.app as api_module
-from data_manager.db.repositories.trading_state_repository import TradingStateRepository
+from data_manager.db.repositories.trading_state_repository import (
+    TradingStateConflictError,
+    TradingStateRepository,
+)
 from data_manager.observability_metrics import (
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
@@ -62,7 +65,7 @@ class TradingDocument(BaseModel):
     @classmethod
     def reject_internal_fields(cls, value):
         if isinstance(value, dict) and any(
-            key.startswith("_mysql_copy_") for key in value
+            key == "_id" or key.startswith("_mysql_copy_") for key in value
         ):
             raise ValueError("reserved trading state metadata")
         return value
@@ -86,6 +89,8 @@ def _database_errors_as_503(handler):
             return await handler(*args, **kwargs)
         except HTTPException:
             raise
+        except TradingStateConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("trading_state_database_error")
             raise HTTPException(
@@ -264,10 +269,9 @@ async def replace_position(position_id: str, body: TradingDocument):
     data = body.model_dump(exclude_none=True)
     if current and current.get("status") == "closed" and data.get("status") == "open":
         raise HTTPException(status_code=409, detail="cannot reopen closed position")
-    data["position_id"] = position_id
     await repo.update_position(position_id, data, upsert=True)
     _schedule_mysql_copy()
-    return data
+    return {**data, "position_id": position_id}
 
 
 @router.patch("/positions/{position_id}")
@@ -277,7 +281,6 @@ async def patch_position(position_id: str, body: TradingDocument):
     if not await repo.get_position(position_id):
         raise HTTPException(status_code=404, detail="position not found")
     data = body.model_dump(exclude_none=True)
-    data.pop("position_id", None)
     await repo.update_position(position_id, data)
     _schedule_mysql_copy()
     return {"position_id": position_id, **data}
