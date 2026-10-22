@@ -222,6 +222,15 @@ async def evaluate_collection(
 
     if verdict.count < required_count:
         verdict.reasons.append(f"depth {verdict.count} < required {required_count}")
+        logger.warning(
+            "candle_readiness: insufficient depth pair=%s timeframe=%s "
+            "collection=%s observed_depth=%d required_depth=%d",
+            pair,
+            timeframe,
+            coll,
+            verdict.count,
+            required_count,
+        )
 
     if not latest:
         verdict.reasons.append("no candles present")

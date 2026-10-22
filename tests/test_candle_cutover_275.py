@@ -188,18 +188,22 @@ class TestReadinessGate:
         assert verdict.collection == "klines_1h"
 
     @pytest.mark.asyncio
-    async def test_shallow_collection_is_not_ready(self):
+    async def test_shallow_collection_is_not_ready(self, caplog):
         adapter = mongo_adapter(count=399, latest=[{"timestamp": NOW}])
-        verdict = await evaluate_collection(
-            adapter,
-            "BTCUSDT",
-            "1h",
-            required_count=400,
-            freshness_intervals=3,
-            now=NOW,
-        )
+        with caplog.at_level("WARNING"):
+            verdict = await evaluate_collection(
+                adapter,
+                "BTCUSDT",
+                "1h",
+                required_count=400,
+                freshness_intervals=3,
+                now=NOW,
+            )
         assert verdict.ready is False
         assert "depth 399 < required 400" in verdict.reasons
+        assert "collection=klines_1h" in caplog.text
+        assert "observed_depth=399" in caplog.text
+        assert "required_depth=400" in caplog.text
 
     @pytest.mark.asyncio
     async def test_deep_but_stale_collection_is_not_ready(self):
@@ -395,6 +399,47 @@ class TestWarmupBackfill:
         mongo.ensure_indexes.assert_awaited_once_with("klines_1h")
 
     @pytest.mark.asyncio
+    async def test_uses_per_timeframe_required_depth_for_daily_source_reads(self):
+        rows = [klines_row(NOW - timedelta(days=i)) for i in range(3)]
+        mysql = Mock()
+        mysql.query_latest = Mock(return_value=rows)
+        mongo = mongo_adapter(count=0, latest=[])
+        mongo.write = AsyncMock(return_value=3)
+        config = self._config(
+            timeframes=["1d"],
+            required_counts={"1d": 290},
+            min_candles=400,
+        )
+
+        result = await warmup.backfill_pair(
+            mysql, mongo, "BTCUSDT", "1d", config, now=NOW
+        )
+
+        assert result.source_rows == 3
+        mysql.query_latest.assert_called_once_with(
+            "klines_d1",
+            "BTCUSDT",
+            290,
+            columns=MYSQL_CANDLE_COLUMNS
+            + ("open_time", "quote_asset_volume", "number_of_trades"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_measured_source_depth_when_daily_data_is_shallow(self, caplog):
+        mysql = Mock()
+        mysql.query_latest = Mock(return_value=[klines_row(NOW)])
+        mongo = mongo_adapter(count=0, latest=[])
+        config = self._config(timeframes=["1d"], required_counts={"1d": 290})
+
+        with caplog.at_level("WARNING"):
+            await warmup.backfill_pair(mysql, mongo, "BTCUSDT", "1d", config, now=NOW)
+
+        assert "pair=BTCUSDT" in caplog.text
+        assert "timeframe=1d" in caplog.text
+        assert "observed_depth=1" in caplog.text
+        assert "required_depth=290" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_already_warm_collection_is_skipped(self):
         mysql = Mock()
         mysql.query_latest = Mock(return_value=[klines_row(NOW)])
@@ -535,6 +580,7 @@ class TestWarmupBackfill:
     def test_config_from_env_defaults_to_the_276_contract(self):
         config = warmup.load_config_from_env({})
         assert config.min_candles == 400
+        assert config.required_counts["1d"] == 290
         assert config.batch_size >= 1
         assert config.timeframes
 
