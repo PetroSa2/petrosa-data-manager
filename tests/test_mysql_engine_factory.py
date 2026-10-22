@@ -81,12 +81,15 @@ def test_role_overrides_cannot_exceed_role_cap(
     monkeypatch.setenv(f"MYSQL_POOL_SIZE_{role.upper()}", "99")
     monkeypatch.setenv(f"MYSQL_MAX_OVERFLOW_{role.upper()}", "99")
     options = role_options(role)
-    assert options["pool_size"] + options["max_overflow"] <= {
-        "serving": 4,
-        "cron": 1,
-        "job": 1,
-        "adhoc": 1,
-    }[role]
+    assert (
+        options["pool_size"] + options["max_overflow"]
+        <= {
+            "serving": 4,
+            "cron": 1,
+            "job": 1,
+            "adhoc": 1,
+        }[role]
+    )
 
 
 def test_closing_engine_is_not_a_budget_error() -> None:
