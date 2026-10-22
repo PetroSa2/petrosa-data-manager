@@ -26,3 +26,12 @@ def test_the_equity_peak_collection_is_readable_and_upsertable_but_not_deletable
     assert check_generic("mongodb", "risk_equity_peak", "upsert") is True
     assert check_generic("mongodb", "risk_equity_peak", "delete") is False
     assert REGISTRY["risk_equity_peak"].classification == "operational"
+
+
+def test_strategy_lifecycle_states_preserves_live_evidence_access():
+    assert check_generic("mongodb", "strategy_lifecycle_states", "read") is True
+    assert check_generic("mongodb", "strategy_lifecycle_states", "upsert") is True
+    assert check_generic("mongodb", "strategy_lifecycle_states", "update") is True
+    assert check_generic("mongodb", "strategy_lifecycle_states", "insert") is False
+    assert check_generic("mongodb", "strategy_lifecycle_states", "delete") is False
+    assert REGISTRY["strategy_lifecycle_states"].classification == "transient_only"

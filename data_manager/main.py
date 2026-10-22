@@ -221,6 +221,8 @@ class DataManagerApp:
         await adapter.ensure_indexes("service_leases")
         await adapter.ensure_indexes("funding_rates")
         await adapter.ensure_indexes("execution_events")
+        await adapter.ensure_indexes("strategy_lifecycle_events")
+        await adapter.ensure_indexes("strategy_lifecycle_states")
         collections = await adapter.list_collections()
         for collection in collections:
             if collection.startswith(("analytics_", "trades_")):

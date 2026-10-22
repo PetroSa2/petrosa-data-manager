@@ -61,6 +61,11 @@ class TestConnectDisconnect:
             assert a._connected is True
             assert a.client is mock_client
 
+            primary_call = Cli.call_args_list[0]
+            assert primary_call.kwargs["serverSelectionTimeoutMS"] == 5000
+            assert primary_call.kwargs["connectTimeoutMS"] == 5000
+            assert primary_call.kwargs["socketTimeoutMS"] == 5000
+
             analytics_call = Cli.call_args_list[1]
             assert analytics_call.kwargs["maxPoolSize"] == 20
             assert analytics_call.kwargs["serverSelectionTimeoutMS"] == 5000
@@ -69,15 +74,15 @@ class TestConnectDisconnect:
 
             lease_call = Cli.call_args_list[2]
             assert lease_call.kwargs["maxPoolSize"] == 10
-            assert lease_call.kwargs["serverSelectionTimeoutMS"] == 1000
-            assert lease_call.kwargs["connectTimeoutMS"] == 1000
-            assert lease_call.kwargs["socketTimeoutMS"] == 1000
+            assert lease_call.kwargs["serverSelectionTimeoutMS"] == 5000
+            assert lease_call.kwargs["connectTimeoutMS"] == 5000
+            assert lease_call.kwargs["socketTimeoutMS"] == 5000
 
             readiness_call = Cli.call_args_list[3]
             assert readiness_call.kwargs["maxPoolSize"] == 2
-            assert readiness_call.kwargs["serverSelectionTimeoutMS"] == 1000
-            assert readiness_call.kwargs["connectTimeoutMS"] == 1000
-            assert readiness_call.kwargs["socketTimeoutMS"] == 1000
+            assert readiness_call.kwargs["serverSelectionTimeoutMS"] == 5000
+            assert readiness_call.kwargs["connectTimeoutMS"] == 5000
+            assert readiness_call.kwargs["socketTimeoutMS"] == 5000
 
     def test_connect_wraps_exception(self):
         with patch(
@@ -788,6 +793,23 @@ class TestEnsureIndexes:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         # Must not raise.
         await adapter.ensure_indexes("any")
+
+    @pytest.mark.asyncio
+    async def test_strategy_lifecycle_states_index_supports_live_reads(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("strategy_lifecycle_states")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        matching = [
+            index
+            for index in indexes
+            if index.document.get("name") == "strategy_id_timestamp_desc"
+        ]
+        assert len(matching) == 1
+        assert matching[0].document["key"] == {"strategy_id": 1, "timestamp": -1}
 
     @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):
