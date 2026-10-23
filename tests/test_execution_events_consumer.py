@@ -155,6 +155,29 @@ def test_execution_event_rejects_missing_required_fields():
         )
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "position_closed",
+        "position_force_closed_no_stops",
+        "unattributed_exchange_close",
+    ],
+)
+def test_execution_event_accepts_unattributed_close_without_order_identifiers(
+    event_type,
+):
+    payload = _exec_payload(
+        event_type=event_type,
+        decision_id="",
+        order_id="",
+        position_id="position-1",
+    )
+    event = ExecutionEvent.from_nats_message(payload)
+    assert event is not None
+    assert event.decision_id == ""
+    assert event.order_id == ""
+
+
 def test_execution_event_rejects_invalid_timestamp():
     bad = _exec_payload(timestamp="not-a-date")
     assert ExecutionEvent.from_nats_message(bad) is None
@@ -234,6 +257,26 @@ async def test_process_message_skips_invalid_payload(
             timeframe="",
         )._value.get()
         == before + 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_message_persists_unattributed_close_without_order_id(
+    execution_events_consumer, mock_db_manager
+):
+    msg = _build_msg(
+        _exec_payload(
+            event_type="position_force_closed_no_stops",
+            decision_id="",
+            order_id="",
+            position_id="position-1",
+        )
+    )
+    await execution_events_consumer._process_message(msg)
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_awaited_once()
+    assert collection.insert_one.await_args.args[0]["event_type"] == (
+        "position_force_closed_no_stops"
     )
 
 

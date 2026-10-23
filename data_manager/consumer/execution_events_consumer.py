@@ -405,7 +405,17 @@ class ExecutionEventsConsumer:
                         doc = event.model_dump(exclude_none=True)
                 except Exception:
                     logger.warning("Could not stamp regime on fill", exc_info=True)
-            doc["_id"] = f"{event.order_id}:{event.event_type}"
+            event_key = event.order_id or event.payload.get("idempotency_key")
+            if not event_key:
+                event_key = ":".join(
+                    (
+                        event.strategy_id,
+                        event.event_type,
+                        event.timestamp.isoformat(),
+                        event.reason or "",
+                    )
+                )
+            doc["_id"] = f"{event_key}:{event.event_type}"
             doc = adapter._prepare_for_bson(doc)
             try:
                 from pymongo.errors import DuplicateKeyError
