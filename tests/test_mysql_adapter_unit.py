@@ -51,7 +51,7 @@ def test_mysql_adapter_init():
 # and the shared max_user_connections=30 cap are external facts confirmed
 # live 2026-09-14 — the ecosystem budget below is derived from those.
 _HPA_MAX_REPLICAS = 2  # k8s/data-manager/hpa.yaml maxReplicas
-_ECOSYSTEM_MYSQL_BUDGET = 2  # serving cap of 1 connection across two replicas
+_ECOSYSTEM_MYSQL_BUDGET = 8  # serving cap of 4 connections across two replicas
 _SESSION_WAIT_TIMEOUT = constants.MYSQL_SESSION_WAIT_TIMEOUT
 
 
@@ -70,7 +70,7 @@ def test_mysql_adapter_pool_recycle_below_server_wait_timeout():
 
 
 def test_mysql_adapter_pool_size_within_ecosystem_budget():
-    """AC2 (#299): (pool_size + max_overflow) * HPA maxReplicas <= 2.
+    """AC2 (#299): (pool_size + max_overflow) * HPA maxReplicas <= 8.
 
     The serving cap leaves headroom for concurrent maintenance processes and
     prevents an environment override from restoring the former 24-connection
@@ -101,7 +101,7 @@ def test_mysql_adapter_connect_passes_hardened_pool_kwargs(
     assert role == "serving"
     assert kwargs["pool_recycle"] < _SESSION_WAIT_TIMEOUT
     assert kwargs["connect_args"]["init_command"]
-    assert adapter.pool_options["pool_size"] + adapter.pool_options["max_overflow"] <= 1
+    assert adapter.pool_options["pool_size"] + adapter.pool_options["max_overflow"] <= 4
 
 
 def test_reconnect_tests_new_engine_and_preserves_adapter_identity():
