@@ -25,12 +25,12 @@ from data_manager.db.mysql_session import configure_utc_session
 logger = logging.getLogger(__name__)
 
 ROLE_DEFAULTS: dict[str, tuple[int, int, int]] = {
-    "serving": (3, 1, 5),
+    "serving": (1, 0, 5),
     "cron": (1, 0, 5),
     "job": (1, 0, 5),
     "adhoc": (1, 0, 5),
 }
-ROLE_CAPS = {"serving": 4, "cron": 1, "job": 1, "adhoc": 1}
+ROLE_CAPS = {"serving": 1, "cron": 1, "job": 1, "adhoc": 1}
 ERROR_KINDS = ("max_user_connections", "too_many_connections", "pool_timeout")
 
 pool_in_use = Gauge(
