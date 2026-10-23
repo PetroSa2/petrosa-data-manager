@@ -90,6 +90,9 @@ def test_serving_cap_uses_shared_budget_and_deployment_shape(
         == 1
     )
 
+    monkeypatch.setenv("MYSQL_SHARED_CONNECTION_BUDGET", "29")
+    assert serving_pool_cap() == 3
+
 
 @pytest.mark.parametrize("role", ["serving", "cron", "job", "adhoc"])
 def test_role_overrides_cannot_exceed_role_cap(
