@@ -1086,11 +1086,9 @@ class MySQLAdapter(BaseAdapter):
                         conn.execute(table.update().where(condition).values(**updates))
                 else:
                     inserted = dict(values)
-                    if (
-                        "id" in table.c
-                        and "id" not in inserted
-                        and not isinstance(table.c.id.type, sa.Integer)
-                    ):
+                    if "id" in table.c and isinstance(table.c.id.type, sa.Integer):
+                        inserted.pop("id", None)
+                    elif "id" in table.c and "id" not in inserted:
                         inserted["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, copy_key))
                     if collection == "daily_pnl":
                         inserted.setdefault("created_at", datetime.now(UTC))
