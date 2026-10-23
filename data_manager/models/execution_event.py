@@ -24,18 +24,20 @@ KNOWN_EVENT_TYPES = {
     "unattributed_exchange_close",
 }
 
+DECISION_BOUND_EVENT_TYPES = {"placed", "filled", "rejected", "partial_fill"}
+
 
 class ExecutionEvent(BaseModel):
     """An `execution.events.*` NATS message persisted into `execution_events`.
 
     Publisher is `petrosa-tradeengine`. Aligns with the cross-service
     identifier contract (petrosa_k8s/docs/cross-service-identifier-contract.md):
-    `decision_id` is required so that order outcomes can be joined back to
-    the CIO decision that produced them. `order_id` and `event_type` are
-    also required for the audit-trail to be meaningful.
+    Order outcomes require `decision_id` so they can be joined back to the CIO
+    decision that produced them. Close notifications may be unattributed and
+    therefore carry an empty decision or order identifier.
     """
 
-    decision_id: str = Field(..., description="CIO decision identifier")
+    decision_id: str = Field(default="", description="CIO decision identifier")
     strategy_id: str = Field(..., description="Strategy that produced the decision")
     order_id: str = Field(..., description="Exchange / engine order identifier")
     event_type: str = Field(
@@ -84,8 +86,9 @@ class ExecutionEvent(BaseModel):
     ) -> "ExecutionEvent | None":
         """Parse a NATS JSON body into an ExecutionEvent. Returns None if invalid.
 
-        Required: `decision_id`, `strategy_id`, `order_id`, `event_type`,
-        `timestamp`. All others are best-effort.
+        Order events require `decision_id`, `strategy_id`, `order_id`,
+        `event_type`, and `timestamp`. Close notifications may omit the first
+        two identifiers because they can be unattributed.
         """
         decision_id = msg_data.get("decision_id")
         strategy_id = msg_data.get("strategy_id") or msg_data.get("strategy")
@@ -93,7 +96,11 @@ class ExecutionEvent(BaseModel):
         event_type = msg_data.get("event_type")
         raw_ts = msg_data.get("timestamp")
 
-        if not decision_id or not strategy_id or not order_id or not event_type:
+        if not strategy_id or not event_type:
+            return None
+        if event_type in DECISION_BOUND_EVENT_TYPES and (
+            not decision_id or not order_id
+        ):
             return None
         if not raw_ts:
             return None
