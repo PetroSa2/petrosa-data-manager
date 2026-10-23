@@ -403,6 +403,21 @@ def test_sql_primary_identity_cannot_change():
     assert engine.committed == before
 
 
+def test_integer_primary_key_is_not_replayed_from_mongo_payload():
+    value = adapter()
+    value.tables["positions"].append_column(sa.Column("id", sa.Integer))
+    engine = TransactionFixture()
+    value.engine = engine
+
+    value.persist_trading_state(
+        "positions",
+        {"position_id": "p1", "id": 9223372036854775807, "status": "open"},
+        1,
+    )
+
+    assert "id" not in engine.committed["positions"]["p1"]
+
+
 def test_missing_committed_target_is_not_a_successful_noop():
     value = adapter()
     engine = TransactionFixture()
