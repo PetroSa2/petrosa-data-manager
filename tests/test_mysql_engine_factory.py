@@ -84,7 +84,7 @@ def test_role_overrides_cannot_exceed_role_cap(
     assert (
         options["pool_size"] + options["max_overflow"]
         <= {
-            "serving": 4,
+            "serving": 1,
             "cron": 1,
             "job": 1,
             "adhoc": 1,
@@ -268,7 +268,7 @@ def test_every_role_builds_its_declared_cap(role: str) -> None:
 
 
 def test_role_caps_leave_maintenance_headroom() -> None:
-    assert ROLE_DEFAULTS["serving"] == (3, 1, 5)
+    assert ROLE_DEFAULTS["serving"] == (1, 0, 5)
     assert ROLE_DEFAULTS["cron"] == (1, 0, 5)
     assert ROLE_DEFAULTS["job"] == (1, 0, 5)
     assert ROLE_DEFAULTS["adhoc"] == (1, 0, 5)
