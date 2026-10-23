@@ -8,6 +8,23 @@ from typing import Any
 from data_manager.services.round_book import FILL_EVENT_TYPES
 
 MAX_ANALYTICS_ROWS = 200_000
+EXECUTION_EVENT_ANALYTICS_COLUMNS = (
+    "timestamp",
+    "decision_id",
+    "order_id",
+    "strategy_id",
+    "event_type",
+    "symbol",
+    "side",
+    "qty",
+    "fill_qty",
+    "fill_quantity",
+    "price",
+    "fill_price",
+    "fill_time",
+    "reason",
+    "payload",
+)
 
 
 def get_mysql_adapter(manager: Any) -> Any:
@@ -73,8 +90,10 @@ def read_execution_events(
     else:
         rows, _ = mysql.find_paginated(
             "execution_events",
+            filter_dict={"strategy_id": strategy_id} if strategy_id else None,
             sort_list=[("timestamp", 1)],
             limit=limit,
+            columns=EXECUTION_EVENT_ANALYTICS_COLUMNS,
             include_total=False,
         )
     selected = _filter_events(
