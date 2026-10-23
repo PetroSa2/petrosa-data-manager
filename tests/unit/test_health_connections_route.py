@@ -52,12 +52,12 @@ def test_connections_reports_live_mysql_adapter_pool_config(client):
     assert resp.status_code == 200
     mysql_pool = resp.json()["pool_configuration"]["mysql"]
     assert mysql_pool == {
-        "pool_size": 1,
-        "max_overflow": 0,
+        "pool_size": 3,
+        "max_overflow": 1,
         "pool_timeout": 5,
         "pool_recycle": constants.MYSQL_POOL_RECYCLE,
     }
-    assert (mysql_pool["pool_size"] + mysql_pool["max_overflow"]) * 2 <= 2
+    assert (mysql_pool["pool_size"] + mysql_pool["max_overflow"]) * 2 <= 8
     assert mysql_pool["pool_recycle"] < constants.MYSQL_SESSION_WAIT_TIMEOUT
 
 

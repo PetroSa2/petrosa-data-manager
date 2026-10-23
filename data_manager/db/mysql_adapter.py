@@ -108,8 +108,9 @@ class MySQLAdapter(BaseAdapter):
         #   connections are recycled before the server closes them.
         # - pool_size + max_overflow is capped so
         #   (pool_size + max_overflow) * HPA maxReplicas (k8s/data-manager/hpa.yaml, =2)
-        #   stays below the shared 30-connection user cap and leaves headroom
-        #   for maintenance workloads. 1 + 0 = 1/pod * 2 pods = 2.
+        #   is derived from the shared budget and deployment shape, leaving
+        #   configured headroom for peer MySQL clients. The labelled defaults
+        #   yield 3 + 1 = 4/pod * 2 pods = 8.
         allowed_kwargs = {"pool_pre_ping", "pool_recycle", "connect_args"}
         unknown_kwargs = set(kwargs) - allowed_kwargs
         if unknown_kwargs:
