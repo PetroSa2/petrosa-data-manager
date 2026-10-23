@@ -823,9 +823,27 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("status", ASCENDING), ("symbol", ASCENDING)]),
                     IndexModel([("strategy_id", ASCENDING), ("status", ASCENDING)]),
                     IndexModel([("entry_time", DESCENDING)]),
+                    IndexModel(
+                        [
+                            ("_mysql_copy_pending", ASCENDING),
+                            ("_mysql_copy_attempted_at", ASCENDING),
+                            ("_id", ASCENDING),
+                        ],
+                        name="trading_state_mysql_pending",
+                    ),
                 ]
             elif collection == "daily_pnl":
-                indexes = [IndexModel([("date", ASCENDING)], unique=True)]
+                indexes = [
+                    IndexModel([("date", ASCENDING)], unique=True),
+                    IndexModel(
+                        [
+                            ("_mysql_copy_pending", ASCENDING),
+                            ("_mysql_copy_attempted_at", ASCENDING),
+                            ("_id", ASCENDING),
+                        ],
+                        name="trading_state_mysql_pending",
+                    ),
+                ]
             elif collection == "strategy_configs_global":
                 indexes = [IndexModel([("strategy_id", ASCENDING)], unique=True)]
             elif collection == "strategy_configs_symbol":

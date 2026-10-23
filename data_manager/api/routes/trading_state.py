@@ -11,28 +11,38 @@ from functools import wraps
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pymongo.errors import DuplicateKeyError
 
 import data_manager.api.app as api_module
-from data_manager.db.repositories.trading_state_repository import TradingStateRepository
+from data_manager.db.repositories.trading_state_repository import (
+    TradingStateConflictError,
+    TradingStateRepository,
+)
 from data_manager.observability_metrics import (
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
     TRADING_STATE_MYSQL_FIELDS_DROPPED,
+    TRADING_STATE_RECOVERY_EVENTS,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/trading")
 _copy_tasks: set[asyncio.Task] = set()
-_copy_state = {
+_copy_state: dict[str, Any] = {
     "pending": 0,
     "failed": 0,
     "dead_lettered": 0,
+    "fallback_failed": 0,
+    "replayed": 0,
+    "task_failed": 0,
     "last_failure_time": None,
 }
 _COPY_RETRIES = 3
 _COPY_BACKOFF_SECONDS = 0.01
+_COPY_BATCH_SIZE = 25
+_COPY_POLL_SECONDS = 5
 _VALID_POSITION_STATUSES = frozenset(
     {"open", "partially_closed", "closed", "superseded"}
 )
@@ -50,6 +60,15 @@ _DROPPED_FIELD_ALLOWLIST = frozenset(
 class TradingDocument(BaseModel):
     model_config = ConfigDict(extra="allow")
     position_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_internal_fields(cls, value):
+        if isinstance(value, dict) and any(
+            key == "_id" or key.startswith("_mysql_copy_") for key in value
+        ):
+            raise ValueError("reserved trading state metadata")
+        return value
 
 
 class DailyPnlRequest(BaseModel):
@@ -70,6 +89,8 @@ def _database_errors_as_503(handler):
             return await handler(*args, **kwargs)
         except HTTPException:
             raise
+        except TradingStateConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("trading_state_database_error")
             raise HTTPException(
@@ -79,18 +100,48 @@ def _database_errors_as_503(handler):
     return wrapped
 
 
-def _schedule_mysql_copy(operation: str, document: dict[str, Any]) -> None:
+def _schedule_mysql_copy() -> None:
     if os.getenv("PETROSA_TRADING_MYSQL_COPY_ENABLED", "true").lower() != "true":
         return
+    if _copy_tasks:
+        return
     _copy_state["pending"] += 1
-    task = asyncio.create_task(asyncio.to_thread(_copy_to_mysql, operation, document))
+    task = asyncio.create_task(_replay_mysql_copies())
     _copy_tasks.add(task)
 
     def _complete(done: asyncio.Task) -> None:
         _copy_tasks.discard(done)
         _copy_state["pending"] = max(0, _copy_state["pending"] - 1)
+        if not done.cancelled() and done.exception() is not None:
+            _copy_state["task_failed"] += 1
+            TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "task_failed"})
+            logger.error("trading_state_mysql_replay_task_failed")
 
     task.add_done_callback(_complete)
+
+
+async def _replay_mysql_copies() -> None:
+    repo = _repo()
+    for table in ("positions", "daily_pnl"):
+        for document in await repo.pending_copies(table, _COPY_BATCH_SIZE):
+            if await asyncio.to_thread(_copy_to_mysql, table, document):
+                await repo.acknowledge_copy(table, document)
+                _copy_state["replayed"] += 1
+                TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "replayed"})
+            else:
+                await repo.defer_copy(table, document)
+
+
+async def mysql_copy_worker() -> None:
+    try:
+        while True:
+            _schedule_mysql_copy()
+            if _copy_tasks:
+                await asyncio.gather(*_copy_tasks, return_exceptions=True)
+            await asyncio.sleep(_COPY_POLL_SECONDS)
+    finally:
+        if _copy_tasks:
+            await asyncio.gather(*_copy_tasks, return_exceptions=True)
 
 
 def _record_failure(operation: str, reason: str) -> None:
@@ -115,24 +166,33 @@ def _dead_letter(
             "TradingStateDeadLetter",
             operation=(str, operation),
             reason=(str, reason),
-            payload=(dict[str, Any], document),
+            payload=(
+                dict[str, Any],
+                jsonable_encoder({k: v for k, v in document.items() if k != "_id"}),
+            ),
             created_at=(datetime, payload["created_at"]),
         )()
-        adapter.write([row], "trading_state_mysql_dead_letters")
-    finally:
+        result = adapter.write([row], "trading_state_mysql_dead_letters")
+        if result != 1 or getattr(result, "failed", 0):
+            raise RuntimeError("dead-letter persistence not confirmed")
         _copy_state["dead_lettered"] += 1
         TRADING_STATE_DEAD_LETTER_COUNT.set(_copy_state["dead_lettered"])
+    except Exception:
+        _copy_state["fallback_failed"] += 1
+        TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "fallback_failed"})
+        logger.error(
+            "trading_state_mysql_dead_letter_failed",
+            extra={"operation": operation, "reason": "write_error"},
+        )
 
 
-def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
+def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
     manager = api_module.db_manager
     adapter = getattr(manager, "mysql_adapter", None) if manager else None
     if adapter is None:
         _record_failure(operation, "adapter_missing")
-        _dead_letter(
-            adapter or _NullDeadLetterAdapter(), operation, document, "adapter_missing"
-        )
-        return
+        _dead_letter(adapter, operation, document, "adapter_missing")
+        return False
     table = "daily_pnl" if operation == "daily_pnl" else "positions"
     if table == "positions" and document.get("status") not in (
         None,
@@ -140,11 +200,11 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
     ):
         _record_failure(operation, "invalid_value")
         _dead_letter(adapter, operation, document, "invalid_value")
-        return
+        return False
     for attempt in range(_COPY_RETRIES):
         try:
             allowed = set(adapter.get_column_names(table))
-            dropped = set(document) - allowed
+            dropped = set(TradingStateRepository._public(document)) - allowed
             for field in dropped:
                 TRADING_STATE_MYSQL_FIELDS_DROPPED.add(
                     1,
@@ -157,38 +217,33 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> None:
                 )
             data = {k: v for k, v in document.items() if k in allowed}
             key = "date" if table == "daily_pnl" else "position_id"
-            updated = adapter.update(table, {key: document[key]}, data)
-            if not updated:
-                from pydantic import create_model
-
-                adapter.write(
-                    [
-                        create_model(
-                            "TradingStateRow", **{k: (Any, v) for k, v in data.items()}
-                        )()
-                    ],
-                    table,
-                )
-            return
-        except Exception as exc:
+            if key not in data:
+                raise ValueError("missing logical key")
+            adapter.persist_trading_state(table, data, document["_mysql_copy_version"])
+            return True
+        except Exception:
             if attempt + 1 < _COPY_RETRIES:
                 time.sleep(_COPY_BACKOFF_SECONDS * (attempt + 1))
                 continue
             _record_failure(operation, "copy_error")
-            logger.exception(
-                "trading_state_mysql_copy_failed", extra={"operation": operation}
+            logger.error(
+                "trading_state_mysql_copy_failed",
+                extra={"operation": operation, "reason": "copy_error"},
             )
-            _dead_letter(adapter, operation, document, str(exc))
-
-
-class _NullDeadLetterAdapter:
-    def write(self, rows: list[Any], table: str) -> None:
-        return None
+            _dead_letter(adapter, operation, document, "copy_error")
+    return False
 
 
 @router.get("/mysql-copy/status")
 async def mysql_copy_status():
-    return {**_copy_state, "retry_state": "in_memory; lost on restart"}
+    return {
+        **_copy_state,
+        "durable_pending": await _repo().pending_copy_count(),
+        "retry_state": "mongo_pending_version; restart_resumable",
+        "batch_size_per_table": _COPY_BATCH_SIZE,
+        "concurrency": 1,
+        "attempts_per_copy": _COPY_RETRIES,
+    }
 
 
 @router.post("/positions", status_code=201)
@@ -202,7 +257,7 @@ async def create_position(body: TradingDocument):
         await repo.create_position(document)
     except DuplicateKeyError:
         return {"position_id": body.position_id, "created": False, "duplicate": True}
-    _schedule_mysql_copy("positions", document)
+    _schedule_mysql_copy()
     return {"position_id": body.position_id, "created": True}
 
 
@@ -214,10 +269,9 @@ async def replace_position(position_id: str, body: TradingDocument):
     data = body.model_dump(exclude_none=True)
     if current and current.get("status") == "closed" and data.get("status") == "open":
         raise HTTPException(status_code=409, detail="cannot reopen closed position")
-    data["position_id"] = position_id
     await repo.update_position(position_id, data, upsert=True)
-    _schedule_mysql_copy("positions", data)
-    return data
+    _schedule_mysql_copy()
+    return {**data, "position_id": position_id}
 
 
 @router.patch("/positions/{position_id}")
@@ -227,9 +281,8 @@ async def patch_position(position_id: str, body: TradingDocument):
     if not await repo.get_position(position_id):
         raise HTTPException(status_code=404, detail="position not found")
     data = body.model_dump(exclude_none=True)
-    data.pop("position_id", None)
     await repo.update_position(position_id, data)
-    _schedule_mysql_copy("positions", {"position_id": position_id, **data})
+    _schedule_mysql_copy()
     return {"position_id": position_id, **data}
 
 
@@ -240,9 +293,7 @@ async def close_position(position_id: str, body: TradingDocument):
     data = body.model_dump(exclude_none=True)
     if not await repo.close_position(position_id, data):
         raise HTTPException(status_code=409, detail="position is not open")
-    _schedule_mysql_copy(
-        "positions", {"position_id": position_id, **data, "status": "closed"}
-    )
+    _schedule_mysql_copy()
     return {"closed": True}
 
 
@@ -262,9 +313,7 @@ async def close_by_side(body: TradingDocument):
     repo = _repo()
     position_id = await repo.close_by_side(symbol, side, update)
     if position_id:
-        _schedule_mysql_copy(
-            "positions", {"position_id": position_id, **update, "status": "closed"}
-        )
+        _schedule_mysql_copy()
     return {"closed": bool(position_id), "position_id": position_id}
 
 
@@ -315,5 +364,5 @@ async def put_daily_pnl(date_value: date, body: DailyPnlRequest):
         "updated_at": datetime.now(UTC),
     }
     result = await _repo().put_daily_pnl(date_value.isoformat(), data)
-    _schedule_mysql_copy("daily_pnl", data)
+    _schedule_mysql_copy()
     return result

@@ -7,6 +7,7 @@ from data_manager.observability_metrics import (
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
     TRADING_STATE_MYSQL_FIELDS_DROPPED,
+    TRADING_STATE_RECOVERY_EVENTS,
     metric_name,
 )
 
@@ -52,6 +53,13 @@ def test_trading_state_dead_letter_count_is_registered_on_otlp_meter():
     assert (
         metric_name(TRADING_STATE_DEAD_LETTER_COUNT)
         == "trading_state_dead_letter_count"
+    )
+
+
+def test_trading_state_recovery_events_are_registered_on_otlp_meter():
+    assert (
+        metric_name(TRADING_STATE_RECOVERY_EVENTS)
+        == "trading_state_recovery_events_total"
     )
 
 

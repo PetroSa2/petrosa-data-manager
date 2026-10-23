@@ -4,6 +4,7 @@ MySQL adapter implementation for Data Manager.
 Based on petrosa-binance-data-extractor patterns.
 """
 
+import hashlib
 import logging
 import threading
 import uuid
@@ -338,6 +339,26 @@ class MySQLAdapter(BaseAdapter):
             Column("created_at", DateTime, nullable=False),
             Column("updated_at", DateTime, nullable=False),
             Index("idx_daily_pnl_date", "date", unique=True),
+        )
+
+        self.tables["trading_state_mysql_dead_letters"] = Table(
+            "trading_state_mysql_dead_letters",
+            self.metadata,
+            Column("id", BigInteger, primary_key=True, autoincrement=True),
+            Column("operation", String(32), nullable=False),
+            Column("reason", String(255), nullable=False),
+            Column("payload", JSON, nullable=False),
+            Column("created_at", MySQLDateTime(fsp=6), nullable=False),
+            Index("idx_trading_state_dead_letters_created_at", "created_at"),
+            Index("idx_trading_state_dead_letters_operation", "operation"),
+            mysql_engine="InnoDB",
+        )
+        self.tables["trading_state_mysql_versions"] = Table(
+            "trading_state_mysql_versions",
+            self.metadata,
+            Column("copy_key", String(64), primary_key=True),
+            Column("version", BigInteger, nullable=False),
+            mysql_engine="InnoDB",
         )
 
         self.tables["trades"] = Table(
@@ -1002,6 +1023,87 @@ class MySQLAdapter(BaseAdapter):
             failed=failed,
             ignored_count=ignored_count,
         )
+
+    def persist_trading_state(
+        self, collection: str, data: dict[str, Any], version: int
+    ) -> None:
+        from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+        from data_manager.db.repositories.ledger_adjustments_repository import (
+            POSITION_MUTABLE_COLUMNS,
+        )
+
+        if collection not in {"positions", "daily_pnl"} or version < 1:
+            raise ValueError("invalid trading state copy")
+        table = self._get_table(collection)
+        versions = self._get_table("trading_state_mysql_versions")
+        key = "date" if collection == "daily_pnl" else "position_id"
+        copy_key = hashlib.sha256(f"{collection}:{data[key]}".encode()).hexdigest()
+        values = {
+            name: self._normalize_temporal_value(value, table.c[name])
+            for name, value in data.items()
+            if name in table.c
+        }
+
+        def persist() -> None:
+            with self._ensure_connected().begin() as conn:
+                condition = table.c[key] == values[key]
+                existing = (
+                    conn.execute(select(table).where(condition).with_for_update())
+                    .mappings()
+                    .first()
+                )
+                if existing and (
+                    existing[key] != values[key]
+                    or ("id" in values and values["id"] != existing.get("id"))
+                ):
+                    raise DatabaseError(
+                        "trading state identity conflicts with stored row"
+                    )
+                ins = mysql_insert(versions).values(copy_key=copy_key, version=0)
+                conn.execute(ins.on_duplicate_key_update(copy_key=versions.c.copy_key))
+                current = conn.execute(
+                    select(versions.c.version)
+                    .where(versions.c.copy_key == copy_key)
+                    .with_for_update()
+                ).scalar_one()
+                if current >= version:
+                    if existing is None:
+                        raise DatabaseError("committed trading state target is missing")
+                    return
+                if existing:
+                    updates = {
+                        name: value
+                        for name, value in values.items()
+                        if name not in {key, "id"}
+                    }
+                    if (
+                        collection == "positions"
+                        and existing.get("status") == "superseded"
+                    ):
+                        for name in POSITION_MUTABLE_COLUMNS:
+                            updates.pop(name, None)
+                    if updates:
+                        conn.execute(table.update().where(condition).values(**updates))
+                else:
+                    inserted = dict(values)
+                    if (
+                        "id" in table.c
+                        and "id" not in inserted
+                        and not isinstance(table.c.id.type, sa.Integer)
+                    ):
+                        inserted["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, copy_key))
+                    if collection == "daily_pnl":
+                        inserted.setdefault("created_at", datetime.now(UTC))
+                        inserted.setdefault("updated_at", datetime.now(UTC))
+                    conn.execute(table.insert().values(**inserted))
+                conn.execute(
+                    versions.update()
+                    .where(versions.c.copy_key == copy_key)
+                    .values(version=version)
+                )
+
+        self.circuit_breaker.call(persist)
 
     def update(
         self, collection: str, filter_dict: dict[str, Any], data: dict[str, Any]

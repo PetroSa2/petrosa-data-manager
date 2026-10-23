@@ -88,10 +88,17 @@ async def _config_rate_limit_middleware(request, call_next):
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting Data Manager API")
-    # Startup logic here
-    yield
-    # Shutdown logic here
-    logger.info("Shutting down Data Manager API")
+    import asyncio
+
+    from data_manager.api.routes.trading_state import mysql_copy_worker
+
+    worker = asyncio.create_task(mysql_copy_worker())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        logger.info("Shutting down Data Manager API")
 
 
 def create_app() -> FastAPI:

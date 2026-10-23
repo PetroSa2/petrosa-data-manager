@@ -30,6 +30,11 @@ class Collection:
                 "position_side": "long",
             }
         ]
+        self.version = 0
+
+    async def find_one_and_update(self, query, update, **kwargs):
+        self.version += 1
+        return {"version": self.version}
 
     async def insert_one(self, document):
         self.rows.append(document)
@@ -52,7 +57,10 @@ class Collection:
 
 class Mongo:
     def __init__(self):
-        self.db = {"positions": Collection(), "daily_pnl": Collection()}
+        self.db = {
+            name: Collection()
+            for name in ("positions", "daily_pnl", "trading_state_mysql_sequences")
+        }
 
     @staticmethod
     def _prepare_for_bson(value):
