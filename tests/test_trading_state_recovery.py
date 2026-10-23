@@ -127,6 +127,8 @@ async def test_double_failure_tasks_are_observed_and_restart_recovers(
         assert "p1" not in caplog.text
         status = await module.mysql_copy_status()
         assert status["durable_pending"] == 1
+        assert status["durable_pending_by_table"] == {"positions": 1, "daily_pnl": 0}
+        assert status["durable_oldest_attempted_at"]
         repo = TradingStateRepository(mysql, mongo)
         retained = await repo.pending_copies("positions", 10)
         assert retained[0]["status"] == "open"
