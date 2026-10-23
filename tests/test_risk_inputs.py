@@ -31,7 +31,11 @@ async def test_fill_loader_projects_only_round_book_fields():
 
     query = collection.find.call_args.args[0]
     assert query["timestamp"] == {"$lt": NOW}
-    assert collection.find.call_args.kwargs["projection"] == risk_route._FILL_PROJECTION
+    projection = collection.find.call_args.kwargs["projection"]
+    assert projection == risk_route._FILL_PROJECTION
+    assert "payload" not in projection
+    assert projection["payload.position_side"] == 1
+    assert projection["payload.order_id"] == 1
 
 
 def _candles(
