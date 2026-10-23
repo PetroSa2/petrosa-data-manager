@@ -236,9 +236,16 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
 
 @router.get("/mysql-copy/status")
 async def mysql_copy_status():
+    repo = _repo()
+    pending_summary = await repo.pending_copy_summary()
     return {
         **_copy_state,
-        "durable_pending": await _repo().pending_copy_count(),
+        "durable_pending": pending_summary["positions"] + pending_summary["daily_pnl"],
+        "durable_pending_by_table": {
+            "positions": pending_summary["positions"],
+            "daily_pnl": pending_summary["daily_pnl"],
+        },
+        "durable_oldest_attempted_at": pending_summary["oldest_attempted_at"],
         "retry_state": "mongo_pending_version; restart_resumable",
         "batch_size_per_table": _COPY_BATCH_SIZE,
         "concurrency": 1,

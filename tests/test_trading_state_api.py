@@ -40,6 +40,9 @@ class FakeRepo:
     async def pending_copy_count(self):
         return 0
 
+    async def pending_copy_summary(self):
+        return {"positions": 0, "daily_pnl": 0, "oldest_attempted_at": None}
+
 
 @pytest.fixture
 def fake_repo(monkeypatch):
@@ -116,6 +119,8 @@ async def test_mysql_copy_status_exposes_durable_state(fake_repo):
     assert "pending" in result
     assert result["retry_state"] == "mongo_pending_version; restart_resumable"
     assert result["durable_pending"] == 0
+    assert result["durable_pending_by_table"] == {"positions": 0, "daily_pnl": 0}
+    assert result["durable_oldest_attempted_at"] is None
 
 
 def test_mysql_copy_is_best_effort(monkeypatch):

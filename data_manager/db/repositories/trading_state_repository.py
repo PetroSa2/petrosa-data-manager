@@ -182,6 +182,31 @@ class TradingStateRepository(BaseRepository):
             ]
         )
 
+    async def pending_copy_summary(self) -> dict[str, Any]:
+        summary: dict[str, Any] = {
+            "positions": 0,
+            "daily_pnl": 0,
+            "oldest_attempted_at": None,
+        }
+        oldest: datetime | None = None
+        for table in ("positions", "daily_pnl"):
+            collection = self._collection(table)
+            summary[table] = await collection.count_documents(
+                {"_mysql_copy_pending": True}
+            )
+            row = await collection.find_one(
+                {"_mysql_copy_pending": True},
+                {"_mysql_copy_attempted_at": 1},
+                sort=[("_mysql_copy_attempted_at", 1), ("_id", 1)],
+            )
+            attempted_at = row.get("_mysql_copy_attempted_at") if row else None
+            if isinstance(attempted_at, datetime) and (
+                oldest is None or attempted_at < oldest
+            ):
+                oldest = attempted_at
+        summary["oldest_attempted_at"] = oldest.isoformat() if oldest else None
+        return summary
+
     async def defer_copy(self, table: str, document: dict[str, Any]) -> None:
         key = "date" if table == "daily_pnl" else "position_id"
         await self._collection(table).update_one(
