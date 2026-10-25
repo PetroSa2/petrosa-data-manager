@@ -89,7 +89,7 @@ jobs:
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     - name: Extract Docker Metadata
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-data-manager
         tags: |
@@ -143,7 +143,7 @@ jobs:
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     - name: Extract Docker Metadata
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: ${{ secrets.DOCKERHUB_USERNAME }}/petrosa-dashboard
         tags: |
