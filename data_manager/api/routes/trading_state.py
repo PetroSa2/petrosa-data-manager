@@ -113,23 +113,32 @@ def _schedule_mysql_copy() -> None:
         _copy_tasks.discard(done)
         _copy_state["pending"] = max(0, _copy_state["pending"] - 1)
         if not done.cancelled() and done.exception() is not None:
-            _copy_state["task_failed"] += 1
-            TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "task_failed"})
-            logger.error("trading_state_mysql_replay_task_failed")
+            _record_task_failure()
 
     task.add_done_callback(_complete)
 
 
+def _record_task_failure() -> None:
+    _copy_state["task_failed"] += 1
+    TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "task_failed"})
+    logger.error("trading_state_mysql_replay_task_failed")
+
+
 async def _replay_mysql_copies() -> None:
-    repo = _repo()
-    for table in ("positions", "daily_pnl"):
-        for document in await repo.pending_copies(table, _COPY_BATCH_SIZE):
-            if await asyncio.to_thread(_copy_to_mysql, table, document):
-                await repo.acknowledge_copy(table, document)
-                _copy_state["replayed"] += 1
-                TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "replayed"})
-            else:
-                await repo.defer_copy(table, document)
+    try:
+        repo = _repo()
+        for table in ("positions", "daily_pnl"):
+            for document in await repo.pending_copies(table, _COPY_BATCH_SIZE):
+                if await asyncio.to_thread(_copy_to_mysql, table, document):
+                    await repo.acknowledge_copy(table, document)
+                    _copy_state["replayed"] += 1
+                    TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "replayed"})
+                else:
+                    await repo.defer_copy(table, document)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _record_task_failure()
 
 
 async def mysql_copy_worker() -> None:
