@@ -106,18 +106,31 @@ def _schedule_mysql_copy() -> None:
     if _copy_tasks:
         return
     _copy_state["pending"] += 1
-    task = asyncio.create_task(_replay_mysql_copies())
+    task = asyncio.create_task(_run_mysql_copy())
     _copy_tasks.add(task)
 
     def _complete(done: asyncio.Task) -> None:
         _copy_tasks.discard(done)
         _copy_state["pending"] = max(0, _copy_state["pending"] - 1)
         if not done.cancelled() and done.exception() is not None:
-            _copy_state["task_failed"] += 1
-            TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "task_failed"})
-            logger.error("trading_state_mysql_replay_task_failed")
+            _record_task_failure("task_exception")
 
     task.add_done_callback(_complete)
+
+
+def _record_task_failure(reason: str = "replay_error") -> None:
+    _copy_state["task_failed"] += 1
+    _copy_state["last_failure_reason"] = reason
+    try:
+        TRADING_STATE_RECOVERY_EVENTS.add(
+            1, {"outcome": "task_failed", "reason": reason}
+        )
+    except Exception:
+        logger.exception("trading_state_mysql_recovery_observability_failed")
+    logger.error(
+        "trading_state_mysql_replay_task_failed",
+        extra={"reason": reason},
+    )
 
 
 async def _replay_mysql_copies() -> None:
@@ -130,6 +143,15 @@ async def _replay_mysql_copies() -> None:
                 TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "replayed"})
             else:
                 await repo.defer_copy(table, document)
+
+
+async def _run_mysql_copy() -> None:
+    try:
+        await _replay_mysql_copies()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _record_task_failure("replay_error")
 
 
 async def mysql_copy_worker() -> None:
