@@ -143,6 +143,7 @@ async def test_scheduled_replay_failure_is_retrieved_without_loop_error(monkeypa
     assert loop_errors == []
     assert module._copy_state["task_failed"] == before + 1
     assert module._copy_state["pending"] == 0
+    assert module._copy_state["last_failure_reason"] == "replay_error"
 
 
 def test_mysql_copy_is_best_effort(monkeypatch):
