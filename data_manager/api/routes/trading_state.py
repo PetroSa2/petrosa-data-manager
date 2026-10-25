@@ -112,14 +112,7 @@ def _schedule_mysql_copy() -> None:
     def _complete(done: asyncio.Task) -> None:
         _copy_tasks.discard(done)
         _copy_state["pending"] = max(0, _copy_state["pending"] - 1)
-        if done.cancelled():
-            return
-        try:
-            error = done.exception()
-        except Exception:
-            _record_task_failure("task_observation_error")
-            return
-        if error is not None:
+        if not done.cancelled() and done.exception() is not None:
             _record_task_failure("task_exception")
 
     task.add_done_callback(_complete)

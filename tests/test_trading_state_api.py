@@ -146,6 +146,36 @@ async def test_scheduled_replay_failure_is_retrieved_without_loop_error(monkeypa
     assert module._copy_state["last_failure_reason"] == "replay_error"
 
 
+@pytest.mark.asyncio
+async def test_escaping_task_failure_is_retrieved_by_completion_callback(monkeypatch):
+    async def fail():
+        raise RuntimeError("unexpected task failure")
+
+    loop_errors = []
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda loop, context: loop_errors.append(context))
+    monkeypatch.setattr(module, "_run_mysql_copy", fail)
+    before = module._copy_state["task_failed"]
+
+    module._schedule_mysql_copy()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert loop_errors == []
+    assert module._copy_state["task_failed"] == before + 1
+    assert module._copy_state["last_failure_reason"] == "task_exception"
+
+
+def test_task_failure_metrics_cannot_escape_recovery_accounting(monkeypatch):
+    class BrokenMetric:
+        def add(self, *args, **kwargs):
+            raise RuntimeError("metric unavailable")
+
+    monkeypatch.setattr(module, "TRADING_STATE_RECOVERY_EVENTS", BrokenMetric())
+    module._record_task_failure("metric_test")
+    assert module._copy_state["last_failure_reason"] == "metric_test"
+
+
 def test_mysql_copy_is_best_effort(monkeypatch):
     class Adapter:
         def get_column_names(self, table):
