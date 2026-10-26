@@ -2,8 +2,10 @@
 Data access endpoints for raw market data.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 
 try:
     from datetime import UTC
@@ -28,11 +30,17 @@ from data_manager.db.repositories.candle_repository import (
     mysql_table_name,
 )
 from data_manager.maintenance.candle_readiness import evaluate_readiness
+from data_manager.observability_metrics import ATLAS_LOAD_CACHE_EVENTS
 from data_manager.utils.time_utils import parse_timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_READINESS_CACHE_SECONDS = 5.0
+_readiness_cache: dict[tuple[object, ...], tuple[float, dict]] = {}
+_readiness_inflight: dict[tuple[object, ...], asyncio.Task] = {}
+_readiness_lock = asyncio.Lock()
 
 # Fallback lookback when `period` cannot be parsed into an interval.
 DEFAULT_CANDLE_WINDOW_HOURS = 24
@@ -41,6 +49,58 @@ DEFAULT_CANDLE_WINDOW_HOURS = 24
 # partially-closed newest candle) cannot silently shorten the returned window
 # by one candle.
 CANDLE_WINDOW_EDGE_INTERVALS = 2
+
+
+async def _cached_readiness(
+    *, pairs: list[str] | None, timeframes: list[str] | None, min_candles: int | None
+) -> dict:
+    key = (tuple(pairs or ()), tuple(timeframes or ()), min_candles)
+    now = monotonic()
+    cached = _readiness_cache.get(key)
+    if cached and now - cached[0] < _READINESS_CACHE_SECONDS:
+        ATLAS_LOAD_CACHE_EVENTS.add(1, {"route": "candle_readiness", "result": "hit"})
+        return cached[1]
+
+    async with _readiness_lock:
+        now = monotonic()
+        cached = _readiness_cache.get(key)
+        if cached and now - cached[0] < _READINESS_CACHE_SECONDS:
+            ATLAS_LOAD_CACHE_EVENTS.add(
+                1, {"route": "candle_readiness", "result": "hit"}
+            )
+            return cached[1]
+        task = _readiness_inflight.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                evaluate_readiness(
+                    api_module.db_manager.mongodb_adapter,
+                    pairs=pairs,
+                    timeframes=timeframes,
+                    required_count=min_candles,
+                )
+            )
+            _readiness_inflight[key] = task
+            owner = True
+        else:
+            owner = False
+
+    try:
+        report = await task
+    finally:
+        if owner:
+            async with _readiness_lock:
+                _readiness_inflight.pop(key, None)
+    result = report.to_dict()
+    if owner:
+        _readiness_cache[key] = (monotonic(), result)
+        ATLAS_LOAD_CACHE_EVENTS.add(
+            1, {"route": "candle_readiness", "result": "backend"}
+        )
+    else:
+        ATLAS_LOAD_CACHE_EVENTS.add(
+            1, {"route": "candle_readiness", "result": "shared"}
+        )
+    return result
 
 
 def _default_candle_start(
@@ -409,13 +469,11 @@ async def get_candle_readiness(
             return None
         return [part.strip() for part in raw.split(",") if part.strip()]
 
-    report = await evaluate_readiness(
-        api_module.db_manager.mongodb_adapter,
+    return await _cached_readiness(
         pairs=_split(pairs),
         timeframes=_split(timeframes),
-        required_count=min_candles,
+        min_candles=min_candles,
     )
-    return report.to_dict()
 
 
 @router.get("/trades")
