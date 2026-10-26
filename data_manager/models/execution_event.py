@@ -81,6 +81,23 @@ class ExecutionEvent(BaseModel):
     )
 
     @staticmethod
+    def validation_error_field(msg_data: dict[str, Any]) -> str | None:
+        """Return the first missing required field for an execution event."""
+        if not (msg_data.get("strategy_id") or msg_data.get("strategy")):
+            return "strategy_id"
+        event_type = msg_data.get("event_type")
+        if not isinstance(event_type, str) or not event_type:
+            return "event_type"
+        if event_type in DECISION_BOUND_EVENT_TYPES:
+            if not msg_data.get("decision_id"):
+                return "decision_id"
+            if not msg_data.get("order_id"):
+                return "order_id"
+        if not msg_data.get("timestamp"):
+            return "timestamp"
+        return None
+
+    @staticmethod
     def from_nats_message(
         msg_data: dict[str, Any], subject: str | None = None
     ) -> "ExecutionEvent | None":
@@ -96,13 +113,7 @@ class ExecutionEvent(BaseModel):
         event_type = msg_data.get("event_type")
         raw_ts = msg_data.get("timestamp")
 
-        if not strategy_id or not event_type:
-            return None
-        if event_type in DECISION_BOUND_EVENT_TYPES and (
-            not decision_id or not order_id
-        ):
-            return None
-        if not raw_ts:
+        if ExecutionEvent.validation_error_field(msg_data):
             return None
 
         try:

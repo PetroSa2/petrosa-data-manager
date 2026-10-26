@@ -13,7 +13,10 @@ from data_manager.consumer.execution_events_consumer import (
 )
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.execution_event import KNOWN_EVENT_TYPES, ExecutionEvent
-from data_manager.observability.thin_data_evidence import THIN_DATA_CONSUMER_ERRORS
+from data_manager.observability.thin_data_evidence import (
+    EXECUTION_EVENT_VALIDATION_ERRORS,
+    THIN_DATA_CONSUMER_ERRORS,
+)
 
 try:
     from datetime import UTC
@@ -255,6 +258,64 @@ async def test_process_message_skips_invalid_payload(
             error_type="invalid_payload",
             symbol="",
             timeframe="",
+        )._value.get()
+        == before + 1
+    )
+    assert (
+        EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+            producer="petrosa-tradeengine",
+            subject="execution.events.strat_momentum_v1",
+            validation_field="strategy_id",
+        )._value.get()
+        >= 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_message_groups_invalid_timestamp(
+    execution_events_consumer, mock_db_manager
+):
+    subject = "execution.events.strat_momentum_v1"
+    before = EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+        producer="petrosa-tradeengine",
+        subject=subject,
+        validation_field="timestamp",
+    )._value.get()
+    await execution_events_consumer._process_message(
+        _build_msg(_exec_payload(timestamp="not-a-timestamp"))
+    )
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_not_awaited()
+    assert (
+        EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+            producer="petrosa-tradeengine",
+            subject=subject,
+            validation_field="timestamp",
+        )._value.get()
+        == before + 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_message_groups_non_object_payload(
+    execution_events_consumer, mock_db_manager
+):
+    subject = "execution.events.strat_momentum_v1"
+    before = EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+        producer="petrosa-tradeengine",
+        subject=subject,
+        validation_field="payload",
+    )._value.get()
+    await execution_events_consumer._process_message(
+        _build_msg(["not", "an", "object"])
+    )
+    collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
+    collection.insert_one.assert_not_awaited()
+    assert (
+        EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+            producer="petrosa-tradeengine",
+            subject=subject,
+            validation_field="payload",
         )._value.get()
         == before + 1
     )

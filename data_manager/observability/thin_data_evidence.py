@@ -8,6 +8,12 @@ THIN_DATA_CONSUMER_ERRORS = Counter(
     ["consumer", "error_type", "symbol", "timeframe"],
 )
 
+EXECUTION_EVENT_VALIDATION_ERRORS = Counter(
+    "data_manager_execution_event_validation_errors_total",
+    "Execution-event validation failures grouped by producer, subject, and field",
+    ["producer", "subject", "validation_field"],
+)
+
 
 def record_thin_data_consumer_error(
     *,
@@ -22,4 +28,15 @@ def record_thin_data_consumer_error(
         error_type=error_type,
         symbol=symbol,
         timeframe=timeframe,
+    ).inc()
+
+
+def record_execution_event_validation_error(
+    *, producer: str, subject: str, validation_field: str
+) -> None:
+    """Record bounded execution-event validation evidence without payload data."""
+    EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+        producer=producer,
+        subject=subject,
+        validation_field=validation_field,
     ).inc()
