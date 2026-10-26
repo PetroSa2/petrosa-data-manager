@@ -300,3 +300,76 @@ async def test_lease_get_and_renew_are_not_blocked_by_heavy_analytics(monkeypatc
     finally:
         release.set()
         await asyncio.gather(*futures)
+
+
+@pytest.mark.asyncio
+async def test_failed_renew_does_not_issue_compensating_get(monkeypatch):
+    calls = {"renew": 0, "get": 0}
+
+    class Repository:
+        async def renew(self, *_args):
+            calls["renew"] += 1
+            return None
+
+        async def get(self, _name):
+            calls["get"] += 1
+            return {"owner": "other"}
+
+    monkeypatch.setattr(leases, "_repo", lambda: Repository())
+    with pytest.raises(HTTPException) as raised:
+        await leases.renew(
+            "leader:data-manager", leases.LeaseRequest(owner="pod-a", ttl_seconds=30)
+        )
+
+    assert raised.value.status_code == 409
+    assert calls == {"renew": 1, "get": 0}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_lease_gets_share_backend_read(monkeypatch):
+    calls = 0
+    lease = {
+        "owner": "pod-a",
+        "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        "fencing_token": 8,
+    }
+
+    class Repository:
+        async def get(self, _name):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0)
+            return lease
+
+    leases._lease_get_cache.clear()
+    monkeypatch.setattr(leases, "_repo", lambda: Repository())
+    results = await asyncio.gather(
+        leases.get("leader:data-manager"), leases.get("leader:data-manager")
+    )
+
+    assert calls == 1
+    assert all(result["owner"] == "pod-a" for result in results)
+
+
+@pytest.mark.asyncio
+async def test_lease_get_cache_expires(monkeypatch):
+    calls = 0
+    lease = {
+        "owner": "pod-a",
+        "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        "fencing_token": 9,
+    }
+
+    class Repository:
+        async def get(self, _name):
+            nonlocal calls
+            calls += 1
+            return lease
+
+    leases._lease_get_cache.clear()
+    monkeypatch.setattr(leases, "_repo", lambda: Repository())
+    monkeypatch.setattr(leases, "_LEASE_GET_CACHE_SECONDS", 0)
+    await leases.get("leader:data-manager")
+    await leases.get("leader:data-manager")
+
+    assert calls == 2

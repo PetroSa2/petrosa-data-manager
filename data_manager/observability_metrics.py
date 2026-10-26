@@ -51,6 +51,10 @@ STRATEGY_SCORECARD_EVALUATE_TOTAL = _meter.create_counter(
     "strategy_scorecard_evaluate_total",
     description="Scorecard evaluation decisions",
 )
+ATLAS_LOAD_CACHE_EVENTS = _meter.create_counter(
+    "atlas_load_cache_events_total",
+    description="Read-path cache hits and backend evaluations by route",
+)
 
 CANDLE_READINESS_DEPTH = Gauge(
     "data_manager_candle_readiness_depth",

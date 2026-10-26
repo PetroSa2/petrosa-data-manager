@@ -10,7 +10,7 @@ import traceback
 from collections import deque
 from datetime import UTC, datetime
 from statistics import median
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any, cast
 
 from fastapi import APIRouter, Body, HTTPException, Path, Request
@@ -24,6 +24,7 @@ from data_manager.db.repositories.lease_repository import (
     LEASES_COLLECTION,
     LeaseRepository,
 )
+from data_manager.observability_metrics import ATLAS_LOAD_CACHE_EVENTS
 from data_manager.utils.event_loop_monitor import event_loop_snapshot
 
 router = APIRouter(prefix="/api/v1/leases")
@@ -39,6 +40,10 @@ lease_ops_total = Counter(
 _LEASE_DIAGNOSTIC_WINDOW_SECONDS = 3 * 60 * 60
 _LEASE_DIAGNOSTIC_MAX_RECORDS = 20_000
 _lease_diagnostics: deque[dict[str, Any]] = deque(maxlen=_LEASE_DIAGNOSTIC_MAX_RECORDS)
+_LEASE_GET_CACHE_SECONDS = 0.25
+_lease_get_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_lease_get_inflight: dict[str, asyncio.Task[dict[str, Any] | None]] = {}
+_lease_get_lock = asyncio.Lock()
 
 
 class LeaseRequest(BaseModel):
@@ -55,6 +60,45 @@ def _repo() -> LeaseRepository:
     if not manager or not getattr(manager, "mongodb_adapter", None):
         raise RuntimeError("MongoDB unavailable")
     return LeaseRepository(mongodb_adapter=manager.mongodb_adapter)
+
+
+async def _cached_get(name: str) -> dict[str, Any] | None:
+    now = monotonic()
+    cached = _lease_get_cache.get(name)
+    if cached and now - cached[0] < _LEASE_GET_CACHE_SECONDS:
+        ATLAS_LOAD_CACHE_EVENTS.add(1, {"route": "lease_get", "result": "hit"})
+        return cached[1]
+
+    async with _lease_get_lock:
+        now = monotonic()
+        cached = _lease_get_cache.get(name)
+        if cached and now - cached[0] < _LEASE_GET_CACHE_SECONDS:
+            ATLAS_LOAD_CACHE_EVENTS.add(1, {"route": "lease_get", "result": "hit"})
+            return cached[1]
+        task = _lease_get_inflight.get(name)
+        if task is None:
+            task = asyncio.create_task(_repo().get(name))
+            _lease_get_inflight[name] = task
+            owner = True
+        else:
+            owner = False
+
+    try:
+        result = await task
+    finally:
+        if owner:
+            async with _lease_get_lock:
+                _lease_get_inflight.pop(name, None)
+    if owner and result is not None:
+        _lease_get_cache[name] = (monotonic(), result)
+        ATLAS_LOAD_CACHE_EVENTS.add(1, {"route": "lease_get", "result": "backend"})
+    else:
+        ATLAS_LOAD_CACHE_EVENTS.add(1, {"route": "lease_get", "result": "shared"})
+    return result
+
+
+def _invalidate_get_cache(name: str) -> None:
+    _lease_get_cache.pop(name, None)
 
 
 def _validate_name(name: str) -> str:
@@ -327,6 +371,7 @@ async def acquire(
         "acquire",
         lambda: _repo().acquire(name, request.owner, request.ttl_seconds),
     )
+    _invalidate_get_cache(name)
     lease_ops_total.labels(
         op="acquire", result="acquired" if lease["acquired"] else "contended"
     ).inc()
@@ -352,13 +397,10 @@ async def renew(
         lambda: _repo().renew(name, request.owner, request.ttl_seconds),
         lambda result: "renew_failed" if result is None else None,
     )
+    _invalidate_get_cache(name)
     if lease is None:
         lease_ops_total.labels(op="renew", result="lost").inc()
-        holder = await _run(http_request, "get", lambda: _repo().get(name))
-        raise HTTPException(
-            status_code=409,
-            detail={"renewed": False, "owner": holder.get("owner") if holder else None},
-        )
+        raise HTTPException(status_code=409, detail={"renewed": False, "owner": None})
     lease_ops_total.labels(op="renew", result="renewed").inc()
     return {
         "renewed": True,
@@ -377,6 +419,7 @@ async def release(
     released = await _run(
         http_request, "release", lambda: _repo().release(name, request.owner)
     )
+    _invalidate_get_cache(name)
     lease_ops_total.labels(op="release", result="released").inc()
     return {"released": released}
 
@@ -386,7 +429,7 @@ async def get(
     name: str = Path(...), http_request: Request = cast(Request, None)
 ) -> dict[str, Any]:
     name = _validate_name(name)
-    lease = await _run(http_request, "get", lambda: _repo().get(name))
+    lease = await _run(http_request, "get", lambda: _cached_get(name))
     if lease is None:
         raise HTTPException(status_code=404, detail="lease not found")
     held = lease["expires_at"] >= datetime.now(UTC)
