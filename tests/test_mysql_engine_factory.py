@@ -84,6 +84,11 @@ def test_serving_cap_uses_shared_budget_and_deployment_shape(
     monkeypatch.setenv("MYSQL_HPA_MAX_REPLICAS", "2")
     assert serving_pool_cap() == 4
 
+    monkeypatch.delenv("MYSQL_DATA_MANAGER_PROCESSES")
+    monkeypatch.setenv("API_WORKERS", "4")
+    assert serving_pool_cap() == 1
+
+    monkeypatch.setenv("MYSQL_DATA_MANAGER_PROCESSES", "1")
     monkeypatch.setenv("MYSQL_SHARED_CONNECTION_BUDGET", "20")
     assert (
         role_options("serving")["pool_size"] + role_options("serving")["max_overflow"]
