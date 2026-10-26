@@ -34,6 +34,7 @@ from data_manager.api.middleware import metrics
 from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.execution_event import ExecutionEvent
 from data_manager.observability.thin_data_evidence import (
+    record_execution_event_validation_error,
     record_thin_data_consumer_error,
 )
 from data_manager.utils.nats_trace_propagator import NATSTracePropagator
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 EXECUTION_EVENTS_COLLECTION = "execution_events"
+_EXECUTION_EVENT_PRODUCER = "petrosa-tradeengine"
 
 _meter = get_meter(__name__)
 _METRIC_ATTRS = {"service": constants.OTEL_SERVICE_NAME, "consumer": "execution"}
@@ -311,15 +313,32 @@ class ExecutionEventsConsumer:
         ) as span:
             span.set_attribute("messaging.destination", subject)
 
-            event = ExecutionEvent.from_nats_message(data, subject=subject)
+            payload_is_object = isinstance(data, dict)
+            event = ExecutionEvent.from_nats_message(
+                data if payload_is_object else {}, subject=subject
+            )
             if event is None:
+                validation_field = (
+                    "payload"
+                    if not payload_is_object
+                    else ExecutionEvent.validation_error_field(data) or "timestamp"
+                )
                 span.set_attribute("message.invalid", True)
                 record_thin_data_consumer_error(
                     consumer="execution_events", error_type="invalid_payload"
                 )
+                record_execution_event_validation_error(
+                    producer=_EXECUTION_EVENT_PRODUCER,
+                    subject=subject,
+                    validation_field=validation_field,
+                )
                 logger.warning(
                     "invalid_execution_event_received",
-                    extra={"subject": subject, "raw_data": data},
+                    extra={
+                        "producer": _EXECUTION_EVENT_PRODUCER,
+                        "subject": subject,
+                        "validation_field": validation_field,
+                    },
                 )
                 execution_messages_failed.add(
                     1, {**_METRIC_ATTRS, "error_type": "invalid_payload"}
