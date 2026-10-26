@@ -65,21 +65,22 @@ class TestConnectDisconnect:
             assert primary_call.kwargs["serverSelectionTimeoutMS"] == 5000
             assert primary_call.kwargs["connectTimeoutMS"] == 5000
             assert primary_call.kwargs["socketTimeoutMS"] == 5000
+            assert primary_call.kwargs["maxPoolSize"] == 8
 
             analytics_call = Cli.call_args_list[1]
-            assert analytics_call.kwargs["maxPoolSize"] == 20
+            assert analytics_call.kwargs["maxPoolSize"] == 8
             assert analytics_call.kwargs["serverSelectionTimeoutMS"] == 5000
             assert analytics_call.kwargs["connectTimeoutMS"] == 5000
             assert analytics_call.kwargs["socketTimeoutMS"] == 5000
 
             lease_call = Cli.call_args_list[2]
-            assert lease_call.kwargs["maxPoolSize"] == 10
+            assert lease_call.kwargs["maxPoolSize"] == 2
             assert lease_call.kwargs["serverSelectionTimeoutMS"] == 5000
             assert lease_call.kwargs["connectTimeoutMS"] == 5000
             assert lease_call.kwargs["socketTimeoutMS"] == 5000
 
             readiness_call = Cli.call_args_list[3]
-            assert readiness_call.kwargs["maxPoolSize"] == 2
+            assert readiness_call.kwargs["maxPoolSize"] == 1
             assert readiness_call.kwargs["serverSelectionTimeoutMS"] == 5000
             assert readiness_call.kwargs["connectTimeoutMS"] == 5000
             assert readiness_call.kwargs["socketTimeoutMS"] == 5000

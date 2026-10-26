@@ -121,6 +121,7 @@ class MongoDBAdapter(BaseAdapter):
             self.client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
                 tz_aware=True,
+                maxPoolSize=constants.MONGODB_PRIMARY_MAX_POOL_SIZE,
                 serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
                 connectTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
                 socketTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
