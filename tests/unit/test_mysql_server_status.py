@@ -41,6 +41,18 @@ class _Connection:
                     {"Variable_name": "Aborted_connects", "Value": "3"},
                 ]
             )
+        if sql == (
+            "SELECT COMMAND, COUNT(*) AS connection_count "
+            "FROM information_schema.PROCESSLIST "
+            "WHERE USER = SUBSTRING_INDEX(CURRENT_USER(), '@', 1) "
+            "GROUP BY COMMAND"
+        ):
+            return _Result(
+                [
+                    {"COMMAND": "Sleep", "connection_count": 2},
+                    {"COMMAND": "Query", "connection_count": 1},
+                ]
+            )
         return _Result(
             [
                 {"Variable_name": "max_user_connections", "Value": "30"},
@@ -72,8 +84,60 @@ def test_adapter_returns_stubbed_values_and_only_read_only_statements():
         "Aborted_connects": 3,
         "max_user_connections": 30,
         "wait_timeout": 15,
+        "User_threads_connected": 3,
+        "User_idle_connections": 2,
+        "User_active_connections": 1,
     }
-    assert connection.statements == ["SHOW GLOBAL STATUS", "SHOW VARIABLES"]
+    assert connection.statements == [
+        "SHOW GLOBAL STATUS",
+        "SHOW VARIABLES",
+        "SELECT COMMAND, COUNT(*) AS connection_count FROM information_schema.PROCESSLIST WHERE USER = SUBSTRING_INDEX(CURRENT_USER(), '@', 1) GROUP BY COMMAND",
+    ]
+
+
+def test_adapter_preserves_global_values_when_process_list_is_unavailable():
+    connection = _Connection()
+    original_execute = connection.execute
+
+    def execute_without_process_list(statement):
+        if "information_schema.PROCESSLIST" in str(statement):
+            raise RuntimeError("access denied")
+        return original_execute(statement)
+
+    connection.execute = execute_without_process_list
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    adapter.engine = SimpleNamespace(connect=lambda: connection)
+    adapter._connected = True
+
+    values = adapter.get_server_status()
+
+    assert values["Threads_connected"] == 7
+    assert "User_threads_connected" not in values
+
+
+def test_adapter_ignores_malformed_process_list_rows():
+    connection = _Connection()
+    original_execute = connection.execute
+
+    def execute_with_malformed_process_row(statement):
+        result = original_execute(statement)
+        if "information_schema.PROCESSLIST" in str(statement):
+            result.rows.append({"COMMAND": "Sleep", "connection_count": "bad"})
+        return result
+
+    connection.execute = execute_with_malformed_process_row
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    adapter.engine = SimpleNamespace(connect=lambda: connection)
+    adapter._connected = True
+
+    values = adapter.get_server_status()
+
+    assert values["User_threads_connected"] == 3
+    assert values["User_idle_connections"] == 2
 
 
 def test_adapter_skips_empty_status_values_without_aborting_valid_values():
@@ -137,6 +201,9 @@ def test_collection_retains_valid_gauges_when_required_value_is_malformed():
                 "Aborted_connects": 3,
                 "max_user_connections": 30,
                 "wait_timeout": 15,
+                "User_threads_connected": 3,
+                "User_idle_connections": 2,
+                "User_active_connections": 1,
             }
         )
     )
@@ -180,6 +247,9 @@ async def test_collection_sets_five_gauges_and_runs_in_worker_thread():
                 "Aborted_connects": 3,
                 "max_user_connections": 30,
                 "wait_timeout": 15,
+                "User_threads_connected": 3,
+                "User_idle_connections": 2,
+                "User_active_connections": 1,
             }
 
     await status.mysql_server_status_loop(lambda: Adapter(), stop_event)
@@ -191,6 +261,9 @@ async def test_collection_sets_five_gauges_and_runs_in_worker_thread():
     assert status.mysql_server_aborted_connects._value.get() == 3
     assert status.mysql_server_max_user_connections._value.get() == 30
     assert status.mysql_server_wait_timeout._value.get() == 15
+    assert status.mysql_user_threads_connected._value.get() == 3
+    assert status.mysql_user_idle_connections._value.get() == 2
+    assert status.mysql_user_active_connections._value.get() == 1
 
 
 @pytest.mark.asyncio

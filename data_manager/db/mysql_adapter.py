@@ -1591,6 +1591,26 @@ class MySQLAdapter(BaseAdapter):
         with engine.connect() as conn:
             status_rows = conn.execute(sa.text("SHOW GLOBAL STATUS")).mappings().all()
             variable_rows = conn.execute(sa.text("SHOW VARIABLES")).mappings().all()
+            try:
+                process_rows = (
+                    conn.execute(
+                        sa.text(
+                            "SELECT COMMAND, COUNT(*) AS connection_count "
+                            "FROM information_schema.PROCESSLIST "
+                            "WHERE USER = SUBSTRING_INDEX(CURRENT_USER(), '@', 1) "
+                            "GROUP BY COMMAND"
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+            except Exception as exc:
+                process_rows = []
+                logger.warning(
+                    "MySQL account process list unavailable exception=%s message=%r",
+                    type(exc).__name__,
+                    str(exc),
+                )
 
         required_fields = {
             "Threads_connected",
@@ -1620,7 +1640,7 @@ class MySQLAdapter(BaseAdapter):
                 "MySQL server status contained non-numeric values fields=%s",
                 [name for name, _value in invalid_values],
             )
-        return {
+        result = {
             name: values[name]
             for name in (
                 "Threads_connected",
@@ -1632,6 +1652,27 @@ class MySQLAdapter(BaseAdapter):
             )
             if name in values
         }
+        if process_rows:
+            total = 0
+            idle = 0
+            for row in process_rows:
+                if not isinstance(row, Mapping):
+                    continue
+                try:
+                    count = int(row["connection_count"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                total += count
+                if str(row.get("COMMAND", "")).lower() == "sleep":
+                    idle += count
+            result.update(
+                {
+                    "User_threads_connected": total,
+                    "User_idle_connections": idle,
+                    "User_active_connections": max(0, total - idle),
+                }
+            )
+        return result
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,18 @@ mysql_server_wait_timeout = Gauge(
     "data_manager_mysql_server_wait_timeout",
     "Configured MySQL server wait timeout",
 )
+mysql_user_threads_connected = Gauge(
+    "data_manager_mysql_user_threads_connected",
+    "Current MySQL connections for the authenticated account",
+)
+mysql_user_idle_connections = Gauge(
+    "data_manager_mysql_user_idle_connections",
+    "Idle MySQL connections for the authenticated account",
+)
+mysql_user_active_connections = Gauge(
+    "data_manager_mysql_user_active_connections",
+    "Active MySQL connections for the authenticated account",
+)
 mysql_server_status_errors_total = Counter(
     "data_manager_mysql_server_status_errors_total",
     "MySQL server status collection errors",
@@ -49,6 +61,9 @@ _GAUGES: dict[str, Gauge] = {
     "Aborted_connects": mysql_server_aborted_connects,
     "max_user_connections": mysql_server_max_user_connections,
     "wait_timeout": mysql_server_wait_timeout,
+    "User_threads_connected": mysql_user_threads_connected,
+    "User_idle_connections": mysql_user_idle_connections,
+    "User_active_connections": mysql_user_active_connections,
 }
 
 
