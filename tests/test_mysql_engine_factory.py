@@ -79,24 +79,24 @@ def test_serving_cap_uses_shared_budget_and_deployment_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MYSQL_SHARED_CONNECTION_BUDGET", "30")
-    monkeypatch.setenv("MYSQL_PEER_CONNECTION_HEADROOM", "14")
+    monkeypatch.setenv("MYSQL_PEER_CONNECTION_HEADROOM", "22")
     monkeypatch.setenv("MYSQL_DATA_MANAGER_PROCESSES", "1")
     monkeypatch.setenv("MYSQL_HPA_MAX_REPLICAS", "2")
-    assert serving_pool_cap() == 8
+    assert serving_pool_cap() == 4
 
     monkeypatch.delenv("MYSQL_DATA_MANAGER_PROCESSES")
     monkeypatch.setenv("API_WORKERS", "4")
-    assert serving_pool_cap() == 2
+    assert serving_pool_cap() == 4
 
     monkeypatch.setenv("MYSQL_DATA_MANAGER_PROCESSES", "1")
     monkeypatch.setenv("MYSQL_SHARED_CONNECTION_BUDGET", "20")
     assert (
         role_options("serving")["pool_size"] + role_options("serving")["max_overflow"]
-        == 3
+        == 1
     )
 
     monkeypatch.setenv("MYSQL_SHARED_CONNECTION_BUDGET", "29")
-    assert serving_pool_cap() == 7
+    assert serving_pool_cap() == 3
 
 
 @pytest.mark.parametrize("role", ["serving", "cron", "job", "adhoc"])
@@ -109,7 +109,7 @@ def test_role_overrides_cannot_exceed_role_cap(
     assert (
         options["pool_size"] + options["max_overflow"]
         <= {
-            "serving": serving_pool_cap(),
+            "serving": 4,
             "cron": 1,
             "job": 1,
             "adhoc": 1,
