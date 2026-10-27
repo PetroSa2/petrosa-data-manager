@@ -4,6 +4,7 @@ MongoDB adapter implementation for Data Manager.
 Handles time series data storage in MongoDB.
 """
 
+import inspect
 import logging
 import re
 from datetime import datetime, timezone
@@ -796,10 +797,14 @@ class MongoDBAdapter(BaseAdapter):
             raise DatabaseError("Not connected to database")
 
         try:
-            target_database = database or (
-                self.lease_db
-                if collection == "service_leases" and self.lease_db is not None
-                else self.db
+            target_database = (
+                database
+                if database is not None
+                else (
+                    self.lease_db
+                    if collection == "service_leases" and self.lease_db is not None
+                    else self.db
+                )
             )
             coll = target_database[collection]
 
@@ -1089,23 +1094,47 @@ class MongoDBAdapter(BaseAdapter):
                 ]
 
             ttl_policy = ttl_policy_for_collection(collection)
-            has_ttl = any("expireAfterSeconds" in index.document for index in indexes)
-            if ttl_policy and not has_ttl:
+            existing_indexes_result = coll.index_information()
+            existing_indexes = (
+                await existing_indexes_result
+                if inspect.isawaitable(existing_indexes_result)
+                else {}
+            )
+            if not isinstance(existing_indexes, dict):
+                existing_indexes = {}
+            if ttl_policy:
                 ttl_key = {ttl_policy.field: ASCENDING}
-                indexes = [
-                    index for index in indexes if index.document.get("key") != ttl_key
-                ]
-                ttl_options: dict[str, Any] = {
-                    "expireAfterSeconds": ttl_policy.seconds,
-                    "name": "application_ttl",
-                }
-                if ttl_policy.partial_filter_expression:
-                    ttl_options["partialFilterExpression"] = (
-                        ttl_policy.partial_filter_expression
-                    )
-                indexes.append(
-                    IndexModel([(ttl_policy.field, ASCENDING)], **ttl_options)
+                existing_ttl = any(
+                    dict(definition.get("key", {})) == ttl_key
+                    and "expireAfterSeconds" in definition
+                    for definition in existing_indexes.values()
                 )
+                index_ttl = any(
+                    index.document.get("key") == ttl_key
+                    and "expireAfterSeconds" in index.document
+                    for index in indexes
+                )
+                indexes = [
+                    index
+                    for index in indexes
+                    if index.document.get("key") != ttl_key
+                    or "expireAfterSeconds" in index.document
+                ]
+                if not existing_ttl and not index_ttl:
+                    for name, definition in existing_indexes.items():
+                        if dict(definition.get("key", {})) == ttl_key:
+                            await coll.drop_index(name)
+                    ttl_options: dict[str, Any] = {
+                        "expireAfterSeconds": ttl_policy.seconds,
+                        "name": "application_ttl",
+                    }
+                    if ttl_policy.partial_filter_expression:
+                        ttl_options["partialFilterExpression"] = (
+                            ttl_policy.partial_filter_expression
+                        )
+                    indexes.append(
+                        IndexModel([(ttl_policy.field, ASCENDING)], **ttl_options)
+                    )
 
             if collection.startswith("klines_"):
                 await coll.create_index(
@@ -1113,7 +1142,7 @@ class MongoDBAdapter(BaseAdapter):
                     unique=True,
                     name="symbol_timestamp_unique",
                 )
-                if ttl_policy:
+                if ttl_policy and not existing_ttl:
                     ttl_options = {
                         "expireAfterSeconds": ttl_policy.seconds,
                         "name": "application_ttl",
