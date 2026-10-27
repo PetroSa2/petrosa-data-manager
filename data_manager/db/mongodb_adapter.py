@@ -94,6 +94,9 @@ class MongoDBAdapter(BaseAdapter):
         self.readiness_client = None
         self.readiness_db = None
         self.db_name = database_name or self._extract_db_name(connection_string)
+        self.server_selection_timeout_ms = self.connection_params.get(
+            "server_selection_timeout_ms"
+        )
 
     def _extract_db_name(self, connection_string: str) -> str:
         """Extract database name from connection string."""
@@ -119,14 +122,18 @@ class MongoDBAdapter(BaseAdapter):
     def connect(self) -> None:
         """Establish connection to MongoDB."""
         try:
+            timeout_ms = (
+                self.server_selection_timeout_ms
+                or constants.MONGODB_ANALYTICS_TIMEOUT_MS
+            )
             self.client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
                 event_listeners=[AtlasCommandListener("primary")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_PRIMARY_MAX_POOL_SIZE,
-                serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
-                connectTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
-                socketTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms,
             )
             self.db = self.client[self.db_name]
             self.analytics_client = motor_asyncio.AsyncIOMotorClient(
@@ -134,9 +141,9 @@ class MongoDBAdapter(BaseAdapter):
                 event_listeners=[AtlasCommandListener("analytics")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_ANALYTICS_MAX_POOL_SIZE,
-                serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
-                connectTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
-                socketTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms,
             )
             self.analytics_db = self.analytics_client[self.db_name]
             self.lease_client = motor_asyncio.AsyncIOMotorClient(
@@ -144,9 +151,9 @@ class MongoDBAdapter(BaseAdapter):
                 event_listeners=[AtlasCommandListener("lease")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_LEASE_MAX_POOL_SIZE,
-                serverSelectionTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
-                connectTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
-                socketTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms,
             )
             self.lease_db = self.lease_client[self.db_name]
             self.readiness_client = motor_asyncio.AsyncIOMotorClient(
@@ -154,9 +161,9 @@ class MongoDBAdapter(BaseAdapter):
                 event_listeners=[AtlasCommandListener("readiness")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_READINESS_MAX_POOL_SIZE,
-                serverSelectionTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
-                connectTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
-                socketTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms,
             )
             self.readiness_db = self.readiness_client[self.db_name]
             self._connected = True

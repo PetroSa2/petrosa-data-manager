@@ -97,6 +97,20 @@ class TestConnectDisconnect:
                 a.connect()
             assert "Failed to connect" in str(exc_info.value)
 
+    def test_connect_uses_retention_timeout_override(self):
+        with patch(
+            "data_manager.db.mongodb_adapter.motor_asyncio.AsyncIOMotorClient"
+        ) as Cli:
+            a = MongoDBAdapter(
+                "mongodb://localhost:27017/test_db",
+                server_selection_timeout_ms=30_000,
+            )
+            a.connect()
+            assert all(
+                call.kwargs["serverSelectionTimeoutMS"] == 30_000
+                for call in Cli.call_args_list
+            )
+
     def test_disconnect_clears_state(self):
         a = MongoDBAdapter("mongodb://localhost:27017/test_db")
         a.client = MagicMock()

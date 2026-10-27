@@ -88,6 +88,9 @@ class RetentionConfig:
     mysql_dry_run: bool = True
     mysql_chunk_sleep_ms: int = 250
     mysql_max_rows_per_chunk: int = 50_000
+    mongo_retries: int = 3
+    mongo_retry_backoff_seconds: float = 5.0
+    mongo_server_selection_timeout_ms: int = 30_000
 
 
 @dataclass
@@ -352,6 +355,16 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> RetentionConf
     mysql_max_rows_per_chunk = _parse_int_env(
         env, "KLINES_RETENTION_MYSQL_MAX_ROWS_PER_CHUNK", 50_000, minimum=1
     )
+    mongo_retries = _parse_int_env(env, "KLINES_RETENTION_MONGO_RETRIES", 3, minimum=0)
+    mongo_retry_backoff_seconds = _parse_float_env(
+        env, "KLINES_RETENTION_MONGO_RETRY_BACKOFF_SECONDS", 5.0, minimum=0.0
+    )
+    mongo_server_selection_timeout_ms = _parse_int_env(
+        env,
+        "KLINES_RETENTION_MONGO_SERVER_SELECTION_TIMEOUT_MS",
+        30_000,
+        minimum=1_000,
+    )
 
     return RetentionConfig(
         windows_days=windows,
@@ -363,6 +376,9 @@ def load_config_from_env(environ: dict[str, str] | None = None) -> RetentionConf
         == "true",
         mysql_chunk_sleep_ms=mysql_chunk_sleep_ms,
         mysql_max_rows_per_chunk=mysql_max_rows_per_chunk,
+        mongo_retries=mongo_retries,
+        mongo_retry_backoff_seconds=mongo_retry_backoff_seconds,
+        mongo_server_selection_timeout_ms=mongo_server_selection_timeout_ms,
     )
 
 
@@ -388,6 +404,22 @@ def _parse_int_env(
         )
         return minimum
     return value
+
+
+def _parse_float_env(
+    env: Mapping[str, str], key: str, default: float, *, minimum: float
+) -> float:
+    raw = env.get(key)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-numeric %s=%r; using default %s", key, raw, default
+        )
+        return default
+    return max(value, minimum)
 
 
 async def discover_klines_collections(adapter: MongoDBAdapter) -> list[str]:
@@ -621,6 +653,31 @@ def _ensure_aware(value: datetime) -> datetime:
     return value
 
 
+async def _run_with_mongo_retries(
+    adapter: MongoDBAdapter, config: RetentionConfig
+) -> list[RetentionResult]:
+    """Retry connection and discovery failures with bounded linear backoff."""
+    backend = MongoRetentionBackend(adapter)
+    for attempt in range(config.mongo_retries + 1):
+        try:
+            adapter.connect()
+            return await prune_klines(backend, config)
+        except Exception:
+            if attempt >= config.mongo_retries:
+                raise
+            delay = config.mongo_retry_backoff_seconds * (attempt + 1)
+            logger.warning(
+                "klines_retention: Mongo attempt %d/%d failed; retrying in %.1fs",
+                attempt + 1,
+                config.mongo_retries + 1,
+                delay,
+                exc_info=True,
+            )
+            adapter.disconnect()
+            await asyncio.sleep(delay)
+    raise RuntimeError("Mongo retention retry loop exhausted unexpectedly")
+
+
 def _build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m data_manager.maintenance.klines_retention",
@@ -688,8 +745,10 @@ async def _amain(argv: list[str] | None = None) -> int:
         if not connection_string:
             logger.error("MONGODB_URL is not set; cannot connect to MongoDB")
             return 2
-        mongo_adapter = MongoDBAdapter(connection_string=connection_string)
-        mongo_adapter.connect()
+        mongo_adapter = MongoDBAdapter(
+            connection_string=connection_string,
+            server_selection_timeout_ms=config.mongo_server_selection_timeout_ms,
+        )
         backends.append(MongoRetentionBackend(mongo_adapter))
 
     if "mysql" in config.backends:
@@ -711,7 +770,10 @@ async def _amain(argv: list[str] | None = None) -> int:
                 if mysql_adapter_instance is not None:
                     mysql_adapter_instance.disconnect()
     try:
-        await prune_klines(backends, config)
+        if mongo_adapter is not None:
+            await _run_with_mongo_retries(mongo_adapter, config)
+        else:
+            await prune_klines(backends, config)
     finally:
         if mysql_adapter_instance is not None:
             mysql_adapter_instance.disconnect()
