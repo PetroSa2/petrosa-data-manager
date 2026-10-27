@@ -97,13 +97,17 @@ SUMMARY = WriteSummary()
 
 async def summary_loop(stop_event: asyncio.Event) -> None:
     """Emit healthy summaries at the five-minute boundary."""
+    from data_manager.observability.mongo_metrics import emit_atlas_summary
+
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=300)
         except TimeoutError:
             SUMMARY.emit()
+            emit_atlas_summary()
         else:
             SUMMARY.emit(force=True)
+            emit_atlas_summary(force=True)
 
 
 def record_write(
