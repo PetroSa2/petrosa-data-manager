@@ -82,7 +82,8 @@ jobs:
           EOF
 
           wait_status=0
-          kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$JOB_NAME" \
+          kubectl -n "$NAMESPACE" wait \
+            --for=condition=complete "job/$JOB_NAME" \
             --timeout=10m || wait_status=$?
           kubectl -n "$NAMESPACE" logs "job/$JOB_NAME"
           exit "$wait_status"
