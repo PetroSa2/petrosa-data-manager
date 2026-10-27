@@ -90,8 +90,11 @@ def _global_setting(name: str, default: int, minimum: int = 1) -> int:
 def serving_pool_cap() -> int:
     """Derive the serving cap from the shared DB budget and deployment shape."""
     shared_budget = _global_setting("MYSQL_SHARED_CONNECTION_BUDGET", 30)
-    peer_headroom = _global_setting("MYSQL_PEER_CONNECTION_HEADROOM", 22, minimum=0)
-    processes = _global_setting("MYSQL_DATA_MANAGER_PROCESSES", 1)
+    peer_headroom = _global_setting("MYSQL_PEER_CONNECTION_HEADROOM", 14, minimum=0)
+    processes = _global_setting(
+        "MYSQL_DATA_MANAGER_PROCESSES",
+        _global_setting("API_WORKERS", 1),
+    )
     replicas = _global_setting("MYSQL_HPA_MAX_REPLICAS", 2)
     available = max(1, shared_budget - peer_headroom)
     return max(1, available // (processes * replicas))
