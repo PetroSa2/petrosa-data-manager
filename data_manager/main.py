@@ -110,6 +110,7 @@ class DataManagerApp:
         self.klines_freshness_task: asyncio.Task | None = None
         self.klines_completeness_task: asyncio.Task | None = None
         self.klines_daily_gaps_task: asyncio.Task | None = None
+        self.klines_retention_task: asyncio.Task | None = None
         self.mysql_server_status_task: asyncio.Task | None = None
         self.report_precomputer = None
         self.running = False
@@ -676,6 +677,22 @@ class DataManagerApp:
             )
         )
 
+        from data_manager.maintenance.klines_retention_scheduler import retention_loop
+
+        self.klines_retention_task = asyncio.create_task(
+            retention_loop(
+                lambda: (
+                    self.db_manager.mongodb_adapter
+                    if self.db_manager is not None
+                    else None
+                ),
+                self._shutdown_event,
+                is_leader=lambda: (
+                    self.leader_election is None or self.leader_election.is_leader
+                ),
+            )
+        )
+
         # Wait for shutdown signal
         await self._shutdown_event.wait()
 
@@ -770,6 +787,13 @@ class DataManagerApp:
             except asyncio.CancelledError:
                 pass
             self.mysql_server_status_task = None
+        if self.klines_retention_task:
+            self.klines_retention_task.cancel()
+            try:
+                await self.klines_retention_task
+            except asyncio.CancelledError:
+                pass
+            self.klines_retention_task = None
         if self.db_manager:
             await self.db_manager.shutdown()
             logger.info("Database connections closed")
