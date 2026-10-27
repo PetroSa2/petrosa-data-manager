@@ -240,6 +240,7 @@ class DataManagerApp:
             await adapter.ensure_indexes(collection)
         for timeframe in constants.SUPPORTED_INTERVALS:
             await adapter.ensure_indexes(f"klines_{timeframe}")
+        await adapter.ensure_ttl_coverage()
 
     def _start_mysql_server_status_collector(self) -> None:
         from data_manager.maintenance.mysql_server_status import (

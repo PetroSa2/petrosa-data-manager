@@ -277,11 +277,12 @@ class TestWrite:
 
         await adapter.ensure_indexes("klines_1h")
 
-        coll.create_index.assert_awaited_once_with(
+        coll.create_index.assert_any_await(
             [("symbol", 1), ("timestamp", 1)],
             unique=True,
             name="symbol_timestamp_unique",
         )
+        assert coll.create_index.await_count == 2
 
     @pytest.mark.asyncio
     async def test_pymongo_error_raises_database_error(self, adapter):
@@ -565,9 +566,9 @@ class TestEnsureIndexes:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         await adapter.ensure_indexes("schemas")
         coll.create_indexes.assert_called_once()
-        # Schemas collection should have 5 indexes.
+        # Schemas collection should have its five indexes plus TTL coverage.
         indexes = coll.create_indexes.call_args[0][0]
-        assert len(indexes) == 5
+        assert len(indexes) == 6
 
     @pytest.mark.asyncio
     async def test_creates_default_time_series_indexes(self, adapter):
@@ -576,9 +577,9 @@ class TestEnsureIndexes:
         adapter.db.__getitem__ = MagicMock(return_value=coll)
         await adapter.ensure_indexes("trades_BTCUSDT")
         indexes = coll.create_indexes.call_args[0][0]
-        # Raw trades must also live in MySQL: no TTL until the copy is proven.
+        # Raw trades use a partial TTL after the historic copy is recorded.
         assert len(indexes) == 2
-        assert all("expireAfterSeconds" not in ix.document for ix in indexes)
+        assert any("expireAfterSeconds" in ix.document for ix in indexes)
 
     @pytest.mark.asyncio
     async def test_normalizes_naive_iso_timestamps_to_utc(self, adapter):
@@ -620,11 +621,12 @@ class TestEnsureIndexes:
 
         await adapter.ensure_indexes("klines_1h")
 
-        coll.create_index.assert_awaited_once_with(
+        coll.create_index.assert_any_await(
             [("symbol", 1), ("timestamp", 1)],
             unique=True,
             name="symbol_timestamp_unique",
         )
+        assert coll.create_index.await_count == 2
 
     @pytest.mark.asyncio
     async def test_klines_count_filter_matches_explain_index_contract(self, adapter):
@@ -651,10 +653,14 @@ class TestEnsureIndexes:
                 "symbol": "BTCUSDT",
             }
         )
-        assert coll.create_index.await_args.args[0] == [
-            ("symbol", 1),
-            ("timestamp", 1),
-        ]
+        assert any(
+            call.args[0]
+            == [
+                ("symbol", 1),
+                ("timestamp", 1),
+            ]
+            for call in coll.create_index.await_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_creates_intents_collection_indexes(self, adapter):
@@ -712,8 +718,8 @@ class TestEnsureIndexes:
             ttl[0].document["expireAfterSeconds"] == constants.CIO_DECISIONS_TTL_SECONDS
         )
 
-    # Collections whose rows must also live in MySQL (the historic copy). They never get a TTL in code
-    # until the copy is proven (data-manager#498): MongoDB would delete history that exists nowhere else.
+    # Collections whose rows must also live in MySQL (the historic copy) use a
+    # partial TTL so only confirmed copied rows can expire.
     MYSQL_COPY_REQUIRED = (
         "execution_events",
         "pnl_events",
@@ -725,7 +731,7 @@ class TestEnsureIndexes:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("collection", MYSQL_COPY_REQUIRED)
-    async def test_mysql_copy_required_collections_never_get_a_ttl(
+    async def test_mysql_copy_required_collections_get_guarded_ttl(
         self, adapter, collection
     ):
         coll = MagicMock()
@@ -735,10 +741,14 @@ class TestEnsureIndexes:
         await adapter.ensure_indexes(collection)
 
         indexes = coll.create_indexes.call_args.args[0]
-        assert indexes
-        assert all("expireAfterSeconds" not in ix.document for ix in indexes)
+        ttl = [ix for ix in indexes if "expireAfterSeconds" in ix.document]
+        assert len(ttl) == 1
+        if collection in {"execution_events", "trades_BTCUSDT"}:
+            assert ttl[0].document["partialFilterExpression"] == {
+                "mysql_copied_at": {"$exists": True}
+            }
 
-    def test_copy_required_ttls_are_disabled_without_proof(self):
+    def test_copy_required_ttls_are_not_disabled_without_proof(self):
         import constants
 
         assert constants.HISTORIC_COPY_PROOF_ENABLED is False
@@ -825,6 +835,60 @@ class TestEnsureIndexes:
         ]
         assert len(matching) == 1
         assert matching[0].document["key"] == {"strategy_id": 1, "timestamp": -1}
+
+    @pytest.mark.asyncio
+    async def test_state_collection_ttl_is_partial(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("positions")
+
+        ttl = [
+            index
+            for index in coll.create_indexes.call_args.args[0]
+            if "expireAfterSeconds" in index.document
+        ]
+        assert len(ttl) == 1
+        assert ttl[0].document["key"] == {"_ttl_expires_at": 1}
+        assert ttl[0].document["partialFilterExpression"] == {
+            "_ttl_expires_at": {"$exists": True}
+        }
+
+    @pytest.mark.asyncio
+    async def test_ttl_coverage_fails_for_missing_index(self, adapter):
+        coll = MagicMock()
+        coll.create_indexes = AsyncMock()
+        coll.index_information = AsyncMock(return_value={"_id_": {"key": {"_id": 1}}})
+        database = MagicMock()
+        database.list_collection_names = AsyncMock(return_value=["positions"])
+        database.__getitem__ = MagicMock(return_value=coll)
+        adapter.client.list_database_names = AsyncMock(return_value=["petrosa"])
+        adapter.client.__getitem__ = MagicMock(return_value=database)
+
+        with pytest.raises(DatabaseError, match="no verified TTL index"):
+            await adapter.ensure_ttl_coverage()
+
+    @pytest.mark.asyncio
+    async def test_ttl_coverage_checks_application_databases_only(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={"application_ttl": {"expireAfterSeconds": 86400}}
+        )
+        application_db = MagicMock()
+        application_db.list_collection_names = AsyncMock(return_value=["positions"])
+        application_db.__getitem__ = MagicMock(return_value=coll)
+        adapter.client.list_database_names = AsyncMock(
+            return_value=["petrosa", "admin", "config", "local"]
+        )
+        adapter.client.__getitem__ = MagicMock(return_value=application_db)
+        adapter.ensure_indexes = AsyncMock()
+
+        await adapter.ensure_ttl_coverage()
+
+        adapter.ensure_indexes.assert_awaited_once_with(
+            "positions", database=application_db
+        )
 
     @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):

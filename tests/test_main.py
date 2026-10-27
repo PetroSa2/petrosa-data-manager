@@ -217,6 +217,7 @@ async def test_ensure_mongodb_indexes_covers_operational_collections(monkeypatch
 
     adapter = MagicMock()
     adapter.ensure_indexes = AsyncMock()
+    adapter.ensure_ttl_coverage = AsyncMock()
     adapter.list_collections = AsyncMock(
         return_value=["analytics_btc", "trades_btc", "other"]
     )
@@ -241,3 +242,4 @@ async def test_ensure_mongodb_indexes_covers_operational_collections(monkeypatch
     assert {"positions", "daily_pnl", "signals"}.issubset(awaited)
     assert {"strategy_lifecycle_events", "strategy_lifecycle_states"}.issubset(awaited)
     adapter.ensure_indexes.assert_any_await("klines_1m")
+    adapter.ensure_ttl_coverage.assert_awaited_once_with()

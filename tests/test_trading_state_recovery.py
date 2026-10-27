@@ -362,7 +362,7 @@ async def test_missing_mysql_keeps_routes_available(recovery):
 
 
 @pytest.mark.asyncio
-async def test_pending_scan_indexes_are_additive_without_ttl(recovery):
+async def test_pending_scan_indexes_are_additive_with_guarded_ttl(recovery):
     from data_manager.db.mongodb_adapter import MongoDBAdapter
 
     mongo, _ = recovery
@@ -380,7 +380,9 @@ async def test_pending_scan_indexes_are_additive_without_ttl(recovery):
             ("_mysql_copy_attempted_at", 1),
             ("_id", 1),
         ]
-        assert not any("expireAfterSeconds" in row for row in info.values())
+        ttl_indexes = [row for row in info.values() if "expireAfterSeconds" in row]
+        assert len(ttl_indexes) == 1
+        assert list(ttl_indexes[0]["key"]) == [("_ttl_expires_at", 1)]
 
 
 def test_unconfirmed_fallback_write_is_not_counted(recovery):

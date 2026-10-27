@@ -31,6 +31,7 @@ import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
 from data_manager.db.write_result import WriteResult
 from data_manager.observability.mongo_metrics import AtlasCommandListener
+from data_manager.persistence_registry import ttl_policy_for_collection
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +229,10 @@ class MongoDBAdapter(BaseAdapter):
                             f"invalid timestamp for MongoDB collection {collection}"
                         ) from None
                     doc["timestamp"] = ts
+
+                ttl_policy = ttl_policy_for_collection(collection)
+                if ttl_policy and ttl_policy.field == "_ttl_inserted_at":
+                    doc.setdefault("_ttl_inserted_at", datetime.now(UTC))
 
                 # Candles are one-row-per-symbol/timestamp. Signals carry their
                 # own unique identity and must not use millisecond timestamps.
@@ -783,18 +788,20 @@ class MongoDBAdapter(BaseAdapter):
         except PyMongoError as e:
             raise DatabaseError(f"Failed to count records in {collection}: {e}") from e
 
-    async def ensure_indexes(self, collection: str) -> None:
+    async def ensure_indexes(
+        self, collection: str, *, database: Any | None = None
+    ) -> None:
         """Ensure indexes exist for collection."""
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
         try:
-            database = (
+            target_database = database or (
                 self.lease_db
                 if collection == "service_leases" and self.lease_db is not None
                 else self.db
             )
-            coll = database[collection]
+            coll = target_database[collection]
 
             # Create indexes based on collection type
             if collection == "schemas":
@@ -1081,12 +1088,39 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)]),
                 ]
 
+            ttl_policy = ttl_policy_for_collection(collection)
+            has_ttl = any("expireAfterSeconds" in index.document for index in indexes)
+            if ttl_policy and not has_ttl:
+                ttl_key = {ttl_policy.field: ASCENDING}
+                indexes = [
+                    index for index in indexes if index.document.get("key") != ttl_key
+                ]
+                ttl_options: dict[str, Any] = {
+                    "expireAfterSeconds": ttl_policy.seconds,
+                    "name": "application_ttl",
+                }
+                if ttl_policy.partial_filter_expression:
+                    ttl_options["partialFilterExpression"] = (
+                        ttl_policy.partial_filter_expression
+                    )
+                indexes.append(
+                    IndexModel([(ttl_policy.field, ASCENDING)], **ttl_options)
+                )
+
             if collection.startswith("klines_"):
                 await coll.create_index(
                     [("symbol", ASCENDING), ("timestamp", ASCENDING)],
                     unique=True,
                     name="symbol_timestamp_unique",
                 )
+                if ttl_policy:
+                    ttl_options = {
+                        "expireAfterSeconds": ttl_policy.seconds,
+                        "name": "application_ttl",
+                    }
+                    await coll.create_index(
+                        [(ttl_policy.field, ASCENDING)], **ttl_options
+                    )
             else:
                 await coll.create_indexes(indexes)
             logger.info(
@@ -1130,6 +1164,30 @@ class MongoDBAdapter(BaseAdapter):
             return collections
         except PyMongoError as e:
             raise DatabaseError(f"Failed to list collections: {e}") from e
+
+    async def ensure_ttl_coverage(self) -> None:
+        """Ensure and verify TTL coverage for every live application collection."""
+        system_databases = {"admin", "config", "local"}
+        for database_name in await self.client.list_database_names():
+            if database_name in system_databases:
+                continue
+            database = self.client[database_name]
+            for collection in await database.list_collection_names():
+                if ttl_policy_for_collection(collection) is None:
+                    raise DatabaseError(
+                        f"MongoDB collection {database_name}.{collection} "
+                        "has no registered TTL policy"
+                    )
+                await self.ensure_indexes(collection, database=database)
+                index_information = await database[collection].index_information()
+                if not any(
+                    "expireAfterSeconds" in definition
+                    for definition in index_information.values()
+                ):
+                    raise DatabaseError(
+                        f"MongoDB collection {database_name}.{collection} "
+                        "has no verified TTL index"
+                    )
 
     # -------------------------------------------------------------------------
     # Read-only introspection helpers (petrosa_k8s#794 storage-inventory audit)
