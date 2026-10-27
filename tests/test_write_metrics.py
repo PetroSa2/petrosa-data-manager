@@ -1,8 +1,10 @@
+import asyncio
 import json
 import logging
 
 from prometheus_client import REGISTRY
 
+from data_manager.observability import mongo_metrics, write_metrics
 from data_manager.observability.write_metrics import (
     PETROSA_DATA_MANAGER_WRITE_DURATION_SECONDS,
     PETROSA_DATA_MANAGER_WRITES_TOTAL,
@@ -63,3 +65,26 @@ def test_summary_shape_and_debug_safe_fields(caplog):
         "latency_seconds",
     }
     assert json.loads(caplog.records[-1].message)["latency_seconds"]["p50"] == 0.2
+
+
+def test_summary_loop_emits_atlas_summary_when_stopping(monkeypatch):
+    emitted = []
+
+    class StopEvent:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        async def wait(self):
+            self.stopped = True
+
+    monkeypatch.setattr(write_metrics.SUMMARY, "emit", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        mongo_metrics,
+        "emit_atlas_summary",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    asyncio.run(write_metrics.summary_loop(StopEvent()))
+    assert emitted == [{"force": True}]
