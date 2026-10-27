@@ -891,6 +891,31 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_existing_ttl_index_is_reused_without_option_conflict(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={
+                "_ttl_inserted_at_ttl": {
+                    "key": {"_ttl_inserted_at": 1},
+                    "expireAfterSeconds": 3600,
+                }
+            }
+        )
+        coll.create_indexes = AsyncMock()
+        coll.drop_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("signals")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        assert not any(
+            index.document.get("key") == {"_ttl_inserted_at": 1}
+            and "expireAfterSeconds" in index.document
+            for index in indexes
+        )
+        coll.drop_index.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):
         adapter._connected = False
         with pytest.raises(DatabaseError, match="Not connected"):
