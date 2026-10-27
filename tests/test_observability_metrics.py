@@ -99,7 +99,7 @@ def test_atlas_listener_records_success_with_route_source(monkeypatch):
     listener = mongo_metrics.AtlasCommandListener("primary")
     token = mongo_metrics.set_source("/api/v1/analysis/scorecard")
     try:
-        listener.command_started(
+        listener.started(
             type(
                 "Event",
                 (),
@@ -110,7 +110,7 @@ def test_atlas_listener_records_success_with_route_source(monkeypatch):
                 },
             )()
         )
-        listener.command_succeeded(
+        listener.succeeded(
             type(
                 "Event",
                 (),
@@ -153,10 +153,10 @@ def test_atlas_listener_records_failure_and_unknown_collection(monkeypatch):
     monkeypatch.setattr(mongo_metrics, "ATLAS_FAILURES", Metric())
     monkeypatch.setattr(mongo_metrics, "ATLAS_LATENCY", Metric())
     listener = mongo_metrics.AtlasCommandListener("readiness")
-    listener.command_started(
+    listener.started(
         type("Event", (), {"request_id": 2, "command_name": "getMore", "command": {}})()
     )
-    listener.command_failed(
+    listener.failed(
         type(
             "Event",
             (),
@@ -179,12 +179,59 @@ def test_atlas_listener_isolates_metric_errors(monkeypatch):
 
     monkeypatch.setattr(mongo_metrics, "ATLAS_OPERATIONS", BrokenMetric())
     listener = mongo_metrics.AtlasCommandListener("primary")
-    listener.command_succeeded(
+    listener.succeeded(
         type(
             "Event", (), {"request_id": 3, "command_name": "ping", "duration_micros": 1}
         )()
     )
     assert listener._commands == {}
+
+
+def test_atlas_listener_implements_pymongo_callback_contract(monkeypatch):
+    class Metric:
+        def add(self, *_args):
+            return None
+
+        def record(self, *_args):
+            return None
+
+    monkeypatch.setattr(mongo_metrics, "ATLAS_OPERATIONS", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_FAILURES", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_LATENCY", Metric())
+    listener = mongo_metrics.AtlasCommandListener("primary")
+    listener.started(
+        type(
+            "Event",
+            (),
+            {
+                "request_id": 4,
+                "command_name": "find",
+                "command": {"find": "signals"},
+            },
+        )()
+    )
+    listener.succeeded(
+        type(
+            "Event",
+            (),
+            {"request_id": 4, "command_name": "find", "duration_micros": 1000},
+        )()
+    )
+    assert listener._commands == {}
+
+
+def test_atlas_summary_is_bounded_and_reports_top_consumers():
+    clock_value = [0.0]
+    summary = mongo_metrics.AtlasOperationSummary(clock=lambda: clock_value[0])
+    summary.record("signals", "find", "/api/v1/signals", 0.1, False)
+    summary.record("signals", "find", "/api/v1/signals", 0.2, True)
+    clock_value[0] = 300.0
+    record = summary.emit()
+    assert record is not None
+    assert record["event"] == "ATLAS_OPS_SUMMARY"
+    assert record["total_ops"] == 2
+    assert record["peak_minute_ops"] == 2
+    assert record["top_failures"][0]["source"] == "/api/v1/signals"
 
 
 def test_mongo_clients_attach_role_specific_listeners(monkeypatch):
