@@ -9,6 +9,8 @@ from fastapi import Request, Response
 from prometheus_client import Counter, Gauge, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from data_manager.observability.mongo_metrics import reset_source, set_source
+
 logger = __import__("logging").getLogger(__name__)
 
 # Prometheus metrics
@@ -107,6 +109,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         request_size = await self._get_request_size(request)
 
         # Process request
+        source_token = set_source(self._extract_mongo_source(request, endpoint))
         try:
             response = await call_next(request)
             status_code = response.status_code
@@ -125,6 +128,8 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             # Record error metrics
             self._record_error_metrics(method, endpoint, e, start_time, request_size)
             raise
+        finally:
+            reset_source(source_token)
 
     def _extract_endpoint(self, request: Request) -> str:
         """Extract endpoint name from request path."""
@@ -149,6 +154,13 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             return path
 
         return path
+
+    def _extract_mongo_source(self, request: Request, endpoint: str) -> str:
+        """Return a bounded source label for Mongo command metrics."""
+        if endpoint.startswith(("/api/v1/", "/data/", "/health/", "/raw/")):
+            return endpoint
+        parts = request.url.path.strip("/").split("/")
+        return f"/{parts[0]}" if parts and parts[0] else "/unknown"
 
     async def _get_request_size(self, request: Request) -> int:
         """Get request body size."""

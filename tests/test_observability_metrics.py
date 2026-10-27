@@ -1,3 +1,4 @@
+from data_manager.observability import mongo_metrics
 from data_manager.observability_metrics import (
     LEDGER_OPEN_POSITION_VARIANCE,
     LEDGER_TIEOUT_CUMULATIVE,
@@ -68,3 +69,118 @@ def test_strategy_scorecard_evaluate_is_registered_on_otlp_meter():
         metric_name(STRATEGY_SCORECARD_EVALUATE_TOTAL)
         == "strategy_scorecard_evaluate_total"
     )
+
+
+def test_atlas_metrics_are_registered():
+    assert mongo_metrics.metric_name(mongo_metrics.ATLAS_OPERATIONS) == (
+        "data_manager_atlas_operations_total"
+    )
+    assert mongo_metrics.metric_name(mongo_metrics.ATLAS_FAILURES) == (
+        "data_manager_atlas_operation_failures_total"
+    )
+    assert mongo_metrics.metric_name(mongo_metrics.ATLAS_LATENCY) == (
+        "data_manager_atlas_operation_duration_seconds"
+    )
+
+
+def test_atlas_listener_records_success_with_route_source(monkeypatch):
+    recorded = []
+
+    class Metric:
+        def add(self, value, attributes):
+            recorded.append((value, attributes))
+
+        def record(self, value, attributes):
+            recorded.append((value, attributes))
+
+    monkeypatch.setattr(mongo_metrics, "ATLAS_OPERATIONS", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_LATENCY", Metric())
+    listener = mongo_metrics.AtlasCommandListener("primary")
+    token = mongo_metrics.set_source("/api/v1/analysis/scorecard")
+    try:
+        listener.command_started(
+            type(
+                "Event",
+                (),
+                {
+                    "request_id": 1,
+                    "command_name": "find",
+                    "command": {"find": "signals"},
+                },
+            )()
+        )
+        listener.command_succeeded(
+            type(
+                "Event",
+                (),
+                {"request_id": 1, "command_name": "find", "duration_micros": 1000},
+            )()
+        )
+    finally:
+        mongo_metrics.reset_source(token)
+    assert recorded == [
+        (
+            1,
+            {
+                "command": "find",
+                "collection": "signals",
+                "source": "/api/v1/analysis/scorecard",
+            },
+        ),
+        (
+            0.001,
+            {
+                "command": "find",
+                "collection": "signals",
+                "source": "/api/v1/analysis/scorecard",
+            },
+        ),
+    ]
+
+
+def test_atlas_listener_records_failure_and_unknown_collection(monkeypatch):
+    recorded = []
+
+    class Metric:
+        def add(self, value, attributes):
+            recorded.append(("add", value, attributes))
+
+        def record(self, value, attributes):
+            recorded.append(("record", value, attributes))
+
+    monkeypatch.setattr(mongo_metrics, "ATLAS_OPERATIONS", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_FAILURES", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_LATENCY", Metric())
+    listener = mongo_metrics.AtlasCommandListener("readiness")
+    listener.command_started(
+        type("Event", (), {"request_id": 2, "command_name": "getMore", "command": {}})()
+    )
+    listener.command_failed(
+        type(
+            "Event",
+            (),
+            {"request_id": 2, "command_name": "getMore", "duration_micros": 2000},
+        )()
+    )
+    assert recorded[0][2] == {
+        "command": "getMore",
+        "collection": "unknown",
+        "source": "readiness",
+    }
+    assert recorded[1][0] == "add"
+    assert recorded[2][0] == "record"
+
+
+def test_atlas_listener_isolates_metric_errors(monkeypatch):
+    class BrokenMetric:
+        def add(self, *_args):
+            raise RuntimeError("metric failure")
+
+    monkeypatch.setattr(mongo_metrics, "ATLAS_OPERATIONS", BrokenMetric())
+    listener = mongo_metrics.AtlasCommandListener("primary")
+    listener.command_succeeded(
+        type(
+            "Event", (), {"request_id": 3, "command_name": "ping", "duration_micros": 1}
+        )()
+    )
+    assert listener._commands == {}
