@@ -1,3 +1,4 @@
+from data_manager.db import mongodb_adapter
 from data_manager.observability import mongo_metrics
 from data_manager.observability_metrics import (
     LEDGER_OPEN_POSITION_VARIANCE,
@@ -184,3 +185,29 @@ def test_atlas_listener_isolates_metric_errors(monkeypatch):
         )()
     )
     assert listener._commands == {}
+
+
+def test_mongo_clients_attach_role_specific_listeners(monkeypatch):
+    clients = []
+
+    class Client:
+        def __init__(self, _connection_string, **kwargs):
+            self.kwargs = kwargs
+            clients.append(self)
+
+        def __getitem__(self, _name):
+            return object()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(mongodb_adapter.motor_asyncio, "AsyncIOMotorClient", Client)
+    adapter = mongodb_adapter.MongoDBAdapter("mongodb://localhost:27017/test")
+    adapter.connect()
+    listeners = [client.kwargs["event_listeners"][0] for client in clients]
+    assert [listener.client_role for listener in listeners] == [
+        "primary",
+        "analytics",
+        "lease",
+        "readiness",
+    ]
