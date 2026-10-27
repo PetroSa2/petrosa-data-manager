@@ -30,6 +30,7 @@ except ImportError:
 import constants
 from data_manager.db.base_adapter import BaseAdapter, DatabaseError
 from data_manager.db.write_result import WriteResult
+from data_manager.observability.mongo_metrics import AtlasCommandListener
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ class MongoDBAdapter(BaseAdapter):
         try:
             self.client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
+                event_listeners=[AtlasCommandListener("primary")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_PRIMARY_MAX_POOL_SIZE,
                 serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
@@ -129,6 +131,7 @@ class MongoDBAdapter(BaseAdapter):
             self.db = self.client[self.db_name]
             self.analytics_client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
+                event_listeners=[AtlasCommandListener("analytics")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_ANALYTICS_MAX_POOL_SIZE,
                 serverSelectionTimeoutMS=constants.MONGODB_ANALYTICS_TIMEOUT_MS,
@@ -138,6 +141,7 @@ class MongoDBAdapter(BaseAdapter):
             self.analytics_db = self.analytics_client[self.db_name]
             self.lease_client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
+                event_listeners=[AtlasCommandListener("lease")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_LEASE_MAX_POOL_SIZE,
                 serverSelectionTimeoutMS=constants.MONGODB_LEASE_TIMEOUT_MS,
@@ -147,6 +151,7 @@ class MongoDBAdapter(BaseAdapter):
             self.lease_db = self.lease_client[self.db_name]
             self.readiness_client = motor_asyncio.AsyncIOMotorClient(
                 self.connection_string,
+                event_listeners=[AtlasCommandListener("readiness")],
                 tz_aware=True,
                 maxPoolSize=constants.MONGODB_READINESS_MAX_POOL_SIZE,
                 serverSelectionTimeoutMS=constants.MONGODB_READINESS_TIMEOUT_MS,
