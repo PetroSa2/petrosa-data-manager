@@ -1,7 +1,7 @@
 ---
 name: Repair positions auto-increment dry run
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       image:
@@ -27,7 +27,8 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          if [[ ! "$IMAGE" =~ ^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$ || "$IMAGE" == *:latest ]]; then
+          if [[ ! "$IMAGE" =~ ^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$ || \
+            "$IMAGE" == *:latest ]]; then
             echo "image must be a pinned repository:tag value" >&2
             exit 2
           fi
@@ -81,6 +82,7 @@ jobs:
           EOF
 
           wait_status=0
-          kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$JOB_NAME" --timeout=10m || wait_status=$?
+          kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$JOB_NAME" \
+            --timeout=10m || wait_status=$?
           kubectl -n "$NAMESPACE" logs "job/$JOB_NAME"
           exit "$wait_status"
