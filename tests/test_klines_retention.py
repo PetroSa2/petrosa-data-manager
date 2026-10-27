@@ -116,6 +116,22 @@ def test_load_config_from_env_defaults_to_mongodb():
     assert config.mysql_dry_run is True
     assert config.mysql_chunk_sleep_ms == 250
     assert config.mysql_max_rows_per_chunk == 50_000
+    assert config.mongo_retries == 3
+    assert config.mongo_retry_backoff_seconds == 5.0
+    assert config.mongo_server_selection_timeout_ms == 30_000
+
+
+def test_load_config_from_env_reads_mongo_retry_settings():
+    config = kr.load_config_from_env(
+        {
+            "KLINES_RETENTION_MONGO_RETRIES": "4",
+            "KLINES_RETENTION_MONGO_RETRY_BACKOFF_SECONDS": "1.5",
+            "KLINES_RETENTION_MONGO_SERVER_SELECTION_TIMEOUT_MS": "45000",
+        }
+    )
+    assert config.mongo_retries == 4
+    assert config.mongo_retry_backoff_seconds == 1.5
+    assert config.mongo_server_selection_timeout_ms == 45_000
 
 
 @pytest.mark.parametrize("backends", ["mysql", "mongodb,mysql"])
@@ -379,6 +395,21 @@ async def test_amain_rejects_mysql_backend(monkeypatch):
     monkeypatch.setenv("KLINES_RETENTION_BACKENDS", "mysql")
     with pytest.raises(ValueError, match="restricted to MongoDB"):
         await kr._amain([])
+
+
+@pytest.mark.asyncio
+async def test_mongo_retry_reconnects_after_transient_failure(monkeypatch):
+    adapter = Mock()
+    config = kr.RetentionConfig(mongo_retries=2, mongo_retry_backoff_seconds=0)
+    prune = AsyncMock(side_effect=[RuntimeError("timeout"), ["ok"]])
+    monkeypatch.setattr(kr, "prune_klines", prune)
+    sleep = AsyncMock()
+    monkeypatch.setattr(kr.asyncio, "sleep", sleep)
+
+    assert await kr._run_with_mongo_retries(adapter, config) == ["ok"]
+    assert adapter.connect.call_count == 2
+    adapter.disconnect.assert_called_once()
+    sleep.assert_awaited_once_with(0)
 
 
 @pytest.mark.asyncio
