@@ -1,0 +1,86 @@
+---
+name: Repair positions auto-increment dry run
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Data-manager image to inspect
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  repair-positions-dry-run:
+    name: Inspect positions auto-increment
+    runs-on: petrosa-org-runners
+    timeout-minutes: 15
+    env:
+      IMAGE: ${{ inputs.image }}
+      NAMESPACE: petrosa-apps
+      JOB_NAME: repair-positions-dry-run-${{ github.run_id }}
+    steps:
+      - name: Create, wait for, and remove inspection Job
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! "$IMAGE" =~ ^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$ || "$IMAGE" == *:latest ]]; then
+            echo "image must be a pinned repository:tag value" >&2
+            exit 2
+          fi
+
+          cleanup() {
+            kubectl -n "$NAMESPACE" delete job "$JOB_NAME" --ignore-not-found
+          }
+          trap cleanup EXIT
+
+          kubectl -n "$NAMESPACE" create -f - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${JOB_NAME}
+            labels:
+              app.kubernetes.io/name: repair-positions-dry-run
+          spec:
+            ttlSecondsAfterFinished: 300
+            backoffLimit: 0
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: repair-positions-dry-run
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  fsGroup: 1000
+                containers:
+                  - name: repair-positions
+                    image: ${IMAGE}
+                    imagePullPolicy: Always
+                    command:
+                      - python
+                      - -m
+                      - data_manager.maintenance.repair_positions_auto_increment
+                      - --dry-run
+                    env:
+                      - name: MYSQL_URI
+                        valueFrom:
+                          secretKeyRef:
+                            name: petrosa-sensitive-credentials
+                            key: MYSQL_URI
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      capabilities:
+                        drop:
+                          - ALL
+          EOF
+
+          wait_status=0
+          kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$JOB_NAME" --timeout=10m || wait_status=$?
+          kubectl -n "$NAMESPACE" logs "job/$JOB_NAME"
+          exit "$wait_status"
