@@ -23,6 +23,21 @@ async def test_shared_client_retention_retries_without_disconnect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shared_client_retention_propagates_terminal_failure(monkeypatch):
+    prune = AsyncMock(side_effect=RuntimeError("terminal failure"))
+    monkeypatch.setattr(scheduler, "prune_klines", prune)
+    sleep = AsyncMock()
+    adapter = MagicMock()
+    config = RetentionConfig(mongo_retries=1, mongo_retry_backoff_seconds=2)
+
+    with pytest.raises(RuntimeError, match="terminal failure"):
+        await scheduler.run_shared_client_retention(adapter, config, sleep=sleep)
+
+    assert prune.await_count == 2
+    sleep.assert_awaited_once_with(2)
+
+
+@pytest.mark.asyncio
 async def test_retention_loop_skips_followers(monkeypatch):
     run = AsyncMock()
     monkeypatch.setattr(scheduler, "run_shared_client_retention", run)
