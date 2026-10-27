@@ -860,11 +860,35 @@ class TestEnsureIndexes:
         coll = MagicMock()
         coll.create_indexes = AsyncMock()
         coll.index_information = AsyncMock(return_value={"_id_": {"key": {"_id": 1}}})
-        adapter.db.__getitem__ = MagicMock(return_value=coll)
-        adapter.list_collections = AsyncMock(return_value=["positions"])
+        database = MagicMock()
+        database.list_collection_names = AsyncMock(return_value=["positions"])
+        database.__getitem__ = MagicMock(return_value=coll)
+        adapter.client.list_database_names = AsyncMock(return_value=["petrosa"])
+        adapter.client.__getitem__ = MagicMock(return_value=database)
 
         with pytest.raises(DatabaseError, match="no verified TTL index"):
             await adapter.ensure_ttl_coverage()
+
+    @pytest.mark.asyncio
+    async def test_ttl_coverage_checks_application_databases_only(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={"application_ttl": {"expireAfterSeconds": 86400}}
+        )
+        application_db = MagicMock()
+        application_db.list_collection_names = AsyncMock(return_value=["positions"])
+        application_db.__getitem__ = MagicMock(return_value=coll)
+        adapter.client.list_database_names = AsyncMock(
+            return_value=["petrosa", "admin", "config", "local"]
+        )
+        adapter.client.__getitem__ = MagicMock(return_value=application_db)
+        adapter.ensure_indexes = AsyncMock()
+
+        await adapter.ensure_ttl_coverage()
+
+        adapter.ensure_indexes.assert_awaited_once_with(
+            "positions", database=application_db
+        )
 
     @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):
