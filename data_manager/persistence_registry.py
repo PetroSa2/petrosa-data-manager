@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import constants
+
 
 @dataclass(frozen=True)
 class PersistenceSpec:
@@ -18,6 +20,15 @@ class PersistenceSpec:
     reason: str | None = None
     pending: bool = False
     min_retention: str | None = None
+
+
+@dataclass(frozen=True)
+class TTLPolicy:
+    """TTL index contract for one application collection."""
+
+    field: str
+    seconds: int
+    partial_filter_expression: dict[str, object] | None = None
 
 
 def durable(
@@ -174,6 +185,10 @@ REGISTRY: dict[str, PersistenceSpec] = {
 }
 
 PREFIX_REGISTRY: tuple[tuple[str, PersistenceSpec], ...] = (
+    ("app_config", transient_only(reason="runtime configuration state")),
+    ("service_config", transient_only(reason="runtime configuration state")),
+    ("strategy_config", transient_only(reason="runtime configuration state")),
+    ("trading_config", transient_only(reason="runtime configuration state")),
     (
         "funding_rates",
         durable(mysql_table="funding_rates", key="symbol+timestamp", pending=True),
@@ -245,6 +260,87 @@ def entry_for_collection(collection: str) -> PersistenceSpec | None:
         if collection.startswith(prefix):
             return spec
     return None
+
+
+_STATE_COLLECTION_PREFIXES = (
+    "app_config",
+    "service_config",
+    "strategy_config",
+    "trading_config",
+)
+_STATE_COLLECTIONS = frozenset(
+    {
+        "positions",
+        "daily_pnl",
+        "leader_election",
+        "distributed_locks",
+        "service_leases",
+        "config_rate_limits",
+        "strategy_lifecycle_states",
+        "cio_auto_resume_registry",
+        "risk_equity_peak",
+        "envelopes",
+        "pending_envelope_changes",
+        "leverage_bounds",
+        "leverage_status",
+        "restore_exercises",
+    }
+)
+
+
+def ttl_policy_for_collection(collection: str) -> TTLPolicy | None:
+    """Return the retention contract for a registered application collection."""
+
+    if entry_for_collection(collection) is None:
+        return None
+    if collection == "intents":
+        return TTLPolicy("received_at", constants.INTENTS_TTL_SECONDS)
+    if collection == "cio_decisions":
+        return TTLPolicy("received_at", constants.CIO_DECISIONS_TTL_SECONDS)
+    if collection == "alerts":
+        return TTLPolicy("_ttl_inserted_at", constants.ALERTS_TTL_SECONDS)
+    if collection == "health_metrics":
+        return TTLPolicy("timestamp", constants.HEALTH_METRICS_TTL_SECONDS)
+    if collection == "audit_logs":
+        return TTLPolicy("timestamp", constants.AUDIT_LOGS_TTL_SECONDS)
+    if collection.startswith("analytics_"):
+        return TTLPolicy("metadata.computed_at", constants.ANALYTICS_TTL_SECONDS)
+    if collection.startswith("klines_"):
+        interval_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "1h": 3600,
+            "4h": 14400,
+            "1d": 86400,
+        }.get(collection.removeprefix("klines_"), 86400)
+        return TTLPolicy("timestamp", 400 * interval_seconds + 86400)
+    if collection.startswith("trades"):
+        return TTLPolicy(
+            "timestamp",
+            constants.TRADES_TTL_SECONDS,
+            {"mysql_copied_at": {"$exists": True}},
+        )
+    if collection == "execution_events":
+        return TTLPolicy(
+            "timestamp",
+            constants.EXECUTION_EVENTS_TTL_SECONDS,
+            {"mysql_copied_at": {"$exists": True}},
+        )
+    if collection in _STATE_COLLECTIONS or collection.startswith(
+        _STATE_COLLECTION_PREFIXES
+    ):
+        return TTLPolicy(
+            "_ttl_expires_at",
+            30 * 86400,
+            {"_ttl_expires_at": {"$exists": True}},
+        )
+    if collection in {"signals", "pnl_events"}:
+        return TTLPolicy("_ttl_inserted_at", 30 * 86400)
+    if collection == "funding_rates":
+        return TTLPolicy("timestamp", 30 * 86400)
+    return TTLPolicy("_ttl_inserted_at", 30 * 86400)
 
 
 def durable_mysql_tables() -> frozenset[str]:
@@ -325,11 +421,13 @@ __all__ = [
     "PREFIX_REGISTRY",
     "REGISTRY",
     "PersistenceSpec",
+    "TTLPolicy",
     "durable",
     "durable_mysql_tables",
     "entry_for_collection",
     "scan_mongo_collection_names",
     "transient_only",
+    "ttl_policy_for_collection",
     "operational",
     "unregistered_collections",
 ]

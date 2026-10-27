@@ -11,6 +11,7 @@ from data_manager.persistence_registry import (
     durable_mysql_tables,
     entry_for_collection,
     scan_mongo_collection_names,
+    ttl_policy_for_collection,
     unregistered_collections,
 )
 
@@ -60,3 +61,17 @@ def test_scanner_fails_for_an_unregistered_collection(tmp_path: Path):
 def test_real_data_manager_has_no_unregistered_static_collections():
     root = Path(__file__).parents[1] / "data_manager"
     assert unregistered_collections(root) == set()
+
+
+def test_every_static_application_collection_has_ttl_policy():
+    root = Path(__file__).parents[1] / "data_manager"
+    collections = scan_mongo_collection_names(root)
+    assert collections
+    assert all(ttl_policy_for_collection(collection) for collection in collections)
+
+
+def test_live_state_ttl_is_partial_and_does_not_expire_open_documents():
+    policy = ttl_policy_for_collection("positions")
+    assert policy is not None
+    assert policy.field == "_ttl_expires_at"
+    assert policy.partial_filter_expression == {"_ttl_expires_at": {"$exists": True}}
