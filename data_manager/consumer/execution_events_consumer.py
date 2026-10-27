@@ -35,7 +35,6 @@ from data_manager.consumer.nats_client import NATSClient
 from data_manager.models.execution_event import ExecutionEvent
 from data_manager.observability.thin_data_evidence import (
     record_execution_event_validation_error,
-    record_thin_data_consumer_error,
 )
 from data_manager.utils.nats_trace_propagator import NATSTracePropagator
 
@@ -295,8 +294,10 @@ class ExecutionEventsConsumer:
             data = json.loads(msg.data.decode())
         except (json.JSONDecodeError, AttributeError) as e:
             logger.error(f"Failed to decode execution event message: {e}")
-            record_thin_data_consumer_error(
-                consumer="execution_events", error_type="json_decode"
+            record_execution_event_validation_error(
+                producer=_EXECUTION_EVENT_PRODUCER,
+                subject=subject,
+                validation_field="json",
             )
             execution_messages_failed.add(
                 1, {**_METRIC_ATTRS, "error_type": "json_decode"}
@@ -324,9 +325,6 @@ class ExecutionEventsConsumer:
                     else ExecutionEvent.validation_error_field(data) or "timestamp"
                 )
                 span.set_attribute("message.invalid", True)
-                record_thin_data_consumer_error(
-                    consumer="execution_events", error_type="invalid_payload"
-                )
                 record_execution_event_validation_error(
                     producer=_EXECUTION_EVENT_PRODUCER,
                     subject=subject,

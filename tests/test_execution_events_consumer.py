@@ -259,7 +259,7 @@ async def test_process_message_skips_invalid_payload(
             symbol="",
             timeframe="",
         )._value.get()
-        == before + 1
+        == before
     )
     assert (
         EXECUTION_EVENT_VALIDATION_ERRORS.labels(
@@ -347,12 +347,16 @@ async def test_process_message_handles_invalid_json(
 ):
     msg = MagicMock()
     msg.data.decode.return_value = "{not-json}"
-    msg.subject = "execution.events.strat_momentum_v1"
-    before = THIN_DATA_CONSUMER_ERRORS.labels(
+    subject = "execution.events.strat_momentum_v1"
+    msg.subject = subject
+    thin_before = THIN_DATA_CONSUMER_ERRORS.labels(
         consumer="execution_events",
         error_type="json_decode",
         symbol="",
         timeframe="",
+    )._value.get()
+    validation_before = EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+        producer="petrosa-tradeengine", subject=subject, validation_field="json"
     )._value.get()
     await execution_events_consumer._process_message(msg)
     collection = mock_db_manager.mongodb_adapter.db.__getitem__.return_value
@@ -364,7 +368,13 @@ async def test_process_message_handles_invalid_json(
             symbol="",
             timeframe="",
         )._value.get()
-        == before + 1
+        == thin_before
+    )
+    assert (
+        EXECUTION_EVENT_VALIDATION_ERRORS.labels(
+            producer="petrosa-tradeengine", subject=subject, validation_field="json"
+        )._value.get()
+        == validation_before + 1
     )
 
 
