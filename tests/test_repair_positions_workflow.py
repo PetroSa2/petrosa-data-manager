@@ -26,8 +26,6 @@ def test_workflow_cleans_up_after_job_completion_or_failure():
 
     assert "trap cleanup EXIT" in source
     assert 'kubectl -n "$NAMESPACE" delete job "$JOB_NAME"' in source
-    assert (
-        'kubectl -n "$NAMESPACE" wait \\\n            --for=condition=complete'
-        in source
-    )
+    assert 'kubectl -n "$NAMESPACE" wait \\' in source
+    assert "--for=condition=complete" in source
     assert 'kubectl -n "$NAMESPACE" logs "job/$JOB_NAME"' in source

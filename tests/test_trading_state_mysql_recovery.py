@@ -405,7 +405,7 @@ def test_sql_primary_identity_cannot_change():
 
 def test_integer_primary_key_is_not_replayed_from_mongo_payload():
     value = adapter()
-    value.tables["positions"].append_column(sa.Column("id", sa.Integer))
+    value.tables["positions"].append_column(sa.Column("id", mysql.BIGINT))
     engine = TransactionFixture()
     value.engine = engine
 
