@@ -271,3 +271,9 @@ def test_daily_gap_detector_uses_initialized_database(monkeypatch):
         backfill_orchestrator=app.backfill_orchestrator,
         backfill_queue=app.backfill_queue,
     )
+
+
+def test_daily_gap_backfill_callback_is_optional():
+    from data_manager.main import DataManagerApp
+
+    assert DataManagerApp._daily_gap_backfill_callback(None) is None

@@ -255,6 +255,10 @@ class DataManagerApp:
             backfill_queue=self.backfill_queue,
         )
 
+    @staticmethod
+    def _daily_gap_backfill_callback(detector):
+        return getattr(detector, "request_backfill", None)
+
     def _start_mysql_server_status_collector(self) -> None:
         from data_manager.maintenance.mysql_server_status import (
             mysql_server_status_loop,
@@ -682,7 +686,7 @@ class DataManagerApp:
                 is_leader=lambda: (
                     self.leader_election is None or self.leader_election.is_leader
                 ),
-                backfill_gap=getattr(daily_gap_detector, "request_backfill", None),
+                backfill_gap=self._daily_gap_backfill_callback(daily_gap_detector),
             )
         )
 
