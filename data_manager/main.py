@@ -682,11 +682,7 @@ class DataManagerApp:
                 is_leader=lambda: (
                     self.leader_election is None or self.leader_election.is_leader
                 ),
-                backfill_gap=(
-                    daily_gap_detector.request_backfill
-                    if daily_gap_detector is not None
-                    else None
-                ),
+                backfill_gap=getattr(daily_gap_detector, "request_backfill", None),
             )
         )
 
