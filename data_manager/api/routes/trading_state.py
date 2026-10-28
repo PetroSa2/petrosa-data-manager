@@ -37,12 +37,15 @@ _copy_state: dict[str, Any] = {
     "fallback_failed": 0,
     "replayed": 0,
     "task_failed": 0,
+    "quarantined": 0,
     "last_failure_time": None,
 }
 _COPY_RETRIES = 3
 _COPY_BACKOFF_SECONDS = 0.01
 _COPY_BATCH_SIZE = 25
 _COPY_POLL_SECONDS = 5
+_COPY_MAX_ATTEMPTS = 5
+_COPY_BACKOFF_MAX_SECONDS = 300
 _VALID_POSITION_STATUSES = frozenset(
     {"open", "partially_closed", "closed", "superseded"}
 )
@@ -142,7 +145,21 @@ async def _replay_mysql_copies() -> None:
                 _copy_state["replayed"] += 1
                 TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "replayed"})
             else:
-                await repo.defer_copy(table, document)
+                quarantined = await repo.defer_copy(table, document)
+                if quarantined:
+                    _copy_state["quarantined"] = _copy_state.get("quarantined", 0) + 1
+                    TRADING_STATE_RECOVERY_EVENTS.add(
+                        1, {"outcome": "quarantined", "operation": table}
+                    )
+                    logger.error(
+                        "trading_state_mysql_copy_quarantined",
+                        extra={"operation": table, "reason": "retry_limit"},
+                    )
+                    manager = api_module.db_manager
+                    adapter = (
+                        getattr(manager, "mysql_adapter", None) if manager else None
+                    )
+                    _dead_letter(adapter, table, document, "quarantined")
 
 
 async def _run_mysql_copy() -> None:
@@ -199,12 +216,18 @@ def _dead_letter(
             raise RuntimeError("dead-letter persistence not confirmed")
         _copy_state["dead_lettered"] += 1
         TRADING_STATE_DEAD_LETTER_COUNT.set(_copy_state["dead_lettered"])
-    except Exception:
+    except Exception as exc:
         _copy_state["fallback_failed"] += 1
+        _copy_state["last_failure_reason"] = type(exc).__name__
         TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "fallback_failed"})
         logger.error(
             "trading_state_mysql_dead_letter_failed",
-            extra={"operation": operation, "reason": "write_error"},
+            extra={
+                "operation": operation,
+                "reason": "write_error",
+                "error_class": type(exc).__name__,
+                "error_message": str(exc)[:200],
+            },
         )
 
 
@@ -243,14 +266,28 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
                 raise ValueError("missing logical key")
             adapter.persist_trading_state(table, data, document["_mysql_copy_version"])
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "trading_state_mysql_copy_attempt_failed",
+                extra={
+                    "operation": operation,
+                    "attempt": attempt + 1,
+                    "error_class": type(exc).__name__,
+                    "error_message": str(exc)[:200],
+                },
+            )
             if attempt + 1 < _COPY_RETRIES:
-                time.sleep(_COPY_BACKOFF_SECONDS * (attempt + 1))
+                time.sleep(_COPY_BACKOFF_SECONDS * (2**attempt))
                 continue
             _record_failure(operation, "copy_error")
             logger.error(
                 "trading_state_mysql_copy_failed",
-                extra={"operation": operation, "reason": "copy_error"},
+                extra={
+                    "operation": operation,
+                    "reason": "copy_error",
+                    "error_class": type(exc).__name__,
+                    "error_message": str(exc)[:200],
+                },
             )
             _dead_letter(adapter, operation, document, "copy_error")
     return False
@@ -272,6 +309,8 @@ async def mysql_copy_status():
         "batch_size_per_table": _COPY_BATCH_SIZE,
         "concurrency": 1,
         "attempts_per_copy": _COPY_RETRIES,
+        "max_deferred_attempts": _COPY_MAX_ATTEMPTS,
+        "backoff_max_seconds": _COPY_BACKOFF_MAX_SECONDS,
     }
 
 
