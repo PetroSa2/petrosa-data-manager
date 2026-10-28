@@ -242,6 +242,19 @@ class DataManagerApp:
             await adapter.ensure_indexes(f"klines_{timeframe}")
         await adapter.ensure_ttl_coverage()
 
+    def _create_daily_gap_detector(self):
+        if self.db_manager is None:
+            logger.warning("Daily gap detector deferred: database unavailable")
+            return None
+
+        from data_manager.auditor.gap_detector import GapDetector
+
+        return GapDetector(
+            self.db_manager,
+            backfill_orchestrator=self.backfill_orchestrator,
+            backfill_queue=self.backfill_queue,
+        )
+
     def _start_mysql_server_status_collector(self) -> None:
         from data_manager.maintenance.mysql_server_status import (
             mysql_server_status_loop,
@@ -656,16 +669,11 @@ class DataManagerApp:
                 ),
             )
         )
-        from data_manager.auditor.gap_detector import GapDetector
         from data_manager.maintenance.klines_daily_gaps import (
             daily_completeness_loop,
         )
 
-        daily_gap_detector = GapDetector(
-            self.db_manager,
-            backfill_orchestrator=self.backfill_orchestrator,
-            backfill_queue=self.backfill_queue,
-        )
+        daily_gap_detector = self._create_daily_gap_detector()
 
         self.klines_daily_gaps_task = asyncio.create_task(
             daily_completeness_loop(
@@ -674,7 +682,11 @@ class DataManagerApp:
                 is_leader=lambda: (
                     self.leader_election is None or self.leader_election.is_leader
                 ),
-                backfill_gap=daily_gap_detector.request_backfill,
+                backfill_gap=(
+                    daily_gap_detector.request_backfill
+                    if daily_gap_detector is not None
+                    else None
+                ),
             )
         )
 

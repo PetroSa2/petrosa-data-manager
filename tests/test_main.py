@@ -243,3 +243,31 @@ async def test_ensure_mongodb_indexes_covers_operational_collections(monkeypatch
     assert {"strategy_lifecycle_events", "strategy_lifecycle_states"}.issubset(awaited)
     adapter.ensure_indexes.assert_any_await("klines_1m")
     adapter.ensure_ttl_coverage.assert_awaited_once_with()
+
+
+def test_daily_gap_detector_is_deferred_without_database():
+    from data_manager.main import DataManagerApp
+
+    app = DataManagerApp()
+
+    assert app._create_daily_gap_detector() is None
+
+
+def test_daily_gap_detector_uses_initialized_database(monkeypatch):
+    from data_manager.main import DataManagerApp
+
+    detector = MagicMock()
+    gap_detector = MagicMock(return_value=detector)
+    monkeypatch.setattr("data_manager.auditor.gap_detector.GapDetector", gap_detector)
+
+    app = DataManagerApp()
+    app.db_manager = MagicMock()
+    app.backfill_orchestrator = MagicMock()
+    app.backfill_queue = MagicMock()
+
+    assert app._create_daily_gap_detector() is detector
+    gap_detector.assert_called_once_with(
+        app.db_manager,
+        backfill_orchestrator=app.backfill_orchestrator,
+        backfill_queue=app.backfill_queue,
+    )
