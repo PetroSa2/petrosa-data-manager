@@ -2,7 +2,7 @@ import asyncio
 import gc
 import threading
 from copy import deepcopy
-from datetime import date
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -471,6 +471,33 @@ async def test_poison_batch_rotates_so_later_valid_work_can_complete(recovery):
     await module._replay_mysql_copies()
     assert mysql.rows[("positions", "valid")]["status"] == "open"
     assert await repo.pending_copy_count() == module._COPY_BATCH_SIZE
+
+
+@pytest.mark.asyncio
+async def test_poison_copy_is_quarantined_after_bounded_retries(recovery, caplog):
+    mongo, mysql = recovery
+    repo = TradingStateRepository(mysql, mongo)
+    await repo.create_position({"position_id": "poison", "status": "invalid"})
+
+    for attempt in range(module._COPY_MAX_ATTEMPTS):
+        await module._replay_mysql_copies()
+        if attempt + 1 < module._COPY_MAX_ATTEMPTS:
+            await mongo.db.positions.update_one(
+                {"position_id": "poison"},
+                {
+                    "$set": {
+                        "_mysql_copy_next_attempt_at": datetime.min.replace(tzinfo=UTC)
+                    }
+                },
+            )
+
+    row = await mongo.db.positions.find_one({"position_id": "poison"})
+    assert row["_mysql_copy_quarantined"] is True
+    assert row["_mysql_copy_attempts"] == module._COPY_MAX_ATTEMPTS
+    assert await repo.pending_copy_count() == 1
+    assert (await repo.pending_copies("positions", 25)) == []
+    assert module._copy_state["quarantined"] == 1
+    assert "trading_state_mysql_copy_quarantined" in caplog.text
 
 
 @pytest.mark.asyncio

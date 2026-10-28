@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pymongo import DESCENDING, ReturnDocument
@@ -153,9 +153,19 @@ class TradingStateRepository(BaseRepository):
         return (await self.get_daily_pnl(date)) or {"date": date, **data}
 
     async def pending_copies(self, table: str, limit: int) -> list[dict[str, Any]]:
+        now = datetime.now(UTC)
         rows: list[dict[str, Any]] = await (
             self._collection(table)
-            .find({"_mysql_copy_pending": True})
+            .find(
+                {
+                    "_mysql_copy_pending": True,
+                    "_mysql_copy_quarantined": {"$ne": True},
+                    "$or": [
+                        {"_mysql_copy_next_attempt_at": {"$exists": False}},
+                        {"_mysql_copy_next_attempt_at": {"$lte": now}},
+                    ],
+                }
+            )
             .sort([("_mysql_copy_attempted_at", 1), ("_id", 1)])
             .limit(limit)
             .to_list(length=limit)
@@ -207,12 +217,27 @@ class TradingStateRepository(BaseRepository):
         summary["oldest_attempted_at"] = oldest.isoformat() if oldest else None
         return summary
 
-    async def defer_copy(self, table: str, document: dict[str, Any]) -> None:
+    async def defer_copy(self, table: str, document: dict[str, Any]) -> bool:
         key = "date" if table == "daily_pnl" else "position_id"
+        attempts = int(document.get("_mysql_copy_attempts", 0)) + 1
+        quarantined = attempts >= 5
+        now = datetime.now(UTC)
+        delay = 0 if attempts == 1 else min(300, 2 ** min(attempts - 1, 8))
+        update = {
+            "$set": {
+                "_mysql_copy_attempted_at": now,
+                "_mysql_copy_next_attempt_at": now
+                if quarantined
+                else now + timedelta(seconds=delay),
+                "_mysql_copy_quarantined": quarantined,
+            },
+            "$inc": {"_mysql_copy_attempts": 1},
+        }
         await self._collection(table).update_one(
             {
                 key: document[key],
                 "_mysql_copy_version": document["_mysql_copy_version"],
             },
-            {"$set": {"_mysql_copy_attempted_at": datetime.now(UTC)}},
+            update,
         )
+        return quarantined
