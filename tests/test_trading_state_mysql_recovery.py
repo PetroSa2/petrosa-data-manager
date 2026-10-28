@@ -388,7 +388,7 @@ async def test_sql_equivalent_alias_remains_durable_pending(monkeypatch):
 
 def test_sql_primary_identity_cannot_change():
     value = adapter()
-    value.tables["positions"].append_column(sa.Column("id", sa.Integer))
+    value.tables["positions"].append_column(sa.Column("id", mysql.BIGINT))
     engine = TransactionFixture()
     value.engine = engine
     value.persist_trading_state(
