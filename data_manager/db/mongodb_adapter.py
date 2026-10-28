@@ -1104,20 +1104,9 @@ class MongoDBAdapter(BaseAdapter):
                 existing_indexes = {}
             if ttl_policy:
                 ttl_key = {ttl_policy.field: ASCENDING}
-                ttl_options: dict[str, Any] = {
-                    "expireAfterSeconds": ttl_policy.seconds,
-                    "name": "application_ttl",
-                }
-                if ttl_policy.partial_filter_expression:
-                    ttl_options["partialFilterExpression"] = (
-                        ttl_policy.partial_filter_expression
-                    )
                 existing_ttl = any(
                     dict(definition.get("key", {})) == ttl_key
-                    and definition.get("expireAfterSeconds")
-                    == ttl_options["expireAfterSeconds"]
-                    and definition.get("partialFilterExpression", {})
-                    == ttl_options.get("partialFilterExpression", {})
+                    and "expireAfterSeconds" in definition
                     for definition in existing_indexes.values()
                 )
                 index_ttl = any(
@@ -1128,16 +1117,21 @@ class MongoDBAdapter(BaseAdapter):
                 indexes = [
                     index
                     for index in indexes
-                    if index.document.get("key") != ttl_key or not existing_ttl
+                    if index.document.get("key") != ttl_key
+                    or "expireAfterSeconds" in index.document
                 ]
-                if not existing_ttl:
-                    for name, definition in existing_indexes.items():
-                        definition_key = dict(definition.get("key", {}))
-                        if definition_key == ttl_key or (
-                            name == ttl_options["name"] and definition_key != ttl_key
-                        ):
-                            await coll.drop_index(name)
                 if not existing_ttl and not index_ttl:
+                    for name, definition in existing_indexes.items():
+                        if dict(definition.get("key", {})) == ttl_key:
+                            await coll.drop_index(name)
+                    ttl_options: dict[str, Any] = {
+                        "expireAfterSeconds": ttl_policy.seconds,
+                        "name": "application_ttl",
+                    }
+                    if ttl_policy.partial_filter_expression:
+                        ttl_options["partialFilterExpression"] = (
+                            ttl_policy.partial_filter_expression
+                        )
                     indexes.append(
                         IndexModel([(ttl_policy.field, ASCENDING)], **ttl_options)
                     )
