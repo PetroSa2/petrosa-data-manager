@@ -578,7 +578,7 @@ class TestEnsureIndexes:
         await adapter.ensure_indexes("trades_BTCUSDT")
         indexes = coll.create_indexes.call_args[0][0]
         # Raw trades use a partial TTL after the historic copy is recorded.
-        assert len(indexes) == 2
+        assert len(indexes) == 3
         assert any("expireAfterSeconds" in ix.document for ix in indexes)
 
     @pytest.mark.asyncio
@@ -873,7 +873,13 @@ class TestEnsureIndexes:
     async def test_ttl_coverage_checks_application_databases_only(self, adapter):
         coll = MagicMock()
         coll.index_information = AsyncMock(
-            return_value={"application_ttl": {"expireAfterSeconds": 86400}}
+            return_value={
+                "application_ttl": {
+                    "key": {"_ttl_expires_at": 1},
+                    "expireAfterSeconds": 30 * 86400,
+                    "partialFilterExpression": {"_ttl_expires_at": {"$exists": True}},
+                }
+            }
         )
         application_db = MagicMock()
         application_db.list_collection_names = AsyncMock(return_value=["positions"])
@@ -897,7 +903,7 @@ class TestEnsureIndexes:
             return_value={
                 "_ttl_inserted_at_ttl": {
                     "key": {"_ttl_inserted_at": 1},
-                    "expireAfterSeconds": 3600,
+                    "expireAfterSeconds": 30 * 86400,
                 }
             }
         )
@@ -914,6 +920,31 @@ class TestEnsureIndexes:
             for index in indexes
         )
         coll.drop_index.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_ttl_index_name_is_repaired(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={
+                "application_ttl": {
+                    "key": {"timestamp": 1},
+                    "expireAfterSeconds": 3600,
+                }
+            }
+        )
+        coll.create_indexes = AsyncMock()
+        coll.drop_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("trading_configs_audit")
+
+        coll.drop_index.assert_awaited_once_with("application_ttl")
+        indexes = coll.create_indexes.call_args.args[0]
+        assert any(
+            index.document.get("key") == {"_ttl_expires_at": 1}
+            and index.document.get("expireAfterSeconds") == 30 * 86400
+            for index in indexes
+        )
 
     @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):
