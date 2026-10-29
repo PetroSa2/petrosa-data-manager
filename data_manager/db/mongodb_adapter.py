@@ -1122,13 +1122,25 @@ class MongoDBAdapter(BaseAdapter):
                 )
                 index_ttl = any(
                     index.document.get("key") == ttl_key
-                    and "expireAfterSeconds" in index.document
+                    and index.document.get("expireAfterSeconds")
+                    == ttl_options["expireAfterSeconds"]
+                    and index.document.get("partialFilterExpression", {})
+                    == ttl_options.get("partialFilterExpression", {})
                     for index in indexes
                 )
                 indexes = [
                     index
                     for index in indexes
-                    if index.document.get("key") != ttl_key or not existing_ttl
+                    if index.document.get("key") != ttl_key
+                    or "expireAfterSeconds" not in index.document
+                    or (
+                        index_ttl
+                        and not existing_ttl
+                        and index.document.get("expireAfterSeconds")
+                        == ttl_options["expireAfterSeconds"]
+                        and index.document.get("partialFilterExpression", {})
+                        == ttl_options.get("partialFilterExpression", {})
+                    )
                 ]
                 if not existing_ttl:
                     for name, definition in existing_indexes.items():
