@@ -124,6 +124,11 @@ async def test_double_failure_tasks_are_observed_and_restart_recovers(
         assert module._copy_state["dead_lettered"] == 0
         assert module._copy_state["task_failed"] == 0
         assert "trading_state_mysql_dead_letter_failed" in caplog.text
+        assert "NoSuchTableError" in caplog.text or "DatabaseError" in caplog.text
+        assert (
+            "mysql unavailable" in caplog.text
+            or "trading_state_mysql_dead_letters" in caplog.text
+        )
         assert "p1" not in caplog.text
         status = await module.mysql_copy_status()
         assert status["durable_pending"] == 1
