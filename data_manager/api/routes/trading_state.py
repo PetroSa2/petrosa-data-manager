@@ -221,7 +221,12 @@ def _dead_letter(
         _copy_state["last_failure_reason"] = type(exc).__name__
         TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "fallback_failed"})
         logger.error(
-            "trading_state_mysql_dead_letter_failed",
+            "trading_state_mysql_dead_letter_failed operation=%s reason=%s "
+            "error_class=%s error_message=%s",
+            operation,
+            "write_error",
+            type(exc).__name__,
+            str(exc)[:200],
             extra={
                 "operation": operation,
                 "reason": "write_error",
@@ -268,7 +273,12 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
             return True
         except Exception as exc:
             logger.warning(
-                "trading_state_mysql_copy_attempt_failed",
+                "trading_state_mysql_copy_attempt_failed operation=%s attempt=%s "
+                "error_class=%s error_message=%s",
+                operation,
+                attempt + 1,
+                type(exc).__name__,
+                str(exc)[:200],
                 extra={
                     "operation": operation,
                     "attempt": attempt + 1,
@@ -281,7 +291,12 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
                 continue
             _record_failure(operation, "copy_error")
             logger.error(
-                "trading_state_mysql_copy_failed",
+                "trading_state_mysql_copy_failed operation=%s reason=%s "
+                "error_class=%s error_message=%s",
+                operation,
+                "copy_error",
+                type(exc).__name__,
+                str(exc)[:200],
                 extra={
                     "operation": operation,
                     "reason": "copy_error",
