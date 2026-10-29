@@ -947,6 +947,42 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_mismatched_proposed_ttl_options_are_replaced(
+        self, adapter, monkeypatch
+    ):
+        from data_manager.persistence_registry import TTLPolicy
+
+        monkeypatch.setattr(
+            "data_manager.db.mongodb_adapter.ttl_policy_for_collection",
+            lambda _collection: TTLPolicy(
+                "timestamp", 30 * 86400, {"historic_copy": {"$exists": True}}
+            ),
+        )
+        monkeypatch.setattr(
+            "data_manager.db.mongodb_adapter.constants.HISTORIC_COPY_PROOF_ENABLED",
+            True,
+        )
+        coll = MagicMock()
+        coll.index_information = AsyncMock(return_value={})
+        coll.create_indexes = AsyncMock()
+        coll.drop_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("execution_events")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        ttl = [
+            index
+            for index in indexes
+            if index.document.get("key") == {"timestamp": 1}
+            and "expireAfterSeconds" in index.document
+        ]
+        assert len(ttl) == 1
+        assert ttl[0].document["partialFilterExpression"] == {
+            "historic_copy": {"$exists": True}
+        }
+
+    @pytest.mark.asyncio
     async def test_raises_when_not_connected(self, adapter):
         adapter._connected = False
         with pytest.raises(DatabaseError, match="Not connected"):
