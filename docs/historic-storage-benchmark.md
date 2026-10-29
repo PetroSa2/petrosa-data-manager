@@ -6,10 +6,11 @@ and MySQL database `benchmark_mysql_vs_postgres`; it never targets production ta
 
 ## Run
 
-Install the benchmark-only PostgreSQL driver outside the service image:
+The image packages the PostgreSQL driver used by this harness. Do not install drivers
+at runtime. Run preflight first when testing target credentials or connectivity:
 
 ```bash
-python -m pip install 'psycopg[binary]>=3.2'
+python scripts/historic_storage_benchmark.py --preflight
 ```
 
 Provide URLs through the environment, not source files, issue text, or committed output.
@@ -20,13 +21,17 @@ The MySQL URL must target a database beginning with `benchmark_`.
 export BENCHMARK_POSTGRES_URL='postgresql://USER:PASSWORD@psql_total.postgresql.dbaas.com.br:5432/psql_total?sslmode=require'
 export BENCHMARK_MYSQL_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/benchmark_mysql_vs_postgres'
 python scripts/historic_storage_benchmark.py --dry-run
-python scripts/historic_storage_benchmark.py --rows 1000 > /secure/local/benchmark-result.json
+python scripts/historic_storage_benchmark.py --rows 1000 --output /secure/local/benchmark-result.json
 ```
 
 The result contains no credentials and records timestamps, row counts, schema,
 workload parameters, p50/p95/p99 latency, throughput, errors, and pool size.
 The default run uses one warm-up, three measured repetitions, four concurrent workers,
 250-row batches, ten symbols, and 1,000 synthetic rows per table.
+Each target is preflighted automatically with a ten-second connection timeout before
+loading rows. Progress is printed per backend and workload, including row counts and
+elapsed seconds; bulk ingest emits additional progress at least every 30 seconds.
+The final JSON is printed to stdout and written unchanged to `--output` when supplied.
 
 ## Workloads and capability review
 
