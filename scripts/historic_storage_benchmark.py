@@ -144,7 +144,7 @@ def build_tables(metadata: MetaData, schema: str | None) -> dict[str, Table]:
 
 def _row(table: Table, value: dict[str, Any]) -> dict[str, Any]:
     columns = tuple(table.columns)
-    return dict(zip(columns, value.values(), strict=True))
+    return dict(zip((column.name for column in columns), value.values(), strict=True))
 
 
 def create_schema(
