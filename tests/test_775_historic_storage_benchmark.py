@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,7 @@ from scripts.historic_storage_benchmark import (
     main,
     measure,
     measure_one,
+    preflight_target,
     redact_url,
     run_target,
     synthetic_rows,
@@ -145,6 +147,10 @@ def test_run_target_and_dry_run(monkeypatch, capsys):
         lambda actual_engine, backend, actual_settings: (None, tables),
     )
     monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.preflight_target",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
         "scripts.historic_storage_benchmark.measure",
         lambda *args: {"workload": args[2], "errors": 0},
     )
@@ -157,3 +163,62 @@ def test_run_target_and_dry_run(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["benchmark", "--dry-run"])
     main()
     assert '"synthetic": true' in capsys.readouterr().out
+
+
+class _PreflightConnection:
+    dialect = SimpleNamespace(name="postgresql")
+
+    def __init__(self, error=None):
+        self.error = error
+        self.statements = []
+
+    def execute(self, statement):
+        if self.error:
+            raise self.error
+        self.statements.append(str(statement))
+
+
+class _PreflightEngine:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def begin(self):
+        class Context:
+            def __enter__(inner):
+                return self.connection
+
+            def __exit__(inner, *args):
+                return False
+
+        return Context()
+
+
+def test_preflight_reports_success_and_redacted_failure():
+    url = "postgresql://user:secret@psql_total.postgresql.dbaas.com.br/psql_total?sslmode=require"
+    lines = []
+    assert preflight_target(
+        url, "postgres", lines.append, _PreflightEngine(_PreflightConnection())
+    )
+    assert lines == ["PREFLIGHT postgres ok"]
+    lines.clear()
+    error = RuntimeError(f"could not connect to {url}")
+    assert not preflight_target(
+        url, "postgres", lines.append, _PreflightEngine(_PreflightConnection(error))
+    )
+    assert "PREFLIGHT postgres fail RuntimeError" in lines[0]
+    assert "secret" not in lines[0]
+
+
+def test_output_matches_final_stdout(monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.setenv("BENCHMARK_POSTGRES_URL", "postgresql://x")
+    monkeypatch.setenv("BENCHMARK_MYSQL_URL", "mysql://x")
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.run_target",
+        lambda url, backend, settings: {"backend": backend},
+    )
+    output_path = tmp_path / "result.json"
+    monkeypatch.setattr("sys.argv", ["benchmark", "--output", str(output_path)])
+    main()
+    stdout = capsys.readouterr().out.strip().splitlines()[-1]
+    assert stdout == output_path.read_text(encoding="utf-8").strip()
+    assert '"backend": "postgres"' in stdout

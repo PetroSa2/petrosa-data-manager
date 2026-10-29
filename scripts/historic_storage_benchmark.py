@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -57,6 +58,8 @@ class Settings:
     concurrency: int = 4
     batch_size: int = 250
     symbols: int = 10
+    statement_timeout_ms: int = 30_000
+    phase_budget_seconds: float = 300.0
 
 
 def validate_settings(settings: Settings) -> None:
@@ -67,6 +70,8 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError("rows, warmups, repetitions, and concurrency must be positive")
     if settings.batch_size < 1 or settings.symbols < 1:
         raise ValueError("batch_size and symbols must be positive")
+    if settings.statement_timeout_ms < 1 or settings.phase_budget_seconds <= 0:
+        raise ValueError("timeouts must be positive")
 
 
 def validate_target(url: str, backend: str, schema: str = SCHEMA) -> None:
@@ -102,6 +107,55 @@ def redact_url(url: str) -> str:
     host = parsed.hostname or "unknown"
     port = f":{parsed.port}" if parsed.port else ""
     return f"{parsed.scheme}://<redacted>@{host}{port}/{parsed.path.lstrip('/')}"
+
+
+def _redact_error(error: Exception, url: str) -> str:
+    message = str(error).replace(url, redact_url(url))
+    return message.replace("password", "[redacted]")
+
+
+def _engine_url(url: str, backend: str) -> str:
+    driver = "postgresql+psycopg" if backend == "postgres" else "mysql+pymysql"
+    return url.replace("postgresql://", f"{driver}://").replace(
+        "mysql://", f"{driver}://"
+    )
+
+
+def _connect_args(backend: str) -> dict[str, Any]:
+    return {"connect_timeout": 10}
+
+
+def preflight_target(
+    url: str,
+    backend: str,
+    emit: Callable[[str], None] = print,
+    engine: Any | None = None,
+) -> bool:
+    """Verify connectivity and isolated-schema DDL before any benchmark writes."""
+    try:
+        validate_target(url, backend)
+        if engine is None:
+            engine = create_engine(
+                _engine_url(url, backend),
+                connect_args=_connect_args(backend),
+                pool_pre_ping=True,
+            )
+        table = "benchmark_preflight_probe"
+        qualified = f'"{SCHEMA}"."{table}"' if backend == "postgres" else f"`{table}`"
+        with engine.begin() as connection:
+            connection.execute(text("SELECT 1"))
+            if backend == "postgres":
+                connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"'))
+            connection.execute(text(f"DROP TABLE IF EXISTS {qualified}"))
+            connection.execute(text(f"CREATE TABLE {qualified} (probe_id INTEGER)"))
+            connection.execute(text(f"DROP TABLE {qualified}"))
+        emit(f"PREFLIGHT {backend} ok")
+        return True
+    except Exception as error:
+        emit(
+            f"PREFLIGHT {backend} fail {type(error).__name__}: {_redact_error(error, url)}"
+        )
+        return False
 
 
 def synthetic_rows(settings: Settings) -> list[dict[str, Any]]:
@@ -188,16 +242,23 @@ def _workload(
     rows: list[dict[str, Any]],
     backend: str,
     settings: Settings,
+    progress: Callable[[int], None] | None = None,
 ) -> Callable[[Any], None]:
     def run(connection: Any) -> None:
         if name == "bulk_ingest":
-            connection.execute(
-                table.insert(),
-                [
-                    _row(table, {**row, "row_key": f"bulk-{time.time_ns()}-{index}"})
-                    for index, row in enumerate(rows)
-                ],
-            )
+            for offset in range(0, len(rows), settings.batch_size):
+                batch = rows[offset : offset + settings.batch_size]
+                connection.execute(
+                    table.insert(),
+                    [
+                        _row(
+                            table, {**row, "row_key": f"bulk-{time.time_ns()}-{index}"}
+                        )
+                        for index, row in enumerate(batch, offset)
+                    ],
+                )
+                if progress:
+                    progress(min(offset + len(batch), len(rows)))
         elif name == "batched_upsert":
             for offset in range(
                 0, min(settings.batch_size, len(rows)), settings.batch_size
@@ -245,18 +306,36 @@ def measure(
     backend: str,
     settings: Settings,
 ) -> dict[str, Any]:
-    operation = _workload(table, name, rows, backend, settings)
+    started_phase = time.perf_counter()
+    last_progress = 0.0
+
+    def report(rows_done: int) -> None:
+        nonlocal last_progress
+        elapsed = time.perf_counter() - started_phase
+        if elapsed - last_progress >= 30 or rows_done == len(rows):
+            print(f"PROGRESS {backend} {name} rows={rows_done} elapsed={elapsed:.1f}s")
+            last_progress = elapsed
+
+    print(f"PROGRESS {backend} {name} rows=0 elapsed=0.0s")
+    operation = _workload(table, name, rows, backend, settings, report)
+
+    def execute_phase() -> None:
+        started = time.perf_counter()
+        with engine.begin() as connection:
+            _set_statement_timeout(connection, backend, settings.statement_timeout_ms)
+            operation(connection)
+        if time.perf_counter() - started > settings.phase_budget_seconds:
+            raise TimeoutError(f"{backend} {name} exceeded phase budget")
+
     samples: list[float] = []
     errors = 0
     if name not in {"concurrent_reads", "concurrent_writes"}:
         for _ in range(settings.warmups):
-            with engine.begin() as connection:
-                operation(connection)
+            execute_phase()
         for _ in range(settings.repetitions):
             started = time.perf_counter()
             try:
-                with engine.begin() as connection:
-                    operation(connection)
+                execute_phase()
             except Exception:
                 errors += 1
             samples.append((time.perf_counter() - started) * 1000)
@@ -265,7 +344,7 @@ def measure(
         started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=settings.concurrency) as pool:
             futures = [
-                pool.submit(measure_one, engine, table, name, rows, backend)
+                pool.submit(measure_one, engine, table, name, rows, backend, settings)
                 for _ in range(settings.concurrency)
             ]
             errors += sum(future.exception() is not None for future in futures)
@@ -276,6 +355,8 @@ def measure(
         throughput = settings.concurrency / max(elapsed / 1000, 0.000001)
     if name not in {"concurrent_reads", "concurrent_writes"}:
         throughput = settings.repetitions / max(sum(samples) / 1000, 0.000001)
+    elapsed = time.perf_counter() - started_phase
+    print(f"PROGRESS {backend} {name} rows={len(rows)} elapsed={elapsed:.1f}s")
     return {
         "workload": name,
         "p50_ms": round(statistics.median(samples), 3),
@@ -287,10 +368,17 @@ def measure(
 
 
 def measure_one(
-    engine: Any, table: Table, name: str, rows: list[dict[str, Any]], backend: str
+    engine: Any,
+    table: Table,
+    name: str,
+    rows: list[dict[str, Any]],
+    backend: str,
+    settings: Settings | None = None,
 ) -> float:
     started = time.perf_counter()
     with engine.begin() as connection:
+        if settings:
+            _set_statement_timeout(connection, backend, settings.statement_timeout_ms)
         if name == "concurrent_reads":
             connection.execute(
                 select(table).where(table.c.row_key == rows[0]["row_key"])
@@ -300,15 +388,24 @@ def measure_one(
     return (time.perf_counter() - started) * 1000
 
 
+def _set_statement_timeout(connection: Any, backend: str, timeout_ms: int) -> None:
+    if getattr(getattr(connection, "dialect", None), "name", None) == "sqlite":
+        return
+    if backend == "postgres":
+        connection.execute(text(f"SET statement_timeout = {timeout_ms}"))
+    elif backend == "mysql":
+        connection.execute(text(f"SET SESSION max_execution_time = {timeout_ms}"))
+
+
 def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
     validate_target(url, backend)
-    driver = "postgresql+psycopg" if backend == "postgres" else "mysql+pymysql"
     engine = create_engine(
-        url.replace("postgresql://", f"{driver}://").replace(
-            "mysql://", f"{driver}://"
-        ),
+        _engine_url(url, backend),
+        connect_args=_connect_args(backend),
         pool_pre_ping=True,
     )
+    if not preflight_target(url, backend, engine=engine):
+        raise RuntimeError(f"{backend} preflight failed")
     _, tables = create_schema(engine, backend, settings)
     rows = synthetic_rows(settings)
     results = [
@@ -334,6 +431,8 @@ def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--rows", type=int, default=Settings.rows)
     args = parser.parse_args()
     settings = Settings(rows=args.rows)
@@ -354,16 +453,21 @@ def main() -> None:
         "postgres": os.environ["BENCHMARK_POSTGRES_URL"],
         "mysql": os.environ["BENCHMARK_MYSQL_URL"],
     }
-    print(
-        json.dumps(
-            {
-                "started_at": datetime.now(UTC).isoformat(),
-                "targets": [
-                    run_target(url, backend, settings) for backend, url in urls.items()
-                ],
-            }
-        )
-    )
+    if args.preflight:
+        results = [preflight_target(url, backend) for backend, url in urls.items()]
+        if not all(results):
+            raise SystemExit(1)
+        return
+    result = {
+        "started_at": datetime.now(UTC).isoformat(),
+        "targets": [
+            run_target(url, backend, settings) for backend, url in urls.items()
+        ],
+    }
+    output = json.dumps(result)
+    if args.output:
+        args.output.write_text(output + "\n", encoding="utf-8")
+    print(output)
 
 
 if __name__ == "__main__":
