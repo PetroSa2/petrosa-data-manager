@@ -19,6 +19,7 @@ from scripts.historic_storage_benchmark import (
     main,
     measure,
     measure_one,
+    measure_rtt,
     preflight_target,
     redact_url,
     run_target,
@@ -363,3 +364,52 @@ def test_target_failure_is_recorded_and_later_target_runs(monkeypatch, capsys):
     assert calls == ["postgres", "mysql"]
     assert '"status": "timeout"' in output
     assert '"backend": "mysql"' in output
+
+
+def test_rtt_baseline_records_fifty_round_trips():
+    engine = create_engine("sqlite://")
+    result = measure_rtt(engine, Settings())
+    assert result["status"] == "ok"
+    assert result["samples"] == 50
+    assert result["p95_ms"] >= result["p50_ms"]
+
+
+def test_run_target_records_workload_error_and_continues(monkeypatch):
+    settings = Settings(rows=1, warmups=1, repetitions=1)
+    engine = SimpleNamespace(pool=SimpleNamespace(size=lambda: 1, _max_overflow=0))
+    tables = {"klines": object()}
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.create_engine",
+        lambda *args, **kwargs: engine,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.preflight_target",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.create_schema",
+        lambda *args, **kwargs: (None, tables),
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.cleanup_schema",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.measure_rtt", lambda *args: {"status": "ok"}
+    )
+    calls = []
+
+    def fake_measure(*args):
+        calls.append(args[2])
+        if len(calls) == 1:
+            raise TimeoutError("workload timeout")
+        return {"workload": args[2], "status": "ok", "errors": 0}
+
+    monkeypatch.setattr("scripts.historic_storage_benchmark.measure", fake_measure)
+    result = run_target(
+        "postgresql://u:p@psql_total.postgresql.dbaas.com.br/psql_total?sslmode=require",
+        "postgres",
+        settings,
+    )
+    assert result["results"][0]["status"] == "timeout"
+    assert len(result["results"]) == len(WORKLOADS)
