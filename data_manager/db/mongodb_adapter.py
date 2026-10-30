@@ -1173,9 +1173,12 @@ class MongoDBAdapter(BaseAdapter):
                     if key in definition
                 }
 
+            def _index_key(definition: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+                return tuple(dict(definition.get("key", {})).items())
+
             existing_equivalent_keys = {
                 (
-                    tuple(definition.get("key", {}).items()),
+                    _index_key(definition),
                     repr(_index_options(definition)),
                 )
                 for definition in existing_indexes.values()
@@ -1184,7 +1187,7 @@ class MongoDBAdapter(BaseAdapter):
                 index
                 for index in indexes
                 if (
-                    tuple(index.document.get("key", {}).items()),
+                    _index_key(index.document),
                     repr(_index_options(index.document)),
                 )
                 not in existing_equivalent_keys
