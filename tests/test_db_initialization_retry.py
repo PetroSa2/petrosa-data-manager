@@ -12,6 +12,7 @@ async def test_database_retry_wires_manager_and_starts_consumers_once():
     app._db_retry_base_seconds = 0
     manager = MagicMock()
     manager.initialize = AsyncMock()
+    app._start_mongo_data_size_loop = MagicMock()
 
     with (
         patch("data_manager.main.DatabaseManager", return_value=manager),
@@ -34,6 +35,7 @@ async def test_database_retry_wires_manager_and_starts_consumers_once():
     assert decision.return_value.start.await_count == 1
     assert execution.return_value.start.await_count == 1
     assert pnl.return_value.start.await_count == 1
+    app._start_mongo_data_size_loop.assert_called_once_with()
 
 
 @pytest.mark.asyncio

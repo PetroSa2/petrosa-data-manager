@@ -113,6 +113,7 @@ class DataManagerApp:
         self.klines_daily_gaps_task: asyncio.Task | None = None
         self.klines_retention_task: asyncio.Task | None = None
         self.mysql_server_status_task: asyncio.Task | None = None
+        self.mongo_data_size_task: asyncio.Task | None = None
         self.report_precomputer = None
         self.running = False
         self._shutdown_event = asyncio.Event()
@@ -649,7 +650,7 @@ class DataManagerApp:
         # AFTER self.running=True so the `while self.running` loop runs its
         # first iteration immediately (the series appears within one refresh
         # interval of boot) rather than exiting on a stale False.
-        asyncio.create_task(self._run_mongo_data_size_loop())
+        self._start_mongo_data_size_loop()
         from data_manager.maintenance.klines_mysql_freshness import freshness_loop
 
         self.klines_freshness_task = asyncio.create_task(
@@ -757,6 +758,7 @@ class DataManagerApp:
                 config.set_database_manager(manager)
                 service_config.set_database_manager(manager)
                 ingest.set_database_manager(manager)
+                self._start_mongo_data_size_loop()
                 await self._start_database_consumers_after_retry()
                 logger.info("Database connections initialized successfully after retry")
                 return
@@ -787,6 +789,16 @@ class DataManagerApp:
                 pass
             self._db_retry_task = None
 
+    def _start_mongo_data_size_loop(self) -> None:
+        """Start the gauge loop once and restart it if an earlier task exited."""
+        if not constants.ENABLE_MONGO_DATA_SIZE_GAUGE:
+            return
+        if self.mongo_data_size_task and not self.mongo_data_size_task.done():
+            return
+        self.mongo_data_size_task = asyncio.create_task(
+            self._run_mongo_data_size_loop()
+        )
+
     async def stop(self) -> None:
         """Stop all application components."""
         logger.info("Stopping Petrosa Data Manager")
@@ -801,6 +813,13 @@ class DataManagerApp:
             except asyncio.CancelledError:
                 pass
             self.mysql_server_status_task = None
+        if self.mongo_data_size_task:
+            self.mongo_data_size_task.cancel()
+            try:
+                await self.mongo_data_size_task
+            except asyncio.CancelledError:
+                pass
+            self.mongo_data_size_task = None
         if self.klines_retention_task:
             self.klines_retention_task.cancel()
             try:
