@@ -41,18 +41,39 @@ async def test_loop_returns_early_when_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_loop_returns_early_when_no_adapter(monkeypatch):
+async def test_loop_waits_for_adapter_then_refreshes(monkeypatch):
     monkeypatch.setattr(constants, "ENABLE_MONGO_DATA_SIZE_GAUGE", True)
     app = DataManagerApp()
     app.db_manager = None  # no adapter available
     app.running = True
 
-    called = AsyncMock()
-    monkeypatch.setattr(mdsg, "refresh_mongo_data_size", called)
+    adapter = types.SimpleNamespace(
+        db_name="delayed_adapter_db",
+        db=types.SimpleNamespace(
+            command=AsyncMock(return_value={"dataSize": 1234}),
+        ),
+        client=None,
+    )
+
+    actual_refresh = mdsg.refresh_mongo_data_size
+
+    async def _refresh(_adapter, **_kwargs):
+        app.running = False
+        return await actual_refresh(_adapter, **_kwargs)
+
+    refresh_mock = AsyncMock(side_effect=_refresh)
+    monkeypatch.setattr(mdsg, "refresh_mongo_data_size", refresh_mock)
+
+    async def _sleep(_interval):
+        app.db_manager = types.SimpleNamespace(mongodb_adapter=adapter)
+
+    monkeypatch.setattr("data_manager.main.asyncio.sleep", _sleep)
 
     await app._run_mongo_data_size_loop()
 
-    called.assert_not_awaited()
+    refresh_mock.assert_awaited_once()
+    assert refresh_mock.await_args.args[0] is adapter
+    assert mdsg._last_data_size["delayed_adapter_db"] == 1234
 
 
 @pytest.mark.asyncio

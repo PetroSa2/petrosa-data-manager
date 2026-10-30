@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 # 1. Setup OpenTelemetry FIRST (before any other imports that might use it)
@@ -1448,9 +1449,6 @@ class DataManagerApp:
         if not constants.ENABLE_MONGO_DATA_SIZE_GAUGE:
             logger.info("Mongo data-size gauge disabled")
             return
-        if not self.db_manager or not getattr(self.db_manager, "mongodb_adapter", None):
-            logger.warning("Mongo data-size gauge loop not started: no mongodb_adapter")
-            return
 
         from data_manager.maintenance.mongo_data_size_gauge import (
             refresh_mongo_data_size,
@@ -1460,10 +1458,31 @@ class DataManagerApp:
             10,
             int(getattr(constants, "MONGO_DATA_SIZE_REFRESH_INTERVAL", 60)),
         )
-        adapter = self.db_manager.mongodb_adapter
         extra_dbs = tuple(getattr(constants, "MONGO_DATA_SIZE_DATABASES", ()))
-        logger.info(f"Mongo data-size gauge loop started (interval={interval}s)")
+        last_wait_warning = 0.0
+        started = False
         while self.running:
+            adapter = (
+                getattr(self.db_manager, "mongodb_adapter", None)
+                if self.db_manager
+                else None
+            )
+            if not adapter:
+                now = time.monotonic()
+                if not last_wait_warning or now - last_wait_warning >= 600:
+                    logger.warning("Mongo data-size gauge waiting: no mongodb_adapter")
+                    last_wait_warning = now
+                try:
+                    await asyncio.sleep(interval)
+                except asyncio.CancelledError:
+                    break
+                continue
+
+            if not started:
+                logger.info(
+                    f"Mongo data-size gauge loop started (interval={interval}s)"
+                )
+                started = True
             try:
                 await refresh_mongo_data_size(adapter, extra_databases=extra_dbs)
             except Exception as exc:
