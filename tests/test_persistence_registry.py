@@ -75,3 +75,11 @@ def test_live_state_ttl_is_partial_and_does_not_expire_open_documents():
     assert policy is not None
     assert policy.field == "_ttl_expires_at"
     assert policy.partial_filter_expression == {"_ttl_expires_at": {"$exists": True}}
+
+
+def test_config_rate_limits_uses_the_shared_timestamp_ttl_contract():
+    policy = ttl_policy_for_collection("config_rate_limits")
+    assert policy is not None
+    assert policy.field == "timestamp"
+    assert policy.seconds == 3600
+    assert policy.partial_filter_expression is None

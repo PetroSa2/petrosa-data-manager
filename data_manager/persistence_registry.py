@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -327,6 +328,11 @@ def ttl_policy_for_collection(collection: str) -> TTLPolicy | None:
             "timestamp",
             constants.EXECUTION_EVENTS_TTL_SECONDS,
             {"mysql_copied_at": {"$exists": True}},
+        )
+    if collection == "config_rate_limits":
+        return TTLPolicy(
+            "timestamp",
+            int(os.getenv("MONGODB_CONFIG_RATE_LIMITS_TTL_SECONDS", "3600")),
         )
     if collection in _STATE_COLLECTIONS or collection.startswith(
         _STATE_COLLECTION_PREFIXES

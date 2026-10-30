@@ -987,6 +987,37 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_config_rate_limits_replaces_conflicting_ttl_without_duplicate_key(
+        self, adapter
+    ):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={
+                "application_ttl": {
+                    "key": {"timestamp": 1},
+                    "expireAfterSeconds": 30 * 86400,
+                }
+            }
+        )
+        coll.create_indexes = AsyncMock()
+        coll.drop_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("config_rate_limits")
+
+        coll.drop_index.assert_awaited_once_with("application_ttl")
+        indexes = coll.create_indexes.call_args.args[0]
+        ttl_indexes = [
+            index
+            for index in indexes
+            if index.document.get("key") == {"timestamp": 1}
+            and "expireAfterSeconds" in index.document
+        ]
+        assert len(ttl_indexes) == 1
+        assert ttl_indexes[0].document["expireAfterSeconds"] == 3600
+        assert ttl_indexes[0].document["name"] == "timestamp_ttl_1h"
+
+    @pytest.mark.asyncio
     async def test_mismatched_proposed_ttl_options_are_replaced(
         self, adapter, monkeypatch
     ):
