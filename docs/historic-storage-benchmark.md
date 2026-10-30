@@ -28,7 +28,10 @@ python scripts/historic_storage_benchmark.py --rows 1000 --mysql-table-prefix be
 ```
 
 The result contains no credentials and records timestamps, row counts, schema,
-workload parameters, p50/p95/p99 latency, throughput, errors, and pool size.
+workload parameters, p50/p95/p99 latency, throughput, pool size, and an `rtt_baseline`
+per target from 50 `SELECT 1` round trips. Each workload has `status` (`ok`, `error`,
+or `timeout`), `error_class`, `completed_operations`, and `elapsed_ms`, so one
+failure does not discard later workloads or the other target.
 The default run uses one warm-up, three measured repetitions, four concurrent workers,
 250-row batches, ten symbols, and 1,000 synthetic rows per table.
 Each target is preflighted automatically with a ten-second connection timeout before
@@ -45,7 +48,9 @@ wildcard cleanup.
 
 The harness measures bulk ingest, batched upsert, point lookup, time-range lookup,
 latest-per-symbol lookup, aggregate/statistical query, concurrent reads, concurrent
-writes, and bounded backfill/replay.
+writes, and bounded backfill/replay. Time-range lookup filters one synthetic symbol and
+timeframe over the generated window and reports returned rows; it does not scan the
+whole table without a symbol predicate.
 
 The run output must be attached to the issue only after checking it contains no URLs
 with credentials. The issue recommendation must state whether evidence supports keeping
