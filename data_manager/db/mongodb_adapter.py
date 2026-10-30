@@ -1157,6 +1157,42 @@ class MongoDBAdapter(BaseAdapter):
                         IndexModel([(ttl_policy.field, ASCENDING)], **ttl_options)
                     )
 
+            # MongoDB rejects an equivalent key pattern when the requested name
+            # differs from an existing plain index. Reuse equivalent indexes so
+            # legacy names cannot prevent startup from reaching TTL coverage.
+            def _index_options(definition: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    key: definition[key]
+                    for key in (
+                        "expireAfterSeconds",
+                        "partialFilterExpression",
+                        "unique",
+                        "sparse",
+                        "collation",
+                    )
+                    if key in definition
+                }
+
+            def _index_key(definition: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+                return tuple(dict(definition.get("key", {})).items())
+
+            existing_equivalent_keys = {
+                (
+                    _index_key(definition),
+                    repr(_index_options(definition)),
+                )
+                for definition in existing_indexes.values()
+            }
+            indexes = [
+                index
+                for index in indexes
+                if (
+                    _index_key(index.document),
+                    repr(_index_options(index.document)),
+                )
+                not in existing_equivalent_keys
+            ]
+
             if collection.startswith("klines_"):
                 await coll.create_index(
                     [("symbol", ASCENDING), ("timestamp", ASCENDING)],
