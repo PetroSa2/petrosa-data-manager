@@ -8,6 +8,7 @@ import json
 import os
 import re
 import statistics
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,7 @@ from sqlalchemy import (
     String,
     Table,
     create_engine,
+    event,
     func,
     select,
     text,
@@ -40,6 +42,7 @@ SCHEMA = "benchmark_mysql_vs_postgres"
 TABLES = ("klines", "signals", "positions", "execution_events")
 DEFAULT_MYSQL_TABLE_PREFIX = "bench775_"
 MYSQL_CONNECTION_CAP = 4
+STALL_TIMEOUT_SECONDS = 60.0
 WORKLOADS = (
     "bulk_ingest",
     "batched_upsert",
@@ -137,7 +140,24 @@ def _engine_url(url: str, backend: str) -> str:
 
 
 def _connect_args(backend: str) -> dict[str, Any]:
-    return {"connect_timeout": 10}
+    args: dict[str, Any] = {"connect_timeout": 10}
+    if backend == "mysql":
+        args["init_command"] = "SET SESSION innodb_lock_wait_timeout = 30"
+    return args
+
+
+def _mysql_connect_hook(dbapi_connection: Any, _connection_record: Any) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("SET SESSION innodb_lock_wait_timeout = 30")
+        cursor.execute("SET SESSION lock_wait_timeout = 30")
+    finally:
+        cursor.close()
+
+
+def _install_connect_hooks(engine: Any, backend: str) -> None:
+    if backend == "mysql" and hasattr(engine, "connect"):
+        event.listen(engine, "connect", _mysql_connect_hook)
 
 
 def _engine_kwargs(backend: str) -> dict[str, Any]:
@@ -162,6 +182,7 @@ def preflight_target(
         validate_target(url, backend, mysql_table_prefix=mysql_table_prefix)
         if engine is None:
             engine = create_engine(_engine_url(url, backend), **_engine_kwargs(backend))
+            _install_connect_hooks(engine, backend)
         table = (
             f"{mysql_table_prefix}benchmark_preflight_probe"
             if backend == "mysql"
@@ -372,17 +393,41 @@ def measure(
     settings: Settings,
 ) -> dict[str, Any]:
     started_phase = time.perf_counter()
-    last_progress = 0.0
+    last_report = 0.0
+    last_progress = started_phase
+    last_rows = 0
+    watchdog_reported = False
+    stop_watchdog = threading.Event()
 
     def report(rows_done: int) -> None:
-        nonlocal last_progress
-        elapsed = time.perf_counter() - started_phase
-        if elapsed - last_progress >= 30 or rows_done == len(rows):
+        nonlocal last_progress, last_report, last_rows
+        last_rows = rows_done
+        now = time.perf_counter()
+        last_progress = now
+        elapsed = now - started_phase
+        if elapsed - (last_report - started_phase) >= 30 or rows_done == len(rows):
             print(f"PROGRESS {backend} {name} rows={rows_done} elapsed={elapsed:.1f}s")
-            last_progress = elapsed
+            last_report = now
+
+    def watchdog() -> None:
+        nonlocal watchdog_reported
+        poll_interval = min(1.0, max(STALL_TIMEOUT_SECONDS / 4, 0.01))
+        while not stop_watchdog.wait(poll_interval):
+            elapsed = time.perf_counter() - started_phase
+            if (
+                time.perf_counter() - last_progress >= STALL_TIMEOUT_SECONDS
+                and not watchdog_reported
+            ):
+                watchdog_reported = True
+                print(f"STALL {backend} {name} rows={last_rows} elapsed={elapsed:.1f}s")
+                if backend == "mysql":
+                    _print_mysql_processlist(engine)
+                return
 
     print(f"PROGRESS {backend} {name} rows=0 elapsed=0.0s")
     operation = _workload(table, name, rows, backend, settings, report)
+    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    watchdog_thread.start()
 
     rows_returned = None
 
@@ -424,10 +469,14 @@ def measure(
     else:
         samples = []
         started = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=settings.concurrency) as pool:
+        worker_count = min(
+            settings.concurrency,
+            MYSQL_CONNECTION_CAP - 1 if backend == "mysql" else settings.concurrency,
+        )
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
             futures = [
                 pool.submit(measure_one, engine, table, name, rows, backend, settings)
-                for _ in range(settings.concurrency)
+                for _ in range(worker_count)
             ]
             errors += sum(future.exception() is not None for future in futures)
             samples.extend(
@@ -438,9 +487,11 @@ def measure(
                 status = "error"
                 error_class = "WorkloadError"
         elapsed = (time.perf_counter() - started) * 1000
-        throughput = settings.concurrency / max(elapsed / 1000, 0.000001)
+        throughput = worker_count / max(elapsed / 1000, 0.000001)
     if name not in {"concurrent_reads", "concurrent_writes"}:
         throughput = settings.repetitions / max(sum(samples) / 1000, 0.000001)
+    stop_watchdog.set()
+    watchdog_thread.join(timeout=1.0)
     elapsed = time.perf_counter() - started_phase
     print(f"PROGRESS {backend} {name} rows={len(rows)} elapsed={elapsed:.1f}s")
     result = {
@@ -457,6 +508,28 @@ def measure(
         "errors": errors,
     }
     return result
+
+
+def _print_mysql_processlist(engine: Any) -> None:
+    try:
+        with engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT ID, TIME, STATE, LEFT(INFO,120) "
+                    "FROM information_schema.PROCESSLIST WHERE DB = DATABASE() LIMIT 20"
+                )
+            ).all()
+        for row in rows:
+            values = [_redact_process_value(value) for value in row]
+            print(f"PROCESS mysql [{', '.join(values)}]")
+    except Exception as error:
+        print(f"PROCESS mysql diagnostics_error={type(error).__name__}")
+
+
+def _redact_process_value(value: Any) -> str:
+    text_value = str(value).replace("\n", " ")[:120]
+    text_value = re.sub(r"://[^\s/@]+:[^\s/@]+@", "://[redacted]@", text_value)
+    return re.sub(r"(?i)password\s*[=:]\s*[^\s,]+", "password=[redacted]", text_value)
 
 
 def measure_one(
@@ -489,7 +562,9 @@ def _set_statement_timeout(connection: Any, backend: str, timeout_ms: int) -> No
         connection.execute(text(f"SET SESSION max_execution_time = {timeout_ms}"))
 
 
-def measure_rtt(engine: Any, settings: Settings) -> dict[str, Any]:
+def measure_rtt(
+    engine: Any, settings: Settings, backend: str = "benchmark"
+) -> dict[str, Any]:
     samples: list[float] = []
     error_class = None
     for _ in range(50):
@@ -504,17 +579,22 @@ def measure_rtt(engine: Any, settings: Settings) -> dict[str, Any]:
     if not samples:
         return {"status": "error", "error_class": error_class, "samples": 0}
     ordered = sorted(samples)
-    return {
+    result = {
         "status": "ok",
         "samples": len(samples),
         "p50_ms": round(statistics.median(samples), 3),
         "p95_ms": round(ordered[max(0, int(len(ordered) * 0.95) - 1)], 3),
     }
+    print(
+        f"PROGRESS {backend} rtt p50={result['p50_ms']:.3f} p95={result['p95_ms']:.3f}"
+    )
+    return result
 
 
 def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
     validate_target(url, backend, mysql_table_prefix=settings.mysql_table_prefix)
     engine = create_engine(_engine_url(url, backend), **_engine_kwargs(backend))
+    _install_connect_hooks(engine, backend)
     if not preflight_target(
         url,
         backend,
@@ -522,6 +602,7 @@ def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
         mysql_table_prefix=settings.mysql_table_prefix,
     ):
         raise RuntimeError(f"{backend} preflight failed")
+    rtt_baseline = measure_rtt(engine, settings, backend)
     _, tables = create_schema(engine, backend, settings)
     try:
         rows = synthetic_rows(settings)
@@ -552,7 +633,7 @@ def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
                 "synthetic": True,
             },
             "parameters": settings.__dict__,
-            "rtt_baseline": measure_rtt(engine, settings),
+            "rtt_baseline": rtt_baseline,
             "results": results,
             "pool": {
                 "size": getattr(engine.pool, "size", lambda: None)(),
@@ -569,9 +650,28 @@ def main() -> None:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--rows", type=int, default=Settings.rows)
+    parser.add_argument("--warmups", type=int, default=Settings.warmups)
+    parser.add_argument("--repetitions", type=int, default=Settings.repetitions)
+    parser.add_argument("--concurrency", type=int, default=Settings.concurrency)
+    parser.add_argument("--batch-size", type=int, default=Settings.batch_size)
+    parser.add_argument("--targets", default="postgres,mysql")
     parser.add_argument("--mysql-table-prefix", default=DEFAULT_MYSQL_TABLE_PREFIX)
     args = parser.parse_args()
-    settings = Settings(rows=args.rows, mysql_table_prefix=args.mysql_table_prefix)
+    selected_targets = tuple(target.strip() for target in args.targets.split(","))
+    if (
+        not selected_targets
+        or any(target not in {"postgres", "mysql"} for target in selected_targets)
+        or len(set(selected_targets)) != len(selected_targets)
+    ):
+        parser.error("--targets must be a comma-separated list of postgres,mysql")
+    settings = Settings(
+        rows=args.rows,
+        warmups=args.warmups,
+        repetitions=args.repetitions,
+        concurrency=args.concurrency,
+        batch_size=args.batch_size,
+        mysql_table_prefix=args.mysql_table_prefix,
+    )
     validate_settings(settings)
     if args.dry_run:
         print(
@@ -586,8 +686,8 @@ def main() -> None:
         )
         return
     urls = {
-        "postgres": os.environ["BENCHMARK_POSTGRES_URL"],
-        "mysql": os.environ["BENCHMARK_MYSQL_URL"],
+        backend: os.environ[f"BENCHMARK_{backend.upper()}_URL"]
+        for backend in selected_targets
     }
     if args.preflight:
         results = [

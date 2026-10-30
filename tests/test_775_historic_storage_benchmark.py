@@ -10,6 +10,8 @@ from scripts.historic_storage_benchmark import (
     SCHEMA,
     WORKLOADS,
     Settings,
+    _connect_args,
+    _mysql_connect_hook,
     _row,
     _upsert,
     _workload,
@@ -413,3 +415,118 @@ def test_run_target_records_workload_error_and_continues(monkeypatch):
     )
     assert result["results"][0]["status"] == "timeout"
     assert len(result["results"]) == len(WORKLOADS)
+
+
+def test_cli_controls_and_mysql_target_do_not_require_postgres(monkeypatch, capsys):
+    monkeypatch.delenv("BENCHMARK_POSTGRES_URL", raising=False)
+    monkeypatch.delenv("BENCHMARK_MYSQL_URL", raising=False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "benchmark",
+            "--dry-run",
+            "--targets",
+            "mysql",
+            "--warmups",
+            "2",
+            "--repetitions",
+            "4",
+            "--concurrency",
+            "3",
+            "--batch-size",
+            "50",
+        ],
+    )
+    main()
+    output = capsys.readouterr().out
+    assert '"warmups": 2' in output
+    assert '"repetitions": 4' in output
+    assert '"concurrency": 3' in output
+    assert '"batch_size": 50' in output
+
+
+def test_mysql_connect_hook_sets_both_lock_timeouts():
+    class Cursor:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, statement):
+            self.statements.append(statement)
+
+        def close(self):
+            pass
+
+    cursor = Cursor()
+    _mysql_connect_hook(SimpleNamespace(cursor=lambda: cursor), None)
+    assert _connect_args("mysql")["init_command"].endswith("= 30")
+    assert cursor.statements == [
+        "SET SESSION innodb_lock_wait_timeout = 30",
+        "SET SESSION lock_wait_timeout = 30",
+    ]
+
+
+def test_rtt_is_reported_before_first_workload(monkeypatch, capsys):
+    settings = Settings(rows=1, warmups=1, repetitions=1)
+    engine = SimpleNamespace(pool=SimpleNamespace(size=lambda: 1, _max_overflow=0))
+    calls = []
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.create_engine",
+        lambda *args, **kwargs: engine,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.preflight_target",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.create_schema",
+        lambda *args, **kwargs: (None, {"klines": object()}),
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.cleanup_schema",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.measure_rtt",
+        lambda *args: calls.append("rtt") or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.measure",
+        lambda *args: calls.append("workload") or {"status": "ok"},
+    )
+    run_target(
+        "postgresql://u:p@psql_total.postgresql.dbaas.com.br/psql_total?sslmode=require",
+        "postgres",
+        settings,
+    )
+    assert calls[:2] == ["rtt", "workload"]
+    assert "PROGRESS" not in capsys.readouterr().out
+
+
+def test_watchdog_prints_one_stall_line(monkeypatch, capsys):
+    settings = Settings(rows=1, warmups=1, repetitions=1)
+    engine = create_engine("sqlite://")
+    _, tables = create_schema(engine, "mysql", settings)
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.STALL_TIMEOUT_SECONDS", 0.02
+    )
+
+    def stalled(_connection):
+        import time as time_module
+
+        time_module.sleep(0.08)
+        return 1
+
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark._workload",
+        lambda *args, **kwargs: stalled,
+    )
+    measure(
+        engine,
+        tables["klines"],
+        "point_lookup",
+        synthetic_rows(settings),
+        "mysql",
+        settings,
+    )
+    output = capsys.readouterr().out
+    assert output.count("STALL mysql point_lookup rows=") == 1
