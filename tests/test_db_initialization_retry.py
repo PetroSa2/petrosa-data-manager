@@ -98,3 +98,13 @@ async def test_stop_shuts_down_a_published_manager_after_cancelling_the_retry():
     app.db_manager = manager
     await app.stop()
     manager.shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_mongo_data_size_task():
+    app = DataManagerApp()
+    app.mongo_data_size_task = asyncio.create_task(asyncio.sleep(60))
+
+    await app.stop()
+
+    assert app.mongo_data_size_task is None
