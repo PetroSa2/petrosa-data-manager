@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import time
 from collections.abc import Callable
@@ -37,6 +38,8 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 
 SCHEMA = "benchmark_mysql_vs_postgres"
 TABLES = ("klines", "signals", "positions", "execution_events")
+DEFAULT_MYSQL_TABLE_PREFIX = "bench775_"
+MYSQL_CONNECTION_CAP = 4
 WORKLOADS = (
     "bulk_ingest",
     "batched_upsert",
@@ -60,6 +63,7 @@ class Settings:
     symbols: int = 10
     statement_timeout_ms: int = 30_000
     phase_budget_seconds: float = 300.0
+    mysql_table_prefix: str = DEFAULT_MYSQL_TABLE_PREFIX
 
 
 def validate_settings(settings: Settings) -> None:
@@ -72,9 +76,20 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError("batch_size and symbols must be positive")
     if settings.statement_timeout_ms < 1 or settings.phase_budget_seconds <= 0:
         raise ValueError("timeouts must be positive")
+    validate_mysql_table_prefix(settings.mysql_table_prefix)
 
 
-def validate_target(url: str, backend: str, schema: str = SCHEMA) -> None:
+def validate_mysql_table_prefix(prefix: str) -> None:
+    if not prefix or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", prefix):
+        raise ValueError("mysql table prefix must be a non-empty SQL identifier prefix")
+
+
+def validate_target(
+    url: str,
+    backend: str,
+    schema: str = SCHEMA,
+    mysql_table_prefix: str = DEFAULT_MYSQL_TABLE_PREFIX,
+) -> None:
     parsed = urlparse(url)
     database = parsed.path.lstrip("/").split("/")[-1]
     if backend not in {"postgres", "mysql"}:
@@ -83,9 +98,9 @@ def validate_target(url: str, backend: str, schema: str = SCHEMA) -> None:
         raise ValueError("benchmark URL must include a database")
     if schema != SCHEMA:
         raise ValueError(f"schema must be {SCHEMA}")
-    if not database.startswith("benchmark_") and not (
-        backend == "postgres" and database == "psql_total"
-    ):
+    if backend == "mysql":
+        validate_mysql_table_prefix(mysql_table_prefix)
+    elif database != "psql_total":
         raise ValueError("target database is not an approved isolated benchmark target")
     if backend == "postgres":
         if parsed.hostname != "psql_total.postgresql.dbaas.com.br":
@@ -125,22 +140,33 @@ def _connect_args(backend: str) -> dict[str, Any]:
     return {"connect_timeout": 10}
 
 
+def _engine_kwargs(backend: str) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "connect_args": _connect_args(backend),
+        "pool_pre_ping": True,
+    }
+    if backend == "mysql":
+        kwargs.update(pool_size=MYSQL_CONNECTION_CAP, max_overflow=0)
+    return kwargs
+
+
 def preflight_target(
     url: str,
     backend: str,
     emit: Callable[[str], None] = print,
     engine: Any | None = None,
+    mysql_table_prefix: str = DEFAULT_MYSQL_TABLE_PREFIX,
 ) -> bool:
     """Verify connectivity and isolated-schema DDL before any benchmark writes."""
     try:
-        validate_target(url, backend)
+        validate_target(url, backend, mysql_table_prefix=mysql_table_prefix)
         if engine is None:
-            engine = create_engine(
-                _engine_url(url, backend),
-                connect_args=_connect_args(backend),
-                pool_pre_ping=True,
-            )
-        table = "benchmark_preflight_probe"
+            engine = create_engine(_engine_url(url, backend), **_engine_kwargs(backend))
+        table = (
+            f"{mysql_table_prefix}benchmark_preflight_probe"
+            if backend == "mysql"
+            else "benchmark_preflight_probe"
+        )
         qualified = f'"{SCHEMA}"."{table}"' if backend == "postgres" else f"`{table}`"
         with engine.begin() as connection:
             connection.execute(text("SELECT 1"))
@@ -175,11 +201,16 @@ def synthetic_rows(settings: Settings) -> list[dict[str, Any]]:
     ]
 
 
-def build_tables(metadata: MetaData, schema: str | None) -> dict[str, Table]:
+def build_tables(
+    metadata: MetaData,
+    schema: str | None,
+    mysql_table_prefix: str = DEFAULT_MYSQL_TABLE_PREFIX,
+) -> dict[str, Table]:
+    validate_mysql_table_prefix(mysql_table_prefix)
     common = {"schema": schema}
     return {
         name: Table(
-            name,
+            f"{mysql_table_prefix}{name}" if schema is None else name,
             metadata,
             Column("row_key", String(64), primary_key=True),
             Column("symbol", String(16), nullable=False),
@@ -189,7 +220,13 @@ def build_tables(metadata: MetaData, schema: str | None) -> dict[str, Table]:
             Column("quantity", Numeric(20, 8), nullable=False),
             Column("payload", JSON(), nullable=False),
             Column("is_open", Boolean(), nullable=False),
-            Index(f"ix_{name}_symbol_event_time", "symbol", "event_time"),
+            Index(
+                f"ix_{mysql_table_prefix}{name}_symbol_event_time"
+                if schema is None
+                else f"ix_{name}_symbol_event_time",
+                "symbol",
+                "event_time",
+            ),
             **common,
         )
         for name in TABLES
@@ -202,21 +239,40 @@ def _row(table: Table, value: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_schema(
-    engine: Any, backend: str, settings: Settings
+    engine: Any,
+    backend: str,
+    settings: Settings,
 ) -> tuple[MetaData, dict[str, Table]]:
     schema = SCHEMA if backend == "postgres" else None
     metadata = MetaData()
-    tables = build_tables(metadata, schema)
+    tables = build_tables(metadata, schema, settings.mysql_table_prefix)
     if backend == "postgres":
         with engine.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"'))
-    metadata.drop_all(engine)
+    if backend == "mysql":
+        with engine.begin() as connection:
+            for table in tables.values():
+                connection.execute(text(f"DROP TABLE IF EXISTS `{table.name}`"))
+    else:
+        metadata.drop_all(engine)
     metadata.create_all(engine)
     rows = synthetic_rows(settings)
     with engine.begin() as connection:
         for table in tables.values():
             connection.execute(table.insert(), [_row(table, row) for row in rows])
     return metadata, tables
+
+
+def cleanup_schema(engine: Any, backend: str, tables: dict[str, Table]) -> None:
+    if backend == "mysql":
+        with engine.begin() as connection:
+            for table in tables.values():
+                connection.execute(text(f"DROP TABLE IF EXISTS `{table.name}`"))
+    else:
+        metadata = MetaData()
+        for table in tables.values():
+            table.to_metadata(metadata)
+        metadata.drop_all(engine)
 
 
 def _upsert(connection: Any, table: Table, row: dict[str, Any], backend: str) -> None:
@@ -398,34 +454,44 @@ def _set_statement_timeout(connection: Any, backend: str, timeout_ms: int) -> No
 
 
 def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
-    validate_target(url, backend)
-    engine = create_engine(
-        _engine_url(url, backend),
-        connect_args=_connect_args(backend),
-        pool_pre_ping=True,
-    )
-    if not preflight_target(url, backend, engine=engine):
+    validate_target(url, backend, mysql_table_prefix=settings.mysql_table_prefix)
+    engine = create_engine(_engine_url(url, backend), **_engine_kwargs(backend))
+    if not preflight_target(
+        url,
+        backend,
+        engine=engine,
+        mysql_table_prefix=settings.mysql_table_prefix,
+    ):
         raise RuntimeError(f"{backend} preflight failed")
     _, tables = create_schema(engine, backend, settings)
-    rows = synthetic_rows(settings)
-    results = [
-        {"table": table_name, **measure(engine, table, name, rows, backend, settings)}
-        for table_name, table in tables.items()
-        for name in WORKLOADS
-    ]
-    return {
-        "backend": backend,
-        "target": redact_url(url),
-        "schema": SCHEMA,
-        "dataset": {
-            "rows_per_table": settings.rows,
-            "tables": list(TABLES),
-            "synthetic": True,
-        },
-        "parameters": settings.__dict__,
-        "results": results,
-        "pool": {"size": getattr(engine.pool, "size", lambda: None)()},
-    }
+    try:
+        rows = synthetic_rows(settings)
+        results = [
+            {
+                "table": table_name,
+                **measure(engine, table, name, rows, backend, settings),
+            }
+            for table_name, table in tables.items()
+            for name in WORKLOADS
+        ]
+        return {
+            "backend": backend,
+            "target": redact_url(url),
+            "schema": SCHEMA,
+            "dataset": {
+                "rows_per_table": settings.rows,
+                "tables": list(TABLES),
+                "synthetic": True,
+            },
+            "parameters": settings.__dict__,
+            "results": results,
+            "pool": {
+                "size": getattr(engine.pool, "size", lambda: None)(),
+                "max_overflow": getattr(engine.pool, "_max_overflow", None),
+            },
+        }
+    finally:
+        cleanup_schema(engine, backend, tables)
 
 
 def main() -> None:
@@ -434,8 +500,9 @@ def main() -> None:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--rows", type=int, default=Settings.rows)
+    parser.add_argument("--mysql-table-prefix", default=DEFAULT_MYSQL_TABLE_PREFIX)
     args = parser.parse_args()
-    settings = Settings(rows=args.rows)
+    settings = Settings(rows=args.rows, mysql_table_prefix=args.mysql_table_prefix)
     validate_settings(settings)
     if args.dry_run:
         print(
@@ -454,7 +521,14 @@ def main() -> None:
         "mysql": os.environ["BENCHMARK_MYSQL_URL"],
     }
     if args.preflight:
-        results = [preflight_target(url, backend) for backend, url in urls.items()]
+        results = [
+            preflight_target(
+                url,
+                backend,
+                mysql_table_prefix=settings.mysql_table_prefix,
+            )
+            for backend, url in urls.items()
+        ]
         if not all(results):
             raise SystemExit(1)
         return

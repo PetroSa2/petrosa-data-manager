@@ -1,8 +1,9 @@
 # Historic Storage Benchmark
 
 This harness compares PostgreSQL and MySQL using synthetic rows only.
-It creates or uses only the isolated PostgreSQL schema `benchmark_mysql_vs_postgres`
-and MySQL database `benchmark_mysql_vs_postgres`; it never targets production tables.
+It creates or uses only the isolated PostgreSQL schema `benchmark_mysql_vs_postgres`.
+MySQL uses the database already named in `BENCHMARK_MYSQL_URL`, with a separate,
+prefixed table namespace so it never targets production table names.
 
 ## Run
 
@@ -15,13 +16,15 @@ python scripts/historic_storage_benchmark.py --preflight
 
 Provide URLs through the environment, not source files, issue text, or committed output.
 The PostgreSQL URL must target `psql_total` and include `sslmode=require`.
-The MySQL URL must target a database beginning with `benchmark_`.
+The MySQL URL may target the shared data-manager database. The table prefix is
+validated as a non-empty SQL identifier prefix and defaults to `bench775_`.
 
 ```bash
 export BENCHMARK_POSTGRES_URL='postgresql://USER:PASSWORD@psql_total.postgresql.dbaas.com.br:5432/psql_total?sslmode=require'
-export BENCHMARK_MYSQL_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/benchmark_mysql_vs_postgres'
+export BENCHMARK_MYSQL_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/MYSQL_DATABASE'
 python scripts/historic_storage_benchmark.py --dry-run
-python scripts/historic_storage_benchmark.py --rows 1000 --output /secure/local/benchmark-result.json
+python scripts/historic_storage_benchmark.py --rows 1000 --mysql-table-prefix bench775_ \
+  --output /secure/local/benchmark-result.json
 ```
 
 The result contains no credentials and records timestamps, row counts, schema,
@@ -32,6 +35,11 @@ Each target is preflighted automatically with a ten-second connection timeout be
 loading rows. Progress is printed per backend and workload, including row counts and
 elapsed seconds; bulk ingest emits additional progress at least every 30 seconds.
 The final JSON is printed to stdout and written unchanged to `--output` when supplied.
+The MySQL engine is capped at four total connections (`pool_size=4` and
+`max_overflow=0`), including concurrent workloads.
+Before setup, the harness drops only the four known prefixed benchmark tables with
+explicit `DROP TABLE IF EXISTS` statements; it never creates a database or uses
+wildcard cleanup.
 
 ## Workloads and capability review
 

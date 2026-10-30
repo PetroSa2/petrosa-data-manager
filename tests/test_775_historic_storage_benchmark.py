@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from scripts.historic_storage_benchmark import (
+    DEFAULT_MYSQL_TABLE_PREFIX,
     SCHEMA,
     WORKLOADS,
     Settings,
@@ -13,6 +14,7 @@ from scripts.historic_storage_benchmark import (
     _upsert,
     _workload,
     build_tables,
+    cleanup_schema,
     create_schema,
     main,
     measure,
@@ -37,15 +39,19 @@ def test_dry_run_contract_is_synthetic_and_complete():
     }
 
 
-def test_target_validation_rejects_production_and_missing_tls():
-    with pytest.raises(ValueError, match="approved isolated") as production_error:
-        validate_target("mysql+pymysql://user:pass@db/petrosa_crypto", "mysql")
+def test_target_validation_rejects_empty_prefix_and_missing_tls():
+    with pytest.raises(ValueError, match="non-empty") as empty_prefix_error:
+        validate_target(
+            "mysql+pymysql://user:pass@db/petrosa_crypto",
+            "mysql",
+            mysql_table_prefix="",
+        )
     with pytest.raises(ValueError, match="sslmode=require") as tls_error:
         validate_target(
             "postgresql://user:pass@psql_total.postgresql.dbaas.com.br/psql_total",
             "postgres",
         )
-    assert production_error.value.args and tls_error.value.args
+    assert empty_prefix_error.value.args and tls_error.value.args
 
 
 def test_target_validation_allows_only_explicit_isolated_targets():
@@ -62,6 +68,7 @@ def test_target_validation_allows_only_explicit_isolated_targets():
 def test_settings_are_bounded_and_schema_is_fixed():
     validate_settings(Settings(rows=10, warmups=1, repetitions=1, concurrency=2))
     assert SCHEMA == "benchmark_mysql_vs_postgres"
+    assert Settings().mysql_table_prefix == DEFAULT_MYSQL_TABLE_PREFIX
     with pytest.raises(ValueError):
         validate_settings(Settings(rows=0))
 
@@ -151,6 +158,10 @@ def test_run_target_and_dry_run(monkeypatch, capsys):
         lambda *args, **kwargs: True,
     )
     monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.cleanup_schema",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
         "scripts.historic_storage_benchmark.measure",
         lambda *args: {"workload": args[2], "errors": 0},
     )
@@ -163,6 +174,32 @@ def test_run_target_and_dry_run(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["benchmark", "--dry-run"])
     main()
     assert '"synthetic": true' in capsys.readouterr().out
+
+
+def test_mysql_engine_connection_cap(monkeypatch):
+    settings = Settings(rows=1)
+    engine = SimpleNamespace(pool=SimpleNamespace(size=lambda: 4))
+    captured = {}
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.create_engine",
+        lambda *args, **kwargs: captured.update(kwargs) or engine,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.preflight_target",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.create_schema",
+        lambda *args, **kwargs: (None, {}),
+    )
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.cleanup_schema",
+        lambda *args, **kwargs: None,
+    )
+    result = run_target("mysql+pymysql://u:p@db/petrosa_crypto", "mysql", settings)
+    assert captured["pool_size"] == 4
+    assert captured["max_overflow"] == 0
+    assert result["pool"]["size"] == 4
 
 
 class _PreflightConnection:
@@ -207,6 +244,23 @@ def test_preflight_reports_success_and_redacted_failure():
     )
     assert "PREFLIGHT postgres fail RuntimeError" in lines[0]
     assert "secret" not in lines[0]
+    mysql_connection = _PreflightConnection()
+    mysql_connection.dialect = SimpleNamespace(name="mysql")
+    assert preflight_target(
+        "mysql+pymysql://user:secret@db/petrosa_crypto",
+        "mysql",
+        lines.append,
+        _PreflightEngine(mysql_connection),
+    )
+    assert (
+        DEFAULT_MYSQL_TABLE_PREFIX + "benchmark_preflight_probe"
+        in mysql_connection.statements[1]
+    )
+    assert all(
+        "benchmark_preflight_probe" not in statement
+        or DEFAULT_MYSQL_TABLE_PREFIX in statement
+        for statement in mysql_connection.statements
+    )
 
 
 def test_output_matches_final_stdout(monkeypatch, capsys, tmp_path: Path):
@@ -222,3 +276,41 @@ def test_output_matches_final_stdout(monkeypatch, capsys, tmp_path: Path):
     stdout = capsys.readouterr().out.strip().splitlines()[-1]
     assert stdout == output_path.read_text(encoding="utf-8").strip()
     assert '"backend": "postgres"' in stdout
+
+
+def test_mysql_setup_workload_and_cleanup_only_use_prefixed_tables():
+    settings = Settings(
+        rows=2, warmups=1, repetitions=1, mysql_table_prefix="bench775_"
+    )
+    engine = create_engine("sqlite://")
+    statements = []
+    from sqlalchemy import event
+
+    event.listen(
+        engine, "before_cursor_execute", lambda *args: statements.append(args[2])
+    )
+    _, tables = create_schema(engine, "mysql", settings)
+    rows = synthetic_rows(settings)
+    measure(engine, tables["klines"], "point_lookup", rows, "mysql", settings)
+    cleanup_schema(engine, "mysql", tables)
+
+    table_statements = [
+        statement.lower()
+        for statement in statements
+        if any(
+            table in statement.lower()
+            for table in ("klines", "signals", "positions", "execution_events")
+        )
+    ]
+    assert table_statements
+    assert all("bench775_" in statement for statement in table_statements)
+    assert {
+        statement.split("`")[1]
+        for statement in table_statements
+        if "drop table" in statement
+    } == {
+        "bench775_klines",
+        "bench775_signals",
+        "bench775_positions",
+        "bench775_execution_events",
+    }
