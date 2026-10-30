@@ -1183,6 +1183,11 @@ class MongoDBAdapter(BaseAdapter):
                 )
                 for definition in existing_indexes.values()
             }
+            existing_ttl_keys = {
+                _index_key(definition)
+                for definition in existing_indexes.values()
+                if "expireAfterSeconds" in definition
+            }
             indexes = [
                 index
                 for index in indexes
@@ -1191,6 +1196,10 @@ class MongoDBAdapter(BaseAdapter):
                     repr(_index_options(index.document)),
                 )
                 not in existing_equivalent_keys
+                and not (
+                    _index_key(index.document) in existing_ttl_keys
+                    and "expireAfterSeconds" not in index.document
+                )
             ]
 
             if collection.startswith("klines_"):
@@ -1208,7 +1217,8 @@ class MongoDBAdapter(BaseAdapter):
                         [(ttl_policy.field, ASCENDING)], **ttl_options
                     )
             else:
-                await coll.create_indexes(indexes)
+                if indexes:
+                    await coll.create_indexes(indexes)
             logger.info(
                 f"Indexes created/verified for MongoDB collection: {collection}"
             )

@@ -992,6 +992,7 @@ class TestEnsureIndexes:
         coll.index_information = AsyncMock(
             return_value={
                 "idx_timestamp": {"key": {"timestamp": 1}},
+                "symbol_timestamp": {"key": {"symbol": 1, "timestamp": 1}},
             }
         )
         coll.create_indexes = AsyncMock()
@@ -1005,6 +1006,29 @@ class TestEnsureIndexes:
             index.document.get("key") == {"timestamp": 1} for index in indexes
         )
         coll.drop_index.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_existing_ttl_replaces_plain_index_request(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={
+                "timestamp_1": {
+                    "key": {"timestamp": 1},
+                    "expireAfterSeconds": 604800,
+                },
+            }
+        )
+        coll.create_indexes = AsyncMock()
+        coll.drop_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("intents")
+
+        assert not any(
+            index.document.get("key") == {"timestamp": 1}
+            and "expireAfterSeconds" not in index.document
+            for index in coll.create_indexes.call_args.args[0]
+        )
 
     @pytest.mark.asyncio
     async def test_config_rate_limits_replaces_conflicting_ttl_without_duplicate_key(
