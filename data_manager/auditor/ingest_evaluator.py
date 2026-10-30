@@ -36,6 +36,8 @@ except ImportError:  # pragma: no cover — py310 compatibility
 
 from petrosa_otel.evaluators import Evaluator
 
+from data_manager.utils.time_utils import as_aware_utc
+
 if TYPE_CHECKING:
     from petrosa_otel.evaluators.base import HysteresisPolicy
     from petrosa_otel.evaluators.publisher import VerdictPublisher
@@ -97,17 +99,17 @@ class IngestEvaluator(Evaluator):
             # Subject not tracked — silently ignore so the consumer is
             # never coupled to the evaluator's subject list.
             return
-        now = self._time()
+        now = as_aware_utc(self._time())
         state.last_message_at = now
         if payload_timestamp is not None:
-            state.last_payload_ts = payload_timestamp
+            state.last_payload_ts = as_aware_utc(payload_timestamp)
 
     def record_parse_failure(self, subject: str) -> None:
         """Hook: consumer calls this on each parse or schema error."""
         state = self._state.get(subject)
         if state is None:
             return
-        now = self._time()
+        now = as_aware_utc(self._time())
         cutoff = now - self._integrity_window
         # Drop expired entries before appending — keeps the list short.
         state.parse_failure_times = [
@@ -123,7 +125,7 @@ class IngestEvaluator(Evaluator):
         Reason is bounded to ≤200 chars / single line per the framework's
         NFR-O5 publish contract.
         """
-        now = self._time()
+        now = as_aware_utc(self._time())
         worst_problem: str | None = None
         for subject in self._subjects:
             state = self._state[subject]

@@ -59,6 +59,30 @@ def test_healthy_after_recent_message_with_fresh_payload():
     assert reason == "no silence, staleness, or integrity issues"
 
 
+def test_naive_payload_timestamp_is_normalized_before_staleness_check():
+    clock = _Clock(datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC))
+    ev = _make(clock)
+    ev.record_message(SUBJECT, payload_timestamp=clock().replace(tzinfo=None))
+
+    verdict, reason = ev.current_sample()
+
+    assert verdict == "healthy"
+    assert reason == "no silence, staleness, or integrity issues"
+
+
+def test_naive_clock_is_normalized_before_integrity_window_checks():
+    clock = _Clock(datetime(2026, 5, 21, 12, 0, 0))
+    ev = _make(clock, integrity_failure_budget=1)
+    ev.record_message(SUBJECT, payload_timestamp=clock())
+    ev.record_parse_failure(SUBJECT)
+    ev.record_parse_failure(SUBJECT)
+
+    verdict, reason = ev.current_sample()
+
+    assert verdict == "unhealthy"
+    assert "parse failures" in reason
+
+
 def test_silence_unhealthy_past_threshold():
     clock = _Clock(datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC))
     ev = _make(clock)
