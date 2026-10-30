@@ -31,6 +31,7 @@ def test_market_data_event_from_nats_message():
     assert event.event_type == EventType.TRADE
     assert event.symbol == "BTCUSDT"
     assert isinstance(event.timestamp, datetime)
+    assert event.timestamp.tzinfo is UTC
     assert event.data == msg_data
 
     # Test 24hrminiticker

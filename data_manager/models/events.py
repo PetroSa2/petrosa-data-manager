@@ -115,7 +115,7 @@ class MarketDataEvent(BaseModel):
             "E", actual_data.get("T", actual_data.get("t", 0))
         )
         if isinstance(timestamp_ms, int) and timestamp_ms > 0:
-            timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0)
+            timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=UTC)
         else:
             timestamp = datetime.now(UTC)
 
