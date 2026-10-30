@@ -1042,7 +1042,6 @@ class MongoDBAdapter(BaseAdapter):
             elif collection == "config_rate_limits":
                 indexes = [
                     IndexModel([("changed_by", ASCENDING), ("timestamp", DESCENDING)]),
-                    IndexModel([("timestamp", ASCENDING)]),
                 ]
             elif collection == "funding_rates":
                 indexes = [
@@ -1106,7 +1105,11 @@ class MongoDBAdapter(BaseAdapter):
                 ttl_key = {ttl_policy.field: ASCENDING}
                 ttl_options: dict[str, Any] = {
                     "expireAfterSeconds": ttl_policy.seconds,
-                    "name": "application_ttl",
+                    "name": (
+                        "timestamp_ttl_1h"
+                        if collection == "config_rate_limits"
+                        else "application_ttl"
+                    ),
                 }
                 if ttl_policy.partial_filter_expression:
                     ttl_options["partialFilterExpression"] = (
