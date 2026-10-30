@@ -299,8 +299,8 @@ def _workload(
     backend: str,
     settings: Settings,
     progress: Callable[[int], None] | None = None,
-) -> Callable[[Any], None]:
-    def run(connection: Any) -> None:
+) -> Callable[[Any], int]:
+    def run(connection: Any) -> int:
         if name == "bulk_ingest":
             for offset in range(0, len(rows), settings.batch_size):
                 batch = rows[offset : offset + settings.batch_size]
@@ -315,39 +315,48 @@ def _workload(
                 )
                 if progress:
                     progress(min(offset + len(batch), len(rows)))
+            return len(rows)
         elif name == "batched_upsert":
             for offset in range(
                 0, min(settings.batch_size, len(rows)), settings.batch_size
             ):
                 for row in rows[offset : offset + settings.batch_size]:
                     _upsert(connection, table, row, backend)
+            return min(settings.batch_size, len(rows))
         elif name == "point_lookup":
             connection.execute(
                 select(table).where(table.c.row_key == rows[0]["row_key"])
             ).first()
+            return 1
         elif name == "time_range_lookup":
-            connection.execute(
+            result = connection.execute(
                 select(table).where(
+                    table.c.symbol == rows[0]["symbol"],
+                    table.c.timeframe == rows[0]["timeframe"],
                     table.c.event_time.between(
                         rows[0]["event_time"], rows[-1]["event_time"]
-                    )
+                    ),
                 )
             ).all()
+            return len(result)
         elif name == "latest_per_symbol_lookup":
             connection.execute(
                 select(table.c.symbol, func.max(table.c.event_time)).group_by(
                     table.c.symbol
                 )
             ).all()
+            return len(rows)
         elif name == "aggregate_statistical_query":
             connection.execute(
                 select(
                     func.count(), func.avg(table.c.price), func.sum(table.c.quantity)
                 )
             ).one()
+            return 1
         elif name == "bounded_backfill_replay":
             for row in rows[: min(25, len(rows))]:
                 _upsert(connection, table, row, backend)
+            return min(25, len(rows))
         else:
             raise ValueError(f"unknown serial workload: {name}")
 
@@ -375,25 +384,42 @@ def measure(
     print(f"PROGRESS {backend} {name} rows=0 elapsed=0.0s")
     operation = _workload(table, name, rows, backend, settings, report)
 
-    def execute_phase() -> None:
+    rows_returned = None
+
+    def execute_phase() -> int:
         started = time.perf_counter()
         with engine.begin() as connection:
             _set_statement_timeout(connection, backend, settings.statement_timeout_ms)
-            operation(connection)
+            completed = operation(connection)
         if time.perf_counter() - started > settings.phase_budget_seconds:
             raise TimeoutError(f"{backend} {name} exceeded phase budget")
+        return completed
 
     samples: list[float] = []
     errors = 0
+    completed_operations = 0
+    status = "ok"
+    error_class = None
     if name not in {"concurrent_reads", "concurrent_writes"}:
         for _ in range(settings.warmups):
-            execute_phase()
+            try:
+                execute_phase()
+            except Exception as error:
+                status = "timeout" if isinstance(error, TimeoutError) else "error"
+                error_class = type(error).__name__
+                errors += 1
+                break
         for _ in range(settings.repetitions):
             started = time.perf_counter()
             try:
-                execute_phase()
-            except Exception:
+                phase_completed = execute_phase()
+                completed_operations += 1
+                if name == "time_range_lookup":
+                    rows_returned = phase_completed
+            except Exception as error:
                 errors += 1
+                status = "timeout" if isinstance(error, TimeoutError) else "error"
+                error_class = type(error).__name__
             samples.append((time.perf_counter() - started) * 1000)
     else:
         samples = []
@@ -407,20 +433,30 @@ def measure(
             samples.extend(
                 future.result() for future in futures if future.exception() is None
             )
+            completed_operations = len(samples)
+            if errors:
+                status = "error"
+                error_class = "WorkloadError"
         elapsed = (time.perf_counter() - started) * 1000
         throughput = settings.concurrency / max(elapsed / 1000, 0.000001)
     if name not in {"concurrent_reads", "concurrent_writes"}:
         throughput = settings.repetitions / max(sum(samples) / 1000, 0.000001)
     elapsed = time.perf_counter() - started_phase
     print(f"PROGRESS {backend} {name} rows={len(rows)} elapsed={elapsed:.1f}s")
-    return {
+    result = {
         "workload": name,
+        "status": status,
+        "error_class": error_class,
+        "completed_operations": completed_operations,
+        "rows_returned": rows_returned,
+        "elapsed_ms": round(elapsed * 1000, 3),
         "p50_ms": round(statistics.median(samples), 3),
         "p95_ms": round(sorted(samples)[max(0, int(len(samples) * 0.95) - 1)], 3),
         "p99_ms": round(sorted(samples)[max(0, int(len(samples) * 0.99) - 1)], 3),
         "throughput_ops_s": round(throughput, 3),
         "errors": errors,
     }
+    return result
 
 
 def measure_one(
@@ -453,6 +489,29 @@ def _set_statement_timeout(connection: Any, backend: str, timeout_ms: int) -> No
         connection.execute(text(f"SET SESSION max_execution_time = {timeout_ms}"))
 
 
+def measure_rtt(engine: Any, settings: Settings) -> dict[str, Any]:
+    samples: list[float] = []
+    error_class = None
+    for _ in range(50):
+        started = time.perf_counter()
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("SELECT 1"))
+        except Exception as error:
+            error_class = type(error).__name__
+            break
+        samples.append((time.perf_counter() - started) * 1000)
+    if not samples:
+        return {"status": "error", "error_class": error_class, "samples": 0}
+    ordered = sorted(samples)
+    return {
+        "status": "ok",
+        "samples": len(samples),
+        "p50_ms": round(statistics.median(samples), 3),
+        "p95_ms": round(ordered[max(0, int(len(ordered) * 0.95) - 1)], 3),
+    }
+
+
 def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
     validate_target(url, backend, mysql_table_prefix=settings.mysql_table_prefix)
     engine = create_engine(_engine_url(url, backend), **_engine_kwargs(backend))
@@ -466,14 +525,23 @@ def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
     _, tables = create_schema(engine, backend, settings)
     try:
         rows = synthetic_rows(settings)
-        results = [
-            {
-                "table": table_name,
-                **measure(engine, table, name, rows, backend, settings),
-            }
-            for table_name, table in tables.items()
-            for name in WORKLOADS
-        ]
+        results = []
+        for name in WORKLOADS:
+            for table_name, table in tables.items():
+                try:
+                    measured = measure(engine, table, name, rows, backend, settings)
+                except Exception as error:
+                    measured = {
+                        "workload": name,
+                        "status": "timeout"
+                        if isinstance(error, TimeoutError)
+                        else "error",
+                        "error_class": type(error).__name__,
+                        "completed_operations": 0,
+                        "elapsed_ms": 0.0,
+                        "errors": 1,
+                    }
+                results.append({"table": table_name, **measured})
         return {
             "backend": backend,
             "target": redact_url(url),
@@ -484,6 +552,7 @@ def run_target(url: str, backend: str, settings: Settings) -> dict[str, Any]:
                 "synthetic": True,
             },
             "parameters": settings.__dict__,
+            "rtt_baseline": measure_rtt(engine, settings),
             "results": results,
             "pool": {
                 "size": getattr(engine.pool, "size", lambda: None)(),
@@ -532,11 +601,26 @@ def main() -> None:
         if not all(results):
             raise SystemExit(1)
         return
+    targets = []
+    for backend, url in urls.items():
+        try:
+            targets.append(run_target(url, backend, settings))
+        except Exception as error:
+            targets.append(
+                {
+                    "backend": backend,
+                    "target": redact_url(url),
+                    "schema": SCHEMA,
+                    "results": [],
+                    "status": "timeout" if isinstance(error, TimeoutError) else "error",
+                    "error_class": type(error).__name__,
+                    "completed_operations": 0,
+                    "elapsed_ms": 0.0,
+                }
+            )
     result = {
         "started_at": datetime.now(UTC).isoformat(),
-        "targets": [
-            run_target(url, backend, settings) for backend, url in urls.items()
-        ],
+        "targets": targets,
     }
     output = json.dumps(result)
     if args.output:

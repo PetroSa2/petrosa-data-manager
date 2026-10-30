@@ -314,3 +314,52 @@ def test_mysql_setup_workload_and_cleanup_only_use_prefixed_tables():
         "bench775_positions",
         "bench775_execution_events",
     }
+
+
+def test_time_range_lookup_filters_symbol_and_timeframe_and_reports_rows():
+    settings = Settings(rows=4, warmups=1, repetitions=1)
+    engine = create_engine("sqlite://")
+    _, tables = create_schema(engine, "mysql", settings)
+    statements = []
+    from sqlalchemy import event
+
+    event.listen(
+        engine, "before_cursor_execute", lambda *args: statements.append(args[2])
+    )
+    result = measure(
+        engine,
+        tables["klines"],
+        "time_range_lookup",
+        synthetic_rows(settings),
+        "mysql",
+        settings,
+    )
+    assert result["status"] == "ok"
+    assert result["completed_operations"] == 1
+    assert result["rows_returned"] == 1
+    assert any(
+        "symbol" in statement.lower() and "timeframe" in statement.lower()
+        for statement in statements
+    )
+
+
+def test_target_failure_is_recorded_and_later_target_runs(monkeypatch, capsys):
+    monkeypatch.setenv("BENCHMARK_POSTGRES_URL", "postgresql://x")
+    monkeypatch.setenv("BENCHMARK_MYSQL_URL", "mysql://x")
+    calls = []
+
+    def fake_run_target(url, backend, settings):
+        calls.append(backend)
+        if backend == "postgres":
+            raise TimeoutError("timed out")
+        return {"backend": backend, "rtt_baseline": {"status": "ok"}, "results": []}
+
+    monkeypatch.setattr(
+        "scripts.historic_storage_benchmark.run_target", fake_run_target
+    )
+    monkeypatch.setattr("sys.argv", ["benchmark"])
+    main()
+    output = capsys.readouterr().out
+    assert calls == ["postgres", "mysql"]
+    assert '"status": "timeout"' in output
+    assert '"backend": "mysql"' in output
