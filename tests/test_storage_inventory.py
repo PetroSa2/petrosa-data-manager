@@ -931,6 +931,26 @@ async def test_mongodb_adapter_is_timeseries_reads_collection_spec():
 
 
 @pytest.mark.asyncio
+async def test_mongodb_adapter_is_timeseries_awaits_async_collection_cursor():
+    from data_manager.db.mongodb_adapter import MongoDBAdapter
+
+    adapter = MongoDBAdapter.__new__(MongoDBAdapter)
+    adapter._connected = True
+
+    class _FakeCursor:
+        async def to_list(self, length):
+            return [{"name": "signals", "options": {}}]
+
+    fake_db = MagicMock()
+    fake_db.list_collections = AsyncMock(return_value=_FakeCursor())
+    adapter.client = MagicMock()
+    adapter.client.__getitem__.return_value = fake_db
+
+    assert await adapter.is_timeseries("petrosa", "signals") is False
+    fake_db.list_collections.assert_awaited_once_with(filter={"name": "signals"})
+
+
+@pytest.mark.asyncio
 async def test_mongodb_adapter_newest_doc_age_returns_datetime_from_first_hit():
     from data_manager.db.mongodb_adapter import MongoDBAdapter
 

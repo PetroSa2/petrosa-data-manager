@@ -1373,9 +1373,10 @@ class MongoDBAdapter(BaseAdapter):
 
         try:
             target_db = self.client[db_name]
-            spec = await target_db.list_collections(
-                filter={"name": collection}
-            ).to_list(length=1)
+            cursor = target_db.list_collections(filter={"name": collection})
+            if inspect.isawaitable(cursor):
+                cursor = await cursor
+            spec = await cursor.to_list(length=1)
         except PyMongoError as exc:
             raise DatabaseError(
                 f"Failed to read collection spec for {db_name}.{collection}: {exc}"
