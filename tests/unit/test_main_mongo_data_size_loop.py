@@ -8,6 +8,7 @@ refresh iteration, and the defense-in-depth exception path.
 
 from __future__ import annotations
 
+import asyncio
 import types
 from unittest.mock import AsyncMock
 
@@ -117,3 +118,29 @@ async def test_loop_isolates_unexpected_refresh_error(monkeypatch):
 
     # Must not raise.
     await app._run_mongo_data_size_loop()
+
+
+def test_start_mongo_data_size_loop_is_disabled(monkeypatch):
+    monkeypatch.setattr(constants, "ENABLE_MONGO_DATA_SIZE_GAUGE", False)
+    app = DataManagerApp()
+
+    app._start_mongo_data_size_loop()
+
+    assert app.mongo_data_size_task is None
+
+
+@pytest.mark.asyncio
+async def test_start_mongo_data_size_loop_is_idempotent(monkeypatch):
+    monkeypatch.setattr(constants, "ENABLE_MONGO_DATA_SIZE_GAUGE", True)
+    app = DataManagerApp()
+    app.running = False
+
+    app._start_mongo_data_size_loop()
+    first_task = app.mongo_data_size_task
+    app._start_mongo_data_size_loop()
+
+    assert first_task is not None
+    assert app.mongo_data_size_task is first_task
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
