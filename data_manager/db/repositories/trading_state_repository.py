@@ -241,3 +241,19 @@ class TradingStateRepository(BaseRepository):
             update,
         )
         return quarantined
+
+    async def release_quarantine(self, table: str, document: dict[str, Any]) -> None:
+        key = "date" if table == "daily_pnl" else "position_id"
+        await self._collection(table).update_one(
+            {
+                key: document[key],
+                "_mysql_copy_version": document["_mysql_copy_version"],
+            },
+            {
+                "$set": {
+                    "_mysql_copy_quarantined": False,
+                    "_mysql_copy_next_attempt_at": datetime.now(UTC)
+                    + timedelta(seconds=300),
+                }
+            },
+        )

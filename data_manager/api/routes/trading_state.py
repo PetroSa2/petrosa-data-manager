@@ -147,19 +147,23 @@ async def _replay_mysql_copies() -> None:
             else:
                 quarantined = await repo.defer_copy(table, document)
                 if quarantined:
-                    _copy_state["quarantined"] = _copy_state.get("quarantined", 0) + 1
-                    TRADING_STATE_RECOVERY_EVENTS.add(
-                        1, {"outcome": "quarantined", "operation": table}
-                    )
-                    logger.error(
-                        "trading_state_mysql_copy_quarantined",
-                        extra={"operation": table, "reason": "retry_limit"},
-                    )
                     manager = api_module.db_manager
                     adapter = (
                         getattr(manager, "mysql_adapter", None) if manager else None
                     )
-                    _dead_letter(adapter, table, document, "quarantined")
+                    if _dead_letter(adapter, table, document, "quarantined"):
+                        _copy_state["quarantined"] = (
+                            _copy_state.get("quarantined", 0) + 1
+                        )
+                        TRADING_STATE_RECOVERY_EVENTS.add(
+                            1, {"outcome": "quarantined", "operation": table}
+                        )
+                        logger.error(
+                            "trading_state_mysql_copy_quarantined",
+                            extra={"operation": table, "reason": "retry_limit"},
+                        )
+                    else:
+                        await repo.release_quarantine(table, document)
 
 
 async def _run_mysql_copy() -> None:
@@ -191,7 +195,7 @@ def _record_failure(operation: str, reason: str) -> None:
 
 def _dead_letter(
     adapter: Any, operation: str, document: dict[str, Any], reason: str
-) -> None:
+) -> bool:
     payload = {
         "operation": operation,
         "reason": reason,
@@ -216,6 +220,7 @@ def _dead_letter(
             raise RuntimeError("dead-letter persistence not confirmed")
         _copy_state["dead_lettered"] += 1
         TRADING_STATE_DEAD_LETTER_COUNT.set(_copy_state["dead_lettered"])
+        return True
     except Exception as exc:
         _copy_state["fallback_failed"] += 1
         _copy_state["last_failure_reason"] = type(exc).__name__
@@ -234,6 +239,7 @@ def _dead_letter(
                 "error_message": str(exc)[:200],
             },
         )
+        return False
 
 
 def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
