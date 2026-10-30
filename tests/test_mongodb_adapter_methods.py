@@ -987,6 +987,26 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_equivalent_legacy_index_name_is_reused(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(
+            return_value={
+                "idx_timestamp": {"key": {"timestamp": 1}},
+            }
+        )
+        coll.create_indexes = AsyncMock()
+        coll.drop_index = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("trading_configs_audit")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        assert not any(
+            index.document.get("key") == {"timestamp": 1} for index in indexes
+        )
+        coll.drop_index.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_config_rate_limits_replaces_conflicting_ttl_without_duplicate_key(
         self, adapter
     ):
