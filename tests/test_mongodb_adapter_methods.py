@@ -897,6 +897,46 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_ttl_coverage_checks_each_application_database(self, adapter):
+        def database_with_verified_ttl():
+            coll = MagicMock()
+            coll.index_information = AsyncMock(
+                return_value={
+                    "application_ttl": {
+                        "key": {"_ttl_expires_at": 1},
+                        "expireAfterSeconds": 30 * 86400,
+                        "partialFilterExpression": {
+                            "_ttl_expires_at": {"$exists": True}
+                        },
+                    }
+                }
+            )
+            database = MagicMock()
+            database.list_collection_names = AsyncMock(return_value=["positions"])
+            database.__getitem__ = MagicMock(return_value=coll)
+            return database
+
+        first_database = database_with_verified_ttl()
+        second_database = database_with_verified_ttl()
+        adapter.client.list_database_names = AsyncMock(
+            return_value=["petrosa", "binance", "admin", "config", "local"]
+        )
+        adapter.client.__getitem__ = MagicMock(
+            side_effect={
+                "petrosa": first_database,
+                "binance": second_database,
+            }.__getitem__
+        )
+        adapter.ensure_indexes = AsyncMock()
+
+        await adapter.ensure_ttl_coverage()
+
+        assert adapter.ensure_indexes.await_args_list == [
+            (("positions",), {"database": first_database}),
+            (("positions",), {"database": second_database}),
+        ]
+
+    @pytest.mark.asyncio
     async def test_existing_ttl_index_is_reused_without_option_conflict(self, adapter):
         coll = MagicMock()
         coll.index_information = AsyncMock(
