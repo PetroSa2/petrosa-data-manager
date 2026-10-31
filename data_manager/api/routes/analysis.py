@@ -99,6 +99,9 @@ _EXECUTION_EVENTS_IN_FLIGHT: dict[
 _EXCHANGE_HISTORY_CACHE: (
     tuple[int, tuple[int | None, int | None, int], dict[str, Any]] | None
 ) = None
+_EXCHANGE_HISTORY_IN_FLIGHT: dict[
+    int, asyncio.Task[tuple[tuple[int | None, int | None, int], dict[str, Any]]]
+] = {}
 _LEG_REPLAY_CACHE: dict[
     tuple[str, tuple[int | None, str | None, int] | None, str], dict[str, Any]
 ] = {}
@@ -484,29 +487,48 @@ async def _load_synthetic_exits(
         return [], None
     repo = LedgerRepository(mysql, mongodb)
     history_started = monotonic()
-    version_reader = getattr(repo, "round_exchange_history_version", None)
-    if version_reader is None:
-        history = await _run_bounded_heavy(repo.round_exchange_history)
-        history_version = (
-            history.get("cut_over_ms"),
-            max(
-                (snapshot.get("as_of_ms") for snapshot in history.get("snapshots", [])),
-                default=None,
-            ),
-            len(history.get("snapshots", [])),
-        )
-    else:
-        history_version = await _run_bounded_heavy(version_reader)
-        global _EXCHANGE_HISTORY_CACHE
-        mysql_source_id = id(mysql)
-        if _EXCHANGE_HISTORY_CACHE is not None and _EXCHANGE_HISTORY_CACHE[:2] == (
-            mysql_source_id,
-            history_version,
-        ):
-            history = _EXCHANGE_HISTORY_CACHE[2]
-        else:
-            history = await _run_bounded_heavy(repo.round_exchange_history)
+    mysql_source_id = id(mysql)
+    global _EXCHANGE_HISTORY_CACHE, _EXCHANGE_HISTORY_IN_FLIGHT
+    history_task = _EXCHANGE_HISTORY_IN_FLIGHT.get(mysql_source_id)
+    if history_task is None:
+
+        async def read_history() -> tuple[
+            tuple[int | None, int | None, int], dict[str, Any]
+        ]:
+            global _EXCHANGE_HISTORY_CACHE
+            version_reader = getattr(repo, "round_exchange_history_version", None)
+            if version_reader is None:
+                history = await _run_bounded_heavy(repo.round_exchange_history)
+                history_version = (
+                    history.get("cut_over_ms"),
+                    max(
+                        (
+                            snapshot.get("as_of_ms")
+                            for snapshot in history.get("snapshots", [])
+                        ),
+                        default=None,
+                    ),
+                    len(history.get("snapshots", [])),
+                )
+            else:
+                history_version = await _run_bounded_heavy(version_reader)
+                cached = _EXCHANGE_HISTORY_CACHE
+                if cached is not None and cached[:2] == (
+                    mysql_source_id,
+                    history_version,
+                ):
+                    return history_version, cached[2]
+                history = await _run_bounded_heavy(repo.round_exchange_history)
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
+            return history_version, history
+
+        history_task = asyncio.create_task(read_history())
+        _EXCHANGE_HISTORY_IN_FLIGHT[mysql_source_id] = history_task
+    try:
+        _history_version, history = await asyncio.shield(history_task)
+    finally:
+        if _EXCHANGE_HISTORY_IN_FLIGHT.get(mysql_source_id) is history_task:
+            _EXCHANGE_HISTORY_IN_FLIGHT.pop(mysql_source_id, None)
     record_report_stage(
         "performance", "exchange_history", monotonic() - history_started
     )

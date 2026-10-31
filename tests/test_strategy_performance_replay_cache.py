@@ -99,6 +99,7 @@ def replay_environment(monkeypatch):
     analysis._EXECUTION_EVENTS_CACHE = None
     analysis._EXECUTION_EVENTS_IN_FLIGHT.clear()
     analysis._EXCHANGE_HISTORY_CACHE = None
+    analysis._EXCHANGE_HISTORY_IN_FLIGHT.clear()
     analysis._LEG_REPLAY_CACHE.clear()
     analysis._BASE_PERFORMANCE_CACHE = None
     analysis._BASE_PERFORMANCE_IN_FLIGHT.clear()
@@ -108,6 +109,7 @@ def replay_environment(monkeypatch):
     analysis._EXECUTION_EVENTS_CACHE = None
     analysis._EXECUTION_EVENTS_IN_FLIGHT.clear()
     analysis._EXCHANGE_HISTORY_CACHE = None
+    analysis._EXCHANGE_HISTORY_IN_FLIGHT.clear()
     analysis._LEG_REPLAY_CACHE.clear()
     analysis._BASE_PERFORMANCE_CACHE = None
     analysis._BASE_PERFORMANCE_IN_FLIGHT.clear()
@@ -134,6 +136,20 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
     fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled"})
     await analysis._load_synthetic_exits("alpha")
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_concurrent_strategy_reads_share_one_exchange_history_query(
+    replay_environment,
+):
+    _history, _fills, _calls, history_reads = replay_environment
+
+    await asyncio.gather(
+        analysis._load_synthetic_exits("alpha"),
+        analysis._load_synthetic_exits("beta"),
+    )
+
+    assert len(history_reads) == 1
 
 
 @pytest.mark.asyncio
