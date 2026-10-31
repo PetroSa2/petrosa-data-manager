@@ -639,49 +639,39 @@ class LedgerRepository(BaseRepository):
         }
 
     def round_exchange_history(self) -> dict[str, Any]:
-        """The exchange position snapshot series after the cut-over (petrosa-data-manager#603).
+        """Read the exchange position snapshot series after the cut-over.
 
         The cut-over is the first stored exchange snapshot: before it there is no exchange history, so a
-        synthetic close there is excluded rather than mis-priced. Read-only.
+        synthetic close there is excluded rather than mis-priced. The tagged union keeps the three
+        logical reads in one MySQL round trip while preserving the existing response shape.
         """
-        earliest = (
-            self._run(
-                "SELECT MIN(as_of_ms) AS earliest FROM ledger_exchange_positions_snapshot"
-            )
-            .mappings()
-            .first()
-        )
-        cut_over_ms = (
-            int(earliest["earliest"])
-            if earliest and earliest["earliest"] is not None
-            else None
-        )
-        if cut_over_ms is None:
-            return {"cut_over_ms": None, "snapshots": []}
-        snapshot_rows = (
-            self._run(
-                "SELECT as_of_ms FROM ledger_exchange_positions_snapshot "
-                "WHERE as_of_ms>=:cut_over ORDER BY as_of_ms",
-                {"cut_over": cut_over_ms},
-            )
-            .mappings()
-            .all()
-        )
         rows = (
             self._run(
-                "SELECT as_of_ms, symbol, position_side, quantity, mark_price "
-                "FROM ledger_exchange_positions WHERE as_of_ms>=:cut_over "
-                "ORDER BY as_of_ms",
-                {"cut_over": cut_over_ms},
+                "SELECT 'snapshot' AS row_kind, as_of_ms, NULL AS symbol, "
+                "NULL AS position_side, NULL AS quantity, NULL AS mark_price "
+                "FROM ledger_exchange_positions_snapshot "
+                "UNION ALL "
+                "SELECT 'position' AS row_kind, as_of_ms, symbol, position_side, "
+                "quantity, mark_price FROM ledger_exchange_positions "
+                "WHERE as_of_ms >= ("
+                "SELECT MIN(as_of_ms) FROM ledger_exchange_positions_snapshot"
+                ") ORDER BY as_of_ms"
             )
             .mappings()
             .all()
         )
+        snapshot_rows = [row for row in rows if row["row_kind"] == "snapshot"]
+        if not snapshot_rows:
+            return {"cut_over_ms": None, "snapshots": []}
+        cut_over_ms = min(int(row["as_of_ms"]) for row in snapshot_rows)
         snapshots: dict[int, dict[str, Any]] = {
             int(row["as_of_ms"]): {"as_of_ms": int(row["as_of_ms"]), "rows": []}
             for row in snapshot_rows
+            if row["as_of_ms"] is not None
         }
         for row in rows:
+            if row["row_kind"] != "position":
+                continue
             as_of_ms = int(row["as_of_ms"])
             snapshot = snapshots.setdefault(
                 as_of_ms, {"as_of_ms": as_of_ms, "rows": []}

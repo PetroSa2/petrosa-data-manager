@@ -2019,16 +2019,17 @@ def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
 
     repo = LedgerRepository(object(), None)
 
+    calls = []
+
     def run(statement, _params=None):
-        if "MIN(as_of_ms)" in statement:
-            return Result([{"earliest": 1_000}])
-        if "FROM ledger_exchange_positions_snapshot" in statement:
-            return Result(
-                [{"as_of_ms": 1_000}, {"as_of_ms": 2_000}, {"as_of_ms": 3_000}]
-            )
+        calls.append(statement)
         return Result(
             [
+                {"row_kind": "snapshot", "as_of_ms": 1_000},
+                {"row_kind": "snapshot", "as_of_ms": 2_000},
+                {"row_kind": "snapshot", "as_of_ms": 3_000},
                 {
+                    "row_kind": "position",
                     "as_of_ms": 1_000,
                     "symbol": "BTCUSDT",
                     "position_side": "LONG",
@@ -2036,6 +2037,7 @@ def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
                     "mark_price": "100",
                 },
                 {
+                    "row_kind": "position",
                     "as_of_ms": 2_000,
                     "symbol": "BTCUSDT",
                     "position_side": "LONG",
@@ -2047,6 +2049,7 @@ def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
 
     repo._run = run
     history = repo.round_exchange_history()
+    assert len(calls) == 1
     assert history["cut_over_ms"] == 1_000
     assert [s["as_of_ms"] for s in history["snapshots"]] == [1_000, 2_000, 3_000]
     assert history["snapshots"][1]["rows"][0]["mark_price"] == "110"
@@ -2071,19 +2074,18 @@ def test_round_exchange_history_keeps_an_empty_snapshot_timestamp():
     repo = LedgerRepository(object(), None)
 
     def run(statement, _params=None):
-        if "MIN(as_of_ms)" in statement:
-            return Result([{"earliest": 1_000}])
-        if "FROM ledger_exchange_positions_snapshot" in statement:
-            return Result([{"as_of_ms": 1_000}, {"as_of_ms": 2_000}])
         return Result(
             [
+                {"row_kind": "snapshot", "as_of_ms": 1_000},
+                {"row_kind": "snapshot", "as_of_ms": 2_000},
                 {
+                    "row_kind": "position",
                     "as_of_ms": 1_000,
                     "symbol": "BTCUSDT",
                     "position_side": "LONG",
                     "quantity": "1",
                     "mark_price": "100",
-                }
+                },
             ]
         )
 
@@ -2109,8 +2111,15 @@ def test_round_exchange_history_without_snapshots_is_empty():
             return self.rows
 
     repo = LedgerRepository(object(), None)
-    repo._run = lambda statement, _params=None: Result([{"earliest": None}])
+    calls = []
+
+    def run(statement, _params=None):
+        calls.append(statement)
+        return Result([])
+
+    repo._run = run
     assert repo.round_exchange_history() == {"cut_over_ms": None, "snapshots": []}
+    assert len(calls) == 1
 
 
 def test_fuzz_synthetic_exits_always_leave_the_book_accounted():
