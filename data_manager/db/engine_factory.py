@@ -40,6 +40,11 @@ connections_open = Gauge(
     "data_manager_mysql_connections_open", "Open MySQL connections", ["role"]
 )
 pool_cap = Gauge("data_manager_mysql_pool_cap", "Configured MySQL pool cap", ["role"])
+pool_peak_in_use = Gauge(
+    "data_manager_mysql_pool_peak_in_use",
+    "Peak MySQL connections checked out since engine creation",
+    ["role"],
+)
 pool_in_use_at_checkout = Histogram(
     "data_manager_mysql_pool_in_use_at_checkout",
     "Pool usage observed at checkout",
@@ -261,6 +266,7 @@ def build_engine(
             current = state["in_use"]
             state["in_use"] += 1
             state["peak_in_use"] = max(state["peak_in_use"], state["in_use"])
+            pool_peak_in_use.labels(role=role).set(state["peak_in_use"])
         pool_in_use_at_checkout.labels(role=role).observe(current)
         pool_in_use.labels(role=role).inc()
 
