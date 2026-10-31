@@ -445,6 +445,9 @@ class MySQLAdapter(BaseAdapter):
             Index(
                 "idx_execution_events_decision_timestamp", "decision_id", "timestamp"
             ),
+            Index(
+                "idx_execution_events_strategy_timestamp", "strategy_id", "timestamp"
+            ),
             **event_table_args,
         )
         self.tables["pnl_events"] = Table(
@@ -507,6 +510,12 @@ class MySQLAdapter(BaseAdapter):
         # Create all tables
         if self.engine is not None:
             self.metadata.create_all(self.engine)
+            strategy_index = next(
+                index
+                for index in self.tables["execution_events"].indexes
+                if index.name == "idx_execution_events_strategy_timestamp"
+            )
+            strategy_index.create(self.engine, checkfirst=True)
             logger.info("MySQL tables created/verified")
 
     def _create_klines_table(
