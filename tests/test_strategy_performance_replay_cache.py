@@ -9,6 +9,7 @@ import pytest
 import data_manager.api.app as api_module
 import data_manager.api.routes.analysis as analysis
 from data_manager.db.repositories.ledger_repository import LedgerRepository
+from data_manager.services.pnl_calculator import PnlBreakdown
 
 
 class _Cursor:
@@ -224,6 +225,65 @@ async def test_synthetic_exits_reuse_execution_events_read(replay_environment):
         analysis._load_execution_events = original_load
 
     assert synthetic_rows
+
+
+@pytest.mark.asyncio
+async def test_performance_passes_shared_events_to_synthetic_exits(
+    replay_environment, monkeypatch
+):
+    _history, _fills, _calls, _history_reads = replay_environment
+    rows = [{"strategy_id": "alpha", "event_type": "filled"}]
+    mysql = SimpleNamespace(query_range=lambda *_args, **_kwargs: [])
+    mongodb = api_module.db_manager.mongodb_adapter
+    api_module.db_manager = SimpleNamespace(
+        mysql_adapter=mysql, mongodb_adapter=mongodb
+    )
+    execution_loader = AsyncMock(return_value=(rows, "fill-1"))
+    synthetic_loader = AsyncMock(return_value=([], None))
+    monkeypatch.setattr(analysis, "_load_execution_events", execution_loader)
+    monkeypatch.setattr(analysis, "_load_synthetic_exits", synthetic_loader)
+    monkeypatch.setattr(
+        analysis,
+        "_orphaned_lots_from_the_cache",
+        AsyncMock(return_value={"status": "enabled", "entries": []}),
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_base_performance",
+        AsyncMock(
+            return_value={
+                "alpha": {
+                    "outcome": analysis.outcome_stats([], known_book=True),
+                    "breakdown": PnlBreakdown(realized=0.0, unrealized=0.0),
+                },
+                "__legacy_exit_side_mapped__": 0,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_timed_leg_replay",
+        AsyncMock(
+            return_value={
+                "complete": False,
+                "outcomes": [],
+                "realized": 0.0,
+                "held_unrealized": 0.0,
+                "unmatched_quantity": 0.0,
+                "unmatched_lots": 0,
+            }
+        ),
+    )
+
+    try:
+        await analysis.get_strategy_performance("alpha")
+    finally:
+        api_module.db_manager = None
+
+    execution_loader.assert_awaited_once_with(mongodb, None)
+    synthetic_loader.assert_awaited_once_with(
+        "alpha", execution_events=rows, latest_fill_id="fill-1"
+    )
 
 
 @pytest.mark.asyncio
