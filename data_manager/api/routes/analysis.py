@@ -469,6 +469,9 @@ async def _orphaned_lots_from_the_cache(strategy_id: str) -> dict[str, Any]:
 
 async def _load_synthetic_exits(
     strategy_id: str,
+    *,
+    execution_events: list[dict[str, Any]] | None = None,
+    latest_fill_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     """Return one strategy's rows from a shared replay of the cut-over-to-latest window.
 
@@ -540,7 +543,10 @@ async def _load_synthetic_exits(
     cut_over_ms = history.get("cut_over_ms")
     if not history.get("snapshots"):
         return [], cut_over_ms
-    all_fills, latest_fill_id = await _load_execution_events(mongodb)
+    if execution_events is None:
+        all_fills, latest_fill_id = await _load_execution_events(mongodb)
+    else:
+        all_fills = execution_events
     logger.info(
         "performance: stage=mongo_reads execution_events=%d duration=versioned",
         len(all_fills),
@@ -1094,9 +1100,15 @@ async def get_strategy_performance(strategy_id: str):
             return _unavailable_performance(strategy_id)
 
         source = mysql if mysql is not None else mongodb
+        orphan_mode = _round_overlay_mode()
         stage = "execution_events_read"
         try:
-            rows, latest_fill_id = await _load_execution_events(mongodb, strategy_id)
+            rows, latest_fill_id = await _load_execution_events(
+                mongodb,
+                None
+                if orphan_mode != "off" and mysql is not None and mongodb is not None
+                else strategy_id,
+            )
         except asyncio.CancelledError:
             raise
         except _AnalyticsDependencyTimeout as exc:
@@ -1143,7 +1155,6 @@ async def get_strategy_performance(strategy_id: str):
         # The orphan overlay of #577. off = unchanged. report = the orphaned amounts only (PnlCalculator figures
         # stay). apply = realized and unrealized both come from ONE leg-aware replay of these fills with the
         # orphaned lots left out of unrealized, so the trend total describes one book at one time.
-        orphan_mode = _round_overlay_mode()
         exposure = None
         leg_pnl = None
         leg_book = None
@@ -1158,7 +1169,11 @@ async def get_strategy_performance(strategy_id: str):
             synthetic_rows: list[dict[str, Any]] = []
             cut_over_ms: int | None = None
             try:
-                synthetic_rows, cut_over_ms = await _load_synthetic_exits(strategy_id)
+                synthetic_rows, cut_over_ms = await _load_synthetic_exits(
+                    strategy_id,
+                    execution_events=rows,
+                    latest_fill_id=latest_fill_id,
+                )
             except _AnalyticsDependencyTimeout:
                 logger.warning(
                     "performance: bounded dependency timeout stage=exchange_history "
