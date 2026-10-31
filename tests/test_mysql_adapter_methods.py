@@ -203,6 +203,10 @@ class TestGetTable:
             for index in execution.indexes
         )
         assert any(
+            index.name == "idx_execution_events_strategy_timestamp"
+            for index in execution.indexes
+        )
+        assert any(
             index.name == "idx_pnl_events_decision_timestamp" for index in pnl.indexes
         )
 
