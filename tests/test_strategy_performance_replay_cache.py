@@ -203,6 +203,30 @@ async def test_concurrent_strategy_reads_share_one_mongo_query(replay_environmen
 
 
 @pytest.mark.asyncio
+async def test_synthetic_exits_reuse_execution_events_read(replay_environment):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    mongodb = api_module.db_manager.mongodb_adapter
+    original_load = analysis._load_execution_events
+
+    async def fail_if_read_again(*_args, **_kwargs):
+        raise AssertionError("execution events should be reused")
+
+    analysis._load_execution_events = fail_if_read_again
+    try:
+        rows, latest_fill_id = await original_load(mongodb)
+        synthetic_rows, _ = await analysis._load_synthetic_exits(
+            "alpha",
+            execution_events=rows,
+            latest_fill_id=latest_fill_id,
+        )
+    finally:
+        analysis._load_execution_events = original_load
+
+    assert synthetic_rows
+
+
+@pytest.mark.asyncio
 async def test_concurrent_different_strategy_reads_stay_isolated(replay_environment):
     _history, fills, _calls, _history_reads = replay_environment
     fills[0]["strategy_id"] = "alpha"
