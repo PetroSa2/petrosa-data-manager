@@ -2054,6 +2054,11 @@ def test_round_exchange_history_groups_the_series_and_finds_the_cut_over():
     assert [s["as_of_ms"] for s in history["snapshots"]] == [1_000, 2_000, 3_000]
     assert history["snapshots"][1]["rows"][0]["mark_price"] == "110"
 
+    version, combined_history = repo.round_exchange_history_with_version()
+    assert len(calls) == 2
+    assert version == (1_000, 3_000, 3)
+    assert combined_history == history
+
 
 def test_round_exchange_history_keeps_an_empty_snapshot_timestamp():
     from data_manager.db.repositories.ledger_repository import LedgerRepository

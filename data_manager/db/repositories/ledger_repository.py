@@ -645,6 +645,13 @@ class LedgerRepository(BaseRepository):
         synthetic close there is excluded rather than mis-priced. The tagged union keeps the three
         logical reads in one MySQL round trip while preserving the existing response shape.
         """
+        _version, history = self.round_exchange_history_with_version()
+        return history
+
+    def round_exchange_history_with_version(
+        self,
+    ) -> tuple[tuple[int | None, int | None, int], dict[str, Any]]:
+        """Read exchange history and derive its cache identity in one MySQL round trip."""
         rows = (
             self._run(
                 "SELECT 'snapshot' AS row_kind, as_of_ms, NULL AS symbol, "
@@ -662,8 +669,11 @@ class LedgerRepository(BaseRepository):
         )
         snapshot_rows = [row for row in rows if row["row_kind"] == "snapshot"]
         if not snapshot_rows:
-            return {"cut_over_ms": None, "snapshots": []}
+            return (None, None, 0), {"cut_over_ms": None, "snapshots": []}
         cut_over_ms = min(int(row["as_of_ms"]) for row in snapshot_rows)
+        snapshot_times = [
+            int(row["as_of_ms"]) for row in snapshot_rows if row["as_of_ms"] is not None
+        ]
         snapshots: dict[int, dict[str, Any]] = {
             int(row["as_of_ms"]): {"as_of_ms": int(row["as_of_ms"]), "rows": []}
             for row in snapshot_rows
@@ -684,10 +694,13 @@ class LedgerRepository(BaseRepository):
                     "mark_price": row["mark_price"],
                 }
             )
-        return {
-            "cut_over_ms": cut_over_ms,
-            "snapshots": [snapshots[key] for key in sorted(snapshots)],
-        }
+        return (
+            (cut_over_ms, max(snapshot_times), len(set(snapshot_times))),
+            {
+                "cut_over_ms": cut_over_ms,
+                "snapshots": [snapshots[key] for key in sorted(snapshots)],
+            },
+        )
 
     def round_exchange_history_version(self) -> tuple[int | None, int | None, int]:
         """Return the snapshot identity used to reuse the exchange-history read."""
