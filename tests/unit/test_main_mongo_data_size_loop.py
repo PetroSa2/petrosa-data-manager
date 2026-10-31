@@ -46,7 +46,7 @@ async def test_loop_waits_for_adapter_then_refreshes(monkeypatch):
     monkeypatch.setattr(constants, "ENABLE_MONGO_DATA_SIZE_GAUGE", True)
     app = DataManagerApp()
     app.db_manager = None  # no adapter available
-    app.running = True
+    app.running = False
 
     adapter = types.SimpleNamespace(
         db_name="delayed_adapter_db",
@@ -59,7 +59,7 @@ async def test_loop_waits_for_adapter_then_refreshes(monkeypatch):
     actual_refresh = mdsg.refresh_mongo_data_size
 
     async def _refresh(_adapter, **_kwargs):
-        app.running = False
+        app._shutdown_event.set()
         return await actual_refresh(_adapter, **_kwargs)
 
     refresh_mock = AsyncMock(side_effect=_refresh)
@@ -78,15 +78,35 @@ async def test_loop_waits_for_adapter_then_refreshes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_loop_stops_while_waiting_when_shutdown_is_signaled(monkeypatch):
+    monkeypatch.setattr(constants, "ENABLE_MONGO_DATA_SIZE_GAUGE", True)
+    app = DataManagerApp()
+    app.running = False
+    app.db_manager = None
+
+    sleep_started = asyncio.Event()
+
+    async def _sleep(_interval):
+        sleep_started.set()
+        app._shutdown_event.set()
+
+    monkeypatch.setattr("data_manager.main.asyncio.sleep", _sleep)
+
+    await app._run_mongo_data_size_loop()
+
+    assert sleep_started.is_set()
+
+
+@pytest.mark.asyncio
 async def test_loop_runs_one_iteration_then_exits(monkeypatch):
     monkeypatch.setattr(constants, "ENABLE_MONGO_DATA_SIZE_GAUGE", True)
     app = _app_with_adapter()
     app.running = True
 
-    # refresh stops the loop after the first pass so `while self.running`
-    # exits deterministically.
+    # refresh signals shutdown after the first pass so the loop exits
+    # deterministically.
     async def _refresh(adapter, **kwargs):
-        app.running = False
+        app._shutdown_event.set()
         return {"petrosa_data_manager": 1}
 
     refresh_mock = AsyncMock(side_effect=_refresh)
@@ -108,9 +128,9 @@ async def test_loop_isolates_unexpected_refresh_error(monkeypatch):
     app.running = True
 
     # refresh raises (defense-in-depth branch); loop must not propagate and
-    # must still terminate — we flip running off before raising.
+    # must still terminate after signaling shutdown.
     async def _boom(adapter, **kwargs):
-        app.running = False
+        app._shutdown_event.set()
         raise RuntimeError("unexpected")
 
     monkeypatch.setattr(mdsg, "refresh_mongo_data_size", AsyncMock(side_effect=_boom))
