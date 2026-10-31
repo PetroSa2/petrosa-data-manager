@@ -305,6 +305,8 @@ class DataManagerApp:
             self.api_server_task = asyncio.create_task(self._run_api_server())
             logger.info("API server task created (health checks available)")
 
+        self._start_mongo_data_size_loop()
+
         # Initialize database connections. A transient startup outage must not
         # permanently leave the API's shared manager unset.
         try:
@@ -646,11 +648,6 @@ class DataManagerApp:
         logger.info("All components started successfully")
         self._start_mysql_server_status_collector()
 
-        # Periodic MongoDB logical-data-size gauge refresh (dm#248). Created
-        # AFTER self.running=True so the `while self.running` loop runs its
-        # first iteration immediately (the series appears within one refresh
-        # interval of boot) rather than exiting on a stale False.
-        self._start_mongo_data_size_loop()
         from data_manager.maintenance.klines_mysql_freshness import freshness_loop
 
         self.klines_freshness_task = asyncio.create_task(
@@ -1480,7 +1477,7 @@ class DataManagerApp:
         extra_dbs = tuple(getattr(constants, "MONGO_DATA_SIZE_DATABASES", ()))
         last_wait_warning = 0.0
         started = False
-        while self.running:
+        while not self._shutdown_event.is_set():
             adapter = (
                 getattr(self.db_manager, "mongodb_adapter", None)
                 if self.db_manager
