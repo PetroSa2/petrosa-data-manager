@@ -1105,7 +1105,9 @@ async def get_strategy_performance(strategy_id: str):
         try:
             rows, latest_fill_id = await _load_execution_events(
                 mongodb,
-                None if orphan_mode != "off" and mongodb is not None else strategy_id,
+                None
+                if orphan_mode != "off" and mysql is not None and mongodb is not None
+                else strategy_id,
             )
         except asyncio.CancelledError:
             raise
