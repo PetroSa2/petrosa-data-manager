@@ -250,6 +250,23 @@ def test_pool_events_move_the_gauges() -> None:
     assert gauge("connections_open") == open_
 
 
+def test_pool_peak_gauge_tracks_highest_concurrent_checkout() -> None:
+    engine = build_engine(SQLITE, "serving")
+    first = engine.connect()
+    second = engine.connect()
+    third = engine.connect()
+    fourth = engine.connect()
+
+    assert _sample("data_manager_mysql_pool_cap", role="serving") == 4
+    assert _sample("data_manager_mysql_pool_peak_in_use", role="serving") == 4
+
+    fourth.close()
+    third.close()
+    second.close()
+    first.close()
+    engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("message", "kind"),
     [
