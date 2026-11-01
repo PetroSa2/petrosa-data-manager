@@ -71,10 +71,18 @@ def replay_environment(monkeypatch):
             pass
 
         def round_exchange_history(self):
-            history_reads.append(1)
+            history_reads.append("history")
             return history
 
+        def round_exchange_history_with_version(self):
+            history_reads.append("combined")
+            return (
+                (history["cut_over_ms"], 1, len(history["snapshots"])),
+                history,
+            )
+
         def round_exchange_history_version(self):
+            history_reads.append("version")
             snapshots = history["snapshots"]
             return (
                 history["cut_over_ms"],
@@ -137,6 +145,15 @@ async def test_replay_cache_filters_strategies_and_runs_off_loop(replay_environm
     fills.append({"_id": "fill-2", "timestamp": 2, "event_type": "filled"})
     await analysis._load_synthetic_exits("alpha")
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_combined_history_reader_is_preferred(replay_environment):
+    _history, _fills, _calls, history_reads = replay_environment
+
+    await analysis._load_synthetic_exits("alpha")
+
+    assert history_reads == ["combined"]
 
 
 @pytest.mark.asyncio
@@ -535,7 +552,7 @@ async def test_warm_request_does_not_replay_again(
         await analysis.get_strategy_performance("alpha")
 
     assert replay.await_count == 1
-    assert len(history_reads) == 1
+    assert len(history_reads) == 2
     assert "stage=response_build" in caplog.text
     assert "duration=" in caplog.text
 

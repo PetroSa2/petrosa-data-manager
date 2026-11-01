@@ -500,7 +500,10 @@ async def _load_synthetic_exits(
         ]:
             global _EXCHANGE_HISTORY_CACHE
             version_reader = getattr(repo, "round_exchange_history_version", None)
-            if version_reader is None:
+            combined_reader = getattr(repo, "round_exchange_history_with_version", None)
+            if combined_reader is not None:
+                history_version, history = await _run_bounded_heavy(combined_reader)
+            elif version_reader is None:
                 history = await _run_bounded_heavy(repo.round_exchange_history)
                 history_version = (
                     history.get("cut_over_ms"),
