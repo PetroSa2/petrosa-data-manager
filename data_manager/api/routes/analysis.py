@@ -626,7 +626,10 @@ async def _load_execution_events_once(
         try:
             rows, latest_fill_id = await asyncio.wait_for(
                 asyncio.to_thread(
-                    read_execution_events, mysql, strategy_id=strategy_id
+                    read_execution_events,
+                    mysql,
+                    strategy_id=strategy_id,
+                    limit=_ROUND_MAX_FILLS,
                 ),
                 constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
             )

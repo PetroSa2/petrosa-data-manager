@@ -175,6 +175,7 @@ async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
     assert result["metadata"]["history_status"] == "zero_sample"
     assert mysql.calls[0][1]["filter_dict"] == {"strategy_id": "active"}
     assert mysql.calls[0][1]["include_total"] is False
+    assert mysql.calls[0][1]["limit"] == analysis._ROUND_MAX_FILLS
 
 
 @pytest.mark.asyncio
