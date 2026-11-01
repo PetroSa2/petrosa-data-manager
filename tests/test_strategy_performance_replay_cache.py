@@ -71,17 +71,18 @@ def replay_environment(monkeypatch):
             pass
 
         def round_exchange_history(self):
-            history_reads.append(1)
+            history_reads.append("history")
             return history
 
         def round_exchange_history_with_version(self):
-            history_reads.append(1)
+            history_reads.append("combined")
             return (
                 (history["cut_over_ms"], 1, len(history["snapshots"])),
                 history,
             )
 
         def round_exchange_history_version(self):
+            history_reads.append("version")
             snapshots = history["snapshots"]
             return (
                 history["cut_over_ms"],
@@ -152,7 +153,7 @@ async def test_combined_history_reader_is_preferred(replay_environment):
 
     await analysis._load_synthetic_exits("alpha")
 
-    assert history_reads == [1]
+    assert history_reads == ["combined"]
 
 
 @pytest.mark.asyncio
