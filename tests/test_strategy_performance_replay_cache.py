@@ -2,7 +2,7 @@ import asyncio
 import threading
 from time import monotonic
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -106,8 +106,10 @@ def replay_environment(monkeypatch):
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._EXECUTION_EVENTS_CACHE_AT = 0.0
     analysis._EXECUTION_EVENTS_IN_FLIGHT.clear()
     analysis._EXCHANGE_HISTORY_CACHE = None
+    analysis._EXCHANGE_HISTORY_CACHE_AT = 0.0
     analysis._EXCHANGE_HISTORY_IN_FLIGHT.clear()
     analysis._LEG_REPLAY_CACHE.clear()
     analysis._BASE_PERFORMANCE_CACHE = None
@@ -116,8 +118,10 @@ def replay_environment(monkeypatch):
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None
+    analysis._EXECUTION_EVENTS_CACHE_AT = 0.0
     analysis._EXECUTION_EVENTS_IN_FLIGHT.clear()
     analysis._EXCHANGE_HISTORY_CACHE = None
+    analysis._EXCHANGE_HISTORY_CACHE_AT = 0.0
     analysis._EXCHANGE_HISTORY_IN_FLIGHT.clear()
     analysis._LEG_REPLAY_CACHE.clear()
     analysis._BASE_PERFORMANCE_CACHE = None
@@ -552,9 +556,46 @@ async def test_warm_request_does_not_replay_again(
         await analysis.get_strategy_performance("alpha")
 
     assert replay.await_count == 1
-    assert len(history_reads) == 2
+    assert len(history_reads) == 1
     assert "stage=response_build" in caplog.text
     assert "duration=" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_exchange_history_cache_expires(replay_environment):
+    _history, _fills, _calls, history_reads = replay_environment
+
+    await analysis._load_synthetic_exits("alpha")
+    analysis._EXCHANGE_HISTORY_CACHE_AT = (
+        monotonic() - analysis._PERFORMANCE_HISTORY_CACHE_TTL_SECONDS - 1
+    )
+    await analysis._load_synthetic_exits("alpha")
+
+    assert history_reads == ["combined", "combined"]
+
+
+@pytest.mark.asyncio
+async def test_mysql_execution_events_cache_reuses_recent_read(
+    replay_environment, monkeypatch
+):
+    _history, _fills, _calls, _history_reads = replay_environment
+    mysql = SimpleNamespace(query_range=lambda *_args, **_kwargs: [])
+    mongodb = api_module.db_manager.mongodb_adapter
+    api_module.db_manager = SimpleNamespace(
+        mysql_adapter=mysql, mongodb_adapter=mongodb
+    )
+    reader = Mock(
+        return_value=([{"strategy_id": "alpha", "event_type": "filled"}], "fill-1")
+    )
+    monkeypatch.setattr(
+        "data_manager.services.historic_analytics.read_execution_events", reader
+    )
+
+    first = await analysis._load_execution_events(mongodb, "alpha")
+    second = await analysis._load_execution_events(mongodb, "alpha")
+
+    assert first == second
+    assert reader.call_count == 1
 
 
 @pytest.mark.asyncio
