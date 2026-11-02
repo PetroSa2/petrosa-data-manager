@@ -99,6 +99,21 @@ def test_serving_cap_uses_shared_budget_and_deployment_shape(
     assert serving_pool_cap() == 3
 
 
+def test_default_serving_budget_leaves_peer_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MYSQL_SHARED_CONNECTION_BUDGET", raising=False)
+    monkeypatch.delenv("MYSQL_PEER_CONNECTION_HEADROOM", raising=False)
+    monkeypatch.delenv("MYSQL_DATA_MANAGER_PROCESSES", raising=False)
+    monkeypatch.delenv("MYSQL_HPA_MAX_REPLICAS", raising=False)
+    assert serving_pool_cap() == 8
+    assert role_options("serving") == {
+        "pool_size": 7,
+        "max_overflow": 1,
+        "pool_timeout": 5,
+    }
+
+
 @pytest.mark.parametrize("role", ["serving", "cron", "job", "adhoc"])
 def test_role_overrides_cannot_exceed_role_cap(
     monkeypatch: pytest.MonkeyPatch, role: str
@@ -109,7 +124,7 @@ def test_role_overrides_cannot_exceed_role_cap(
     assert (
         options["pool_size"] + options["max_overflow"]
         <= {
-            "serving": 4,
+            "serving": 8,
             "cron": 1,
             "job": 1,
             "adhoc": 1,
@@ -257,7 +272,7 @@ def test_pool_peak_gauge_tracks_highest_concurrent_checkout() -> None:
     third = engine.connect()
     fourth = engine.connect()
 
-    assert _sample("data_manager_mysql_pool_cap", role="serving") == 4
+    assert _sample("data_manager_mysql_pool_cap", role="serving") == 8
     assert _sample("data_manager_mysql_pool_peak_in_use", role="serving") == 4
 
     fourth.close()
@@ -310,7 +325,7 @@ def test_every_role_builds_its_declared_cap(role: str) -> None:
 
 
 def test_role_caps_leave_maintenance_headroom() -> None:
-    assert ROLE_DEFAULTS["serving"] == (3, 1, 5)
+    assert ROLE_DEFAULTS["serving"] == (7, 1, 5)
     assert ROLE_DEFAULTS["cron"] == (1, 0, 5)
     assert ROLE_DEFAULTS["job"] == (1, 0, 5)
     assert ROLE_DEFAULTS["adhoc"] == (1, 0, 5)

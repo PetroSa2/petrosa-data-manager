@@ -25,12 +25,12 @@ from data_manager.db.mysql_session import configure_utc_session
 logger = logging.getLogger(__name__)
 
 ROLE_DEFAULTS: dict[str, tuple[int, int, int]] = {
-    "serving": (3, 1, 5),
+    "serving": (7, 1, 5),
     "cron": (1, 0, 5),
     "job": (1, 0, 5),
     "adhoc": (1, 0, 5),
 }
-ROLE_CAPS = {"serving": 4, "cron": 1, "job": 1, "adhoc": 1}
+ROLE_CAPS = {"serving": 8, "cron": 1, "job": 1, "adhoc": 1}
 ERROR_KINDS = ("max_user_connections", "too_many_connections", "pool_timeout")
 
 pool_in_use = Gauge(
@@ -95,7 +95,7 @@ def _global_setting(name: str, default: int, minimum: int = 1) -> int:
 def serving_pool_cap() -> int:
     """Derive the serving cap from the shared DB budget and deployment shape."""
     shared_budget = _global_setting("MYSQL_SHARED_CONNECTION_BUDGET", 30)
-    peer_headroom = _global_setting("MYSQL_PEER_CONNECTION_HEADROOM", 22, minimum=0)
+    peer_headroom = _global_setting("MYSQL_PEER_CONNECTION_HEADROOM", 14, minimum=0)
     processes = _global_setting("MYSQL_DATA_MANAGER_PROCESSES", 1)
     replicas = _global_setting("MYSQL_HPA_MAX_REPLICAS", 2)
     available = max(1, shared_budget - peer_headroom)
