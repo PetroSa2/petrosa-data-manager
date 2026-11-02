@@ -1225,6 +1225,29 @@ class MongoDBAdapter(BaseAdapter):
 
         except PyMongoError as e:
             logger.warning(f"Failed to ensure indexes for {collection}: {e}")
+            if ttl_policy and not existing_ttl:
+                ttl_options = {
+                    "expireAfterSeconds": ttl_policy.seconds,
+                    "name": (
+                        "timestamp_ttl_1h"
+                        if collection == "config_rate_limits"
+                        else "application_ttl"
+                    ),
+                }
+                if ttl_policy.partial_filter_expression:
+                    ttl_options["partialFilterExpression"] = (
+                        ttl_policy.partial_filter_expression
+                    )
+                try:
+                    await coll.create_index(
+                        [(ttl_policy.field, ASCENDING)], **ttl_options
+                    )
+                except PyMongoError as ttl_error:
+                    logger.warning(
+                        "Failed to ensure TTL index for %s after index batch failure: %s",
+                        collection,
+                        ttl_error,
+                    )
 
     async def delete_range(
         self,
