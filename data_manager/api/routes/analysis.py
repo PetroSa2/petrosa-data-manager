@@ -59,6 +59,9 @@ def _analytics_database(mongodb: Any) -> Any:
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
 _ROUND_MAX_FILLS = 50_000
+_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
+    os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
+)
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
 )
@@ -93,12 +96,14 @@ _SYNTHETIC_EXITS_IN_FLIGHT: dict[
 _EXECUTION_EVENTS_CACHE: (
     tuple[int, str | None, str | None, list[dict[str, Any]]] | None
 ) = None
+_EXECUTION_EVENTS_CACHE_AT = 0.0
 _EXECUTION_EVENTS_IN_FLIGHT: dict[
     tuple[int, str | None], asyncio.Task[tuple[list[dict[str, Any]], str | None]]
 ] = {}
 _EXCHANGE_HISTORY_CACHE: (
     tuple[int, tuple[int | None, int | None, int], dict[str, Any]] | None
 ) = None
+_EXCHANGE_HISTORY_CACHE_AT = 0.0
 _EXCHANGE_HISTORY_IN_FLIGHT: dict[
     int, asyncio.Task[tuple[tuple[int | None, int | None, int], dict[str, Any]]]
 ] = {}
@@ -498,7 +503,15 @@ async def _load_synthetic_exits(
         async def read_history() -> tuple[
             tuple[int | None, int | None, int], dict[str, Any]
         ]:
-            global _EXCHANGE_HISTORY_CACHE
+            global _EXCHANGE_HISTORY_CACHE, _EXCHANGE_HISTORY_CACHE_AT
+            cached = _EXCHANGE_HISTORY_CACHE
+            if (
+                cached is not None
+                and cached[0] == mysql_source_id
+                and monotonic() - _EXCHANGE_HISTORY_CACHE_AT
+                < _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS
+            ):
+                return cached[1], cached[2]
             version_reader = getattr(repo, "round_exchange_history_version", None)
             combined_reader = getattr(repo, "round_exchange_history_with_version", None)
             if combined_reader is not None:
@@ -526,6 +539,7 @@ async def _load_synthetic_exits(
                     return history_version, cached[2]
                 history = await _run_bounded_heavy(repo.round_exchange_history)
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
+            _EXCHANGE_HISTORY_CACHE_AT = monotonic()
             return history_version, history
 
         history_task = asyncio.create_task(read_history())
@@ -621,6 +635,16 @@ async def _load_execution_events_once(
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
+        global _EXECUTION_EVENTS_CACHE, _EXECUTION_EVENTS_CACHE_AT
+        cached = _EXECUTION_EVENTS_CACHE
+        if (
+            cached is not None
+            and cached[0] == id(mysql)
+            and cached[2] == strategy_id
+            and monotonic() - _EXECUTION_EVENTS_CACHE_AT
+            < _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS
+        ):
+            return cached[3], cached[1]
         from data_manager.services.historic_analytics import read_execution_events
 
         try:
@@ -637,6 +661,8 @@ async def _load_execution_events_once(
             raise _AnalyticsDependencyTimeout(
                 "execution_events MySQL read timed out"
             ) from exc
+        _EXECUTION_EVENTS_CACHE = (id(mysql), latest_fill_id, strategy_id, rows)
+        _EXECUTION_EVENTS_CACHE_AT = monotonic()
         return rows, latest_fill_id
 
     read_started = monotonic()
@@ -670,7 +696,6 @@ async def _load_execution_events_once(
         if newest_fill
         else None
     )
-    global _EXECUTION_EVENTS_CACHE
     source_id = id(collection)
     if _EXECUTION_EVENTS_CACHE is not None and _EXECUTION_EVENTS_CACHE[:3] == (
         source_id,
