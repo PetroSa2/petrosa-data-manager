@@ -631,6 +631,45 @@ async def test_mysql_execution_events_cache_is_shared_across_strategies(
 
 
 @pytest.mark.asyncio
+async def test_mysql_execution_events_in_flight_is_shared_across_strategies(
+    replay_environment, monkeypatch
+):
+    _history, _fills, _calls, _history_reads = replay_environment
+    mysql = SimpleNamespace(query_range=lambda *_args, **_kwargs: [])
+    mongodb = api_module.db_manager.mongodb_adapter
+    api_module.db_manager = SimpleNamespace(
+        mysql_adapter=mysql, mongodb_adapter=mongodb
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def read_events(*_args, **_kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return (
+            [
+                {"strategy_id": "alpha", "event_type": "filled"},
+                {"strategy_id": "beta", "event_type": "filled"},
+            ],
+            "fill-3",
+        )
+
+    monkeypatch.setattr(
+        "data_manager.services.historic_analytics.read_execution_events", read_events
+    )
+    alpha_task = asyncio.create_task(analysis._load_execution_events(mongodb, "alpha"))
+    beta_task = asyncio.create_task(analysis._load_execution_events(mongodb, "beta"))
+    await asyncio.to_thread(started.wait, 1)
+    release.set()
+
+    alpha, _ = await alpha_task
+    beta, _ = await beta_task
+
+    assert [row["strategy_id"] for row in alpha] == ["alpha"]
+    assert [row["strategy_id"] for row in beta] == ["beta"]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_requests_share_in_flight_replay(
     replay_environment, monkeypatch
 ):
