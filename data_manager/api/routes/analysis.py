@@ -636,15 +636,24 @@ async def _load_execution_events_once(
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
         global _EXECUTION_EVENTS_CACHE, _EXECUTION_EVENTS_CACHE_AT
+        source_wide = (
+            getattr(api_module.db_manager, "mongodb_adapter", None) is not None
+        )
+        cache_strategy_id = None if source_wide else strategy_id
         cached = _EXECUTION_EVENTS_CACHE
         if (
             cached is not None
             and cached[0] == id(mysql)
-            and cached[2] == strategy_id
+            and cached[2] == cache_strategy_id
             and monotonic() - _EXECUTION_EVENTS_CACHE_AT
             < _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS
         ):
-            return cached[3], cached[1]
+            rows = cached[3]
+            return (
+                rows
+                if strategy_id is None or not source_wide
+                else _filter_strategy_rows(rows, strategy_id)
+            ), cached[1]
         from data_manager.services.historic_analytics import read_execution_events
 
         try:
@@ -652,7 +661,7 @@ async def _load_execution_events_once(
                 asyncio.to_thread(
                     read_execution_events,
                     mysql,
-                    strategy_id=strategy_id,
+                    strategy_id=cache_strategy_id,
                     limit=_ROUND_MAX_FILLS,
                 ),
                 constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
@@ -661,9 +670,13 @@ async def _load_execution_events_once(
             raise _AnalyticsDependencyTimeout(
                 "execution_events MySQL read timed out"
             ) from exc
-        _EXECUTION_EVENTS_CACHE = (id(mysql), latest_fill_id, strategy_id, rows)
+        _EXECUTION_EVENTS_CACHE = (id(mysql), latest_fill_id, cache_strategy_id, rows)
         _EXECUTION_EVENTS_CACHE_AT = monotonic()
-        return rows, latest_fill_id
+        return (
+            rows
+            if strategy_id is None or not source_wide
+            else _filter_strategy_rows(rows, strategy_id)
+        ), latest_fill_id
 
     read_started = monotonic()
     fill_filter = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
@@ -726,20 +739,28 @@ async def _load_execution_events(
     source = (
         mysql if mysql is not None else _analytics_database(mongodb)["execution_events"]
     )
-    key = (id(source), strategy_id)
+    source_wide = (
+        mysql is not None
+        and getattr(api_module.db_manager, "mongodb_adapter", None) is not None
+    )
+    cache_strategy_id = None if source_wide else strategy_id
+    key = (id(source), cache_strategy_id)
     task = _EXECUTION_EVENTS_IN_FLIGHT.get(key)
     if task is None:
 
         async def load_and_clear() -> tuple[list[dict[str, Any]], str | None]:
             try:
-                return await _load_execution_events_once(mongodb, strategy_id)
+                return await _load_execution_events_once(mongodb, cache_strategy_id)
             finally:
                 if _EXECUTION_EVENTS_IN_FLIGHT.get(key) is asyncio.current_task():
                     _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
 
         task = asyncio.create_task(load_and_clear())
         _EXECUTION_EVENTS_IN_FLIGHT[key] = task
-    return await asyncio.shield(task)
+    rows, latest_fill_id = await asyncio.shield(task)
+    if source_wide and strategy_id is not None:
+        rows = _filter_strategy_rows(rows, strategy_id)
+    return rows, latest_fill_id
 
 
 def _leg_aware_pnl(
