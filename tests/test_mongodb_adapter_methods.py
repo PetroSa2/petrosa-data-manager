@@ -837,6 +837,18 @@ class TestEnsureIndexes:
         )
 
     @pytest.mark.asyncio
+    async def test_ttl_retry_error_is_swallowed(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(return_value={})
+        coll.create_indexes = AsyncMock(side_effect=PyMongoError("duplicate key"))
+        coll.create_index = AsyncMock(side_effect=PyMongoError("ttl failure"))
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("positions")
+
+        coll.create_index.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_strategy_lifecycle_states_index_supports_live_reads(self, adapter):
         coll = MagicMock()
         coll.create_indexes = AsyncMock()
