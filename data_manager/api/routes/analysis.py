@@ -637,7 +637,8 @@ async def _load_execution_events_once(
     if mysql is not None:
         global _EXECUTION_EVENTS_CACHE, _EXECUTION_EVENTS_CACHE_AT
         source_wide = (
-            getattr(api_module.db_manager, "mongodb_adapter", None) is not None
+            strategy_id is None
+            and getattr(api_module.db_manager, "mongodb_adapter", None) is not None
         )
         cache_strategy_id = None if source_wide else strategy_id
         cached = _EXECUTION_EVENTS_CACHE
@@ -741,6 +742,7 @@ async def _load_execution_events(
     )
     source_wide = (
         mysql is not None
+        and strategy_id is None
         and getattr(api_module.db_manager, "mongodb_adapter", None) is not None
     )
     cache_strategy_id = None if source_wide else strategy_id
@@ -1157,9 +1159,7 @@ async def get_strategy_performance(strategy_id: str):
         try:
             rows, latest_fill_id = await _load_execution_events(
                 mongodb,
-                None
-                if orphan_mode != "off" and mysql is not None and mongodb is not None
-                else strategy_id,
+                strategy_id,
             )
         except asyncio.CancelledError:
             raise

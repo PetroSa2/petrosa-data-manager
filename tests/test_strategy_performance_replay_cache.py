@@ -301,7 +301,7 @@ async def test_performance_passes_shared_events_to_synthetic_exits(
     finally:
         api_module.db_manager = None
 
-    execution_loader.assert_awaited_once_with(mongodb, None)
+    execution_loader.assert_awaited_once_with(mongodb, "alpha")
     synthetic_loader.assert_awaited_once_with(
         "alpha", execution_events=rows, latest_fill_id="fill-1"
     )
@@ -584,9 +584,14 @@ async def test_mysql_execution_events_cache_reuses_recent_read(
     api_module.db_manager = SimpleNamespace(
         mysql_adapter=mysql, mongodb_adapter=mongodb
     )
-    reader = Mock(
-        return_value=([{"strategy_id": "alpha", "event_type": "filled"}], "fill-1")
-    )
+
+    def read_events(*_args, **kwargs):
+        return (
+            [{"strategy_id": kwargs["strategy_id"], "event_type": "filled"}],
+            "fill-1",
+        )
+
+    reader = Mock(side_effect=read_events)
     monkeypatch.setattr(
         "data_manager.services.historic_analytics.read_execution_events", reader
     )
@@ -599,7 +604,7 @@ async def test_mysql_execution_events_cache_reuses_recent_read(
 
 
 @pytest.mark.asyncio
-async def test_mysql_execution_events_cache_is_shared_across_strategies(
+async def test_mysql_execution_events_cache_is_scoped_to_each_strategy(
     replay_environment, monkeypatch
 ):
     _history, _fills, _calls, _history_reads = replay_environment
@@ -608,15 +613,14 @@ async def test_mysql_execution_events_cache_is_shared_across_strategies(
     api_module.db_manager = SimpleNamespace(
         mysql_adapter=mysql, mongodb_adapter=mongodb
     )
-    reader = Mock(
-        return_value=(
-            [
-                {"strategy_id": "alpha", "event_type": "filled"},
-                {"strategy_id": "beta", "event_type": "filled"},
-            ],
+
+    def read_events(*_args, **kwargs):
+        return (
+            [{"strategy_id": kwargs["strategy_id"], "event_type": "filled"}],
             "fill-2",
         )
-    )
+
+    reader = Mock(side_effect=read_events)
     monkeypatch.setattr(
         "data_manager.services.historic_analytics.read_execution_events", reader
     )
@@ -626,12 +630,15 @@ async def test_mysql_execution_events_cache_is_shared_across_strategies(
 
     assert [row["strategy_id"] for row in alpha] == ["alpha"]
     assert [row["strategy_id"] for row in beta] == ["beta"]
-    assert reader.call_count == 1
-    assert reader.call_args.kwargs["strategy_id"] is None
+    assert reader.call_count == 2
+    assert [call.kwargs["strategy_id"] for call in reader.call_args_list] == [
+        "alpha",
+        "beta",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_mysql_execution_events_in_flight_is_shared_across_strategies(
+async def test_mysql_execution_events_in_flight_is_scoped_to_each_strategy(
     replay_environment, monkeypatch
 ):
     _history, _fills, _calls, _history_reads = replay_environment
@@ -643,13 +650,13 @@ async def test_mysql_execution_events_in_flight_is_shared_across_strategies(
     started = threading.Event()
     release = threading.Event()
 
-    def read_events(*_args, **_kwargs):
+    def read_events(*_args, **kwargs):
         started.set()
         release.wait(timeout=2)
+        strategy_id = kwargs["strategy_id"]
         return (
             [
-                {"strategy_id": "alpha", "event_type": "filled"},
-                {"strategy_id": "beta", "event_type": "filled"},
+                {"strategy_id": strategy_id, "event_type": "filled"},
             ],
             "fill-3",
         )
