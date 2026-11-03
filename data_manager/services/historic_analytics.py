@@ -90,7 +90,10 @@ def read_execution_events(
     else:
         rows, _ = mysql.find_paginated(
             "execution_events",
-            filter_dict={"strategy_id": strategy_id} if strategy_id else None,
+            filter_dict={
+                **({"strategy_id": strategy_id} if strategy_id else {}),
+                "event_type": sorted(event_types),
+            },
             sort_list=[("timestamp", 1)],
             limit=limit,
             columns=EXECUTION_EVENT_ANALYTICS_COLUMNS,

@@ -60,7 +60,10 @@ def test_historic_read_helpers_normalize_inputs_and_use_bounded_pages():
     rows, _ = read_execution_events(mysql, strategy_id="missing")
     assert rows == []
     assert mysql.calls[-1][1]["include_total"] is False
-    assert mysql.calls[-1][1]["filter_dict"] == {"strategy_id": "missing"}
+    assert mysql.calls[-1][1]["filter_dict"] == {
+        "strategy_id": "missing",
+        "event_type": ["filled", "partial_fill"],
+    }
     assert mysql.calls[-1][1]["columns"] == (
         "timestamp",
         "decision_id",
@@ -173,7 +176,10 @@ async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
     assert result["stats"]["consecutive_losses"] == 0
     assert result["metadata"]["history_source"] == "execution_events_mysql"
     assert result["metadata"]["history_status"] == "zero_sample"
-    assert mysql.calls[0][1]["filter_dict"] == {"strategy_id": "active"}
+    assert mysql.calls[0][1]["filter_dict"] == {
+        "strategy_id": "active",
+        "event_type": ["filled", "partial_fill"],
+    }
     assert mysql.calls[0][1]["include_total"] is False
     assert mysql.calls[0][1]["limit"] == analysis._ROUND_MAX_FILLS
 

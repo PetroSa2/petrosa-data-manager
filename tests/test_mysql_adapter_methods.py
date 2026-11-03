@@ -84,6 +84,43 @@ def test_find_paginated_can_skip_full_table_count(sqlite_adapter):
     assert not any("count(" in statement for statement in statements)
 
 
+def test_find_paginated_pushes_list_filters_to_sql(sqlite_adapter):
+    with sqlite_adapter.engine.begin() as connection:
+        connection.execute(
+            sqlite_adapter.tables["execution_events"].insert(),
+            [
+                {
+                    "event_key": "fill-1",
+                    "decision_id": "decision-1",
+                    "strategy_id": "strategy-1",
+                    "order_id": "order-1",
+                    "event_type": "filled",
+                    "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+                    "payload": {},
+                    "received_at": datetime(2026, 1, 1, tzinfo=UTC),
+                },
+                {
+                    "event_key": "close-1",
+                    "decision_id": "decision-1",
+                    "strategy_id": "strategy-1",
+                    "order_id": "order-1",
+                    "event_type": "close",
+                    "timestamp": datetime(2026, 1, 2, tzinfo=UTC),
+                    "payload": {},
+                    "received_at": datetime(2026, 1, 2, tzinfo=UTC),
+                },
+            ],
+        )
+
+    rows, _ = sqlite_adapter.find_paginated(
+        "execution_events",
+        filter_dict={"strategy_id": "strategy-1", "event_type": ["filled"]},
+        include_total=False,
+    )
+
+    assert [row["event_type"] for row in rows] == ["filled"]
+
+
 class TestBuildConnectionString:
     def test_falls_back_to_defaults_when_no_constants(self):
         with patch("data_manager.db.mysql_adapter.constants") as const:
