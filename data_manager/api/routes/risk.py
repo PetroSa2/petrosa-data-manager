@@ -54,6 +54,8 @@ async def _load_wallet_rows(
 
 
 _MAX_FILLS = 200_000
+_FILL_LOOKBACK_DAYS = 30.0
+_LAST_GOOD_STRATEGIES: dict[int, tuple[dict[str, Any], datetime]] = {}
 _FILL_PROJECTION = {
     "event_type": 1,
     "strategy_id": 1,
@@ -93,13 +95,19 @@ _FILL_PROJECTION = {
 
 
 async def _load_fills(
-    end: datetime | None, db_manager: Any | None = None
+    end: datetime | None,
+    db_manager: Any | None = None,
+    *,
+    lookback_days: float = _FILL_LOOKBACK_DAYS,
 ) -> list[dict[str, Any]]:
     manager = db_manager or api_module.db_manager
     mongodb = manager.mongodb_adapter
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
     if end is not None:
-        query["timestamp"] = {"$lt": end}
+        query["timestamp"] = {
+            "$gte": end - timedelta(days=lookback_days),
+            "$lt": end,
+        }
     return (
         await mongodb.db["execution_events"]
         .find(query, projection=_FILL_PROJECTION)
@@ -271,9 +279,14 @@ async def compute_risk_inputs(
     # The median holding time per strategy (rule 23's H, rule 7's integrity flag), from the round book
     strategies: dict[str, Any] = {}
     strategies_error: str | None = None
+    strategies_stale_since: str | None = None
     try:
         fills_read_started = monotonic()
-        fills = await _load_fills(now, db_manager)
+        fills = await _load_fills(
+            now,
+            db_manager,
+            lookback_days=strategies_window_days,
+        )
         record_report_stage(
             "risk_inputs",
             "read+decode",
@@ -287,6 +300,7 @@ async def compute_risk_inputs(
             now,
             strategies_window_days,
         )
+        _LAST_GOOD_STRATEGIES[id(db_manager)] = (strategies, now)
         record_report_stage(
             "risk_inputs",
             "compute",
@@ -294,8 +308,19 @@ async def compute_risk_inputs(
             source=source,
         )
     except Exception as exc:
-        logger.error("risk inputs: strategy fills not readable: %s", exc, exc_info=True)
-        strategies_error = "strategy fills not readable"
+        cached = _LAST_GOOD_STRATEGIES.get(id(db_manager))
+        if cached is not None:
+            strategies = cached[0]
+            strategies_stale_since = now.isoformat()
+            logger.warning(
+                "risk inputs: strategy fill refresh failed; serving cached strategy data: %s",
+                exc,
+            )
+        else:
+            logger.error(
+                "risk inputs: strategy fills not readable: %s", exc, exc_info=True
+            )
+            strategies_error = "strategy fills not readable"
 
     report = {
         "as_of": now.isoformat(),
@@ -315,6 +340,7 @@ async def compute_risk_inputs(
         "equity": equity,
         "strategies": strategies,
         "strategies_error": strategies_error,
+        "strategies_stale_since": strategies_stale_since,
     }
     return report
 
