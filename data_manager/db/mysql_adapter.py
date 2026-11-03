@@ -1445,7 +1445,10 @@ class MySQLAdapter(BaseAdapter):
                     )
                 if key not in table.c:
                     return [], 0
-                conditions.append(table.c[key] == value)
+                if isinstance(value, list | tuple | set | frozenset):
+                    conditions.append(table.c[key].in_(value))
+                else:
+                    conditions.append(table.c[key] == value)
         keyset = unique_sort or (bool(cursor) and "sort" in cursor)
         effective_sort = list(sort_list or [])
         if keyset and effective_sort:
