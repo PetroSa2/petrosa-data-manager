@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from time import monotonic
+from time import monotonic, sleep
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -161,6 +161,33 @@ async def test_combined_history_reader_is_preferred(replay_environment):
 
 
 @pytest.mark.asyncio
+async def test_version_probe_falls_back_to_the_full_history_reader(
+    replay_environment, monkeypatch
+):
+    history, _fills, _calls, _history_reads = replay_environment
+
+    class VersionOnlyRepository:
+        def __init__(self, *_args):
+            pass
+
+        def round_exchange_history_version(self):
+            return history["cut_over_ms"], 1, len(history["snapshots"])
+
+        def round_exchange_history(self):
+            return history
+
+    monkeypatch.setattr(
+        "data_manager.db.repositories.ledger_repository.LedgerRepository",
+        VersionOnlyRepository,
+    )
+
+    rows, cut_over_ms = await analysis._load_synthetic_exits("alpha")
+
+    assert rows == [{"strategy_id": "alpha", "event_type": "filled"}]
+    assert cut_over_ms == 1
+
+
+@pytest.mark.asyncio
 async def test_concurrent_strategy_reads_share_one_exchange_history_query(
     replay_environment,
 ):
@@ -190,6 +217,20 @@ async def test_execution_events_are_read_once_per_version(replay_environment):
 
 def test_strategy_performance_default_dependency_timeout_matches_production_budget():
     assert analysis.constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS == 5.0
+
+
+@pytest.mark.asyncio
+async def test_bounded_heavy_accepts_a_short_optional_overlay_budget(monkeypatch):
+    monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.001)
+
+    def slow_read():
+        sleep(0.05)
+
+    with pytest.raises(analysis._AnalyticsDependencyTimeout):
+        await analysis._run_bounded_heavy(
+            slow_read,
+            timeout_seconds=analysis._PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+        )
 
 
 @pytest.mark.asyncio
@@ -785,6 +826,23 @@ async def test_failed_replay_is_removed_from_in_flight_cache(
         await analysis._load_synthetic_exits("alpha")
 
     assert analysis._SYNTHETIC_EXITS_IN_FLIGHT == {}
+
+
+@pytest.mark.asyncio
+async def test_synthetic_replay_uses_the_short_overlay_budget(
+    replay_environment, monkeypatch
+):
+    def slow_build(_rows, _exchange_history):
+        sleep(0.05)
+        return []
+
+    monkeypatch.setattr(
+        "data_manager.services.round_book.build_synthetic_exits", slow_build
+    )
+    monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.001)
+
+    with pytest.raises(analysis._AnalyticsDependencyTimeout):
+        await analysis._load_synthetic_exits("alpha")
 
 
 @pytest.mark.parametrize(
