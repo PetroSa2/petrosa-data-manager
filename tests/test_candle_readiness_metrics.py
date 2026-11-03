@@ -124,3 +124,38 @@ async def test_readiness_retains_declared_strategy_minimum_and_observed_depth(
         )
         == 290
     )
+
+
+@pytest.mark.asyncio
+async def test_readiness_strategy_depth_uses_coldest_collection(monkeypatch):
+    import constants
+
+    monkeypatch.setattr(
+        constants,
+        "CANDLE_WARMUP_STRATEGY_LOOKBACKS",
+        {"minervini_trend_template": {"1d": 265}},
+    )
+    monkeypatch.setattr(constants, "CANDLE_WARMUP_ACTIVE_STRATEGIES", ())
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    adapter = MagicMock()
+    adapter.get_record_count = AsyncMock(side_effect=[300, 280])
+    adapter.query_latest = AsyncMock(
+        return_value=[{"timestamp": now - timedelta(seconds=60)}]
+    )
+
+    report = await evaluate_readiness(
+        adapter,
+        pairs=["BTCUSDT", "ETHUSDT"],
+        timeframes=["1d"],
+        now=now,
+    )
+
+    assert report.ready is False
+    assert (
+        _strategy_metric_value(
+            "data_manager_candle_strategy_depth",
+            "minervini_trend_template",
+            "1d",
+        )
+        == 280
+    )
