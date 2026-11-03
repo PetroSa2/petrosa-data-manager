@@ -47,6 +47,8 @@ from data_manager.observability_metrics import (
     CANDLE_READINESS_DEPTH,
     CANDLE_READINESS_MAX_AGE_SECONDS,
     CANDLE_READINESS_REQUIRED_DEPTH,
+    CANDLE_STRATEGY_DEPTH,
+    CANDLE_STRATEGY_MINIMUM,
 )
 from data_manager.utils.time_utils import parse_timeframe_to_seconds
 
@@ -100,15 +102,12 @@ class ReadinessReport:
         }
 
 
-def derive_required_counts(
+def _valid_strategy_lookbacks(
     timeframes: Sequence[str],
     *,
     active_strategies: Sequence[str] | None = None,
     strategy_lookbacks: Mapping[str, Mapping[str, object]] | None = None,
-    margin_candles: int | None = None,
-    fallback_candles: int | None = None,
-) -> dict[str, int]:
-    """Resolve the candle depth required by active strategies per timeframe."""
+) -> dict[str, dict[str, int]]:
     declarations = (
         constants.CANDLE_WARMUP_STRATEGY_LOOKBACKS
         if strategy_lookbacks is None
@@ -120,6 +119,38 @@ def derive_required_counts(
         active_strategies
         if active_strategies is not None
         else constants.CANDLE_WARMUP_ACTIVE_STRATEGIES or declarations.keys()
+    )
+    valid: dict[str, dict[str, int]] = {}
+    for strategy in active:
+        values = declarations.get(strategy, {})
+        if not isinstance(values, Mapping):
+            continue
+        for timeframe in timeframes:
+            value = values.get(timeframe)
+            if isinstance(value, bool):
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                valid.setdefault(strategy, {})[timeframe] = parsed
+    return valid
+
+
+def derive_required_counts(
+    timeframes: Sequence[str],
+    *,
+    active_strategies: Sequence[str] | None = None,
+    strategy_lookbacks: Mapping[str, Mapping[str, object]] | None = None,
+    margin_candles: int | None = None,
+    fallback_candles: int | None = None,
+) -> dict[str, int]:
+    """Resolve the candle depth required by active strategies per timeframe."""
+    valid = _valid_strategy_lookbacks(
+        timeframes,
+        active_strategies=active_strategies,
+        strategy_lookbacks=strategy_lookbacks,
     )
     margin = (
         constants.CANDLE_WARMUP_MARGIN_CANDLES
@@ -134,19 +165,9 @@ def derive_required_counts(
     required: dict[str, int] = {}
     for timeframe in timeframes:
         lookbacks = []
-        for strategy in active:
-            values = declarations.get(strategy, {})
-            if not isinstance(values, Mapping):
-                continue
-            value = values.get(timeframe)
-            if isinstance(value, bool):
-                continue
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError):
-                continue
-            if parsed > 0:
-                lookbacks.append(parsed)
+        for values in valid.values():
+            if timeframe in values:
+                lookbacks.append(values[timeframe])
         required[timeframe] = max(lookbacks) + margin if lookbacks else fallback
     return required
 
@@ -177,6 +198,25 @@ def _record_readiness_metrics(verdict: CollectionReadiness) -> None:
     CANDLE_READINESS_MAX_AGE_SECONDS.labels(**labels).set(
         verdict.max_age_seconds if verdict.max_age_seconds is not None else -1
     )
+
+
+def _record_strategy_metrics(
+    results: Sequence[CollectionReadiness],
+    timeframes: Sequence[str],
+) -> None:
+    """Retain declared strategy minima and conservative observed depth."""
+    valid = _valid_strategy_lookbacks(timeframes)
+    for strategy, lookbacks in valid.items():
+        for timeframe, minimum in lookbacks.items():
+            depths = [
+                result.count for result in results if result.timeframe == timeframe
+            ]
+            CANDLE_STRATEGY_MINIMUM.labels(strategy=strategy, timeframe=timeframe).set(
+                minimum
+            )
+            CANDLE_STRATEGY_DEPTH.labels(strategy=strategy, timeframe=timeframe).set(
+                min(depths, default=0)
+            )
 
 
 async def evaluate_collection(
@@ -332,6 +372,7 @@ async def evaluate_readiness(
             )
         )
     )
+    _record_strategy_metrics(results, effective_timeframes)
 
     # Fail closed: an empty grid is NOT a pass. "Nothing checked" must never
     # be mistaken for "everything verified".
