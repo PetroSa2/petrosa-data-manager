@@ -76,6 +76,16 @@ CANDLE_READINESS_MAX_AGE_SECONDS = Gauge(
     "Maximum allowed age of the newest candle",
     ["pair", "timeframe"],
 )
+CANDLE_STRATEGY_MINIMUM = Gauge(
+    "data_manager_candle_strategy_minimum",
+    "Declared minimum candle count for an active strategy",
+    ["strategy", "timeframe"],
+)
+CANDLE_STRATEGY_DEPTH = Gauge(
+    "data_manager_candle_strategy_depth",
+    "Lowest observed candle count across the readiness scope for a strategy",
+    ["strategy", "timeframe"],
+)
 
 
 def initialize_readiness_metrics() -> None:
