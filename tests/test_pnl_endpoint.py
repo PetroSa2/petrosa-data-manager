@@ -595,6 +595,37 @@ async def test_performance_mysql_timeout_empty_mongodb_fallback_is_zero_sample(
 
 
 @pytest.mark.asyncio
+async def test_performance_mysql_timeout_keeps_degraded_response_when_fallback_fails(
+    monkeypatch,
+):
+    import data_manager.api.routes.analysis as analysis_route
+
+    mongodb = SimpleNamespace()
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(
+            mysql_adapter=SimpleNamespace(query_range=lambda *_args, **_kwargs: []),
+            mongodb_adapter=mongodb,
+        ),
+    )
+    loader = AsyncMock(
+        side_effect=[
+            analysis_route._AnalyticsDependencyTimeout("read timed out"),
+            ValueError("MongoDB unavailable"),
+        ]
+    )
+    monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert response["degraded"] is True
+    assert response["metadata"]["history_status"] == "unavailable"
+    api_module.db_manager = None
+
+
+@pytest.mark.asyncio
 async def test_performance_timeout_reuses_last_good_strategy_response(monkeypatch):
     import data_manager.api.routes.analysis as analysis_route
 
