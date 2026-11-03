@@ -63,7 +63,7 @@ _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
 )
 _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
-    os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.75")
+    os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.1")
 )
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
@@ -1252,7 +1252,7 @@ async def get_strategy_performance(strategy_id: str):
                     "performance: bounded dependency timeout stage=exchange_history "
                     "strategy=%s timeout=%.3fs",
                     strategy_id,
-                    constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                    _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
                 )
                 exposure = _unavailable_exposure("timeout")
                 overlay = None
