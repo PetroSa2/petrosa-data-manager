@@ -63,7 +63,7 @@ _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
 )
 _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
-    os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.1")
+    os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.01")
 )
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
