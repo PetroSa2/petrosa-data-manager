@@ -10,6 +10,7 @@
 - [**klines-retention.md**](klines-retention.md) - MySQL-tier `klines_*` retention job.
 - [**candle-consumer-retention-contract.md**](candle-consumer-retention-contract.md) - Execution-path candle consumer inventory and Mongo `candles_*` retention/warm-up window contract.
 - [**candle-warmup-continuous-backfill.md**](candle-warmup-continuous-backfill.md) - Continuous warm-up backfill scheduler: design rationale, metrics, alert rules, operator runbook (#319).
+- [**data-health-validation-evidence.md**](runbooks/data-health-validation-evidence.md) - Retained, read-only 24-hour DataHealthMetrics validation evidence.
 
 ## 🔧 CI/CD & Development
 - [**Makefile**](../Makefile) - Build, test, lint, and operational commands.
