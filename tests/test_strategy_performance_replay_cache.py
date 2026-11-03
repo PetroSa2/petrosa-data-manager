@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from time import monotonic
+from time import monotonic, sleep
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -190,6 +190,20 @@ async def test_execution_events_are_read_once_per_version(replay_environment):
 
 def test_strategy_performance_default_dependency_timeout_matches_production_budget():
     assert analysis.constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS == 5.0
+
+
+@pytest.mark.asyncio
+async def test_bounded_heavy_accepts_a_short_optional_overlay_budget(monkeypatch):
+    monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.001)
+
+    def slow_read():
+        sleep(0.05)
+
+    with pytest.raises(analysis._AnalyticsDependencyTimeout):
+        await analysis._run_bounded_heavy(
+            slow_read,
+            timeout_seconds=analysis._PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+        )
 
 
 @pytest.mark.asyncio

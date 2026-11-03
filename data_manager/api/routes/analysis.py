@@ -62,6 +62,9 @@ _ROUND_MAX_FILLS = 50_000
 _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
 )
+_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
+    os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.75")
+)
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
 )
@@ -146,11 +149,17 @@ class _AnalyticsDependencyTimeout(TimeoutError):
     """A bounded optional analytics dependency did not complete in time."""
 
 
-async def _run_bounded_heavy(func, *args, **kwargs):
+async def _run_bounded_heavy(
+    func, *args, timeout_seconds: float | None = None, **kwargs
+):
     try:
         return await asyncio.wait_for(
             _run_heavy(func, *args, **kwargs),
-            timeout=constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            timeout=(
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
         )
     except TimeoutError as exc:
         raise _AnalyticsDependencyTimeout from exc
@@ -515,9 +524,15 @@ async def _load_synthetic_exits(
             version_reader = getattr(repo, "round_exchange_history_version", None)
             combined_reader = getattr(repo, "round_exchange_history_with_version", None)
             if combined_reader is not None:
-                history_version, history = await _run_bounded_heavy(combined_reader)
+                history_version, history = await _run_bounded_heavy(
+                    combined_reader,
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                )
             elif version_reader is None:
-                history = await _run_bounded_heavy(repo.round_exchange_history)
+                history = await _run_bounded_heavy(
+                    repo.round_exchange_history,
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                )
                 history_version = (
                     history.get("cut_over_ms"),
                     max(
@@ -530,14 +545,20 @@ async def _load_synthetic_exits(
                     len(history.get("snapshots", [])),
                 )
             else:
-                history_version = await _run_bounded_heavy(version_reader)
+                history_version = await _run_bounded_heavy(
+                    version_reader,
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                )
                 cached = _EXCHANGE_HISTORY_CACHE
                 if cached is not None and cached[:2] == (
                     mysql_source_id,
                     history_version,
                 ):
                     return history_version, cached[2]
-                history = await _run_bounded_heavy(repo.round_exchange_history)
+                history = await _run_bounded_heavy(
+                    repo.round_exchange_history,
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                )
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
             _EXCHANGE_HISTORY_CACHE_AT = monotonic()
             return history_version, history
@@ -596,7 +617,7 @@ async def _load_synthetic_exits(
         try:
             try:
                 synthetic = await asyncio.wait_for(
-                    task, constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
+                    task, _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
                 )
             except TimeoutError as exc:
                 raise _AnalyticsDependencyTimeout from exc
