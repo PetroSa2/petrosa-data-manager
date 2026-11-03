@@ -422,6 +422,29 @@ def test_performance_warns_when_measured_replay_exceeds_budget_fraction(
     assert "budget_source=configured" in caplog.text
 
 
+def test_performance_overlay_timeout_keeps_optional_path_bounded():
+    import data_manager.api.routes.analysis as analysis_route
+
+    assert analysis_route._PERFORMANCE_OVERLAY_TIMEOUT_SECONDS == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_performance_overlay_dependency_timeout_returns_before_blocking_work_finishes():
+    import time
+
+    import data_manager.api.routes.analysis as analysis_route
+
+    started = time.perf_counter()
+    with pytest.raises(analysis_route._AnalyticsDependencyTimeout):
+        await analysis_route._run_bounded_heavy(
+            time.sleep,
+            0.05,
+            timeout_seconds=analysis_route._PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+        )
+
+    assert time.perf_counter() - started < 0.04
+
+
 @pytest.mark.asyncio
 async def test_performance_unavailable_response_preserves_assessor_contract(
     monkeypatch,
