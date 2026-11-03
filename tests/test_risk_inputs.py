@@ -30,7 +30,10 @@ async def test_fill_loader_projects_only_round_book_fields():
     await risk_route._load_fills(NOW, manager)
 
     query = collection.find.call_args.args[0]
-    assert query["timestamp"] == {"$lt": NOW}
+    assert query["timestamp"] == {
+        "$gte": NOW - timedelta(days=risk_route._FILL_LOOKBACK_DAYS),
+        "$lt": NOW,
+    }
     projection = collection.find.call_args.kwargs["projection"]
     assert projection == risk_route._FILL_PROJECTION
     assert "payload" not in projection
@@ -454,7 +457,7 @@ def test_holding_times_only_count_rounds_in_the_window():
 
 
 def test_the_endpoint_serves_the_key_tradeengine_reads(client, monkeypatch):
-    async def fills(end, db_manager=None):
+    async def fills(end, db_manager=None, **kwargs):
         return _rounds("iceberg_detector", [60, 120, 180])
 
     monkeypatch.setattr(risk_route, "_load_fills", fills)
@@ -467,7 +470,7 @@ def test_the_endpoint_serves_the_key_tradeengine_reads(client, monkeypatch):
 
 
 def test_a_failed_fill_read_is_reported_not_invented(client, monkeypatch):
-    async def boom(end, db_manager=None):
+    async def boom(end, db_manager=None, **kwargs):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(risk_route, "_load_fills", boom)
@@ -477,3 +480,21 @@ def test_a_failed_fill_read_is_reported_not_invented(client, monkeypatch):
     assert (
         "equity" in body and "symbols" in body
     )  # the rest of the response is unaffected
+
+
+def test_fill_refresh_serves_last_good_strategy_data_as_stale(client, monkeypatch):
+    successful = True
+
+    async def fills(end, db_manager=None, **kwargs):
+        if successful:
+            return _rounds("iceberg_detector", [60, 120, 180])
+        raise TimeoutError("Atlas read timed out")
+
+    monkeypatch.setattr(risk_route, "_load_fills", fills)
+    first = client.get("/api/v1/risk/inputs?symbols=BTCUSDT").json()
+    successful = False
+    second = client.get("/api/v1/risk/inputs?symbols=BTCUSDT").json()
+
+    assert second["strategies"] == first["strategies"]
+    assert second["strategies_error"] is None
+    assert second["strategies_stale_since"] is not None
