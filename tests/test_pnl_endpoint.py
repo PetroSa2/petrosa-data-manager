@@ -526,6 +526,75 @@ async def test_performance_execution_event_timeout_preserves_assessor_contract(
 
 
 @pytest.mark.asyncio
+async def test_performance_mysql_timeout_falls_back_to_mongodb(monkeypatch):
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = [
+        _fill(side="buy", qty=1, price=100, seconds_before=200),
+        _fill(side="sell", qty=1, price=110, seconds_before=100),
+    ]
+    mongodb = SimpleNamespace()
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(
+            mysql_adapter=SimpleNamespace(query_range=lambda *_args, **_kwargs: []),
+            mongodb_adapter=mongodb,
+        ),
+    )
+    loader = AsyncMock(
+        side_effect=[
+            analysis_route._AnalyticsDependencyTimeout("read timed out"),
+            (rows, "fill-2"),
+        ]
+    )
+    monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert response.get("degraded", False) is False
+    assert response["stats"]["win_rate"] == 1.0
+    assert response["stats"]["wins"] == 1
+    assert response["metadata"]["history_source"] == "execution_events_mongodb_fallback"
+    assert loader.await_args_list[1].kwargs == {"force_mongodb": True}
+    api_module.db_manager = None
+
+
+@pytest.mark.asyncio
+async def test_performance_mysql_timeout_empty_mongodb_fallback_is_zero_sample(
+    monkeypatch,
+):
+    import data_manager.api.routes.analysis as analysis_route
+
+    mongodb = SimpleNamespace()
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(
+            mysql_adapter=SimpleNamespace(query_range=lambda *_args, **_kwargs: []),
+            mongodb_adapter=mongodb,
+        ),
+    )
+    loader = AsyncMock(
+        side_effect=[
+            analysis_route._AnalyticsDependencyTimeout("read timed out"),
+            ([], None),
+        ]
+    )
+    monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert response.get("degraded", False) is False
+    assert response["stats"]["win_rate"] == 0.0
+    assert response["stats"]["wins"] == 0
+    assert response["metadata"]["history_status"] == "zero_sample"
+    api_module.db_manager = None
+
+
+@pytest.mark.asyncio
 async def test_performance_timeout_reuses_last_good_strategy_response(monkeypatch):
     import data_manager.api.routes.analysis as analysis_route
 

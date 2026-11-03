@@ -456,6 +456,30 @@ async def test_strategy_performance_reads_only_the_requested_strategy(
 
 
 @pytest.mark.asyncio
+async def test_forced_mongodb_execution_event_read_bypasses_mysql(
+    replay_environment, monkeypatch
+):
+    _history, fills, _calls, _history_reads = replay_environment
+    fills[0]["strategy_id"] = "alpha"
+    mongodb = api_module.db_manager.mongodb_adapter
+    mysql_reader = Mock(side_effect=AssertionError("MySQL should be bypassed"))
+    monkeypatch.setattr(
+        "data_manager.services.historic_analytics.read_execution_events",
+        mysql_reader,
+    )
+
+    rows, _latest_fill_id = await analysis._load_execution_events(
+        mongodb,
+        "alpha",
+        force_mongodb=True,
+    )
+
+    assert [row["strategy_id"] for row in rows] == ["alpha"]
+    assert mongodb.db["execution_events"].find_calls == 1
+    mysql_reader.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_strategy_performance_projection_keeps_replay_fields(
     replay_environment,
 ):
