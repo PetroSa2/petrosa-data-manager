@@ -213,6 +213,30 @@ def test_collection_retains_valid_gauges_when_required_value_is_malformed():
     assert status.mysql_server_wait_timeout._value.get() == 15
 
 
+def test_collection_retains_required_gauges_when_process_list_is_unavailable():
+    before = status.mysql_server_status_errors_total._value.get()
+    connection = _Connection()
+    original_execute = connection.execute
+
+    def execute_without_process_list(statement):
+        if "information_schema.PROCESSLIST" in str(statement):
+            raise RuntimeError("access denied")
+        return original_execute(statement)
+
+    connection.execute = execute_without_process_list
+    adapter = MySQLAdapter(
+        connection_string="mysql+pymysql://user:pass@host/db", role="serving"
+    )
+    adapter.engine = SimpleNamespace(connect=lambda: connection)
+    adapter._connected = True
+
+    status.collect_mysql_server_status(adapter)
+
+    assert status.mysql_server_max_used_connections._value.get() == 22
+    assert status.mysql_server_aborted_clients._value.get() == 41
+    assert status.mysql_server_status_errors_total._value.get() == before
+
+
 @pytest.mark.asyncio
 async def test_collection_skips_invalid_status_field_without_raising(caplog):
     before = status.mysql_server_status_errors_total._value.get()
