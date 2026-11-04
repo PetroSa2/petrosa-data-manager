@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pymongo.errors import NetworkTimeout
 
 from data_manager.maintenance import round_report
 from data_manager.services.round_book import (
@@ -616,7 +617,7 @@ def _routed_collection(by_strategy_filter):
     """An execution_events collection whose find() answers per query (all fills, or one strategy)."""
     calls = []
 
-    def find(query, *args):
+    def find(query, *args, **kwargs):
         calls.append(query)
         cursor = MagicMock()
         cursor.sort.return_value = cursor
@@ -1798,6 +1799,32 @@ def _overlay_route_case(monkeypatch, *, historic, live):
         mongodb_adapter=mongodb, mysql_adapter=object()
     )
     return api_module, seen, mongodb
+
+
+@pytest.mark.asyncio
+async def test_rounds_read_timeout_returns_partial_report(monkeypatch):
+    import data_manager.api.app as api_module
+    import data_manager.api.routes.analysis as analysis_route
+
+    class TimeoutCollection:
+        def find(self, query, projection=None):
+            assert query["timestamp"]["$gte"] < query["timestamp"]["$lte"]
+            assert projection["payload"] == 1
+            raise NetworkTimeout("read timed out")
+
+    mongodb = SimpleNamespace(db={"execution_events": TimeoutCollection()})
+    api_module.db_manager = SimpleNamespace(mongodb_adapter=mongodb)
+    monkeypatch.setattr(analysis_route, "_round_overlay_mode", lambda: "off")
+    try:
+        report = await analysis_route.get_closed_rounds(
+            strategy_id="order_flow_imbalance", window_days=90.0
+        )
+    finally:
+        api_module.db_manager = None
+
+    assert report["status"] == "partial"
+    assert report["metadata"]["covered_window"]["start"]
+    assert report["metadata"]["covered_window"]["end"]
 
 
 @pytest.mark.asyncio

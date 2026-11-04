@@ -276,8 +276,8 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
         def __init__(self, name):
             self.name = name
 
-        def find(self, *args):
-            seen.setdefault(self.name, []).append(args)
+        def find(self, *args, **kwargs):
+            seen.setdefault(self.name, []).append((args, kwargs))
             return Cursor()
 
     class Database(dict):
@@ -289,8 +289,8 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
     await compute_closed_rounds(manager)
 
     regime_queries = seen["analytics_BTCUSDT_regime"]
-    anchor_query, projection = regime_queries[0]
-    bounded_query, bounded_projection = regime_queries[1]
+    (anchor_query, projection), _ = regime_queries[0]
+    (bounded_query, bounded_projection), _ = regime_queries[1]
     assert anchor_query["timestamp"]["$lt"] == datetime(
         2025, 12, 31, 23, 45, tzinfo=UTC
     )
@@ -299,8 +299,11 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
         2025, 12, 31, 23, 45, tzinfo=UTC
     )
     assert bounded_projection == REGIME_DOC_PROJECTION
-    # rounds reads whole events (see the note above SLIPPAGE_FILL_PROJECTION): no projection argument
+    # rounds use a replay-specific projection while slippage keeps its own projection contract
     assert len(seen["execution_events"]) == 2
+    (rounds_query,), rounds_kwargs = seen["execution_events"][1]
+    assert rounds_query["timestamp"]["$gte"] < rounds_query["timestamp"]["$lte"]
+    assert rounds_kwargs["projection"]["payload"] == 1
 
 
 @pytest.mark.asyncio
