@@ -304,6 +304,7 @@ async def test_regime_docs_use_the_shared_projection_and_rounds_stay_unprojected
     (rounds_query,), rounds_kwargs = seen["execution_events"][1]
     assert rounds_query["timestamp"]["$gte"] < rounds_query["timestamp"]["$lte"]
     assert rounds_kwargs["projection"]["payload"] == 1
+    assert rounds_kwargs["projection"]["fee"] == 1
 
 
 @pytest.mark.asyncio
