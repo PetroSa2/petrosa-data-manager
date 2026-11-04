@@ -609,6 +609,8 @@ async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatc
     rows = [
         _fill(side="buy", qty=1, price=100, seconds_before=200),
         _fill(side="sell", qty=1, price=110, seconds_before=100),
+        _fill(side="buy", qty=1, price=200, seconds_before=300, strategy_id="S2"),
+        _fill(side="sell", qty=1, price=190, seconds_before=250, strategy_id="S2"),
     ]
     mysql = SimpleNamespace(query_range=lambda *_args, **_kwargs: [])
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
