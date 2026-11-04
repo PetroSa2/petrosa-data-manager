@@ -525,6 +525,12 @@ async def test_performance_execution_event_timeout_preserves_assessor_contract(
     assert response["stats"]["consecutive_losses"] is None
 
 
+def test_performance_execution_event_timeout_budget_is_under_endpoint_sla():
+    import data_manager.api.routes.analysis as analysis_route
+
+    assert analysis_route._PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS <= 1.0
+
+
 @pytest.mark.asyncio
 async def test_performance_mysql_timeout_falls_back_to_mongodb(monkeypatch):
     import data_manager.api.routes.analysis as analysis_route

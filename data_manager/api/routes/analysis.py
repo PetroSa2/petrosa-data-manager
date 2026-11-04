@@ -95,6 +95,7 @@ ROUND_BOOK_PROJECTION: dict[str, int] = {
 _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
 )
+_PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS = 1.0
 _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.01")
 )
@@ -721,7 +722,10 @@ async def _load_execution_events_once(
                     strategy_id=cache_strategy_id,
                     limit=_ROUND_MAX_FILLS,
                 ),
-                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                min(
+                    constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                    _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+                ),
             )
         except TimeoutError as exc:
             raise _AnalyticsDependencyTimeout(
@@ -745,7 +749,10 @@ async def _load_execution_events_once(
             collection.find(fill_filter, projection=_EXECUTION_EVENT_PROJECTION)
             .sort("timestamp", -1)
             .to_list(length=_ROUND_MAX_FILLS),
-            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            min(
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+            ),
         )
     except TimeoutError as exc:
         duration = monotonic() - read_started
