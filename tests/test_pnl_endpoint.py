@@ -601,6 +601,47 @@ async def test_performance_mysql_timeout_empty_mongodb_fallback_is_zero_sample(
 
 
 @pytest.mark.asyncio
+async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatch):
+    from time import monotonic
+
+    import data_manager.api.routes.analysis as analysis_route
+
+    rows = [
+        _fill(side="buy", qty=1, price=100, seconds_before=200),
+        _fill(side="sell", qty=1, price=110, seconds_before=100),
+        _fill(side="buy", qty=1, price=200, seconds_before=300, strategy_id="S2"),
+        _fill(side="sell", qty=1, price=190, seconds_before=250, strategy_id="S2"),
+    ]
+    mysql = SimpleNamespace(query_range=lambda *_args, **_kwargs: [])
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
+    monkeypatch.setattr(
+        api_module,
+        "db_manager",
+        SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None),
+    )
+    monkeypatch.setattr(
+        analysis_route,
+        "_EXECUTION_EVENTS_CACHE",
+        (id(mysql), "fill-2", None, rows),
+    )
+    monkeypatch.setattr(analysis_route, "_EXECUTION_EVENTS_CACHE_AT", monotonic())
+    monkeypatch.setattr(
+        analysis_route,
+        "_load_execution_events",
+        AsyncMock(
+            side_effect=analysis_route._AnalyticsDependencyTimeout("read timed out")
+        ),
+    )
+
+    response = await analysis_route.get_strategy_performance("S1")
+
+    assert response.get("degraded", False) is False
+    assert response["stats"]["win_rate"] == 1.0
+    assert response["metadata"]["history_source"] == "execution_events_cached_fallback"
+    api_module.db_manager = None
+
+
+@pytest.mark.asyncio
 async def test_performance_mysql_timeout_keeps_degraded_response_when_fallback_fails(
     monkeypatch,
 ):

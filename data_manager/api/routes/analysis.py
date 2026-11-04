@@ -790,6 +790,7 @@ async def _load_execution_events_once(
         _ROUND_MAX_FILLS,
     )
     _EXECUTION_EVENTS_CACHE = (source_id, latest_fill_id, strategy_id, all_fills)
+    _EXECUTION_EVENTS_CACHE_AT = monotonic()
     return all_fills, latest_fill_id
 
 
@@ -830,6 +831,38 @@ async def _load_execution_events(
     if source_wide and strategy_id is not None:
         rows = _filter_strategy_rows(rows, strategy_id)
     return rows, latest_fill_id
+
+
+def _cached_execution_events_after_timeout(
+    mongodb: Any,
+    mysql: Any,
+    strategy_id: str,
+) -> tuple[list[dict[str, Any]], str | None] | None:
+    """Return a recent, source-compatible snapshot when a history read times out."""
+    cached = _EXECUTION_EVENTS_CACHE
+    if (
+        cached is None
+        or monotonic() - _EXECUTION_EVENTS_CACHE_AT
+        >= _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS
+    ):
+        return None
+    source = (
+        mysql
+        if mysql is not None
+        else (
+            _analytics_database(mongodb)["execution_events"]
+            if mongodb is not None
+            else None
+        )
+    )
+    if source is None or cached[0] != id(source):
+        return None
+    rows = cached[3]
+    if cached[2] is None:
+        rows = _filter_strategy_rows(rows, strategy_id)
+    elif cached[2] != strategy_id:
+        return None
+    return rows, cached[1]
 
 
 def _leg_aware_pnl(
@@ -1222,6 +1255,7 @@ async def get_strategy_performance(strategy_id: str):
 
         source = mysql if mysql is not None else mongodb
         used_mongodb_fallback = False
+        used_cached_fallback = False
         orphan_mode = _round_overlay_mode()
         stage = "execution_events_read"
         try:
@@ -1249,6 +1283,18 @@ async def get_strategy_performance(strategy_id: str):
                         strategy_id,
                     )
             if not used_mongodb_fallback:
+                cached = _cached_execution_events_after_timeout(
+                    mongodb, mysql, strategy_id
+                )
+                if cached is not None:
+                    rows, latest_fill_id = cached
+                    used_cached_fallback = True
+                    logger.warning(
+                        "performance: execution_events read timeout; "
+                        "using recent cached snapshot strategy=%s",
+                        strategy_id,
+                    )
+            if not used_mongodb_fallback and not used_cached_fallback:
                 logger.warning(
                     "performance: stage=execution_events_read outcome=timeout "
                     "strategy=%s duration=%.3fs error_type=%s error=%r",
@@ -1452,6 +1498,8 @@ async def get_strategy_performance(strategy_id: str):
                 "history_source": (
                     "execution_events_mongodb_fallback"
                     if used_mongodb_fallback
+                    else "execution_events_cached_fallback"
+                    if used_cached_fallback
                     else "execution_events_mysql"
                     if mysql is not None
                     else "execution_events"
