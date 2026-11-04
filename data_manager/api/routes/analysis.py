@@ -25,6 +25,7 @@ except ImportError:
 from fastapi import APIRouter, HTTPException, Query
 from prometheus_client import Gauge, Histogram
 from pydantic import BaseModel
+from pymongo.errors import NetworkTimeout
 
 import constants
 import data_manager.api.app as api_module
@@ -59,6 +60,38 @@ def _analytics_database(mongodb: Any) -> Any:
 _SLIPPAGE_MAX_FILLS = 50_000
 _REGIME_MAX_DOCS = 20_000
 _ROUND_MAX_FILLS = 50_000
+ROUND_BOOK_PROJECTION: dict[str, int] = {
+    "event_type": 1,
+    "strategy_id": 1,
+    "symbol": 1,
+    "timestamp": 1,
+    "fill_time": 1,
+    "decision_id": 1,
+    "fill_qty": 1,
+    "fill_quantity": 1,
+    "qty": 1,
+    "fill_price": 1,
+    "price": 1,
+    "closed_quantity": 1,
+    "exit_price": 1,
+    "side": 1,
+    "position_side": 1,
+    "ps": 1,
+    "order_id": 1,
+    "position_id": 1,
+    "reason": 1,
+    "close_reason": 1,
+    "position_status": 1,
+    "reduce_only": 1,
+    "fee": 1,
+    "fees": 1,
+    "fee_asset": 1,
+    "fee_status": 1,
+    "pnl": 1,
+    "realized_pnl": 1,
+    "synthetic": 1,
+    "payload": 1,
+}
 _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
 )
@@ -1806,13 +1839,18 @@ async def compute_closed_rounds(
         raise HTTPException(status_code=503, detail="MongoDB is unavailable")
     mode = _round_overlay_mode()
     mongodb = db_manager.mongodb_adapter
-    base_query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
+    window_end = datetime.now(UTC)
+    window_start = window_end - timedelta(days=window_days)
+    base_query: dict[str, Any] = {
+        "event_type": {"$in": sorted(FILL_EVENT_TYPES)},
+        "timestamp": {"$gte": window_start, "$lte": window_end},
+    }
 
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         read_started = monotonic()
         cursor = (
             _analytics_database(mongodb)["execution_events"]
-            .find(query)
+            .find(query, projection=ROUND_BOOK_PROJECTION)
             .sort("timestamp", 1)
         )
         rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
@@ -1831,6 +1869,29 @@ async def compute_closed_rounds(
             overlay_cut = True
             rows = await read(own_query)
             truncated = len(rows) >= _ROUND_MAX_FILLS
+    except NetworkTimeout as exc:
+        logger.warning("rounds: execution_events read timed out: %s", exc)
+        report = await _run_heavy(
+            build_report,
+            [],
+            window_days=window_days,
+            exchange=None,
+            closed_entry_orders=None,
+            apply_overlay=False,
+            exchange_history=None,
+        )
+        report["status"] = "partial"
+        report["metadata"] = {
+            "calculated_at": datetime.now(UTC).isoformat(),
+            "fills_read": 0,
+            "truncated": True,
+            "source": "data-manager-round-book",
+            "covered_window": {
+                "start": window_start.isoformat(),
+                "end": window_end.isoformat(),
+            },
+        }
+        return report
     except Exception as exc:
         logger.error("rounds: execution_events read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

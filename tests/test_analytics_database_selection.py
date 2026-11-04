@@ -41,7 +41,7 @@ def test_strategy_scorecard_uses_configured_database_without_truth_testing():
 @pytest.mark.asyncio
 async def test_closed_rounds_returns_explicit_error_when_execution_read_fails():
     class Collection:
-        def find(self, _query):
+        def find(self, _query, projection=None):
             raise RuntimeError("analytics read failed")
 
     mongodb = SimpleNamespace(

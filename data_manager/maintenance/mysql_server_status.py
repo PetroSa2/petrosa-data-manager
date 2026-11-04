@@ -65,6 +65,11 @@ _GAUGES: dict[str, Gauge] = {
     "User_idle_connections": mysql_user_idle_connections,
     "User_active_connections": mysql_user_active_connections,
 }
+_REQUIRED_GAUGES = set(_GAUGES) - {
+    "User_threads_connected",
+    "User_idle_connections",
+    "User_active_connections",
+}
 
 
 def collect_mysql_server_status(adapter: Any) -> None:
@@ -82,8 +87,11 @@ def collect_mysql_server_status(adapter: Any) -> None:
                 gauge.set(float(value))
             except (TypeError, ValueError):
                 invalid.append(name)
-        if missing or invalid:
+        required_missing = [name for name in missing if name in _REQUIRED_GAUGES]
+        required_invalid = [name for name in invalid if name in _REQUIRED_GAUGES]
+        if required_missing or required_invalid:
             mysql_server_status_errors_total.inc()
+        if missing or invalid:
             logger.warning(
                 "MySQL server status collection skipped invalid values fields=%s",
                 [*missing, *invalid],
