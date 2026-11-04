@@ -628,6 +628,11 @@ async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatc
     monkeypatch.setattr(analysis_route, "_EXECUTION_EVENTS_CACHE_AT", monotonic())
     monkeypatch.setattr(
         analysis_route,
+        "_cached_execution_events_after_timeout",
+        lambda *_args: (rows, "fill-2"),
+    )
+    monkeypatch.setattr(
+        analysis_route,
         "_load_execution_events",
         AsyncMock(
             side_effect=[
