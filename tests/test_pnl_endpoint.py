@@ -630,7 +630,10 @@ async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatc
         analysis_route,
         "_load_execution_events",
         AsyncMock(
-            side_effect=analysis_route._AnalyticsDependencyTimeout("read timed out")
+            side_effect=[
+                analysis_route._AnalyticsDependencyTimeout("read timed out"),
+                AssertionError("fallback read should not run when cache is valid"),
+            ]
         ),
     )
 
