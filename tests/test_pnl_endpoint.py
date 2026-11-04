@@ -613,11 +613,12 @@ async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatc
         _fill(side="sell", qty=1, price=190, seconds_before=250, strategy_id="S2"),
     ]
     mysql = SimpleNamespace(query_range=lambda *_args, **_kwargs: [])
+    mongodb = SimpleNamespace()
     monkeypatch.setenv("ROUND_ORPHAN_MARKING", "off")
     monkeypatch.setattr(
         api_module,
         "db_manager",
-        SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None),
+        SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=mongodb),
     )
     monkeypatch.setattr(
         analysis_route,
@@ -638,6 +639,7 @@ async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatc
     assert response.get("degraded", False) is False
     assert response["stats"]["win_rate"] == 1.0
     assert response["metadata"]["history_source"] == "execution_events_cached_fallback"
+    assert analysis_route._load_execution_events.await_count == 1
     api_module.db_manager = None
 
 
