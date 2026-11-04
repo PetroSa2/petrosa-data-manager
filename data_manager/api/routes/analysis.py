@@ -95,6 +95,7 @@ ROUND_BOOK_PROJECTION: dict[str, int] = {
 _PERFORMANCE_HISTORY_CACHE_TTL_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_HISTORY_CACHE_TTL_SECONDS", "5")
 )
+_PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS = 1.0
 _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.01")
 )
@@ -682,12 +683,14 @@ async def _load_synthetic_exits(
 async def _load_execution_events_once(
     mongodb: Any,
     strategy_id: str | None = None,
+    *,
+    force_mongodb: bool = False,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Read fills once per newest fill-event version and filter them per caller."""
     from data_manager.services.historic_analytics import get_mysql_adapter
     from data_manager.services.round_book import FILL_EVENT_TYPES
 
-    mysql = get_mysql_adapter(api_module.db_manager)
+    mysql = None if force_mongodb else get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
         global _EXECUTION_EVENTS_CACHE, _EXECUTION_EVENTS_CACHE_AT
         source_wide = (
@@ -719,7 +722,10 @@ async def _load_execution_events_once(
                     strategy_id=cache_strategy_id,
                     limit=_ROUND_MAX_FILLS,
                 ),
-                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                min(
+                    constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                    _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+                ),
             )
         except TimeoutError as exc:
             raise _AnalyticsDependencyTimeout(
@@ -743,7 +749,10 @@ async def _load_execution_events_once(
             collection.find(fill_filter, projection=_EXECUTION_EVENT_PROJECTION)
             .sort("timestamp", -1)
             .to_list(length=_ROUND_MAX_FILLS),
-            constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+            min(
+                constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
+                _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+            ),
         )
     except TimeoutError as exc:
         duration = monotonic() - read_started
@@ -787,10 +796,12 @@ async def _load_execution_events_once(
 async def _load_execution_events(
     mongodb: Any,
     strategy_id: str | None = None,
+    *,
+    force_mongodb: bool = False,
 ) -> tuple[list[dict[str, Any]], str | None]:
     from data_manager.services.historic_analytics import get_mysql_adapter
 
-    mysql = get_mysql_adapter(api_module.db_manager)
+    mysql = None if force_mongodb else get_mysql_adapter(api_module.db_manager)
     source = (
         mysql if mysql is not None else _analytics_database(mongodb)["execution_events"]
     )
@@ -800,13 +811,15 @@ async def _load_execution_events(
         and getattr(api_module.db_manager, "mongodb_adapter", None) is not None
     )
     cache_strategy_id = None if source_wide else strategy_id
-    key = (id(source), cache_strategy_id)
+    key = (id(source), cache_strategy_id, force_mongodb)
     task = _EXECUTION_EVENTS_IN_FLIGHT.get(key)
     if task is None:
 
         async def load_and_clear() -> tuple[list[dict[str, Any]], str | None]:
             try:
-                return await _load_execution_events_once(mongodb, cache_strategy_id)
+                return await _load_execution_events_once(
+                    mongodb, cache_strategy_id, force_mongodb=force_mongodb
+                )
             finally:
                 if _EXECUTION_EVENTS_IN_FLIGHT.get(key) is asyncio.current_task():
                     _EXECUTION_EVENTS_IN_FLIGHT.pop(key, None)
@@ -1208,6 +1221,7 @@ async def get_strategy_performance(strategy_id: str):
             return _unavailable_performance(strategy_id)
 
         source = mysql if mysql is not None else mongodb
+        used_mongodb_fallback = False
         orphan_mode = _round_overlay_mode()
         stage = "execution_events_read"
         try:
@@ -1218,17 +1232,34 @@ async def get_strategy_performance(strategy_id: str):
         except asyncio.CancelledError:
             raise
         except _AnalyticsDependencyTimeout as exc:
-            logger.warning(
-                "performance: stage=execution_events_read outcome=timeout "
-                "strategy=%s duration=%.3fs error_type=%s error=%r",
-                strategy_id,
-                monotonic() - request_started,
-                type(exc).__name__,
-                str(exc),
-            )
-            return _stale_performance(
-                strategy_id, source, exc
-            ) or _degraded_performance(strategy_id, exc)
+            if mysql is not None and mongodb is not None:
+                try:
+                    rows, latest_fill_id = await _load_execution_events(
+                        mongodb,
+                        strategy_id,
+                        force_mongodb=True,
+                    )
+                except Exception:
+                    pass
+                else:
+                    used_mongodb_fallback = True
+                    logger.warning(
+                        "performance: execution_events MySQL timeout; "
+                        "using MongoDB fallback strategy=%s",
+                        strategy_id,
+                    )
+            if not used_mongodb_fallback:
+                logger.warning(
+                    "performance: stage=execution_events_read outcome=timeout "
+                    "strategy=%s duration=%.3fs error_type=%s error=%r",
+                    strategy_id,
+                    monotonic() - request_started,
+                    type(exc).__name__,
+                    str(exc),
+                )
+                return _stale_performance(
+                    strategy_id, source, exc
+                ) or _degraded_performance(strategy_id, exc)
         except Exception as exc:
             logger.exception(
                 "performance: stage=execution_events_read outcome=error "
@@ -1419,7 +1450,9 @@ async def get_strategy_performance(strategy_id: str):
                 "calculated_at": datetime.now(UTC).isoformat(),
                 "source": "data-manager-pnl-calculator",
                 "history_source": (
-                    "execution_events_mysql"
+                    "execution_events_mongodb_fallback"
+                    if used_mongodb_fallback
+                    else "execution_events_mysql"
                     if mysql is not None
                     else "execution_events"
                 ),
