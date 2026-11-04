@@ -1266,7 +1266,16 @@ async def get_strategy_performance(strategy_id: str):
         except asyncio.CancelledError:
             raise
         except _AnalyticsDependencyTimeout as exc:
-            if mysql is not None and mongodb is not None:
+            cached = _cached_execution_events_after_timeout(mongodb, mysql, strategy_id)
+            if cached is not None:
+                rows, latest_fill_id = cached
+                used_cached_fallback = True
+                logger.warning(
+                    "performance: execution_events read timeout; "
+                    "using recent cached snapshot strategy=%s",
+                    strategy_id,
+                )
+            if not used_cached_fallback and mysql is not None and mongodb is not None:
                 try:
                     rows, latest_fill_id = await _load_execution_events(
                         mongodb,
@@ -1280,18 +1289,6 @@ async def get_strategy_performance(strategy_id: str):
                     logger.warning(
                         "performance: execution_events MySQL timeout; "
                         "using MongoDB fallback strategy=%s",
-                        strategy_id,
-                    )
-            if not used_mongodb_fallback:
-                cached = _cached_execution_events_after_timeout(
-                    mongodb, mysql, strategy_id
-                )
-                if cached is not None:
-                    rows, latest_fill_id = cached
-                    used_cached_fallback = True
-                    logger.warning(
-                        "performance: execution_events read timeout; "
-                        "using recent cached snapshot strategy=%s",
                         strategy_id,
                     )
             if not used_mongodb_fallback and not used_cached_fallback:
