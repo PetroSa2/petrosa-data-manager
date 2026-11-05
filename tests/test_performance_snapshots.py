@@ -64,15 +64,26 @@ def test_zero_sample_body_is_good():
     assert ps.is_good(body)
 
 
-def test_stale_snapshot_is_not_served(monkeypatch):
+def test_stale_snapshot_is_served_flagged_with_age(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(ps, "monotonic", lambda: clock[0])
     store = ps.PerformanceSnapshotStore(interval=10)
     store.put("s", _good())
     clock[0] += 10 * ps.STALE_AFTER_INTERVALS
-    assert store.get("s") is not None
+    assert store.get("s")["metadata"]["snapshot_status"] == "served"
     clock[0] += 0.001
-    assert store.get("s") is None
+    stale = store.get("s")
+    assert stale["metadata"]["snapshot_status"] == "stale"
+    assert stale["metadata"]["stale"] is True
+    assert stale["metadata"]["snapshot_age_seconds"] == pytest.approx(30.001)
+    assert stale["stats"]["win_rate"] == 0.5
+
+
+def test_cadence_follows_a_pass_longer_than_the_interval():
+    store = ps.PerformanceSnapshotStore(interval=10)
+    assert store.cadence == 10
+    store.last_pass_seconds = 25
+    assert store.cadence == 25
 
 
 def test_idle_strategies_are_forgotten(monkeypatch):
@@ -107,8 +118,9 @@ def test_refresh_sets_context_and_stores_each_strategy():
     assert store.get("b") is None
 
 
-def test_refresh_survives_errors_and_timeouts():
-    store = ps.PerformanceSnapshotStore(interval=0.05)
+def test_refresh_survives_errors_and_timeouts(monkeypatch):
+    monkeypatch.setattr(ps.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.025)
+    store = ps.PerformanceSnapshotStore(interval=60)
     for name in ("boom", "slow", "ok"):
         store.note_request(name)
 
@@ -121,6 +133,51 @@ def test_refresh_survives_errors_and_timeouts():
 
     outcomes = asyncio.run(store.refresh_once(compute))
     assert outcomes == {"boom": "error", "ok": "stored", "slow": "error"}
+
+
+def test_compute_over_budget_keeps_previous_snapshot(monkeypatch, caplog):
+    monkeypatch.setattr(ps.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.025)
+    assert ps.compute_cap_seconds() == pytest.approx(0.05)
+    store = ps.PerformanceSnapshotStore(interval=60)
+    store.note_request("s")
+    store.put("s", _good(0.3))
+
+    async def slow(_strategy_id: str) -> dict:
+        await asyncio.sleep(1)
+        return _good(0.9)
+
+    with caplog.at_level("INFO", logger=ps.__name__):
+        outcomes = asyncio.run(store.refresh_once(slow))
+    assert outcomes == {"s": "error"}
+    assert store.get("s")["stats"]["win_rate"] == 0.3
+    assert "refresh outcome=error strategy=s" in caplog.text
+    assert "pass strategies=1" in caplog.text
+    assert "error=1" in caplog.text
+
+
+def test_seed_registers_registry_strategies_and_survives_failure():
+    store = ps.PerformanceSnapshotStore(interval=60)
+    computed: list[str] = []
+
+    async def compute(strategy_id: str) -> dict:
+        computed.append(strategy_id)
+        return _good()
+
+    async def seed() -> list[str]:
+        return ["b", "a", ""]
+
+    async def broken_seed() -> list[str]:
+        raise RuntimeError("registry down")
+
+    assert asyncio.run(store.refresh_once(compute, seed)) == {
+        "a": "stored",
+        "b": "stored",
+    }
+    assert computed == ["a", "b"]
+    assert asyncio.run(store.refresh_once(compute, broken_seed)) == {
+        "a": "stored",
+        "b": "stored",
+    }
 
 
 def test_run_loops_until_cancelled():
