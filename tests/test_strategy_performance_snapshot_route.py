@@ -84,6 +84,31 @@ async def test_route_serves_stale_snapshot_flagged(store, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_route_expired_snapshot_is_degraded_without_compute(store, monkeypatch):
+    compute = AsyncMock(side_effect=AssertionError("must not compute inline"))
+    monkeypatch.setattr(analysis, "compute_strategy_performance", compute)
+    monkeypatch.setattr(analysis, "_snapshot_miss", compute)
+    clock = [1000.0]
+    monkeypatch.setattr(ps, "monotonic", lambda: clock[0])
+    store.put("S1", _good(0.4))
+    clock[0] += store.cadence * ps.EXPIRE_AFTER_INTERVALS + 1
+
+    response = await analysis.get_strategy_performance("S1")
+
+    compute.assert_not_awaited()
+    assert response["degraded"] is True
+    assert response["error"]["type"] == "PerformanceSnapshotExpired"
+    assert response["stats"]["win_rate"] is None
+    metadata = response["metadata"]
+    assert metadata["snapshot_status"] == "expired"
+    assert metadata["snapshot_age_seconds"] == pytest.approx(
+        store.cadence * ps.EXPIRE_AFTER_INTERVALS + 1
+    )
+    assert "snapshot_computed_at" in metadata
+    assert metadata["history_status"] == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_refresh_pass_fills_snapshot_served_by_next_request(store, monkeypatch):
     compute = AsyncMock(return_value=_good(0.6))
     monkeypatch.setattr(analysis, "compute_strategy_performance", compute)

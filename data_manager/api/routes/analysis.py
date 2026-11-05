@@ -1248,19 +1248,43 @@ async def get_strategy_performance(strategy_id: str):
     The snapshot is refreshed off the request path (``performance_snapshots``): the strategy registry is
     seeded every pass and any strategy asked for joins it. Until a strategy's first snapshot exists the route
     answers at once with an explicit ``warming`` result (``degraded=true``) instead of a slow inline read. A
-    snapshot past its freshness horizon is served with ``snapshot_status="stale"`` and its age.
+    snapshot past its freshness horizon is served with ``snapshot_status="stale"`` and its age; past its expiry
+    the answer is degraded (``snapshot_status="expired"``), never hours-old stats presented as current.
     """
     store = performance_snapshots.store
     store.note_request(strategy_id)
     served = store.get(strategy_id)
-    if served is not None:
-        return served
-    return await _snapshot_miss(strategy_id)
+    if served is None:
+        return await _snapshot_miss(strategy_id)
+    if served["metadata"].get("snapshot_status") == "expired":
+        return _expired_performance(strategy_id, served["metadata"])
+    return served
 
 
 async def _snapshot_miss(strategy_id: str) -> dict[str, Any]:
     """Answer a request that found no snapshot: warming, with no database read."""
     return _warming_performance(strategy_id)
+
+
+def _expired_performance(
+    strategy_id: str, snapshot_metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """The answer when the last good snapshot is past its expiry: degraded, with its age, no stats."""
+    error = {
+        "type": "PerformanceSnapshotExpired",
+        "message": "the last performance snapshot is too old to use; refreshes are failing",
+    }
+    response = _unavailable_performance(strategy_id)
+    response["degraded"] = True
+    response["error"] = error
+    response["metadata"].update(
+        source="data-manager-performance-snapshot",
+        degraded=True,
+        error=error,
+        snapshot_refresh_seconds=performance_snapshots.store.cadence,
+        **snapshot_metadata,
+    )
+    return response
 
 
 def _warming_performance(strategy_id: str) -> dict[str, Any]:
