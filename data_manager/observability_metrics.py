@@ -55,6 +55,15 @@ ATLAS_LOAD_CACHE_EVENTS = _meter.create_counter(
     "atlas_load_cache_events_total",
     description="Read-path cache hits and backend evaluations by route",
 )
+PERFORMANCE_SNAPSHOT_REFRESH = _meter.create_counter(
+    "performance_snapshot_refresh_total",
+    description="Strategy performance snapshot refreshes by strategy_id and outcome",
+)
+PERFORMANCE_SNAPSHOT_AGE = _meter.create_gauge(
+    "performance_snapshot_age_seconds",
+    description="Age of each strategy's performance snapshot after a refresh pass",
+    unit="s",
+)
 
 CANDLE_READINESS_DEPTH = Gauge(
     "data_manager_candle_readiness_depth",

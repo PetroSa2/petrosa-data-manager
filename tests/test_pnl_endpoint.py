@@ -20,6 +20,20 @@ from data_manager.api.routes.analysis import (
 T0 = datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def _performance_route_computes_inline(monkeypatch):
+    """These tests check the compute through HTTP: a snapshot miss computes inline (#738)."""
+    import data_manager.api.routes.analysis as analysis_route
+    from data_manager.services import performance_snapshots
+
+    monkeypatch.setattr(
+        performance_snapshots, "store", performance_snapshots.PerformanceSnapshotStore()
+    )
+    monkeypatch.setattr(
+        analysis_route, "_snapshot_miss", analysis_route.compute_strategy_performance
+    )
+
+
 def _fill(
     *,
     side: str,
@@ -454,7 +468,7 @@ async def test_performance_unavailable_response_preserves_assessor_contract(
 
     monkeypatch.setattr(api_module, "db_manager", None)
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert {
         "win_rate",
@@ -483,7 +497,7 @@ async def test_performance_read_failure_returns_iterable_degraded_stats(monkeypa
     loader = AsyncMock(side_effect=ValueError("execution events unavailable"))
     monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert response["degraded"] is True
     assert isinstance(response["stats"], dict)
@@ -509,7 +523,7 @@ async def test_performance_execution_event_timeout_preserves_assessor_contract(
         SimpleNamespace(mongodb_adapter=object()),
     )
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert response["degraded"] is True
     assert response["error"] == {
@@ -557,7 +571,7 @@ async def test_performance_mysql_timeout_falls_back_to_mongodb(monkeypatch):
     )
     monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert response.get("degraded", False) is False
     assert response["stats"]["win_rate"] == 1.0
@@ -591,7 +605,7 @@ async def test_performance_mysql_timeout_empty_mongodb_fallback_is_zero_sample(
     )
     monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert response.get("degraded", False) is False
     assert response["stats"]["win_rate"] == 0.0
@@ -642,7 +656,7 @@ async def test_performance_mysql_timeout_reuses_recent_cached_history(monkeypatc
         ),
     )
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert response.get("degraded", False) is False
     assert response["stats"]["win_rate"] == 1.0
@@ -675,7 +689,7 @@ async def test_performance_mysql_timeout_keeps_degraded_response_when_fallback_f
     )
     monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
 
-    response = await analysis_route.get_strategy_performance("S1")
+    response = await analysis_route.compute_strategy_performance("S1")
 
     assert response["degraded"] is True
     assert response["metadata"]["history_status"] == "unavailable"
@@ -698,8 +712,8 @@ async def test_performance_timeout_reuses_last_good_strategy_response(monkeypatc
     )
     monkeypatch.setattr(analysis_route, "_load_execution_events", loader)
     try:
-        fresh = await analysis_route.get_strategy_performance("S1")
-        stale = await analysis_route.get_strategy_performance("S1")
+        fresh = await analysis_route.compute_strategy_performance("S1")
+        stale = await analysis_route.compute_strategy_performance("S1")
         assert fresh["stats"]["win_rate"] == 1.0
         assert stale["degraded"] is True
         assert stale["stale"] is True
@@ -726,7 +740,7 @@ async def test_performance_keeps_base_contract_when_overlay_times_out(monkeypatc
     )
     try:
         _client_with_fills(rows)
-        response = await analysis_route.get_strategy_performance("S1")
+        response = await analysis_route.compute_strategy_performance("S1")
         assert response["stats"]["win_rate"] == 1.0
         assert response["stats"]["consecutive_losses"] == 0
         assert response["metadata"]["overlay_status"] == "timeout"
@@ -756,7 +770,7 @@ async def test_performance_bounds_leg_replay_timeout(monkeypatch):
     )
     try:
         _client_with_fills(rows)
-        response = await analysis_route.get_strategy_performance("S1")
+        response = await analysis_route.compute_strategy_performance("S1")
         assert response["metadata"]["overlay_status"] == "timeout"
         assert response["stats"]["consecutive_losses"] is None
     finally:

@@ -30,6 +30,7 @@ from pymongo.errors import NetworkTimeout
 import constants
 import data_manager.api.app as api_module
 from data_manager.observability_metrics import STRATEGY_SCORECARD_EVALUATE_TOTAL
+from data_manager.services import performance_snapshots
 from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,15 @@ _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS = 1.0
 _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.01")
 )
+
+
+def _execution_events_timeout() -> float:
+    """The execution-events read deadline: short on a request, the full budget in the background refresh."""
+    if performance_snapshots.snapshot_refresh_active.get():
+        return float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
+    return _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS
+
+
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
 )
@@ -724,7 +734,7 @@ async def _load_execution_events_once(
                 ),
                 min(
                     constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
-                    _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+                    _execution_events_timeout(),
                 ),
             )
         except TimeoutError as exc:
@@ -751,7 +761,7 @@ async def _load_execution_events_once(
             .to_list(length=_ROUND_MAX_FILLS),
             min(
                 constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
-                _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+                _execution_events_timeout(),
             ),
         )
     except TimeoutError as exc:
@@ -1233,6 +1243,70 @@ def win_rate_delta_with_noise_floor(
 
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
+    """Serve the strategy's background-refreshed snapshot; never read a database on the request path.
+
+    The snapshot is refreshed off the request path (``performance_snapshots``): the strategy registry is
+    seeded every pass and any strategy asked for joins it. Until a strategy's first snapshot exists the route
+    answers at once with an explicit ``warming`` result (``degraded=true``) instead of a slow inline read. A
+    snapshot past its freshness horizon is served with ``snapshot_status="stale"`` and its age; past its expiry
+    the answer is degraded (``snapshot_status="expired"``), never hours-old stats presented as current.
+    """
+    store = performance_snapshots.store
+    store.note_request(strategy_id)
+    served = store.get(strategy_id)
+    if served is None:
+        return await _snapshot_miss(strategy_id)
+    if served["metadata"].get("snapshot_status") == "expired":
+        return _expired_performance(strategy_id, served["metadata"])
+    return served
+
+
+async def _snapshot_miss(strategy_id: str) -> dict[str, Any]:
+    """Answer a request that found no snapshot: warming, with no database read."""
+    return _warming_performance(strategy_id)
+
+
+def _expired_performance(
+    strategy_id: str, snapshot_metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """The answer when the last good snapshot is past its expiry: degraded, with its age, no stats."""
+    error = {
+        "type": "PerformanceSnapshotExpired",
+        "message": "the last performance snapshot is too old to use; refreshes are failing",
+    }
+    response = _unavailable_performance(strategy_id)
+    response["degraded"] = True
+    response["error"] = error
+    response["metadata"].update(
+        source="data-manager-performance-snapshot",
+        degraded=True,
+        error=error,
+        snapshot_refresh_seconds=performance_snapshots.store.cadence,
+        **snapshot_metadata,
+    )
+    return response
+
+
+def _warming_performance(strategy_id: str) -> dict[str, Any]:
+    """The answer before a strategy's first background snapshot exists: explicit, immediate, no DB read."""
+    error = {
+        "type": "PerformanceSnapshotWarming",
+        "message": "no performance snapshot yet; the background refresh computes it",
+    }
+    response = _unavailable_performance(strategy_id)
+    response["degraded"] = True
+    response["error"] = error
+    response["metadata"].update(
+        source="data-manager-performance-snapshot",
+        degraded=True,
+        error=error,
+        snapshot_status="warming",
+        snapshot_refresh_seconds=performance_snapshots.store.cadence,
+    )
+    return response
+
+
+async def compute_strategy_performance(strategy_id: str):
     """
     Returns historical performance metrics for a specific strategy.
 

@@ -84,20 +84,36 @@ async def _config_rate_limit_middleware(request, call_next):
     return await config_rate_limit_middleware(request, call_next)
 
 
+async def _configured_strategy_ids() -> list[str]:
+    """The strategy registry (strategy configs) that seeds the performance snapshot refresh."""
+    adapter = getattr(db_manager, "mongodb_adapter", None)
+    if adapter is None:
+        return []
+    return list(await adapter.list_all_strategy_ids())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting Data Manager API")
     import asyncio
 
+    from data_manager.api.routes.analysis import compute_strategy_performance
     from data_manager.api.routes.trading_state import mysql_copy_worker
+    from data_manager.services import performance_snapshots
 
     worker = asyncio.create_task(mysql_copy_worker())
+    snapshots = asyncio.create_task(
+        performance_snapshots.store.run(
+            compute_strategy_performance, _configured_strategy_ids
+        )
+    )
     try:
         yield
     finally:
         worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        snapshots.cancel()
+        await asyncio.gather(worker, snapshots, return_exceptions=True)
         logger.info("Shutting down Data Manager API")
 
 
