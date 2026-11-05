@@ -560,9 +560,7 @@ def test_positions_tieout_excludes_live_reconciler_closes():
             ),
         ]
     )
-    repo._external_close_ids_for_tieout = lambda: {"reconciled-entry"}
-
-    result = repo.positions_tieout()
+    result = repo.positions_tieout(external_close_ids={"reconciled-entry"})
 
     btc = next(row for row in result["quantity_tieout"] if row["symbol"] == "BTCUSDT")
     assert btc["ledger_open_rows"] == 1
@@ -570,16 +568,18 @@ def test_positions_tieout_excludes_live_reconciler_closes():
     assert btc["status"] == "exchange_exceeds_ledger"
 
 
-def test_tieout_live_close_overlay_requires_mongo_when_mysql_is_available():
+@pytest.mark.asyncio
+async def test_tieout_live_close_overlay_requires_mongo_when_mysql_is_available():
     repo = FakeLedgerRepository([])
     repo.mysql = object()
 
     with pytest.raises(RuntimeError, match="MongoDB is not available") as error:
-        repo._external_close_ids_for_tieout()
+        await repo.live_closed_entry_order_ids_for_tieout()
     assert "MongoDB" in str(error.value)
 
 
-def test_tieout_live_close_overlay_reads_external_close_ids(monkeypatch):
+@pytest.mark.asyncio
+async def test_tieout_live_close_overlay_reads_external_close_ids(monkeypatch):
     repo = FakeLedgerRepository([])
     repo.mongodb = object()
 
@@ -588,7 +588,7 @@ def test_tieout_live_close_overlay_reads_external_close_ids(monkeypatch):
 
     monkeypatch.setattr(repo, "live_closed_entry_order_ids", read_ids)
 
-    assert repo._external_close_ids_for_tieout() == {"external-entry"}
+    assert await repo.live_closed_entry_order_ids_for_tieout() == {"external-entry"}
 
 
 def test_positions_tieout_compares_open_quantity_with_the_exchange_quantity():
