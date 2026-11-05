@@ -46,17 +46,41 @@ async def test_route_serves_snapshot_without_computing(store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_route_without_snapshot_computes_inline_and_registers(store, monkeypatch):
-    compute = AsyncMock(return_value=_good(0.5))
+async def test_route_miss_returns_warming_without_db_or_compute(store, monkeypatch):
+    compute = AsyncMock(side_effect=AssertionError("must not compute inline"))
     monkeypatch.setattr(analysis, "compute_strategy_performance", compute)
 
+    started = time.monotonic()
     response = await analysis.get_strategy_performance("S1")
 
-    assert response["stats"]["win_rate"] == 0.5
-    compute.assert_awaited_once_with("S1")
+    assert time.monotonic() - started < 0.1
+    compute.assert_not_awaited()
+    assert response["degraded"] is True
+    assert response["error"]["type"] == "PerformanceSnapshotWarming"
+    assert response["metadata"]["snapshot_status"] == "warming"
+    assert response["metadata"]["snapshot_refresh_seconds"] == store.cadence
+    assert set(response["stats"]) >= {
+        "win_rate",
+        "win_rate_delta",
+        "consecutive_losses",
+    }
     assert store.wanted() == ["S1"]
     # Only the background refresh stores snapshots; the request path never writes one.
     assert store.get("S1") is None
+
+
+@pytest.mark.asyncio
+async def test_route_serves_stale_snapshot_flagged(store, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(ps, "monotonic", lambda: clock[0])
+    store.put("S1", _good(0.4))
+    clock[0] += store.cadence * ps.STALE_AFTER_INTERVALS + 1
+
+    response = await analysis.get_strategy_performance("S1")
+
+    assert response["stats"]["win_rate"] == 0.4
+    assert response["metadata"]["snapshot_status"] == "stale"
+    assert response["metadata"]["stale"] is True
 
 
 @pytest.mark.asyncio
@@ -74,18 +98,17 @@ async def test_refresh_pass_fills_snapshot_served_by_next_request(store, monkeyp
     assert response["stats"]["win_rate"] == 0.6
 
 
-def test_background_refresh_uses_full_dependency_budget():
+def test_background_refresh_gives_only_the_read_the_full_budget():
     assert analysis._execution_events_timeout() == pytest.approx(
         analysis._PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS
-    )
-    assert analysis._overlay_timeout() == pytest.approx(
-        analysis._PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
     )
     token = ps.snapshot_refresh_active.set(True)
     try:
         full = constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
         assert analysis._execution_events_timeout() == pytest.approx(full)
-        assert analysis._overlay_timeout() == pytest.approx(full)
+        # The overlay keeps its request budget: measured live, a 5 s overlay still timed out and only
+        # added 5 s to every refresh.
+        assert not hasattr(analysis, "_overlay_timeout")
     finally:
         ps.snapshot_refresh_active.reset(token)
 

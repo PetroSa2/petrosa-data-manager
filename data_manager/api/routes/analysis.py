@@ -109,13 +109,6 @@ def _execution_events_timeout() -> float:
     return _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS
 
 
-def _overlay_timeout() -> float:
-    """The overlay deadline: short on a request, the full budget in the background refresh."""
-    if performance_snapshots.snapshot_refresh_active.get():
-        return float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
-    return _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
-
-
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
 )
@@ -577,12 +570,12 @@ async def _load_synthetic_exits(
             if combined_reader is not None:
                 history_version, history = await _run_bounded_heavy(
                     combined_reader,
-                    timeout_seconds=_overlay_timeout(),
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
                 )
             elif version_reader is None:
                 history = await _run_bounded_heavy(
                     repo.round_exchange_history,
-                    timeout_seconds=_overlay_timeout(),
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
                 )
                 history_version = (
                     history.get("cut_over_ms"),
@@ -598,7 +591,7 @@ async def _load_synthetic_exits(
             else:
                 history_version = await _run_bounded_heavy(
                     version_reader,
-                    timeout_seconds=_overlay_timeout(),
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
                 )
                 cached = _EXCHANGE_HISTORY_CACHE
                 if cached is not None and cached[:2] == (
@@ -608,7 +601,7 @@ async def _load_synthetic_exits(
                     return history_version, cached[2]
                 history = await _run_bounded_heavy(
                     repo.round_exchange_history,
-                    timeout_seconds=_overlay_timeout(),
+                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
                 )
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
             _EXCHANGE_HISTORY_CACHE_AT = monotonic()
@@ -667,7 +660,9 @@ async def _load_synthetic_exits(
             _SYNTHETIC_EXITS_IN_FLIGHT[version] = task
         try:
             try:
-                synthetic = await asyncio.wait_for(task, _overlay_timeout())
+                synthetic = await asyncio.wait_for(
+                    task, _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
+                )
             except TimeoutError as exc:
                 raise _AnalyticsDependencyTimeout from exc
         except Exception:
@@ -1248,18 +1243,43 @@ def win_rate_delta_with_noise_floor(
 
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
-    """Serve the strategy's background-refreshed snapshot; compute inline only when there is none.
+    """Serve the strategy's background-refreshed snapshot; never read a database on the request path.
 
-    The snapshot is refreshed off the request path (``performance_snapshots``), so a request costs no database
-    round trip. Asking for a strategy registers it for the next refresh pass. Until that pass has stored a good
-    snapshot, or after the snapshot went stale, the request computes inline as before.
+    The snapshot is refreshed off the request path (``performance_snapshots``): the strategy registry is
+    seeded every pass and any strategy asked for joins it. Until a strategy's first snapshot exists the route
+    answers at once with an explicit ``warming`` result (``degraded=true``) instead of a slow inline read. A
+    snapshot past its freshness horizon is served with ``snapshot_status="stale"`` and its age.
     """
     store = performance_snapshots.store
     store.note_request(strategy_id)
     served = store.get(strategy_id)
     if served is not None:
         return served
-    return await compute_strategy_performance(strategy_id)
+    return await _snapshot_miss(strategy_id)
+
+
+async def _snapshot_miss(strategy_id: str) -> dict[str, Any]:
+    """Answer a request that found no snapshot: warming, with no database read."""
+    return _warming_performance(strategy_id)
+
+
+def _warming_performance(strategy_id: str) -> dict[str, Any]:
+    """The answer before a strategy's first background snapshot exists: explicit, immediate, no DB read."""
+    error = {
+        "type": "PerformanceSnapshotWarming",
+        "message": "no performance snapshot yet; the background refresh computes it",
+    }
+    response = _unavailable_performance(strategy_id)
+    response["degraded"] = True
+    response["error"] = error
+    response["metadata"].update(
+        source="data-manager-performance-snapshot",
+        degraded=True,
+        error=error,
+        snapshot_status="warming",
+        snapshot_refresh_seconds=performance_snapshots.store.cadence,
+    )
+    return response
 
 
 async def compute_strategy_performance(strategy_id: str):
@@ -1389,7 +1409,7 @@ async def compute_strategy_performance(strategy_id: str):
                     "performance: bounded dependency timeout stage=exchange_history "
                     "strategy=%s timeout=%.3fs",
                     strategy_id,
-                    _overlay_timeout(),
+                    _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
                 )
                 exposure = _unavailable_exposure("timeout")
                 overlay = None
