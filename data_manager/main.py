@@ -129,6 +129,7 @@ class DataManagerApp:
             os.getenv("DM_DB_INIT_RETRY_CAP_SECONDS", "60")
         )
         self._database_consumers_started = False
+        self._coordination_pending = False
 
     def _set_leader_election_health_reference(self, leader_election) -> None:
         from data_manager import api
@@ -303,16 +304,16 @@ class DataManagerApp:
         """Wait until the startup or retry path publishes the database; False on shutdown.
 
         A component that needs the database waits for it instead of giving up for the pod's lifetime,
-        so a startup outage followed by a successful retry still starts it, exactly once.
+        so a startup outage followed by a successful retry still starts it, exactly once. The component
+        reports ``startup_component_up=1`` itself, where it actually starts.
         """
         if self.db_manager is None:
             self._component_up(component, False)
             logger.warning("%s waits for the database", component)
-        while self.db_manager is None:
+        while self.db_manager is None or getattr(self, "_coordination_pending", False):
             if self._shutdown_event.is_set():
                 return False
             await asyncio.sleep(max(self._db_retry_base_seconds, 1))
-        self._component_up(component, True)
         return True
 
     async def _ensure_mongodb_indexes_or_report(self) -> None:
@@ -365,16 +366,20 @@ class DataManagerApp:
                 self.leader_election = None
 
         if self.report_precomputer is None and constants.ENABLE_REPORT_PRECOMPUTE:
+            from data_manager import api
             from data_manager.services.report_precompute import ReportPrecomputer
 
-            self.report_precomputer = ReportPrecomputer(
-                self.db_manager, self.leader_election
-            )
-            from data_manager import api
-
-            api.app.report_precomputer = self.report_precomputer
-            await self.report_precomputer.start()
-            self._component_up("report_precompute", True)
+            try:
+                precomputer = ReportPrecomputer(self.db_manager, self.leader_election)
+                await precomputer.start()
+            except Exception as e:
+                # Never raise: on the retry path the consumers already run on this manager.
+                self._component_up("report_precompute", False)
+                logger.error(f"Failed to start report precompute: {e}", exc_info=True)
+            else:
+                self.report_precomputer = precomputer
+                api.app.report_precomputer = precomputer
+                self._component_up("report_precompute", True)
 
     async def start(self) -> None:
         """Start all application components."""
@@ -811,20 +816,30 @@ class DataManagerApp:
                 manager = DatabaseManager()
                 await manager.initialize()
                 db_init_attempts_total.labels(result="success").inc()
-                self.db_manager = manager
-                await self._check_schema_migrations()
-                await self._ensure_mongodb_indexes_or_report()
-                from data_manager import api
+                # Components waiting in _wait_for_database start only after leader
+                # election exists, so none of them acts as leader on every pod.
+                self._coordination_pending = True
+                try:
+                    self.db_manager = manager
+                    await self._check_schema_migrations()
+                    await self._ensure_mongodb_indexes_or_report()
+                    from data_manager import api
 
-                api.app.db_manager = manager
-                from data_manager.api.routes import config, ingest, service_config
+                    api.app.db_manager = manager
+                    from data_manager.api.routes import (
+                        config,
+                        ingest,
+                        service_config,
+                    )
 
-                config.set_database_manager(manager)
-                service_config.set_database_manager(manager)
-                ingest.set_database_manager(manager)
-                self._start_mongo_data_size_loop()
-                await self._start_database_consumers_after_retry()
-                await self._start_coordination()
+                    config.set_database_manager(manager)
+                    service_config.set_database_manager(manager)
+                    ingest.set_database_manager(manager)
+                    self._start_mongo_data_size_loop()
+                    await self._start_database_consumers_after_retry()
+                    await self._start_coordination()
+                finally:
+                    self._coordination_pending = False
                 logger.warning(
                     "Database connections initialized successfully after retry"
                 )
@@ -1109,6 +1124,7 @@ class DataManagerApp:
 
         # Check database health before starting
         if not self.db_manager.mongo_healthy():
+            self._component_up("auditor", False)
             logger.warning(
                 "Auditor not started: Database connections not healthy. "
                 "This is expected if databases are not yet configured."
@@ -1161,10 +1177,12 @@ class DataManagerApp:
             await backfill_trigger.start()
 
             self._set_audit_scheduler_health_reference(audit_scheduler)
+            self._component_up("auditor", True)
             await audit_scheduler.start()
         except Exception as e:
             logger.error(f"Error in auditor: {e}", exc_info=True)
         finally:
+            self._component_up("auditor", False)
             self._set_audit_scheduler_health_reference(None)
             if backfill_trigger is not None:
                 await backfill_trigger.stop()
@@ -1366,6 +1384,7 @@ class DataManagerApp:
 
         # Check database health before starting
         if not self.db_manager.mongo_healthy():
+            self._component_up("analytics", False)
             logger.warning(
                 "Analytics not started: Database connections not healthy. "
                 "This is expected if databases are not yet configured."
@@ -1379,9 +1398,12 @@ class DataManagerApp:
 
         try:
             analytics_scheduler = AnalyticsScheduler(self.db_manager)
+            self._component_up("analytics", True)
             await analytics_scheduler.start()
         except Exception as e:
             logger.error(f"Error in analytics: {e}", exc_info=True)
+        finally:
+            self._component_up("analytics", False)
 
         logger.info("Analytics stopped")
 
@@ -1402,10 +1424,12 @@ class DataManagerApp:
         if not await self._wait_for_database("drawdown_scheduler"):
             return
         if not getattr(self.db_manager, "mongodb_adapter", None):
+            self._component_up("drawdown_scheduler", False)
             logger.warning("DrawdownScheduler not started: no mongodb_adapter")
             return
 
         if not self.db_manager.mongo_healthy():
+            self._component_up("drawdown_scheduler", False)
             logger.warning("DrawdownScheduler not started: databases not healthy")
             return
 
@@ -1435,11 +1459,13 @@ class DataManagerApp:
                 nats_client=drawdown_nats_client,
             )
             await scheduler.start()
+            self._component_up("drawdown_scheduler", True)
             logger.info(
                 "drawdown_scheduler_started",
                 extra={"interval_seconds": 300},
             )
         except Exception as e:
+            self._component_up("drawdown_scheduler", False)
             logger.error(f"Error in DrawdownScheduler: {e}", exc_info=True)
 
     async def _run_ledger_tieout_scheduler(self) -> None:
@@ -1449,6 +1475,7 @@ class DataManagerApp:
         if not await self._wait_for_database("ledger_tieout"):
             return
         if not self.db_manager.mysql_adapter:
+            self._component_up("ledger_tieout", False)
             logger.warning("Ledger tie-out scheduler not started: no mysql_adapter")
             return
 
@@ -1467,7 +1494,9 @@ class DataManagerApp:
                 leader_election=self.leader_election,
             )
             await self.ledger_tieout_scheduler.start()
+            self._component_up("ledger_tieout", True)
         except Exception as exc:  # noqa: BLE001
+            self._component_up("ledger_tieout", False)
             logger.error(
                 "Error starting ledger tie-out scheduler: %s", exc, exc_info=True
             )
@@ -1508,9 +1537,12 @@ class DataManagerApp:
                 self.db_manager,
                 leader_election=self.leader_election,
             )
+            self._component_up("candle_warmup", True)
             await self.candle_warmup_scheduler.start()
         except Exception as e:
             logger.error(f"Error in candle warm-up scheduler: {e}", exc_info=True)
+        finally:
+            self._component_up("candle_warmup", False)
 
         logger.info("Candle warm-up scheduler stopped")
 

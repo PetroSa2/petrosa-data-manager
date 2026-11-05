@@ -140,7 +140,84 @@ async def test_analytics_waits_for_the_retry_then_starts_once(gauge, monkeypatch
 
     scheduler_cls.assert_called_once_with(manager)
     assert scheduler.start.await_count == 1
-    assert gauge.last("analytics") == 1
+    analytics = [
+        value for value, attrs in gauge.values if attrs == {"component": "analytics"}
+    ]
+    # 0 while waiting, 1 while the scheduler runs, 0 once it has stopped.
+    assert analytics == [0, 1, 0]
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_database_never_reports_analytics_up(gauge, monkeypatch):
+    monkeypatch.setattr(main_module.constants, "ENABLE_ANALYTICS", True)
+    app = DataManagerApp()
+    app.db_manager = MagicMock()
+    app.db_manager.mongo_healthy.return_value = False
+
+    await app._run_analytics()
+
+    assert [v for v, a in gauge.values if a == {"component": "analytics"}] == [0]
+
+
+@pytest.mark.asyncio
+async def test_runners_wait_while_retry_coordination_is_pending(gauge):
+    app = DataManagerApp()
+    app._db_retry_base_seconds = 0
+    app.db_manager = MagicMock()
+    app._coordination_pending = True
+    waiter = asyncio.create_task(app._wait_for_database("candle_warmup"))
+    await asyncio.sleep(0.05)
+    assert not waiter.done()
+    app._coordination_pending = False
+    assert await asyncio.wait_for(waiter, timeout=3) is True
+
+
+@pytest.mark.asyncio
+async def test_precompute_failure_in_retry_never_raises_or_reinitializes(
+    gauge, monkeypatch
+):
+    monkeypatch.setattr(main_module.constants, "ENABLE_LEADER_ELECTION", False)
+    monkeypatch.setattr(main_module.constants, "ENABLE_REPORT_PRECOMPUTE", True)
+    import data_manager.api.app as api_app
+
+    monkeypatch.setattr(api_app, "report_precomputer", None)
+    monkeypatch.setattr(api_app, "db_manager", None)
+    app = DataManagerApp()
+    app._db_retry_base_seconds = 0
+    manager = MagicMock()
+    manager.initialize = AsyncMock()
+    app._start_mongo_data_size_loop = MagicMock()
+    app._check_schema_migrations = AsyncMock()
+    app._ensure_mongodb_indexes_or_report = AsyncMock()
+    precomputer = MagicMock()
+    precomputer.start = AsyncMock(side_effect=RuntimeError("index create failed"))
+
+    with (
+        patch("data_manager.main.DatabaseManager", return_value=manager) as manager_cls,
+        patch("data_manager.main.IntentConsumer") as intent,
+        patch("data_manager.main.DecisionConsumer") as decision,
+        patch("data_manager.main.AlertDispatcher") as alerts,
+        patch("data_manager.main.ExecutionEventsConsumer") as execution,
+        patch("data_manager.main.PnlConsumer") as pnl,
+        patch(
+            "data_manager.services.report_precompute.ReportPrecomputer",
+            return_value=precomputer,
+        ),
+        patch("data_manager.main.asyncio.sleep", new=AsyncMock()),
+    ):
+        for consumer in (intent, decision, alerts, execution, pnl):
+            consumer.return_value.start = AsyncMock(return_value=True)
+        await app._retry_database_initialization()
+
+    assert manager_cls.call_count == 1
+    assert manager.initialize.await_count == 1
+    assert app.db_manager is manager
+    for consumer in (intent, decision, execution):
+        assert consumer.return_value.start.await_count == 1
+    assert app.report_precomputer is None
+    assert api_app.report_precomputer is None
+    assert gauge.last("report_precompute") == 0
+    assert app._coordination_pending is False
 
 
 @pytest.mark.asyncio
