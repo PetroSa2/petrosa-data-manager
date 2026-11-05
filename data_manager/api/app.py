@@ -84,6 +84,14 @@ async def _config_rate_limit_middleware(request, call_next):
     return await config_rate_limit_middleware(request, call_next)
 
 
+async def _configured_strategy_ids() -> list[str]:
+    """The strategy registry (strategy configs) that seeds the performance snapshot refresh."""
+    adapter = getattr(db_manager, "mongodb_adapter", None)
+    if adapter is None:
+        return []
+    return list(await adapter.list_all_strategy_ids())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -96,7 +104,9 @@ async def lifespan(app: FastAPI):
 
     worker = asyncio.create_task(mysql_copy_worker())
     snapshots = asyncio.create_task(
-        performance_snapshots.store.run(compute_strategy_performance)
+        performance_snapshots.store.run(
+            compute_strategy_performance, _configured_strategy_ids
+        )
     )
     try:
         yield

@@ -18,8 +18,8 @@ async def test_lifespan_starts_and_cancels_snapshot_refresh(monkeypatch):
     cancelled = asyncio.Event()
     seen: list[object] = []
 
-    async def fake_run(compute):
-        seen.append(compute)
+    async def fake_run(compute, seed):
+        seen.append((compute, seed))
         started.set()
         try:
             await asyncio.Event().wait()
@@ -36,5 +36,21 @@ async def test_lifespan_starts_and_cancels_snapshot_refresh(monkeypatch):
     async with api_module.lifespan(None):
         await asyncio.wait_for(started.wait(), timeout=2)
 
-    assert seen == [analysis.compute_strategy_performance]
+    assert seen == [
+        (analysis.compute_strategy_performance, api_module._configured_strategy_ids)
+    ]
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_seed_reads_strategy_registry(monkeypatch):
+    class Adapter:
+        async def list_all_strategy_ids(self):
+            return ["b", "a"]
+
+    monkeypatch.setattr(api_module, "db_manager", None)
+    assert await api_module._configured_strategy_ids() == []
+    monkeypatch.setattr(
+        api_module, "db_manager", type("M", (), {"mongodb_adapter": Adapter()})()
+    )
+    assert await api_module._configured_strategy_ids() == ["b", "a"]
