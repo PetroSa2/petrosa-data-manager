@@ -131,9 +131,11 @@ def test_background_refresh_gives_only_the_read_the_full_budget():
     try:
         full = constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS
         assert analysis._execution_events_timeout() == pytest.approx(full)
-        # The overlay keeps its request budget: measured live, a 5 s overlay still timed out and only
-        # added 5 s to every refresh.
-        assert not hasattr(analysis, "_overlay_timeout")
+        # The replay gets its own measured refresh budget (#842). #827 measured that a 5 s overlay still timed
+        # out live; the 2026-11-05 measurement explains why: an exchange-history reload takes up to 8.5 s. So
+        # the budget covers that case instead of sharing the 5 s read budget.
+        assert analysis._overlay_timeout() == pytest.approx(ps.overlay_budget_seconds())
+        assert analysis._overlay_timeout() > 8.5
     finally:
         ps.snapshot_refresh_active.reset(token)
 
