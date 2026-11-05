@@ -108,6 +108,10 @@ REGISTRY: dict[str, PersistenceSpec] = {
     ),
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
+    "exchange_positions": operational(
+        reason="legacy collection with no writer; kept untouched (never-tripped TTL) until the "
+        "operator decides to archive or drop it"
+    ),
     "trading_state_mysql_sequences": operational(
         reason="per-row MySQL copy version counters for trading state; must outlive "
         "the rows they version, so the TTL index never trips"
@@ -290,6 +294,7 @@ _STATE_COLLECTIONS = frozenset(
         "leverage_status",
         "restore_exercises",
         "trading_state_mysql_sequences",
+        "exchange_positions",
     }
 )
 

@@ -108,3 +108,15 @@ def test_trading_state_mysql_sequences_has_a_never_tripped_ttl():
     assert policy is not None
     assert policy.field == "_ttl_expires_at"
     assert policy.partial_filter_expression == {"_ttl_expires_at": {"$exists": True}}
+
+
+def test_legacy_exchange_positions_has_a_never_tripped_ttl():
+    """Present live with no registered policy; registered so startup TTL coverage passes (#829).
+
+    The TTL index only expires documents carrying ``_ttl_expires_at``, which nothing writes, so no
+    legacy data is deleted; archiving or dropping it is an operator decision.
+    """
+    policy = ttl_policy_for_collection("exchange_positions")
+    assert policy is not None
+    assert policy.field == "_ttl_expires_at"
+    assert policy.partial_filter_expression == {"_ttl_expires_at": {"$exists": True}}
