@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -426,3 +427,41 @@ def test_compute_cap_holds_the_read_the_replay_and_a_margin(monkeypatch):
 
     assert ps.compute_cap_seconds() == pytest.approx(5.0 + 15.0 + 5.0)
     assert ps.compute_cap_seconds() > 5.0 + 15.0
+
+
+def test_a_pass_counts_and_warns_about_replay_fallbacks(monkeypatch, caplog):
+    """#842: a snapshot whose replay timed out is counted, by strategy, and the pass warns."""
+    added: list[tuple[int, dict]] = []
+    monkeypatch.setattr(
+        ps.PERFORMANCE_REPLAY_FALLBACK, "add", lambda n, attrs: added.append((n, attrs))
+    )
+    store = ps.PerformanceSnapshotStore(interval=60)
+    for name in ("netting", "replayed"):
+        store.note_request(name)
+
+    async def compute(strategy_id: str) -> dict:
+        body = _good()
+        body["metadata"]["overlay_status"] = (
+            "timeout" if strategy_id == "netting" else "unavailable"
+        )
+        return body
+
+    with caplog.at_level(logging.WARNING):
+        outcomes = asyncio.run(store.refresh_once(compute))
+
+    assert outcomes == {"netting": "stored", "replayed": "stored"}
+    assert added == [(1, {"strategy_id": "netting"})]
+    assert "replay_fallback count=1 strategies=netting" in caplog.text
+
+
+def test_a_pass_without_fallbacks_does_not_warn(caplog):
+    store = ps.PerformanceSnapshotStore(interval=60)
+    store.note_request("replayed")
+
+    async def compute(_strategy_id: str) -> dict:
+        return _good()
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(store.refresh_once(compute))
+
+    assert "replay_fallback" not in caplog.text
