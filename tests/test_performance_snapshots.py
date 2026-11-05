@@ -120,6 +120,9 @@ def test_refresh_sets_context_and_stores_each_strategy():
 
 def test_refresh_survives_errors_and_timeouts(monkeypatch):
     monkeypatch.setattr(ps.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.025)
+    monkeypatch.setenv(
+        ps.OVERLAY_BUDGET_ENV, "0.025"
+    )  # cap 0.075 s, far below the 1 s compute
     store = ps.PerformanceSnapshotStore(interval=60)
     for name in ("boom", "slow", "ok"):
         store.note_request(name)
@@ -137,7 +140,8 @@ def test_refresh_survives_errors_and_timeouts(monkeypatch):
 
 def test_compute_over_budget_keeps_previous_snapshot(monkeypatch, caplog):
     monkeypatch.setattr(ps.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.025)
-    assert ps.compute_cap_seconds() == pytest.approx(0.05)
+    monkeypatch.setenv(ps.OVERLAY_BUDGET_ENV, "0.025")
+    assert ps.compute_cap_seconds() == pytest.approx(0.075)
     store = ps.PerformanceSnapshotStore(interval=60)
     store.note_request("s")
     store.put("s", _good(0.3))
@@ -401,3 +405,24 @@ def test_supervisor_restarts_a_loop_that_exits(monkeypatch, caplog):
     assert "refresh loop exited unexpectedly (CancelledError)" in caplog.text
     assert "refresh loop exited unexpectedly (RuntimeError)" in caplog.text
     assert gauge.values == [1, 0, 1, 0, 1, 0]
+
+
+def test_overlay_budget_is_configured_or_the_labelled_fallback(monkeypatch):
+    """#842: the refresh's replay budget covers the measured 8.5 s reload case."""
+    monkeypatch.delenv(ps.OVERLAY_BUDGET_ENV, raising=False)
+    assert ps.overlay_budget_seconds() == ps.OVERLAY_BUDGET_FALLBACK_SECONDS
+    assert ps.OVERLAY_BUDGET_FALLBACK_SECONDS > 8.5
+    monkeypatch.setenv(ps.OVERLAY_BUDGET_ENV, "12")
+    assert ps.overlay_budget_seconds() == 12.0
+    for bad in ("0", "-1", "soon"):
+        monkeypatch.setenv(ps.OVERLAY_BUDGET_ENV, bad)
+        assert ps.overlay_budget_seconds() == ps.OVERLAY_BUDGET_FALLBACK_SECONDS
+
+
+def test_compute_cap_holds_the_read_the_replay_and_a_margin(monkeypatch):
+    """#842: a replay that uses its whole budget after a full read still fits under the cap."""
+    monkeypatch.setattr(ps.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setenv(ps.OVERLAY_BUDGET_ENV, "15")
+
+    assert ps.compute_cap_seconds() == pytest.approx(5.0 + 15.0 + 5.0)
+    assert ps.compute_cap_seconds() > 5.0 + 15.0

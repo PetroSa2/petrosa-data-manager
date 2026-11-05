@@ -44,9 +44,12 @@ STALE_AFTER_INTERVALS = 3
 EXPIRE_AFTER_INTERVALS = 10
 #: A strategy nobody asked for (and not in the registry) during this many cadences is no longer refreshed.
 IDLE_AFTER_INTERVALS = 60
-#: One compute has two sequential stages that are each bounded by the dependency budget: the
-#: execution-events read and the replay. The cap per strategy is that many budgets.
-COMPUTE_STAGES = 2
+#: The leg-aware replay's budget in the refresh (#842). Measured 2026-11-05 in a throwaway pod: 0.5-2.3 s per
+#: strategy, up to 8.5 s right after an exchange-history reload. Fallback only, used when the env var is unset
+#: or invalid: that maximum with headroom. Never the 10 ms request-path budget, which made every pass fall back
+#: to the netting calculator.
+OVERLAY_BUDGET_ENV = "DATA_MANAGER_PERFORMANCE_REFRESH_OVERLAY_SECONDS"
+OVERLAY_BUDGET_FALLBACK_SECONDS = 15.0
 
 #: True while the background refresh computes a snapshot. The performance route reads it to give the
 #: execution-events read the full dependency budget there instead of the short request-path deadline.
@@ -78,9 +81,35 @@ def interval_seconds() -> float:
     return value
 
 
+def overlay_budget_seconds() -> float:
+    """The replay budget in the refresh: the configured value, or the labelled fallback (#842)."""
+    configured = os.getenv(OVERLAY_BUDGET_ENV)
+    if configured is None:
+        return OVERLAY_BUDGET_FALLBACK_SECONDS
+    try:
+        value = float(configured)
+    except ValueError:
+        value = 0.0
+    if value > 0:
+        return value
+    logger.warning(
+        "performance_snapshot: invalid %s=%r; using fallback %.1fs",
+        OVERLAY_BUDGET_ENV,
+        configured,
+        OVERLAY_BUDGET_FALLBACK_SECONDS,
+    )
+    return OVERLAY_BUDGET_FALLBACK_SECONDS
+
+
 def compute_cap_seconds() -> float:
-    """The most one strategy's compute may take in the refresh."""
-    return COMPUTE_STAGES * float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
+    """The most one strategy's compute may take in the refresh.
+
+    Its bounded stages in sequence: the execution-events read (the dependency budget), the leg-aware replay
+    (the overlay budget), and one more dependency budget as the margin for the analytics around them. So a
+    replay that finishes inside its own budget never hits the cap (#842).
+    """
+    read_budget = float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
+    return read_budget + overlay_budget_seconds() + read_budget
 
 
 def _being_cancelled() -> bool:
