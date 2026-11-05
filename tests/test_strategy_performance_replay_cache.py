@@ -338,7 +338,7 @@ async def test_performance_passes_shared_events_to_synthetic_exits(
     )
 
     try:
-        await analysis.get_strategy_performance("alpha")
+        await analysis.compute_strategy_performance("alpha")
     finally:
         api_module.db_manager = None
 
@@ -617,8 +617,8 @@ async def test_warm_request_does_not_replay_again(
     monkeypatch.setattr(analysis, "_timed_leg_replay", replay)
 
     with caplog.at_level("INFO", logger=analysis.logger.name):
-        await analysis.get_strategy_performance("alpha")
-        await analysis.get_strategy_performance("alpha")
+        await analysis.compute_strategy_performance("alpha")
+        await analysis.compute_strategy_performance("alpha")
 
     assert replay.await_count == 1
     assert len(history_reads) == 1
@@ -786,8 +786,8 @@ async def test_repeated_performance_requests_reuse_leg_replay(
     second_rows, second_version = await analysis._load_execution_events(
         api_module.db_manager.mongodb_adapter
     )
-    first = await analysis.get_strategy_performance("alpha")
-    second = await analysis.get_strategy_performance("alpha")
+    first = await analysis.compute_strategy_performance("alpha")
+    second = await analysis.compute_strategy_performance("alpha")
 
     assert second_rows == first_rows
     assert second_version == first_version
