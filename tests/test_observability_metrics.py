@@ -7,6 +7,7 @@ from data_manager.observability_metrics import (
     LEDGER_TIEOUT_VARIANCE,
     PERFORMANCE_SNAPSHOT_AGE,
     PERFORMANCE_SNAPSHOT_REFRESH,
+    STARTUP_COMPONENT_UP,
     STRATEGY_SCORECARD_EVALUATE_TOTAL,
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
@@ -268,3 +269,7 @@ def test_performance_snapshot_metrics_are_registered_on_otlp_meter():
         == "performance_snapshot_refresh_total"
     )
     assert metric_name(PERFORMANCE_SNAPSHOT_AGE) == "performance_snapshot_age_seconds"
+
+
+def test_startup_component_up_is_registered_on_otlp_meter():
+    assert metric_name(STARTUP_COMPONENT_UP) == "startup_component_up"
