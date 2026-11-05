@@ -27,6 +27,7 @@ import constants
 from data_manager.observability_metrics import (
     PERFORMANCE_SNAPSHOT_AGE,
     PERFORMANCE_SNAPSHOT_REFRESH,
+    STARTUP_COMPONENT_UP,
 )
 from data_manager.services.report_precompute import record_report_stage
 
@@ -82,14 +83,18 @@ def compute_cap_seconds() -> float:
     return COMPUTE_STAGES * float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
 
 
+def _being_cancelled() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
 def _raise_if_cancelling() -> None:
     """Stop when this task was cancelled, even if an inner ``wait_for`` swallowed the CancelledError.
 
     On Python 3.11 ``asyncio.wait_for`` can drop a cancel that lands while its inner call finishes; the
     task's ``cancelling()`` count stays above zero, so checking it keeps the refresh loop stoppable.
     """
-    task = asyncio.current_task()
-    if task is not None and task.cancelling():
+    if _being_cancelled():
         raise asyncio.CancelledError
 
 
@@ -178,8 +183,14 @@ class PerformanceSnapshotStore:
         try:
             async with asyncio.timeout(compute_cap_seconds()):
                 strategy_ids = await seed()
-        except asyncio.CancelledError:
-            raise
+        except asyncio.CancelledError as exc:
+            if _being_cancelled():
+                raise
+            logger.warning(
+                "performance_snapshot: seed outcome=error exception=%s",
+                type(exc).__name__,
+            )
+            return "error"
         except Exception as exc:
             logger.warning(
                 "performance_snapshot: seed outcome=error exception=%s",
@@ -209,8 +220,23 @@ class PerformanceSnapshotStore:
                 # loop then never stops (petrosa-data-manager#738).
                 async with asyncio.timeout(cap):
                     body = await compute(strategy_id)
-            except asyncio.CancelledError:
-                raise
+            except asyncio.CancelledError as exc:
+                if _being_cancelled():
+                    raise
+                # A CancelledError the compute raised on its own (e.g. a shared task another waiter
+                # cancelled) is a failed refresh of this strategy, not a stop of the loop (#738).
+                outcomes[strategy_id] = "error"
+                PERFORMANCE_SNAPSHOT_REFRESH.add(
+                    1, {"strategy_id": strategy_id, "outcome": "error"}
+                )
+                logger.warning(
+                    "performance_snapshot: refresh outcome=error strategy=%s "
+                    "duration=%.3fs exception=%s",
+                    strategy_id,
+                    monotonic() - started,
+                    type(exc).__name__,
+                )
+                continue
             except Exception as exc:
                 outcomes[strategy_id] = "error"
                 PERFORMANCE_SNAPSHOT_REFRESH.add(
@@ -278,6 +304,42 @@ class PerformanceSnapshotStore:
             except Exception:
                 logger.exception("performance_snapshot: refresh pass failed")
             await asyncio.sleep(max(0.0, self.interval - (monotonic() - started)))
+
+
+#: Restart backoff for the supervised loop: starts at one cadence, doubles, capped at this many cadences.
+RESTART_BACKOFF_MAX_INTERVALS = 10
+
+
+async def supervise(
+    store: PerformanceSnapshotStore, compute: Compute, seed: Seed | None = None
+) -> None:
+    """Run the refresh loop and restart it whenever it ends for any reason other than shutdown.
+
+    A loop that died silently left one pod serving expired snapshots for its whole lifetime (#738,
+    2026-11-05). Every unexpected exit is an ERROR, sets ``startup_component_up{performance_snapshots}``
+    to 0 and restarts after a backoff, so a future bug costs one pass, not the pod's lifetime.
+    """
+    backoff = store.interval
+    while True:
+        STARTUP_COMPONENT_UP.set(1, {"component": "performance_snapshots"})
+        try:
+            await store.run(compute, seed)
+            reason = "returned"
+        except asyncio.CancelledError:
+            if _being_cancelled():
+                STARTUP_COMPONENT_UP.set(0, {"component": "performance_snapshots"})
+                raise
+            reason = "CancelledError"
+        except Exception as exc:
+            reason = type(exc).__name__
+        STARTUP_COMPONENT_UP.set(0, {"component": "performance_snapshots"})
+        logger.error(
+            "performance_snapshot: refresh loop exited unexpectedly (%s); restarting in %.1fs",
+            reason,
+            backoff,
+        )
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, store.interval * RESTART_BACKOFF_MAX_INTERVALS)
 
 
 #: The process-wide store used by the performance route and started by the API lifespan.
