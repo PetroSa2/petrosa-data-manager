@@ -13,6 +13,35 @@ from data_manager.services import performance_snapshots as ps
 
 
 @pytest.mark.asyncio
+async def test_lifespan_runs_the_refresh_under_the_supervisor(monkeypatch):
+    seen: list[tuple] = []
+
+    async def fake_supervise(store, compute, seed):
+        seen.append((store, compute, seed))
+        await asyncio.Event().wait()
+
+    async def idle_worker():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(trading_state, "mysql_copy_worker", idle_worker)
+    monkeypatch.setattr(ps, "supervise", fake_supervise)
+
+    async with api_module.lifespan(None):
+        for _ in range(100):
+            if seen:
+                break
+            await asyncio.sleep(0.01)
+
+    assert seen == [
+        (
+            ps.store,
+            analysis.compute_strategy_performance,
+            api_module._configured_strategy_ids,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_lifespan_starts_and_cancels_snapshot_refresh(monkeypatch):
     started = asyncio.Event()
     cancelled = asyncio.Event()

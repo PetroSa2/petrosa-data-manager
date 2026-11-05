@@ -343,3 +343,61 @@ def test_pass_records_outcome_counter_age_gauge_and_seed_status(monkeypatch, cap
     assert "pass seed=ok strategies=2" in caplog.text
     assert "pass seed=error strategies=2" in caplog.text
     assert "pass seed=none strategies=2" in caplog.text
+
+
+def test_compute_raising_cancelled_error_is_an_error_not_a_stop():
+    """A CancelledError the compute raises itself (a poisoned shared task) must not stop the loop (#738)."""
+    store = ps.PerformanceSnapshotStore(interval=60)
+    store.note_request("poisoned")
+    store.note_request("ok")
+
+    async def compute(strategy_id: str) -> dict:
+        if strategy_id == "poisoned":
+            raise asyncio.CancelledError
+        return _good()
+
+    async def seed() -> list[str]:
+        raise asyncio.CancelledError
+
+    outcomes = asyncio.run(store.refresh_once(compute, seed))
+    assert outcomes == {"ok": "stored", "poisoned": "error"}
+
+
+class _GaugeRecorder:
+    def __init__(self) -> None:
+        self.values: list[int] = []
+
+    def set(self, value, attributes):
+        assert attributes == {"component": "performance_snapshots"}
+        self.values.append(value)
+
+
+def test_supervisor_restarts_a_loop_that_exits(monkeypatch, caplog):
+    gauge = _GaugeRecorder()
+    monkeypatch.setattr(ps, "STARTUP_COMPONENT_UP", gauge)
+    store = ps.PerformanceSnapshotStore(interval=0.01)
+    runs: list[int] = []
+
+    async def fake_run(compute, seed=None):
+        runs.append(1)
+        if len(runs) == 1:
+            raise asyncio.CancelledError  # a stray cancel, not a shutdown
+        if len(runs) == 2:
+            raise RuntimeError("unexpected")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(store, "run", fake_run)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(ps.supervise(store, lambda _s: None))
+        await asyncio.sleep(0.2)
+        assert len(runs) == 3
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), 2)
+
+    with caplog.at_level("ERROR", logger=ps.__name__):
+        asyncio.run(scenario())
+    assert "refresh loop exited unexpectedly (CancelledError)" in caplog.text
+    assert "refresh loop exited unexpectedly (RuntimeError)" in caplog.text
+    assert gauge.values == [1, 0, 1, 0, 1, 0]

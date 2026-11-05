@@ -104,8 +104,10 @@ async def lifespan(app: FastAPI):
 
     worker = asyncio.create_task(mysql_copy_worker())
     snapshots = asyncio.create_task(
-        performance_snapshots.store.run(
-            compute_strategy_performance, _configured_strategy_ids
+        performance_snapshots.supervise(
+            performance_snapshots.store,
+            compute_strategy_performance,
+            _configured_strategy_ids,
         )
     )
     try:

@@ -209,6 +209,23 @@ async def _run_bounded_heavy(
         raise _AnalyticsDependencyTimeout from exc
 
 
+def _evict_when_failed(
+    cache: dict[Any, Any], key: Any, task: asyncio.Task[Any]
+) -> None:
+    """Drop ``task`` from an in-flight cache as soon as it ends cancelled or with an error.
+
+    A shared task left under its version key after a cancel or failure is awaited by every later caller
+    of that version (#738: it killed the snapshot refresh loop).
+    """
+
+    def _done(finished: asyncio.Task[Any]) -> None:
+        failed = finished.cancelled() or finished.exception() is not None
+        if failed and cache.get(key) is finished:
+            cache.pop(key, None)
+
+    task.add_done_callback(_done)
+
+
 def _filter_strategy_rows(
     rows: list[dict[str, Any]], strategy_id: str, *, stringify: bool = False
 ) -> list[dict[str, Any]]:
@@ -653,20 +670,24 @@ async def _load_synthetic_exits(
     else:
         synthetic_started = monotonic()
         task = _SYNTHETIC_EXITS_IN_FLIGHT.get(version)
-        if task is None:
+        if task is None or task.cancelled():
             task = asyncio.create_task(
                 _run_heavy(build_synthetic_exits, all_fills, history)
             )
             _SYNTHETIC_EXITS_IN_FLIGHT[version] = task
+            _evict_when_failed(_SYNTHETIC_EXITS_IN_FLIGHT, version, task)
         try:
             try:
+                # Shielded: this waiter's deadline must not cancel the shared build.
                 synthetic = await asyncio.wait_for(
-                    task, _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
+                    asyncio.shield(task), _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
                 )
             except TimeoutError as exc:
                 raise _AnalyticsDependencyTimeout from exc
-        except Exception:
-            if _SYNTHETIC_EXITS_IN_FLIGHT.get(version) is task:
+        except BaseException:
+            # A finished-but-failed or cancelled task never stays under its version key; a still
+            # running one stays so the next caller joins it instead of starting a duplicate build.
+            if task.done() and _SYNTHETIC_EXITS_IN_FLIGHT.get(version) is task:
                 _SYNTHETIC_EXITS_IN_FLIGHT.pop(version, None)
             raise
         else:
@@ -1197,13 +1218,16 @@ async def _base_performance(
     if _BASE_PERFORMANCE_CACHE is not None and _BASE_PERFORMANCE_CACHE[:3] == version:
         return _BASE_PERFORMANCE_CACHE[3]
     task = _BASE_PERFORMANCE_IN_FLIGHT.get(version)
-    if task is None:
+    if task is None or task.cancelled():
         task = asyncio.create_task(_run_heavy(_calculate_base_performance, rows))
         _BASE_PERFORMANCE_IN_FLIGHT[version] = task
+        _evict_when_failed(_BASE_PERFORMANCE_IN_FLIGHT, version, task)
     try:
-        result = await task
-    except Exception:
-        if _BASE_PERFORMANCE_IN_FLIGHT.get(version) is task:
+        # Shielded: a cancelled waiter (request disconnect, refresh cap) must not cancel the
+        # shared task, or every later waiter of this version gets CancelledError (#738).
+        result = await asyncio.shield(task)
+    except BaseException:
+        if task.done() and _BASE_PERFORMANCE_IN_FLIGHT.get(version) is task:
             _BASE_PERFORMANCE_IN_FLIGHT.pop(version, None)
         raise
     if _BASE_PERFORMANCE_IN_FLIGHT.get(version) is task:
