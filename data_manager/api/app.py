@@ -90,14 +90,20 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Data Manager API")
     import asyncio
 
+    from data_manager.api.routes.analysis import compute_strategy_performance
     from data_manager.api.routes.trading_state import mysql_copy_worker
+    from data_manager.services import performance_snapshots
 
     worker = asyncio.create_task(mysql_copy_worker())
+    snapshots = asyncio.create_task(
+        performance_snapshots.store.run(compute_strategy_performance)
+    )
     try:
         yield
     finally:
         worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        snapshots.cancel()
+        await asyncio.gather(worker, snapshots, return_exceptions=True)
         logger.info("Shutting down Data Manager API")
 
 
