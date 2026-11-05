@@ -878,6 +878,54 @@ async def test_synthetic_replay_uses_the_short_overlay_budget(
         await analysis._load_synthetic_exits("alpha")
 
 
+def test_overlay_budget_is_one_refresh_interval_in_the_background_refresh(monkeypatch):
+    """#842: the 10 ms request budget never applies to the background refresh, where nobody waits."""
+    from data_manager.services import performance_snapshots
+
+    monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(performance_snapshots.store, "interval", 42.0)
+
+    assert analysis._overlay_timeout() == 0.01
+    token = performance_snapshots.snapshot_refresh_active.set(True)
+    try:
+        assert analysis._overlay_timeout() == 42.0
+    finally:
+        performance_snapshots.snapshot_refresh_active.reset(token)
+    assert analysis._overlay_timeout() == 0.01
+
+
+@pytest.mark.asyncio
+async def test_slow_replay_completes_in_the_refresh_but_times_out_on_a_request(
+    replay_environment, monkeypatch
+):
+    """#842: a replay slower than the request budget still finishes in the refresh, so the
+    snapshot gets the leg-aware book instead of the netting fallback."""
+    from data_manager.services import performance_snapshots
+
+    def slow_build(_rows, _exchange_history):
+        sleep(0.05)
+        return [{"strategy_id": "alpha", "event_type": "filled"}]
+
+    monkeypatch.setattr(
+        "data_manager.services.round_book.build_synthetic_exits", slow_build
+    )
+    monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(performance_snapshots.store, "interval", 5.0)
+
+    with pytest.raises(analysis._AnalyticsDependencyTimeout):
+        await analysis._load_synthetic_exits("alpha")
+    analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
+    analysis._SYNTHETIC_EXITS_CACHE = None
+
+    token = performance_snapshots.snapshot_refresh_active.set(True)
+    try:
+        rows, _cut_over = await analysis._load_synthetic_exits("alpha")
+    finally:
+        performance_snapshots.snapshot_refresh_active.reset(token)
+
+    assert rows == [{"strategy_id": "alpha", "event_type": "filled"}]
+
+
 @pytest.mark.parametrize(
     ("row", "expected"),
     [

@@ -102,6 +102,19 @@ _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
 )
 
 
+def _overlay_timeout() -> float:
+    """The exchange-history / synthetic-exits deadline of the leg-aware replay (#842).
+
+    On a request: the short request-path budget. In the background snapshot refresh no caller waits, so the
+    replay gets one refresh interval: measured 2026-11-05 it takes 0.5-2.3 s per strategy and up to 8.5 s
+    right after an exchange-history reload. The 10 ms request value there made every pass fall back to the
+    netting calculator, so the snapshots served its wins/losses instead of the leg-aware book's.
+    """
+    if performance_snapshots.snapshot_refresh_active.get():
+        return performance_snapshots.store.interval
+    return _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
+
+
 def _execution_events_timeout() -> float:
     """The execution-events read deadline: short on a request, the full budget in the background refresh."""
     if performance_snapshots.snapshot_refresh_active.get():
@@ -587,12 +600,12 @@ async def _load_synthetic_exits(
             if combined_reader is not None:
                 history_version, history = await _run_bounded_heavy(
                     combined_reader,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
             elif version_reader is None:
                 history = await _run_bounded_heavy(
                     repo.round_exchange_history,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
                 history_version = (
                     history.get("cut_over_ms"),
@@ -608,7 +621,7 @@ async def _load_synthetic_exits(
             else:
                 history_version = await _run_bounded_heavy(
                     version_reader,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
                 cached = _EXCHANGE_HISTORY_CACHE
                 if cached is not None and cached[:2] == (
@@ -618,7 +631,7 @@ async def _load_synthetic_exits(
                     return history_version, cached[2]
                 history = await _run_bounded_heavy(
                     repo.round_exchange_history,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
             _EXCHANGE_HISTORY_CACHE_AT = monotonic()
@@ -680,7 +693,7 @@ async def _load_synthetic_exits(
             try:
                 # Shielded: this waiter's deadline must not cancel the shared build.
                 synthetic = await asyncio.wait_for(
-                    asyncio.shield(task), _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
+                    asyncio.shield(task), _overlay_timeout()
                 )
             except TimeoutError as exc:
                 raise _AnalyticsDependencyTimeout from exc
@@ -1457,7 +1470,7 @@ async def compute_strategy_performance(strategy_id: str):
                     "performance: bounded dependency timeout stage=exchange_history "
                     "strategy=%s timeout=%.3fs",
                     strategy_id,
-                    _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    _overlay_timeout(),
                 )
                 exposure = _unavailable_exposure("timeout")
                 overlay = None
