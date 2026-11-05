@@ -176,6 +176,9 @@ async def _run_mysql_copy() -> None:
 
 
 async def mysql_copy_worker() -> None:
+    # The API lifespan starts this before main.py has an initialized manager; copying or
+    # dead-lettering before then wrote into a missing MySQL adapter (#829). Shutdown cancels the wait.
+    await api_module.wait_for_database()
     try:
         while True:
             _schedule_mysql_copy()
@@ -196,6 +199,17 @@ def _record_failure(operation: str, reason: str) -> None:
 def _dead_letter(
     adapter: Any, operation: str, document: dict[str, Any], reason: str
 ) -> bool:
+    if adapter is None:
+        # Dead letters live in MySQL; without an adapter the fallback fails by definition. Count it
+        # as before, but never attempt a write on None (#829: AttributeError ERROR lines at startup).
+        _copy_state["fallback_failed"] += 1
+        _copy_state["last_failure_reason"] = "adapter_missing"
+        TRADING_STATE_RECOVERY_EVENTS.add(1, {"outcome": "fallback_failed"})
+        logger.warning(
+            "trading_state_mysql_dead_letter_skipped operation=%s reason=adapter_missing",
+            operation,
+        )
+        return False
     payload = {
         "operation": operation,
         "reason": reason,
