@@ -109,8 +109,8 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
     "exchange_positions": operational(
-        reason="legacy collection with no writer; kept untouched (never-tripped TTL) until the "
-        "operator decides to archive or drop it"
+        reason="live exchange-level position state written by tradeengine through the "
+        "data-manager API (create/update_exchange_position); state, so its TTL never trips"
     ),
     "trading_state_mysql_sequences": operational(
         reason="per-row MySQL copy version counters for trading state; must outlive "
