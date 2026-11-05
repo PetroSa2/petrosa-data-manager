@@ -151,7 +151,7 @@ def test_compute_over_budget_keeps_previous_snapshot(monkeypatch, caplog):
     assert outcomes == {"s": "error"}
     assert store.get("s")["stats"]["win_rate"] == 0.3
     assert "refresh outcome=error strategy=s" in caplog.text
-    assert "pass strategies=1" in caplog.text
+    assert "pass seed=none strategies=1" in caplog.text
     assert "error=1" in caplog.text
 
 
@@ -198,3 +198,70 @@ def test_run_loops_until_cancelled():
 
     asyncio.run(scenario())
     assert len(calls) >= 2
+
+
+def test_snapshot_past_expiry_returns_expired_metadata_only(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(ps, "monotonic", lambda: clock[0])
+    store = ps.PerformanceSnapshotStore(interval=10)
+    store.put("s", _good())
+    clock[0] += 10 * ps.EXPIRE_AFTER_INTERVALS
+    assert store.get("s")["metadata"]["snapshot_status"] == "stale"
+    clock[0] += 0.001
+    expired = store.get("s")
+    assert expired == {
+        "metadata": {
+            "snapshot_status": "expired",
+            "snapshot_age_seconds": pytest.approx(100.001),
+            "snapshot_computed_at": expired["metadata"]["snapshot_computed_at"],
+        }
+    }
+    assert "stats" not in expired
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[float, dict]] = []
+
+    def add(self, value, attributes):
+        self.calls.append((value, attributes))
+
+    def set(self, value, attributes):
+        self.calls.append((value, attributes))
+
+
+def test_pass_records_outcome_counter_age_gauge_and_seed_status(monkeypatch, caplog):
+    counter, gauge = _Recorder(), _Recorder()
+    monkeypatch.setattr(ps, "PERFORMANCE_SNAPSHOT_REFRESH", counter)
+    monkeypatch.setattr(ps, "PERFORMANCE_SNAPSHOT_AGE", gauge)
+    monkeypatch.setattr(ps.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.025)
+    store = ps.PerformanceSnapshotStore(interval=60)
+    store.note_request("bad")
+
+    async def compute(strategy_id: str) -> dict:
+        if strategy_id == "bad":
+            raise RuntimeError("db down")
+        return _good()
+
+    async def seed() -> list[str]:
+        return ["good"]
+
+    async def broken_seed() -> list[str]:
+        raise RuntimeError("registry down")
+
+    with caplog.at_level("INFO", logger=ps.__name__):
+        asyncio.run(store.refresh_once(compute, seed))
+        asyncio.run(store.refresh_once(compute, broken_seed))
+        asyncio.run(store.refresh_once(compute))
+
+    assert counter.calls[:2] == [
+        (1, {"strategy_id": "bad", "outcome": "error"}),
+        (1, {"strategy_id": "good", "outcome": "stored"}),
+    ]
+    assert [attributes for _, attributes in gauge.calls] == [
+        {"strategy_id": "good"}
+    ] * 3
+    assert all(age >= 0 for age, _ in gauge.calls)
+    assert "pass seed=ok strategies=2" in caplog.text
+    assert "pass seed=error strategies=2" in caplog.text
+    assert "pass seed=none strategies=2" in caplog.text

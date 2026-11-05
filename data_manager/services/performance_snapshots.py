@@ -24,6 +24,10 @@ from time import monotonic
 from typing import Any
 
 import constants
+from data_manager.observability_metrics import (
+    PERFORMANCE_SNAPSHOT_AGE,
+    PERFORMANCE_SNAPSHOT_REFRESH,
+)
 from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,9 @@ INTERVAL_ENV = "DATA_MANAGER_PERFORMANCE_SNAPSHOT_INTERVAL_SECONDS"
 INTERVAL_FALLBACK_SECONDS = 60.0
 #: A snapshot older than this many cadences is served flagged ``stale`` (the ``ReportPrecomputer`` convention).
 STALE_AFTER_INTERVALS = 3
+#: A snapshot older than this many cadences has expired: it is no longer served, because a caller that does
+#: not read ``stale`` would act on it as current. The route answers degraded instead.
+EXPIRE_AFTER_INTERVALS = 10
 #: A strategy nobody asked for (and not in the registry) during this many cadences is no longer refreshed.
 IDLE_AFTER_INTERVALS = 60
 #: One compute has two sequential stages that are each bounded by the dependency budget: the
@@ -112,19 +119,26 @@ class PerformanceSnapshotStore:
     def get(self, strategy_id: str) -> dict[str, Any] | None:
         """Return a copy of the snapshot with its age, or ``None`` when there is none yet.
 
-        A snapshot older than ``STALE_AFTER_INTERVALS`` cadences is still served, flagged
-        ``snapshot_status="stale"`` with its age, so the caller can weigh it instead of getting nulls.
+        - Up to ``STALE_AFTER_INTERVALS`` cadences old: ``snapshot_status="served"``.
+        - Up to ``EXPIRE_AFTER_INTERVALS`` cadences: served, flagged ``snapshot_status="stale"`` and ``stale``.
+        - Older: only ``{"metadata": {...}}`` with ``snapshot_status="expired"``, the age and computed time,
+          and no stats. The caller answers degraded.
         """
         snapshot = self._snapshots.get(strategy_id)
         if snapshot is None:
             return None
         age = monotonic() - snapshot.computed_monotonic
+        snapshot_metadata = {
+            "snapshot_computed_at": snapshot.computed_at.isoformat(),
+            "snapshot_age_seconds": round(age, 3),
+        }
+        if age > self.cadence * EXPIRE_AFTER_INTERVALS:
+            return {"metadata": {"snapshot_status": "expired", **snapshot_metadata}}
         stale = age > self.cadence * STALE_AFTER_INTERVALS
         body = deepcopy(snapshot.body)
         metadata = body.setdefault("metadata", {})
         metadata["snapshot_status"] = "stale" if stale else "served"
-        metadata["snapshot_computed_at"] = snapshot.computed_at.isoformat()
-        metadata["snapshot_age_seconds"] = round(age, 3)
+        metadata.update(snapshot_metadata)
         if stale:
             metadata["stale"] = True
         return body
@@ -146,9 +160,10 @@ class PerformanceSnapshotStore:
             self._snapshots.pop(strategy_id, None)
         return sorted(self._requested)
 
-    async def _seed(self, seed: Seed | None) -> None:
+    async def _seed(self, seed: Seed | None) -> str:
+        """Register the registry's strategies; return ``none``, ``ok`` or ``error`` for the pass log."""
         if seed is None:
-            return
+            return "none"
         try:
             strategy_ids = await asyncio.wait_for(seed(), compute_cap_seconds())
         except asyncio.CancelledError:
@@ -158,17 +173,18 @@ class PerformanceSnapshotStore:
                 "performance_snapshot: seed outcome=error exception=%s",
                 type(exc).__name__,
             )
-            return
+            return "error"
         for strategy_id in strategy_ids:
             if strategy_id:
                 self.note_request(str(strategy_id))
+        return "ok"
 
     async def refresh_once(
         self, compute: Compute, seed: Seed | None = None
     ) -> dict[str, str]:
         """Recompute every wanted strategy once, one at a time; return each outcome."""
         pass_started = monotonic()
-        await self._seed(seed)
+        seed_status = await self._seed(seed)
         outcomes: dict[str, str] = {}
         cap = compute_cap_seconds()
         for strategy_id in self.wanted():
@@ -180,6 +196,9 @@ class PerformanceSnapshotStore:
                 raise
             except Exception as exc:
                 outcomes[strategy_id] = "error"
+                PERFORMANCE_SNAPSHOT_REFRESH.add(
+                    1, {"strategy_id": strategy_id, "outcome": "error"}
+                )
                 logger.warning(
                     "performance_snapshot: refresh outcome=error strategy=%s "
                     "duration=%.3fs cap=%.1fs exception=%s",
@@ -193,6 +212,9 @@ class PerformanceSnapshotStore:
                 snapshot_refresh_active.reset(token)
             kept = self.put(strategy_id, body)
             outcomes[strategy_id] = "stored" if kept else "kept_previous"
+            PERFORMANCE_SNAPSHOT_REFRESH.add(
+                1, {"strategy_id": strategy_id, "outcome": outcomes[strategy_id]}
+            )
             duration = monotonic() - started
             record_report_stage(
                 "performance", "snapshot_refresh", duration, source="refresh"
@@ -204,13 +226,19 @@ class PerformanceSnapshotStore:
                 duration,
             )
         self.last_pass_seconds = monotonic() - pass_started
+        now = monotonic()
+        for strategy_id, snapshot in self._snapshots.items():
+            PERFORMANCE_SNAPSHOT_AGE.set(
+                now - snapshot.computed_monotonic, {"strategy_id": strategy_id}
+            )
         counts = {
             outcome: list(outcomes.values()).count(outcome)
             for outcome in ("stored", "kept_previous", "error")
         }
         logger.info(
-            "performance_snapshot: pass strategies=%d duration=%.3fs cadence=%.1fs "
-            "stored=%d kept_previous=%d error=%d",
+            "performance_snapshot: pass seed=%s strategies=%d duration=%.3fs "
+            "cadence=%.1fs stored=%d kept_previous=%d error=%d",
+            seed_status,
             len(outcomes),
             self.last_pass_seconds,
             self.cadence,
