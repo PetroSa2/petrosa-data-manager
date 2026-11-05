@@ -64,6 +64,10 @@ PERFORMANCE_SNAPSHOT_AGE = _meter.create_gauge(
     description="Age of each strategy's performance snapshot after a refresh pass",
     unit="s",
 )
+STARTUP_COMPONENT_UP = _meter.create_gauge(
+    "startup_component_up",
+    description="1 when a startup component is running, 0 when it failed or waits for the database",
+)
 
 CANDLE_READINESS_DEPTH = Gauge(
     "data_manager_candle_readiness_depth",

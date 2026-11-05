@@ -13,6 +13,10 @@ async def test_database_retry_wires_manager_and_starts_consumers_once():
     manager = MagicMock()
     manager.initialize = AsyncMock()
     app._start_mongo_data_size_loop = MagicMock()
+    # Coordination and index coverage after a retry are covered in
+    # test_startup_component_recovery.py; here only the consumers are under test.
+    app._start_coordination = AsyncMock()
+    app._ensure_mongodb_indexes_or_report = AsyncMock()
 
     with (
         patch("data_manager.main.DatabaseManager", return_value=manager),

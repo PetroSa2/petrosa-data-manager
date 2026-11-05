@@ -108,6 +108,10 @@ REGISTRY: dict[str, PersistenceSpec] = {
     ),
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
+    "trading_state_mysql_sequences": operational(
+        reason="per-row MySQL copy version counters for trading state; must outlive "
+        "the rows they version, so the TTL index never trips"
+    ),
     "service_leases": transient_only(reason="coordination lease API; safe to recreate"),
     "config_rate_limits": transient_only(
         reason="bounded sliding-window rate-limit cache"
@@ -285,6 +289,7 @@ _STATE_COLLECTIONS = frozenset(
         "leverage_bounds",
         "leverage_status",
         "restore_exercises",
+        "trading_state_mysql_sequences",
     }
 )
 
@@ -367,6 +372,11 @@ def _literal_strings(node: ast.AST) -> set[str]:
     return set()
 
 
+#: Helper methods that take a collection name and return ``db[name]`` (for example
+#: ``TradingStateRepository._collection``). A name passed to them is a collection name too.
+_COLLECTION_ACCESSORS = frozenset({"_collection", "get_collection"})
+
+
 def scan_mongo_collection_names(root: str | Path) -> set[str]:
     """Find static Mongo collection names used by ``data_manager``."""
 
@@ -397,6 +407,14 @@ def scan_mongo_collection_names(root: str | Path) -> set[str]:
                             found.update(values)
 
         for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _COLLECTION_ACCESSORS
+                and node.args
+            ):
+                found.update(_literal_strings(node.args[0]))
+                continue
             if not isinstance(node, ast.Subscript):
                 continue
             base = node.value
