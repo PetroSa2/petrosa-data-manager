@@ -878,12 +878,12 @@ async def test_synthetic_replay_uses_the_short_overlay_budget(
         await analysis._load_synthetic_exits("alpha")
 
 
-def test_overlay_budget_is_one_refresh_interval_in_the_background_refresh(monkeypatch):
+def test_overlay_budget_is_the_refresh_budget_in_the_background_refresh(monkeypatch):
     """#842: the 10 ms request budget never applies to the background refresh, where nobody waits."""
     from data_manager.services import performance_snapshots
 
     monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(performance_snapshots.store, "interval", 42.0)
+    monkeypatch.setenv(performance_snapshots.OVERLAY_BUDGET_ENV, "42")
 
     assert analysis._overlay_timeout() == 0.01
     token = performance_snapshots.snapshot_refresh_active.set(True)
@@ -910,7 +910,7 @@ async def test_slow_replay_completes_in_the_refresh_but_times_out_on_a_request(
         "data_manager.services.round_book.build_synthetic_exits", slow_build
     )
     monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.001)
-    monkeypatch.setattr(performance_snapshots.store, "interval", 5.0)
+    monkeypatch.setenv(performance_snapshots.OVERLAY_BUDGET_ENV, "5")
 
     with pytest.raises(analysis._AnalyticsDependencyTimeout):
         await analysis._load_synthetic_exits("alpha")
@@ -924,6 +924,43 @@ async def test_slow_replay_completes_in_the_refresh_but_times_out_on_a_request(
         performance_snapshots.snapshot_refresh_active.reset(token)
 
     assert rows == [{"strategy_id": "alpha", "event_type": "filled"}]
+
+
+@pytest.mark.asyncio
+async def test_a_replay_just_under_its_budget_completes_inside_the_compute_cap(
+    replay_environment, monkeypatch
+):
+    """#842: the refresh's cap holds the read budget, the whole replay budget and a margin."""
+    from data_manager.services import performance_snapshots
+
+    monkeypatch.setattr(
+        analysis.constants, "ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS", 0.02
+    )
+    monkeypatch.setenv(performance_snapshots.OVERLAY_BUDGET_ENV, "0.2")
+    monkeypatch.setattr(analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", 0.001)
+
+    def build_just_under_budget(_rows, _exchange_history):
+        sleep(0.15)  # inside the 0.2 s replay budget; the cap is 0.02 + 0.2 + 0.02
+        return [{"strategy_id": "alpha", "event_type": "filled"}]
+
+    monkeypatch.setattr(
+        "data_manager.services.round_book.build_synthetic_exits",
+        build_just_under_budget,
+    )
+
+    async def compute(strategy_id):
+        rows, _cut_over = await analysis._load_synthetic_exits(strategy_id)
+        return {
+            "stats": {"exits": len(rows)},
+            "metadata": {"history_status": "computed"},
+        }
+
+    store = performance_snapshots.PerformanceSnapshotStore(interval=60)
+    store.note_request("alpha")
+    outcomes = await store.refresh_once(compute)
+
+    assert outcomes == {"alpha": "stored"}
+    assert store.get("alpha")["stats"] == {"exits": 1}
 
 
 @pytest.mark.parametrize(

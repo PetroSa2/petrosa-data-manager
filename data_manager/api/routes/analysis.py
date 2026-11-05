@@ -105,13 +105,13 @@ _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
 def _overlay_timeout() -> float:
     """The exchange-history / synthetic-exits deadline of the leg-aware replay (#842).
 
-    On a request: the short request-path budget. In the background snapshot refresh no caller waits, so the
-    replay gets one refresh interval: measured 2026-11-05 it takes 0.5-2.3 s per strategy and up to 8.5 s
-    right after an exchange-history reload. The 10 ms request value there made every pass fall back to the
-    netting calculator, so the snapshots served its wins/losses instead of the leg-aware book's.
+    On a request: the short request-path budget (requests are served from the snapshot anyway). In the
+    background snapshot refresh no caller waits, so the replay gets its measured refresh budget
+    (``performance_snapshots.overlay_budget_seconds``). The 10 ms request value there made every pass fall back
+    to the netting calculator, so the snapshots served its wins/losses instead of the leg-aware book's.
     """
     if performance_snapshots.snapshot_refresh_active.get():
-        return performance_snapshots.store.interval
+        return performance_snapshots.overlay_budget_seconds()
     return _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
 
 
