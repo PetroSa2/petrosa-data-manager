@@ -244,9 +244,16 @@ async def test_app_does_not_start_ledger_scheduler_without_database():
     from data_manager.main import DataManagerApp
 
     app = DataManagerApp()
+    app._db_retry_base_seconds = 0
 
     with patch("data_manager.main.constants.LEDGER_TIEOUT_SCHEDULER_ENABLED", True):
-        await app._run_ledger_tieout_scheduler()
+        # Without a database the scheduler waits for one (#829) and never starts;
+        # shutdown ends the wait.
+        runner = asyncio.create_task(app._run_ledger_tieout_scheduler())
+        await asyncio.sleep(0.05)
+        assert app.ledger_tieout_scheduler is None
+        app._shutdown_event.set()
+        await asyncio.wait_for(runner, timeout=3)
 
     assert app.ledger_tieout_scheduler is None
 
