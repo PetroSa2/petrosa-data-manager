@@ -30,6 +30,7 @@ from pymongo.errors import NetworkTimeout
 import constants
 import data_manager.api.app as api_module
 from data_manager.observability_metrics import STRATEGY_SCORECARD_EVALUATE_TOTAL
+from data_manager.services import performance_snapshots
 from data_manager.services.report_precompute import record_report_stage
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,22 @@ _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS = 1.0
 _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS = float(
     os.getenv("DATA_MANAGER_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", "0.01")
 )
+
+
+def _execution_events_timeout() -> float:
+    """The execution-events read deadline: short on a request, the full budget in the background refresh."""
+    if performance_snapshots.snapshot_refresh_active.get():
+        return float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
+    return _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS
+
+
+def _overlay_timeout() -> float:
+    """The overlay deadline: short on a request, the full budget in the background refresh."""
+    if performance_snapshots.snapshot_refresh_active.get():
+        return float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
+    return _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
+
+
 ROUND_BOOK_ORPHANED_LOTS = Gauge(
     "data_manager_round_book_orphaned_lots", "Orphaned round-book lots", ["strategy_id"]
 )
@@ -560,12 +577,12 @@ async def _load_synthetic_exits(
             if combined_reader is not None:
                 history_version, history = await _run_bounded_heavy(
                     combined_reader,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
             elif version_reader is None:
                 history = await _run_bounded_heavy(
                     repo.round_exchange_history,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
                 history_version = (
                     history.get("cut_over_ms"),
@@ -581,7 +598,7 @@ async def _load_synthetic_exits(
             else:
                 history_version = await _run_bounded_heavy(
                     version_reader,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
                 cached = _EXCHANGE_HISTORY_CACHE
                 if cached is not None and cached[:2] == (
@@ -591,7 +608,7 @@ async def _load_synthetic_exits(
                     return history_version, cached[2]
                 history = await _run_bounded_heavy(
                     repo.round_exchange_history,
-                    timeout_seconds=_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    timeout_seconds=_overlay_timeout(),
                 )
             _EXCHANGE_HISTORY_CACHE = (mysql_source_id, history_version, history)
             _EXCHANGE_HISTORY_CACHE_AT = monotonic()
@@ -650,9 +667,7 @@ async def _load_synthetic_exits(
             _SYNTHETIC_EXITS_IN_FLIGHT[version] = task
         try:
             try:
-                synthetic = await asyncio.wait_for(
-                    task, _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS
-                )
+                synthetic = await asyncio.wait_for(task, _overlay_timeout())
             except TimeoutError as exc:
                 raise _AnalyticsDependencyTimeout from exc
         except Exception:
@@ -724,7 +739,7 @@ async def _load_execution_events_once(
                 ),
                 min(
                     constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
-                    _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+                    _execution_events_timeout(),
                 ),
             )
         except TimeoutError as exc:
@@ -751,7 +766,7 @@ async def _load_execution_events_once(
             .to_list(length=_ROUND_MAX_FILLS),
             min(
                 constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS,
-                _PERFORMANCE_EXECUTION_EVENTS_TIMEOUT_SECONDS,
+                _execution_events_timeout(),
             ),
         )
     except TimeoutError as exc:
@@ -1233,6 +1248,21 @@ def win_rate_delta_with_noise_floor(
 
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
+    """Serve the strategy's background-refreshed snapshot; compute inline only when there is none.
+
+    The snapshot is refreshed off the request path (``performance_snapshots``), so a request costs no database
+    round trip. Asking for a strategy registers it for the next refresh pass. Until that pass has stored a good
+    snapshot, or after the snapshot went stale, the request computes inline as before.
+    """
+    store = performance_snapshots.store
+    store.note_request(strategy_id)
+    served = store.get(strategy_id)
+    if served is not None:
+        return served
+    return await compute_strategy_performance(strategy_id)
+
+
+async def compute_strategy_performance(strategy_id: str):
     """
     Returns historical performance metrics for a specific strategy.
 
@@ -1359,7 +1389,7 @@ async def get_strategy_performance(strategy_id: str):
                     "performance: bounded dependency timeout stage=exchange_history "
                     "strategy=%s timeout=%.3fs",
                     strategy_id,
-                    _PERFORMANCE_OVERLAY_TIMEOUT_SECONDS,
+                    _overlay_timeout(),
                 )
                 exposure = _unavailable_exposure("timeout")
                 overlay = None
