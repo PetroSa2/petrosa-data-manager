@@ -83,3 +83,28 @@ def test_config_rate_limits_uses_the_shared_timestamp_ttl_contract():
     assert policy.field == "timestamp"
     assert policy.seconds == 3600
     assert policy.partial_filter_expression is None
+
+
+def test_scanner_finds_names_passed_to_collection_helpers(tmp_path: Path):
+    module = tmp_path / "repository.py"
+    module.write_text(
+        "class Repo:\n"
+        "    def _collection(self, name):\n"
+        "        return self.db[name]\n"
+        "    async def bump(self):\n"
+        '        await self._collection("hidden_counter").find_one_and_update({}, {})\n'
+        '        await self.mongodb.get_collection("other_hidden").find_one({})\n',
+        encoding="utf-8",
+    )
+
+    assert {"hidden_counter", "other_hidden"} <= scan_mongo_collection_names(tmp_path)
+    assert unregistered_collections(tmp_path) == {"hidden_counter", "other_hidden"}
+
+
+def test_trading_state_mysql_sequences_has_a_never_tripped_ttl():
+    root = Path(__file__).parents[1] / "data_manager"
+    assert "trading_state_mysql_sequences" in scan_mongo_collection_names(root)
+    policy = ttl_policy_for_collection("trading_state_mysql_sequences")
+    assert policy is not None
+    assert policy.field == "_ttl_expires_at"
+    assert policy.partial_filter_expression == {"_ttl_expires_at": {"$exists": True}}
