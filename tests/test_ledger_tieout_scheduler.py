@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from data_manager.db.repositories.ledger_repository import LedgerRepository
 from data_manager.services.ledger_tieout_scheduler import LedgerTieoutScheduler
 
 
@@ -26,7 +27,9 @@ def _result():
 async def test_cycle_uses_lookback_range_and_sets_gauges():
     repository = MagicMock()
     repository.tieout.return_value = _result()
-    repository.positions_tieout.return_value = {"phantom_rows": [{"id": 1}]}
+    repository.positions_tieout_on_loop = AsyncMock(
+        return_value={"phantom_rows": [{"id": 1}]}
+    )
     scheduler = LedgerTieoutScheduler(
         repository,
         leader_election=MagicMock(is_leader=True),
@@ -115,7 +118,7 @@ async def test_disabled_leader_election_fails_closed():
 @pytest.mark.asyncio
 async def test_failure_isolated_and_next_run_succeeds(caplog):
     repository = MagicMock()
-    repository.positions_tieout.return_value = {"phantom_rows": []}
+    repository.positions_tieout_on_loop = AsyncMock(return_value={"phantom_rows": []})
     scheduler = LedgerTieoutScheduler(
         repository, leader_election=MagicMock(is_leader=True)
     )
@@ -143,20 +146,24 @@ async def test_failure_isolated_and_next_run_succeeds(caplog):
 
 @pytest.mark.asyncio
 async def test_repository_calls_run_off_event_loop():
-    repository = MagicMock()
     loop_thread = threading.get_ident()
     worker_threads = []
 
-    def tieout(first, last):
-        worker_threads.append(threading.get_ident())
-        return _result()
+    class Repository:
+        """The real on-loop wrapper around thread-side SQL work (#837)."""
 
-    def positions_tieout():
-        worker_threads.append(threading.get_ident())
-        return {"phantom_rows": []}
+        mongodb = None
+        positions_tieout_on_loop = LedgerRepository.positions_tieout_on_loop
 
-    repository.tieout.side_effect = tieout
-    repository.positions_tieout.side_effect = positions_tieout
+        def tieout(self, first, last):
+            worker_threads.append(threading.get_ident())
+            return _result()
+
+        def positions_tieout(self, *, external_close_ids=None):
+            worker_threads.append(threading.get_ident())
+            return {"phantom_rows": []}
+
+    repository = Repository()
     await LedgerTieoutScheduler(
         repository, leader_election=MagicMock(is_leader=True)
     ).run_cycle()
@@ -271,3 +278,33 @@ async def test_app_stops_ledger_scheduler():
         await app.stop()
 
     scheduler.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cycle_outcomes_are_counted():
+    """A running but failing scheduler is visible: failed and successful cycles are counted (#837)."""
+    repository = MagicMock()
+    repository.positions_tieout_on_loop = AsyncMock(return_value={"phantom_rows": []})
+    scheduler = LedgerTieoutScheduler(
+        repository, leader_election=MagicMock(is_leader=True)
+    )
+    scheduler.interval_seconds = 0.001
+    scheduler.running = True
+    calls = 0
+
+    def tieout(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("got Future attached to a different loop")
+        scheduler.running = False
+        return _result()
+
+    repository.tieout.side_effect = tieout
+    with patch(
+        "data_manager.services.ledger_tieout_scheduler.LEDGER_TIEOUT_CYCLES"
+    ) as cycles:
+        await asyncio.wait_for(scheduler._loop(), timeout=1)
+
+    outcomes = [call.args[1]["outcome"] for call in cycles.add.call_args_list]
+    assert outcomes == ["failed", "success"]

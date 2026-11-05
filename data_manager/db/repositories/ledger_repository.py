@@ -57,15 +57,6 @@ class LedgerRepository(BaseRepository):
         with engine.begin() as connection:
             return connection.execute(text(statement), params or {})
 
-    def _external_close_ids_for_tieout(
-        self, *, allow_missing: bool = False
-    ) -> set[str]:
-        if self.mongodb is None:
-            if allow_missing or getattr(self, "historic_only", False):
-                return set()
-            raise RuntimeError("MongoDB is not available")
-        return asyncio.run(self.live_closed_entry_order_ids())
-
     @staticmethod
     def economic_hash(payload: dict[str, Any]) -> str:
         economic = {
@@ -482,8 +473,48 @@ class LedgerRepository(BaseRepository):
             "cumulative_variance": str(cumulative),
         }
 
-    def positions_tieout(self) -> dict[str, Any]:
-        """Compare latest exchange positions with open historic rows."""
+    async def live_closed_entry_order_ids_for_tieout(self) -> set[str]:
+        """The live closed-entry ids, read on the caller's event loop (the Motor client's loop).
+
+        The same semantics as the old in-thread read: empty when Mongo is absent in historic-only mode, else
+        raise when Mongo is unavailable.
+        """
+        if self.mongodb is None:
+            if getattr(self, "historic_only", False):
+                return set()
+            raise RuntimeError("MongoDB is not available")
+        return await self.live_closed_entry_order_ids()
+
+    async def positions_tieout_on_loop(self) -> dict[str, Any]:
+        """``positions_tieout`` with its Motor read on the running loop and its MySQL work in a thread.
+
+        Running the Motor read from a worker thread (``asyncio.run`` inside ``to_thread``) failed every
+        time with "Future attached to a different loop" (petrosa-data-manager#837).
+        """
+        if self.mongodb is None:
+            external_close_ids: set[str] | None = None
+        else:
+            external_close_ids = await self.live_closed_entry_order_ids_for_tieout()
+        return await asyncio.to_thread(
+            self.positions_tieout, external_close_ids=external_close_ids
+        )
+
+    def positions_tieout(
+        self, *, external_close_ids: set[str] | None = None
+    ) -> dict[str, Any]:
+        """Compare latest exchange positions with open historic rows.
+
+        ``external_close_ids``: the live closed-entry ids, read beforehand on the event loop
+        (``positions_tieout_on_loop``). Without them this method is only valid when Mongo is absent.
+        """
+        if external_close_ids is None:
+            if self.mongodb is not None:
+                # Never read Motor from here: this runs in a worker thread (#837).
+                raise RuntimeError(
+                    "positions_tieout needs external_close_ids read on the event loop; "
+                    "use positions_tieout_on_loop()"
+                )
+            external_close_ids = set()
         snapshot = (
             self._run(
                 "SELECT * FROM ledger_exchange_positions_snapshot ORDER BY as_of_ms DESC LIMIT 1"
@@ -512,12 +543,7 @@ class LedgerRepository(BaseRepository):
             .mappings()
             .all()
         )
-        try:
-            external_close_ids = self._external_close_ids_for_tieout()
-        except RuntimeError:
-            if self.mongodb is not None:
-                raise
-            external_close_ids = set()
+
         ledger = (
             self._run(
                 "SELECT entry_order_id, symbol, position_side, quantity "

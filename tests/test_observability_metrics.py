@@ -3,6 +3,7 @@ from data_manager.observability import mongo_metrics
 from data_manager.observability_metrics import (
     LEDGER_OPEN_POSITION_VARIANCE,
     LEDGER_TIEOUT_CUMULATIVE,
+    LEDGER_TIEOUT_CYCLES,
     LEDGER_TIEOUT_LAST_COMPLETE_DAY,
     LEDGER_TIEOUT_VARIANCE,
     PERFORMANCE_SNAPSHOT_AGE,
@@ -273,3 +274,7 @@ def test_performance_snapshot_metrics_are_registered_on_otlp_meter():
 
 def test_startup_component_up_is_registered_on_otlp_meter():
     assert metric_name(STARTUP_COMPONENT_UP) == "startup_component_up"
+
+
+def test_ledger_tieout_cycles_is_registered_on_otlp_meter():
+    assert metric_name(LEDGER_TIEOUT_CYCLES) == "ledger_tieout_cycles_total"
