@@ -780,28 +780,69 @@ class DataManagerApp:
         await self._shutdown_event.wait()
 
     async def _start_database_consumers_after_retry(self) -> None:
-        """Start consumers that were intentionally deferred during DB outage."""
+        """Start consumers that were intentionally deferred during DB outage.
+
+        All or nothing: if one consumer fails to start, the ones started in this call are stopped and
+        cleared before the error propagates, so the next retry starts each consumer exactly once on its
+        new manager instead of leaving earlier ones bound to the failed one.
+        """
         if self._database_consumers_started or self.db_manager is None:
             return
-        if constants.ENABLE_INTENT_CONSUMER:
-            self.intent_consumer = IntentConsumer(db_manager=self.db_manager)
-            await self.intent_consumer.start()
-        if constants.ENABLE_DECISION_CONSUMER:
-            self.decision_consumer = DecisionConsumer(db_manager=self.db_manager)
-            await self.decision_consumer.start()
-        if constants.ENABLE_ALERT_DISPATCHER:
-            self.alert_dispatcher = AlertDispatcher(
-                db_manager=self.db_manager, subject=constants.NATS_ALERTS_SUBJECT
-            )
-            await self.alert_dispatcher.start()
-        if constants.ENABLE_EXECUTION_EVENTS_CONSUMER:
-            self.execution_events_consumer = ExecutionEventsConsumer(
-                db_manager=self.db_manager
-            )
-            await self.execution_events_consumer.start()
-        if constants.ENABLE_PNL_CONSUMER:
-            self.pnl_consumer = PnlConsumer(db_manager=self.db_manager)
-            await self.pnl_consumer.start()
+        specs: list[tuple[bool, str, Any]] = [
+            (
+                constants.ENABLE_INTENT_CONSUMER,
+                "intent_consumer",
+                lambda: IntentConsumer(db_manager=self.db_manager),
+            ),
+            (
+                constants.ENABLE_DECISION_CONSUMER,
+                "decision_consumer",
+                lambda: DecisionConsumer(db_manager=self.db_manager),
+            ),
+            (
+                constants.ENABLE_ALERT_DISPATCHER,
+                "alert_dispatcher",
+                lambda: AlertDispatcher(
+                    db_manager=self.db_manager, subject=constants.NATS_ALERTS_SUBJECT
+                ),
+            ),
+            (
+                constants.ENABLE_EXECUTION_EVENTS_CONSUMER,
+                "execution_events_consumer",
+                lambda: ExecutionEventsConsumer(db_manager=self.db_manager),
+            ),
+            (
+                constants.ENABLE_PNL_CONSUMER,
+                "pnl_consumer",
+                lambda: PnlConsumer(db_manager=self.db_manager),
+            ),
+        ]
+        started: list[str] = []
+        try:
+            for enabled, attribute, build in specs:
+                if not enabled:
+                    continue
+                consumer = build()
+                setattr(self, attribute, consumer)
+                await consumer.start()
+                started.append(attribute)
+        except BaseException:
+            for attribute in reversed(started):
+                consumer = getattr(self, attribute, None)
+                try:
+                    if consumer is not None:
+                        await consumer.stop()
+                except Exception as exc:
+                    logger.warning(
+                        "Stopping %s after a failed retry start failed: %s",
+                        attribute,
+                        exc,
+                    )
+                setattr(self, attribute, None)
+            for enabled, attribute, _build in specs:
+                if enabled and attribute not in started:
+                    setattr(self, attribute, None)
+            raise
         self._database_consumers_started = True
 
     async def _retry_database_initialization(self) -> None:

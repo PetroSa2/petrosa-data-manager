@@ -295,3 +295,62 @@ async def test_retry_failure_after_publish_never_releases_waiters_on_that_manage
     first.shutdown.assert_awaited_once()
     second.shutdown.assert_not_awaited()
     assert app._coordination_pending is False
+
+
+@pytest.mark.asyncio
+async def test_consumer_start_after_retry_is_all_or_nothing(monkeypatch):
+    for flag in (
+        "ENABLE_INTENT_CONSUMER",
+        "ENABLE_DECISION_CONSUMER",
+        "ENABLE_ALERT_DISPATCHER",
+        "ENABLE_EXECUTION_EVENTS_CONSUMER",
+        "ENABLE_PNL_CONSUMER",
+    ):
+        monkeypatch.setattr(main_module.constants, flag, True)
+    app = DataManagerApp()
+    app.db_manager = MagicMock()
+    built: dict[str, list[MagicMock]] = {}
+
+    def factory(name, fail_first=False):
+        def build(*_args, **_kwargs):
+            consumer = MagicMock(name=name)
+            first = not built.get(name)
+            consumer.start = AsyncMock(
+                side_effect=RuntimeError("nats down") if fail_first and first else None,
+                return_value=True,
+            )
+            consumer.stop = AsyncMock()
+            built.setdefault(name, []).append(consumer)
+            return consumer
+
+        return build
+
+    with (
+        patch("data_manager.main.IntentConsumer", side_effect=factory("intent")),
+        patch(
+            "data_manager.main.DecisionConsumer",
+            side_effect=factory("decision", fail_first=True),
+        ),
+        patch("data_manager.main.AlertDispatcher", side_effect=factory("alerts")),
+        patch(
+            "data_manager.main.ExecutionEventsConsumer",
+            side_effect=factory("execution"),
+        ),
+        patch("data_manager.main.PnlConsumer", side_effect=factory("pnl")),
+    ):
+        with pytest.raises(RuntimeError, match="nats down"):
+            await app._start_database_consumers_after_retry()
+        # The consumer started before the failure is stopped and cleared; nothing stays bound.
+        built["intent"][0].stop.assert_awaited_once()
+        assert app._database_consumers_started is False
+        assert app.intent_consumer is None and app.decision_consumer is None
+        assert "alerts" not in built
+
+        await app._start_database_consumers_after_retry()
+        await app._start_database_consumers_after_retry()
+
+    assert app._database_consumers_started is True
+    for name in ("intent", "decision", "alerts", "execution", "pnl"):
+        assert built[name][-1].start.await_count == 1
+    assert len(built["intent"]) == 2 and len(built["alerts"]) == 1
+    assert app.intent_consumer is built["intent"][-1]
