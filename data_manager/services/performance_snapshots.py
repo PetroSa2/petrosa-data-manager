@@ -165,7 +165,8 @@ class PerformanceSnapshotStore:
         if seed is None:
             return "none"
         try:
-            strategy_ids = await asyncio.wait_for(seed(), compute_cap_seconds())
+            async with asyncio.timeout(compute_cap_seconds()):
+                strategy_ids = await seed()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -191,7 +192,11 @@ class PerformanceSnapshotStore:
             started = monotonic()
             token = snapshot_refresh_active.set(True)
             try:
-                body = await asyncio.wait_for(compute(strategy_id), cap)
+                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can swallow an
+                # outer cancel when the inner call finishes at the same moment, and the
+                # loop then never stops (petrosa-data-manager#738).
+                async with asyncio.timeout(cap):
+                    body = await compute(strategy_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
