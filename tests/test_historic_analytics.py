@@ -168,7 +168,7 @@ async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
     mysql = MySQLFake([])
     api_module.db_manager = SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None)
     try:
-        result = await analysis.get_strategy_performance("active")
+        result = await analysis.compute_strategy_performance("active")
     finally:
         api_module.db_manager = None
 
