@@ -27,6 +27,10 @@ LEDGER_TIEOUT_LAST_COMPLETE_DAY = _meter.create_gauge(
     "ledger_tieout_last_complete_day",
     description="Last complete UTC day included in tie-out",
 )
+LEDGER_TIEOUT_CYCLES = _meter.create_counter(
+    "ledger_tieout_cycles_total",
+    description="Ledger tie-out scheduler cycles by outcome (success, failed)",
+)
 LEDGER_OPEN_POSITION_VARIANCE = _meter.create_gauge(
     "ledger_open_positions_variance",
     description="Ledger rows without exchange positions",
