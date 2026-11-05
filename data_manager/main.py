@@ -818,16 +818,21 @@ class DataManagerApp:
             ),
         ]
         started: list[str] = []
+        starting: str | None = None
         try:
             for enabled, attribute, build in specs:
                 if not enabled:
                     continue
+                starting = attribute
                 consumer = build()
                 setattr(self, attribute, consumer)
                 await consumer.start()
                 started.append(attribute)
+                starting = None
         except BaseException:
-            for attribute in reversed(started):
+            # The consumer whose start() raised may have opened a subscription or task first.
+            to_stop = ([starting] if starting else []) + list(reversed(started))
+            for attribute in to_stop:
                 consumer = getattr(self, attribute, None)
                 try:
                     if consumer is not None:

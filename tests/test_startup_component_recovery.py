@@ -342,6 +342,8 @@ async def test_consumer_start_after_retry_is_all_or_nothing(monkeypatch):
             await app._start_database_consumers_after_retry()
         # The consumer started before the failure is stopped and cleared; nothing stays bound.
         built["intent"][0].stop.assert_awaited_once()
+        # The consumer whose own start() raised is stopped too (it may have half-started).
+        built["decision"][0].stop.assert_awaited_once()
         assert app._database_consumers_started is False
         assert app.intent_consumer is None and app.decision_consumer is None
         assert "alerts" not in built
