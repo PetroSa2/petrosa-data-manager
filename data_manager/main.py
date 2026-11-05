@@ -425,7 +425,7 @@ class DataManagerApp:
             if self.api_server_task:
                 from data_manager import api
 
-                api.app.db_manager = self.db_manager
+                api.app.publish_database(self.db_manager)
                 # Also update repositories in routers
                 from data_manager.api.routes import config, ingest, service_config
 
@@ -871,7 +871,7 @@ class DataManagerApp:
                     await self._ensure_mongodb_indexes_or_report()
                     from data_manager import api
 
-                    api.app.db_manager = manager
+                    api.app.publish_database(manager)
                     from data_manager.api.routes import (
                         config,
                         ingest,
@@ -891,8 +891,7 @@ class DataManagerApp:
 
                     if self.db_manager is manager:
                         self.db_manager = None
-                    if getattr(api.app, "db_manager", None) is manager:
-                        api.app.db_manager = None
+                    api.app.unpublish_database(manager)
                     raise
                 finally:
                     self._coordination_pending = False
@@ -1102,11 +1101,15 @@ class DataManagerApp:
         from data_manager import api
         from data_manager.api.routes import backfill, config, ingest, service_config
 
-        api.app.db_manager = self.db_manager
+        # Never publish self.db_manager here: start() assigns it before initialize() finishes, and
+        # this task can run in between (#829: the copy worker saw Mongo without MySQL). start() and
+        # the DB retry publish it once it is initialized; reuse what is already published.
+        published = api.app.db_manager
         backfill.backfill_orchestrator = getattr(self, "backfill_orchestrator", None)
-        config.set_database_manager(self.db_manager)
-        service_config.set_database_manager(self.db_manager)
-        ingest.set_database_manager(self.db_manager)
+        if published is not None:
+            config.set_database_manager(published)
+            service_config.set_database_manager(published)
+            ingest.set_database_manager(published)
 
         # Initialize and set configuration rate limiter
         try:
