@@ -108,6 +108,18 @@ REGISTRY: dict[str, PersistenceSpec] = {
     ),
     "leader_election": transient_only(reason="coordination lease; safe to recreate"),
     "distributed_locks": transient_only(reason="coordination lock; safe to recreate"),
+    "strategy_positions": operational(
+        reason="live per-strategy position state written by tradeengine through the "
+        "data-manager API; state, so its TTL never trips"
+    ),
+    "position_contributions": operational(
+        reason="live strategy-to-exchange position contributions written by tradeengine "
+        "through the data-manager API; state, so its TTL never trips"
+    ),
+    "exchange_positions": operational(
+        reason="live exchange-level position state written by tradeengine through the "
+        "data-manager API (create/update_exchange_position); state, so its TTL never trips"
+    ),
     "trading_state_mysql_sequences": operational(
         reason="per-row MySQL copy version counters for trading state; must outlive "
         "the rows they version, so the TTL index never trips"
@@ -290,6 +302,9 @@ _STATE_COLLECTIONS = frozenset(
         "leverage_status",
         "restore_exercises",
         "trading_state_mysql_sequences",
+        "exchange_positions",
+        "strategy_positions",
+        "position_contributions",
     }
 )
 

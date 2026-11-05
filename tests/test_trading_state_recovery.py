@@ -654,3 +654,38 @@ async def test_existing_storage_identity_cannot_be_changed(recovery, field):
         await repo.update_position("p1", {field: 10})
     assert "identity is immutable" in str(error.value)
     assert await mongo.db.positions.find_one({"position_id": "p1"}) == before
+
+
+@pytest.mark.asyncio
+async def test_copy_worker_waits_for_the_published_database(recovery, monkeypatch):
+    """The worker must copy and dead-letter nothing until main.py publishes the manager (#829)."""
+    import data_manager.api.app as api_app
+
+    manager = module.api_module.db_manager
+    monkeypatch.setattr(api_app, "db_manager", None)
+    monkeypatch.setattr(api_app, "_database_ready", None)
+    calls: list[str] = []
+    monkeypatch.setattr(module, "_schedule_mysql_copy", lambda: calls.append("copy"))
+    monkeypatch.setattr(module, "_COPY_POLL_SECONDS", 0.01)
+
+    worker = asyncio.create_task(module.mysql_copy_worker())
+    await asyncio.sleep(0.05)
+    assert calls == []
+    assert module._copy_state["fallback_failed"] == 0
+
+    api_app.publish_database(manager)
+    await asyncio.sleep(0.05)
+    assert calls
+    worker.cancel()
+    await asyncio.gather(worker, return_exceptions=True)
+
+
+def test_dead_letter_without_adapter_counts_but_never_writes(caplog):
+    before = module._copy_state["fallback_failed"]
+    with caplog.at_level("WARNING"):
+        assert (
+            module._dead_letter(None, "positions", {"position_id": "p1"}, "x") is False
+        )
+    assert module._copy_state["fallback_failed"] == before + 1
+    assert "trading_state_mysql_dead_letter_skipped" in caplog.text
+    assert "trading_state_mysql_dead_letter_failed" not in caplog.text

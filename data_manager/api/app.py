@@ -2,9 +2,11 @@
 FastAPI application factory.
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -63,8 +65,51 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Global database manager reference (will be set by main app)
+# Global database manager reference: set only through publish_database() once it is initialized.
 db_manager = None
+_database_ready: asyncio.Event | None = None
+_database_ready_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _database_ready_event() -> asyncio.Event:
+    """The "database published" event of the running loop (created lazily, per loop)."""
+    global _database_ready, _database_ready_loop
+    loop = asyncio.get_running_loop()
+    if _database_ready is None or _database_ready_loop is not loop:
+        _database_ready = asyncio.Event()
+        _database_ready_loop = loop
+        if db_manager is not None:
+            _database_ready.set()
+    return _database_ready
+
+
+def publish_database(manager: Any) -> None:
+    """Make a fully initialized manager visible to the API and wake everything waiting for it."""
+    global db_manager
+    db_manager = manager
+    if _database_ready is not None:
+        _database_ready.set()
+
+
+def unpublish_database(manager: Any = None) -> None:
+    """Withdraw the published manager (only ``manager``, when given), so waiters block again."""
+    global db_manager
+    if manager is not None and db_manager is not manager:
+        return
+    db_manager = None
+    if _database_ready is not None:
+        _database_ready.clear()
+
+
+async def wait_for_database() -> Any:
+    """Return the published manager, waiting until one is published (#829: no half-initialized use)."""
+    while True:
+        await _database_ready_event().wait()
+        if db_manager is not None:
+            return db_manager
+        _database_ready_event().clear()
+
+
 leader_election = None
 audit_scheduler = None
 report_precomputer = None

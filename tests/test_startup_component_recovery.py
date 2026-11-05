@@ -356,3 +356,55 @@ async def test_consumer_start_after_retry_is_all_or_nothing(monkeypatch):
         assert built[name][-1].start.await_count == 1
     assert len(built["intent"]) == 2 and len(built["alerts"]) == 1
     assert app.intent_consumer is built["intent"][-1]
+
+
+@pytest.mark.asyncio
+async def test_api_server_task_never_publishes_an_uninitialized_manager(monkeypatch):
+    """start() assigns db_manager before initialize() ends; the API task must not publish it (#829)."""
+    import data_manager.api.app as api_app
+
+    monkeypatch.setattr(api_app, "db_manager", None)
+    monkeypatch.setattr(api_app, "_database_ready", None)
+    app = DataManagerApp()
+    app.db_manager = MagicMock(name="still_initializing", mysql_adapter=None)
+
+    class _Server:
+        def __init__(self, config):
+            pass
+
+        async def serve(self):
+            return None
+
+    monkeypatch.setattr(main_module.uvicorn, "Server", _Server)
+    await app._run_api_server()
+
+    assert api_app.db_manager is None
+
+
+@pytest.mark.asyncio
+async def test_start_publishes_only_after_initialize(monkeypatch):
+    import data_manager.api.app as api_app
+
+    monkeypatch.setattr(api_app, "db_manager", None)
+    monkeypatch.setattr(api_app, "_database_ready", None)
+    published: list[object] = []
+    monkeypatch.setattr(api_app, "publish_database", lambda m: published.append(m))
+    app = DataManagerApp()
+    app._db_retry_base_seconds = 0
+    manager = MagicMock()
+    manager.initialize = AsyncMock()
+    app._start_mongo_data_size_loop = MagicMock()
+    app._check_schema_migrations = AsyncMock()
+    app._ensure_mongodb_indexes_or_report = AsyncMock()
+    app._start_database_consumers_after_retry = AsyncMock()
+    app._start_coordination = AsyncMock()
+
+    with (
+        patch("data_manager.main.DatabaseManager", return_value=manager),
+        patch("data_manager.main.asyncio.sleep", new=AsyncMock()),
+    ):
+        await app._retry_database_initialization()
+
+    manager.initialize.assert_awaited_once()
+    app._ensure_mongodb_indexes_or_report.assert_awaited_once()
+    assert published == [manager]
