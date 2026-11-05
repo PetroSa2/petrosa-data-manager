@@ -838,6 +838,16 @@ class DataManagerApp:
                     self._start_mongo_data_size_loop()
                     await self._start_database_consumers_after_retry()
                     await self._start_coordination()
+                except BaseException:
+                    # Unpublish before the waiters are released, so no component ever
+                    # starts on a half-initialized manager; the next attempt retries.
+                    from data_manager import api
+
+                    if self.db_manager is manager:
+                        self.db_manager = None
+                    if getattr(api.app, "db_manager", None) is manager:
+                        api.app.db_manager = None
+                    raise
                 finally:
                     self._coordination_pending = False
                 logger.warning(
@@ -853,6 +863,8 @@ class DataManagerApp:
             except Exception as exc:
                 db_init_attempts_total.labels(result="failure").inc()
                 logger.warning("Database initialization retry failed: %s", exc)
+                if manager is not None and self.db_manager is not manager:
+                    await self._close_unpublished_manager(manager)
                 delay = min(delay * 2, self._db_retry_cap_seconds)
 
     @staticmethod

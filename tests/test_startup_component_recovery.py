@@ -249,3 +249,49 @@ async def test_lazy_gap_backfill_builds_detector_once_database_exists():
 
     create.assert_called_once_with()
     assert detector.request_backfill.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_failure_after_publish_never_releases_waiters_on_that_manager(
+    gauge, monkeypatch
+):
+    import data_manager.api.app as api_app
+
+    monkeypatch.setattr(api_app, "db_manager", None)
+    app = DataManagerApp()
+    app._db_retry_base_seconds = 0
+    first, second = MagicMock(name="first"), MagicMock(name="second")
+    for manager in (first, second):
+        manager.initialize = AsyncMock()
+        manager.shutdown = AsyncMock()
+    app._start_mongo_data_size_loop = MagicMock()
+    app._check_schema_migrations = AsyncMock(
+        side_effect=[RuntimeError("migration check failed"), None]
+    )
+    app._ensure_mongodb_indexes_or_report = AsyncMock()
+    app._start_database_consumers_after_retry = AsyncMock()
+    app._start_coordination = AsyncMock()
+    seen: list[object] = []
+
+    async def waiter() -> None:
+        assert await app._wait_for_database("auditor")
+        seen.append(app.db_manager)
+
+    task = asyncio.create_task(waiter())
+    real_sleep = asyncio.sleep
+
+    async def yielding_sleep(_delay):
+        await real_sleep(0)
+
+    with (
+        patch("data_manager.main.DatabaseManager", side_effect=[first, second]),
+        patch("data_manager.main.asyncio.sleep", new=yielding_sleep),
+    ):
+        await app._retry_database_initialization()
+        await asyncio.wait_for(task, timeout=3)
+
+    assert seen == [second]
+    assert app.db_manager is second
+    first.shutdown.assert_awaited_once()
+    second.shutdown.assert_not_awaited()
+    assert app._coordination_pending is False
