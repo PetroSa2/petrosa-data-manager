@@ -25,6 +25,7 @@ from typing import Any
 
 import constants
 from data_manager.observability_metrics import (
+    PERFORMANCE_REPLAY_FALLBACK,
     PERFORMANCE_SNAPSHOT_AGE,
     PERFORMANCE_SNAPSHOT_REFRESH,
     STARTUP_COMPONENT_UP,
@@ -238,6 +239,7 @@ class PerformanceSnapshotStore:
         pass_started = monotonic()
         seed_status = await self._seed(seed)
         outcomes: dict[str, str] = {}
+        replay_fallbacks: list[str] = []
         cap = compute_cap_seconds()
         for strategy_id in self.wanted():
             _raise_if_cancelling()
@@ -283,6 +285,10 @@ class PerformanceSnapshotStore:
             finally:
                 snapshot_refresh_active.reset(token)
             _raise_if_cancelling()
+            if (body.get("metadata") or {}).get("overlay_status") == "timeout":
+                # The replay ran out of its budget: these outcomes are the netting calculator's (#842).
+                replay_fallbacks.append(strategy_id)
+                PERFORMANCE_REPLAY_FALLBACK.add(1, {"strategy_id": strategy_id})
             kept = self.put(strategy_id, body)
             outcomes[strategy_id] = "stored" if kept else "kept_previous"
             PERFORMANCE_SNAPSHOT_REFRESH.add(
@@ -308,6 +314,14 @@ class PerformanceSnapshotStore:
             outcome: list(outcomes.values()).count(outcome)
             for outcome in ("stored", "kept_previous", "error")
         }
+        if replay_fallbacks:
+            logger.warning(
+                "performance_snapshot: replay_fallback count=%d strategies=%s "
+                "overlay_budget=%.1fs",
+                len(replay_fallbacks),
+                ",".join(replay_fallbacks),
+                overlay_budget_seconds(),
+            )
         logger.info(
             "performance_snapshot: pass seed=%s strategies=%d duration=%.3fs "
             "cadence=%.1fs stored=%d kept_previous=%d error=%d",

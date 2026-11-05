@@ -63,6 +63,13 @@ PERFORMANCE_SNAPSHOT_REFRESH = _meter.create_counter(
     "performance_snapshot_refresh_total",
     description="Strategy performance snapshot refreshes by strategy_id and outcome",
 )
+PERFORMANCE_REPLAY_FALLBACK = _meter.create_counter(
+    "performance_snapshot_replay_fallback_total",
+    description=(
+        "Snapshots computed while the leg-aware replay timed out, so their outcomes come from the "
+        "netting calculator (#842), by strategy_id"
+    ),
+)
 PERFORMANCE_SNAPSHOT_AGE = _meter.create_gauge(
     "performance_snapshot_age_seconds",
     description="Age of each strategy's performance snapshot after a refresh pass",
