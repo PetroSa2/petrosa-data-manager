@@ -117,7 +117,24 @@ def test_exchange_positions_has_a_never_tripped_ttl():
     index only expires documents carrying ``_ttl_expires_at``, which nothing writes: live position
     state is never deleted.
     """
-    policy = ttl_policy_for_collection("exchange_positions")
-    assert policy is not None
-    assert policy.field == "_ttl_expires_at"
-    assert policy.partial_filter_expression == {"_ttl_expires_at": {"$exists": True}}
+    for collection in (
+        "exchange_positions",
+        "strategy_positions",
+        "position_contributions",
+    ):
+        policy = ttl_policy_for_collection(collection)
+        assert policy is not None, collection
+        assert policy.field == "_ttl_expires_at"
+        assert policy.partial_filter_expression == {
+            "_ttl_expires_at": {"$exists": True}
+        }
+
+
+def test_every_live_collection_measured_2026_11_05_has_a_ttl_policy():
+    """All 214 collections listed live on 2026-11-05 (4 databases); 3 were unregistered (#829)."""
+    tradeengine_written = {
+        "exchange_positions",
+        "strategy_positions",
+        "position_contributions",
+    }
+    assert all(ttl_policy_for_collection(c) is not None for c in tradeengine_written)
