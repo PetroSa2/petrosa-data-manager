@@ -5,6 +5,8 @@ from data_manager.observability_metrics import (
     LEDGER_TIEOUT_CUMULATIVE,
     LEDGER_TIEOUT_LAST_COMPLETE_DAY,
     LEDGER_TIEOUT_VARIANCE,
+    PERFORMANCE_SNAPSHOT_AGE,
+    PERFORMANCE_SNAPSHOT_REFRESH,
     STRATEGY_SCORECARD_EVALUATE_TOTAL,
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
@@ -258,3 +260,11 @@ def test_mongo_clients_attach_role_specific_listeners(monkeypatch):
         "lease",
         "readiness",
     ]
+
+
+def test_performance_snapshot_metrics_are_registered_on_otlp_meter():
+    assert (
+        metric_name(PERFORMANCE_SNAPSHOT_REFRESH)
+        == "performance_snapshot_refresh_total"
+    )
+    assert metric_name(PERFORMANCE_SNAPSHOT_AGE) == "performance_snapshot_age_seconds"
