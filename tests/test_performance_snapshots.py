@@ -194,10 +194,88 @@ def test_run_loops_until_cancelled():
         await asyncio.sleep(0.05)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            # Bounded: a swallowed cancel fails the test instead of hanging the run.
+            await asyncio.wait_for(asyncio.shield(task), 2)
 
     asyncio.run(scenario())
     assert len(calls) >= 2
+
+
+def test_cancel_is_never_swallowed_by_a_finishing_compute():
+    """A cancel landing while a compute finishes stops the loop (it did not, ~50 % of runs, with wait_for)."""
+
+    async def compute(_strategy_id: str) -> dict:
+        return _good()
+
+    async def scenario() -> bool:
+        store = ps.PerformanceSnapshotStore(interval=0.0001)
+        store.note_request("s")
+        task = asyncio.create_task(store.run(compute))
+        await asyncio.sleep(0.002)
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), 0.5)
+        except asyncio.CancelledError:
+            return True
+        except TimeoutError:
+            task.cancel()
+            return False
+        return False
+
+    results = [asyncio.run(scenario()) for _ in range(200)]
+    assert all(results), f"{results.count(False)} of 200 cancels were swallowed"
+
+
+def _stops_within_bound(compute, runs: int) -> list[bool]:
+    async def scenario() -> bool:
+        store = ps.PerformanceSnapshotStore(interval=0.0001)
+        store.note_request("s")
+        task = asyncio.create_task(store.run(compute))
+        await asyncio.sleep(0.002)
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), 0.5)
+        except asyncio.CancelledError:
+            return True
+        except TimeoutError:
+            task.cancel()
+            return False
+        return False
+
+    return [asyncio.run(scenario()) for _ in range(runs)]
+
+
+def test_cancel_swallowed_inside_compute_still_stops_the_loop():
+    """A compute that swallows the CancelledError and returns must not keep the loop alive."""
+
+    swallowed = [0]
+
+    async def swallowing_compute(_strategy_id: str) -> dict:
+        try:
+            await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            # What an inner wait_for does on Python 3.11 in the race. Only the first cancel is
+            # swallowed, so a broken loop still ends at the harness's second cancel (bounded test).
+            if swallowed[0]:
+                raise
+            swallowed[0] += 1
+        return _good()
+
+    results = []
+    for _ in range(50):
+        swallowed[0] = 0
+        results.extend(_stops_within_bound(swallowing_compute, 1))
+    assert all(results), f"{results.count(False)} of 50 runs kept looping"
+
+
+def test_cancel_racing_an_inner_wait_for_stops_the_loop():
+    async def compute_with_inner_wait_for(_strategy_id: str) -> dict:
+        for _ in range(5):
+            await asyncio.wait_for(asyncio.sleep(0), 1)
+        return _good()
+
+    results = _stops_within_bound(compute_with_inner_wait_for, 200)
+    assert all(results), f"{results.count(False)} of 200 cancels were swallowed"
 
 
 def test_snapshot_past_expiry_returns_expired_metadata_only(monkeypatch):
