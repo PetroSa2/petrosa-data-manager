@@ -56,6 +56,12 @@ class _Mongo:
         return _Cursor(rows, self)
 
 
+#: The overlay deadline these tests never reach. They test sharing, caching and replay, not the deadline, and
+#: the production budget (10 ms) made them race a thread-pool build on loaded CI runners (#830). Tests of the
+#: deadline itself set their own budget (``test_synthetic_replay_uses_the_short_overlay_budget``).
+_UNREACHED_OVERLAY_BUDGET_S = 30.0
+
+
 @pytest.fixture
 def replay_environment(monkeypatch):
     fills = [{"_id": "fill-1", "timestamp": 1, "event_type": "filled"}]
@@ -103,6 +109,9 @@ def replay_environment(monkeypatch):
     )
     monkeypatch.setattr("data_manager.services.round_book.build_synthetic_exits", build)
     monkeypatch.setattr(api_module, "db_manager", manager)
+    monkeypatch.setattr(
+        analysis, "_PERFORMANCE_OVERLAY_TIMEOUT_SECONDS", _UNREACHED_OVERLAY_BUDGET_S
+    )
     analysis._SYNTHETIC_EXITS_CACHE = None
     analysis._SYNTHETIC_EXITS_IN_FLIGHT.clear()
     analysis._EXECUTION_EVENTS_CACHE = None

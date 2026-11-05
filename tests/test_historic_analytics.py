@@ -186,6 +186,11 @@ async def test_legacy_strategy_performance_uses_mysql_without_mongodb():
 
 @pytest.mark.asyncio
 async def test_legacy_strategy_performance_mysql_read_is_bounded(monkeypatch):
+    # The execution-events cache is keyed by id(mysql): a fake freed by an earlier test can leave an entry
+    # whose id this new fake reuses, so the read was skipped as a cache hit ("DID NOT RAISE", #830).
+    monkeypatch.setattr(analysis, "_EXECUTION_EVENTS_CACHE", None)
+    monkeypatch.setattr(analysis, "_EXECUTION_EVENTS_CACHE_AT", 0.0)
+    monkeypatch.setattr(analysis, "_EXECUTION_EVENTS_IN_FLIGHT", {})
     mysql = MySQLFake([])
     api_module.db_manager = SimpleNamespace(mysql_adapter=mysql, mongodb_adapter=None)
 
