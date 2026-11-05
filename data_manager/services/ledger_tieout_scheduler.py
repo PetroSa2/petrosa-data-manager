@@ -17,6 +17,7 @@ from data_manager.api.routes.ledger import (
     TIEOUT_LAST_COMPLETE_DAY,
     TIEOUT_VARIANCE,
 )
+from data_manager.observability_metrics import LEDGER_TIEOUT_CYCLES
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,12 @@ class LedgerTieoutScheduler:
     async def _loop(self) -> None:
         while self.running:
             try:
-                await self.run_cycle()
+                if await self.run_cycle() is not None:
+                    LEDGER_TIEOUT_CYCLES.add(1, {"outcome": "success"})
             except Exception as exc:  # noqa: BLE001
                 ERRORS_TOTAL.inc()
+                # "Running" must not read as "working": count failed cycles (#837).
+                LEDGER_TIEOUT_CYCLES.add(1, {"outcome": "failed"})
                 logger.error(
                     "ledger_tieout_scheduler_cycle_failed error_type=%s error=%s",
                     type(exc).__name__,
@@ -96,7 +100,8 @@ class LedgerTieoutScheduler:
         tieout = await asyncio.to_thread(self.repository.tieout, first, today)
         self._set_tieout_gauges(tieout, today)
 
-        positions = await asyncio.to_thread(self.repository.positions_tieout)
+        # The Motor read runs here, on the loop; only the MySQL part goes to a thread (#837).
+        positions = await self.repository.positions_tieout_on_loop()
         OPEN_POSITION_VARIANCE.set(len(positions["phantom_rows"]))
         return tieout
 
