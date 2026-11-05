@@ -84,3 +84,27 @@ async def test_daily_pnl_repository_operations():
     assert await repo.get_daily_pnl("2026-09-26") is None
     result = await repo.put_daily_pnl("2026-09-26", {"daily_pnl": 2.0})
     assert result["daily_pnl"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_mysql_copy_sequence_docs_never_carry_a_ttl_field(monkeypatch):
+    """The sequences TTL index is never-tripped: a written sequence doc has no _ttl_expires_at (#829)."""
+    monkeypatch.setenv("PETROSA_TRADING_MYSQL_COPY_ENABLED", "true")
+    mongo = Mongo()
+    sequences = mongo.db["trading_state_mysql_sequences"]
+    calls = []
+    original = sequences.find_one_and_update
+
+    async def recording(query, update, **kwargs):
+        calls.append((query, update, kwargs))
+        return await original(query, update, **kwargs)
+
+    sequences.find_one_and_update = recording
+    repo = TradingStateRepository(None, mongo)
+    await repo.update_position("p1", {"status": "open"}, upsert=True)
+
+    assert calls, "the copy path must bump a sequence"
+    for query, update, kwargs in calls:
+        assert kwargs.get("upsert") is True
+        written = {key for op in update.values() for key in op} | set(query)
+        assert "_ttl_expires_at" not in written
