@@ -82,6 +82,17 @@ def compute_cap_seconds() -> float:
     return COMPUTE_STAGES * float(constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS)
 
 
+def _raise_if_cancelling() -> None:
+    """Stop when this task was cancelled, even if an inner ``wait_for`` swallowed the CancelledError.
+
+    On Python 3.11 ``asyncio.wait_for`` can drop a cancel that lands while its inner call finishes; the
+    task's ``cancelling()`` count stays above zero, so checking it keeps the refresh loop stoppable.
+    """
+    task = asyncio.current_task()
+    if task is not None and task.cancelling():
+        raise asyncio.CancelledError
+
+
 def is_good(body: dict[str, Any]) -> bool:
     """A body worth serving again: computed from history, not a degraded or no-history placeholder."""
     metadata = body.get("metadata") or {}
@@ -189,6 +200,7 @@ class PerformanceSnapshotStore:
         outcomes: dict[str, str] = {}
         cap = compute_cap_seconds()
         for strategy_id in self.wanted():
+            _raise_if_cancelling()
             started = monotonic()
             token = snapshot_refresh_active.set(True)
             try:
@@ -215,6 +227,7 @@ class PerformanceSnapshotStore:
                 continue
             finally:
                 snapshot_refresh_active.reset(token)
+            _raise_if_cancelling()
             kept = self.put(strategy_id, body)
             outcomes[strategy_id] = "stored" if kept else "kept_previous"
             PERFORMANCE_SNAPSHOT_REFRESH.add(
@@ -256,6 +269,7 @@ class PerformanceSnapshotStore:
     async def run(self, compute: Compute, seed: Seed | None = None) -> None:
         """Refresh until cancelled; a pass starts one interval after the previous one started, never overlapping."""
         while True:
+            _raise_if_cancelling()
             started = monotonic()
             try:
                 await self.refresh_once(compute, seed)
