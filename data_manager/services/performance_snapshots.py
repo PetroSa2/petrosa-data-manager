@@ -135,6 +135,7 @@ class PerformanceSnapshotStore:
     def get(self, strategy_id: str) -> dict[str, Any] | None:
         """Return a copy of the snapshot with its age, or ``None`` when there is none yet.
 
+        - Served and stale bodies carry ``degraded=False`` at the top level and in ``metadata``.
         - Up to ``STALE_AFTER_INTERVALS`` cadences old: ``snapshot_status="served"``.
         - Up to ``EXPIRE_AFTER_INTERVALS`` cadences: served, flagged ``snapshot_status="stale"`` and ``stale``.
         - Older: only ``{"metadata": {...}}`` with ``snapshot_status="expired"``, the age and computed time,
@@ -152,7 +153,11 @@ class PerformanceSnapshotStore:
             return {"metadata": {"snapshot_status": "expired", **snapshot_metadata}}
         stale = age > self.cadence * STALE_AFTER_INTERVALS
         body = deepcopy(snapshot.body)
+        # Only good bodies are stored, so a served or stale answer is not degraded: say so explicitly,
+        # because a caller testing ``degraded is False`` reads a missing key as not OK (#833).
+        body["degraded"] = False
         metadata = body.setdefault("metadata", {})
+        metadata["degraded"] = False
         metadata["snapshot_status"] = "stale" if stale else "served"
         metadata.update(snapshot_metadata)
         if stale:
@@ -177,9 +182,14 @@ class PerformanceSnapshotStore:
         return sorted(self._requested)
 
     async def _seed(self, seed: Seed | None) -> str:
-        """Register the registry's strategies; return ``none``, ``ok`` or ``error`` for the pass log."""
+        """Register the seeded strategies; return ``none``, ``ok`` or ``error`` for the pass log.
+
+        The seed runs as part of the refresh (``snapshot_refresh_active``), so the reads it shares with the
+        computes get the refresh budget, not the request-path deadline.
+        """
         if seed is None:
             return "none"
+        token = snapshot_refresh_active.set(True)
         try:
             async with asyncio.timeout(compute_cap_seconds()):
                 strategy_ids = await seed()
@@ -197,6 +207,8 @@ class PerformanceSnapshotStore:
                 type(exc).__name__,
             )
             return "error"
+        finally:
+            snapshot_refresh_active.reset(token)
         for strategy_id in strategy_ids:
             if strategy_id:
                 self.note_request(str(strategy_id))

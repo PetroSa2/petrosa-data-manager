@@ -129,12 +129,55 @@ async def _config_rate_limit_middleware(request, call_next):
     return await config_rate_limit_middleware(request, call_next)
 
 
+async def _allowlist_strategy_ids(adapter: Any) -> list[str]:
+    """The runtime allowlist (``enabled_strategies`` in the application config)."""
+    config = await adapter.get_app_config() or {}
+    return list((config.get("parameters") or {}).get("enabled_strategies") or [])
+
+
+async def _traded_strategy_ids(adapter: Any) -> list[str]:
+    """Strategies present in the execution events that the performance stats are computed from.
+
+    Reads through the same shared, versioned cache as the refresh's computes, so it adds no extra
+    database round trip within a cache period.
+    """
+    from data_manager.api.routes.analysis import _load_execution_events
+
+    rows, _latest = await _load_execution_events(adapter)
+    return [str(row["strategy_id"]) for row in rows if row.get("strategy_id")]
+
+
+#: Seed sources beyond the registry. A strategy outside the registry (e.g. a realtime strategy) that
+#: trades, or is on the runtime allowlist, is refreshed on every pod from the first pass, instead of
+#: answering ``warming`` on each pod until that pod is asked for it (#833).
+_EXTRA_SEED_SOURCES = (
+    ("allowlist", _allowlist_strategy_ids),
+    ("execution_events", _traded_strategy_ids),
+)
+
+
 async def _configured_strategy_ids() -> list[str]:
-    """The strategy registry (strategy configs) that seeds the performance snapshot refresh."""
+    """Seed for the performance snapshot refresh: registry, runtime allowlist and traded strategies.
+
+    The registry read is the base seed. Each extra source is best effort: its failure is a WARNING
+    and the pass still seeds everything else.
+    """
     adapter = getattr(db_manager, "mongodb_adapter", None)
     if adapter is None:
         return []
-    return list(await adapter.list_all_strategy_ids())
+    strategy_ids = list(await adapter.list_all_strategy_ids())
+    for name, source in _EXTRA_SEED_SOURCES:
+        try:
+            strategy_ids.extend(await source(adapter))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "performance_snapshot: seed source=%s outcome=error exception=%s",
+                name,
+                type(exc).__name__,
+            )
+    return list(dict.fromkeys(s for s in strategy_ids if s))
 
 
 @asynccontextmanager
