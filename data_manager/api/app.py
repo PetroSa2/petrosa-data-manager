@@ -34,6 +34,7 @@ from data_manager.api.routes import (
     envelopes,
     fidelity,
     generic,
+    ground_truth,
     health,
     ingest,
     leases,
@@ -292,6 +293,10 @@ def create_app() -> FastAPI:
     app.include_router(strategy_net_r.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(
         strategy_net_r.router, prefix="/api/v1/analysis", tags=["Analysis"]
+    )
+    # dm#844: per-strategy closed rounds rebuilt from the exchange's own fills
+    app.include_router(
+        ground_truth.router, prefix="/api/v1/analysis", tags=["Analysis"]
     )
     app.include_router(catalog.router, prefix="/catalog", tags=["Catalog"])
     app.include_router(backfill.router, prefix="/backfill", tags=["Backfill"])
