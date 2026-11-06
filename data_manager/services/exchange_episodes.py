@@ -344,6 +344,11 @@ def build_ground_truth_v2(
                 "strategy_id": row.get("strategy_id"),
                 "status": row.get("status"),
                 "close_reason": row.get("close_reason"),
+                # risk at entry, linked by the entry order id (#842)
+                "entry_order_id": order_id,
+                "entry_quantity": row.get("entry_quantity"),
+                "entry_price": row.get("entry_price"),
+                "stop_loss_price": row.get("stop_loss_price"),
             }
             for order_id in ep["opening_order_ids"]
             for row in rows_by_entry.get(order_id, [])

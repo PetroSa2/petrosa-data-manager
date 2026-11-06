@@ -48,6 +48,10 @@ _POSITION_FIELDS = {
     "entry_time": 1,
     "exit_time": 1,
     "entry_quantity": 1,
+    # Risk at entry for the exchange-truth net R (petrosa-data-manager#842): the entry price and the stop the
+    # row carried. Entries are reliable on these rows; te#838 only affects exits.
+    "entry_price": 1,
+    "stop_loss_price": 1,
     "close_reason": 1,
 }
 
