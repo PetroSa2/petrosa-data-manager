@@ -236,3 +236,29 @@ def test_streaks_open_rows_and_non_usdt_fees() -> None:
     assert gt["totals"]["fills_in_rounds"] + gt["totals"]["fills_unmatched"] == len(
         fills
     )
+
+
+def test_unmatched_headline_comes_first_with_counts_and_reasons() -> None:
+    fills = [
+        _fill(1, 1, "BUY", "1", "100", 0),
+        _fill(2, 2, "SELL", "1", "101", 5),
+        _fill(3, 3, "BUY", "1", "100", 6),
+        _fill(9, 99, "SELL", "0.5", "100", 7),
+    ]
+    rows = [
+        _row(
+            "ok", "s", entry=1, exit_order_id="2", exit_time=T0 + timedelta(minutes=5)
+        ),
+        _row("ghost", "s", entry=3, entry_min=6, status="closed_externally"),
+        _row("old", "s", entry=404, status="closed_externally", symbol="ETHUSDT"),
+    ]
+    gt = build_ground_truth(fills, [], rows, {})
+    assert next(iter(gt)) == "unmatched_headline"
+    h = gt["unmatched_headline"]
+    assert (h["closed_rows"], h["rounds_matched"], h["rounds_unmatched"]) == (3, 1, 2)
+    assert h["rounds_unmatched_share"] == pytest.approx(0.6667)
+    assert h["unmatched_rounds_by_reason"] == {
+        "entry_fills_not_found": 1,
+        "quantity_mismatch": 1,
+    }
+    assert h["fills_unmatched"] == 2

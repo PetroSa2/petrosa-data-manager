@@ -267,7 +267,21 @@ def build_ground_truth(
             }
         )
 
+    closed_rows = len(rounds) + len(unmatched_rounds)
     return {
+        # First, so no reader can miss how much of the window is not matched.
+        "unmatched_headline": {
+            "closed_rows": closed_rows,
+            "rounds_matched": len(rounds),
+            "rounds_unmatched": len(unmatched_rounds),
+            "rounds_unmatched_share": (
+                round(len(unmatched_rounds) / closed_rows, 4) if closed_rows else 0.0
+            ),
+            "unmatched_rounds_by_reason": _count_by(unmatched_rounds, "reason"),
+            "fills": len(fills),
+            "fills_unmatched": len(unmatched_fills),
+            "unmatched_fills_by_reason": _count_by(unmatched_fills, "reason"),
+        },
         "strategies": _per_strategy(rounds, unmatched_rounds),
         "rounds": rounds,
         "unmatched_rounds": unmatched_rounds,
@@ -282,6 +296,13 @@ def build_ground_truth(
             "open_rows": open_rows,
         },
     }
+
+
+def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for item in items:
+        counts[str(item.get(key))] += 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def _attribute_by_quantity(
