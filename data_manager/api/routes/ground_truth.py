@@ -1,8 +1,8 @@
 """Per-strategy ground truth of closed rounds from exchange fills (dm#844).
 
 Read-only, computed on demand (no new collection). See
-:mod:`data_manager.services.exchange_ground_truth` for what a round is and how every
-fill and closed row is accounted for.
+:mod:`data_manager.services.exchange_episodes` for what an episode is, how it is
+attributed, and how every fill and ledger row is accounted for.
 
 A request has a total time budget, so a wide window can't hold a request worker for
 many minutes. The exchange reads fan out to about ``pairs x 2 x ceil(window / 7 days)``
