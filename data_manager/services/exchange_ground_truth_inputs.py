@@ -9,6 +9,9 @@
 - **Exchange history**: fills and orders per symbol from tradeengine's read-only routes
   (:mod:`data_manager.services.exchange_history_client`).
 
+The report itself is built from the exchange's own flat-to-flat episodes
+(:mod:`data_manager.services.exchange_episodes`); ledger rows only annotate them.
+
 Nothing is written anywhere.
 """
 
@@ -21,7 +24,7 @@ from typing import Any
 
 from sqlalchemy import bindparam, text
 
-from data_manager.services.exchange_ground_truth import build_ground_truth
+from data_manager.services.exchange_episodes import build_ground_truth_v2
 from data_manager.services.exchange_history_client import ExchangeHistoryClient
 
 # Read caps: exceeding one is an explicit error, never a silently cut window.
@@ -165,7 +168,7 @@ async def compute_ground_truth(
     client = client or ExchangeHistoryClient()
 
     rows = await read_position_rows(mongodb, start, end)
-    order_strategy, exits_by_entry, symbols, conflicts = await asyncio.to_thread(
+    order_strategy, _journal_exits, symbols, conflicts = await asyncio.to_thread(
         read_order_journal, mysql, start, end
     )
     symbols |= {str(r["symbol"]) for r in rows if r.get("symbol")}
@@ -178,20 +181,25 @@ async def compute_ground_truth(
         fills += await client.fills(symbol, start_ms, end_ms)
         orders += await client.orders(symbol, start_ms, end_ms)
 
-    exits_by_row = {
-        str(r.get("strategy_position_id")): exits_by_entry.get(
-            str(r.get("entry_order_id")), set()
-        )
-        for r in rows
-    }
-    report = build_ground_truth(fills, orders, rows, order_strategy, exits_by_row)
+    # The ledger's entry orders are a second source for order -> strategy; the
+    # journal wins, and an order claimed by two strategies stays unmapped.
+    for row in rows:
+        order_id = str(row.get("entry_order_id") or "")
+        strategy = str(row.get("strategy_id") or "")
+        if order_id and strategy and order_id not in conflicts:
+            known = order_strategy.setdefault(order_id, strategy)
+            if known != strategy:
+                conflicts.append(order_id)
+                order_strategy.pop(order_id, None)
+    report = build_ground_truth_v2(fills, orders, order_strategy, rows)
     report["metadata"] = {
         "calculated_at": datetime.now(UTC).isoformat(),
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "symbols": sorted(symbols),
         "position_rows": len(rows),
         "orders": len(orders),
-        "order_strategy_conflicts": conflicts,
+        "order_strategy_conflicts": sorted(set(conflicts)),
+        "method": "exchange flat-to-flat episodes (v2)",
         "source": "binance-testnet-userTrades-via-tradeengine",
     }
     return report

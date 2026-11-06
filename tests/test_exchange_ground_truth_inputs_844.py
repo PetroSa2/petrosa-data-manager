@@ -191,12 +191,66 @@ async def test_compute_reads_every_symbol_and_builds_the_report() -> None:
 
     client.fills.assert_awaited_once()
     assert client.fills.await_args.args[0] == "BTCUSDT"
+    # v2: one flat-to-flat episode, attributed through the journal / ledger entry order
     assert report["strategies"]["iceberg_detector"]["wins"] == 1
-    assert report["rounds"][0]["net_pnl"] == pytest.approx(2.0)
+    (episode,) = report["episodes"]
+    assert episode["status"] == "attributed"
+    assert episode["net_pnl"] == pytest.approx(2.0)
+    assert episode["ledger_rows"][0]["strategy_position_id"] == "sp1"
     assert report["metadata"]["symbols"] == ["BTCUSDT"]
+    assert report["metadata"]["method"] == "exchange flat-to-flat episodes (v2)"
 
 
 async def test_compute_needs_both_stores() -> None:
     db = type("Db", (), {"mongodb_adapter": None, "mysql_adapter": None})()
     with pytest.raises(GroundTruthInputError):
         await compute_ground_truth(db, window_days=7, client=AsyncMock(), now=NOW)
+
+
+async def test_ledger_entry_order_maps_a_strategy_the_journal_lacks() -> None:
+    entry_ms = int((NOW - timedelta(days=1)).timestamp() * 1000)
+    rows = [
+        {
+            "strategy_position_id": "sp9",
+            "strategy_id": "inside_bar_breakout",
+            "symbol": "ETHUSDT",
+            "side": "LONG",
+            "status": "closed_externally",
+            "entry_order_id": "777",
+            "entry_time": NOW - timedelta(days=1),
+        }
+    ]
+    client = AsyncMock()
+    client.fills.return_value = [
+        {
+            "id": 1,
+            "orderId": 777,
+            "symbol": "ETHUSDT",
+            "side": "BUY",
+            "price": "2000",
+            "qty": "0.01",
+            "realizedPnl": "0",
+            "commission": "0",
+            "time": entry_ms,
+        },
+        {
+            "id": 2,
+            "orderId": 888,
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "price": "2010",
+            "qty": "0.01",
+            "realizedPnl": "0.1",
+            "commission": "0",
+            "time": entry_ms + 60_000,
+        },
+    ]
+    client.orders.return_value = []
+    db = type(
+        "Db", (), {"mongodb_adapter": _Mongo(rows), "mysql_adapter": _MySQL([])}
+    )()
+
+    report = await compute_ground_truth(db, window_days=7, client=client, now=NOW)
+
+    assert report["episodes"][0]["strategy_id"] == "inside_bar_breakout"
+    assert report["external_closes"] == {"inside_bar_breakout": {"unknown": 1}}
