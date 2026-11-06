@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from data_manager.db.database_manager import DatabaseManager
 from data_manager.models.config import ConfigAudit
+from data_manager.services import strategy_stats_source
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +211,15 @@ async def update_application_config(request: AppConfigRequest):
             "llm_spend_ceiling_usd_per_day": request.llm_spend_ceiling_usd_per_day,
         }
 
+        # The stats-source switch (petrosa-data-manager#842) is set only through its own audited endpoint;
+        # a general config update keeps whatever it is instead of silently resetting it.
+        existing = await db_manager.configuration.get_app_config() or {}
+        current_source = (existing.get("parameters") or {}).get(
+            strategy_stats_source.CONFIG_KEY
+        )
+        if current_source is not None:
+            parameters[strategy_stats_source.CONFIG_KEY] = current_source
+
         config = await db_manager.configuration.upsert_app_config(
             parameters=parameters, changed_by=request.changed_by, reason=request.reason
         )
@@ -234,6 +244,74 @@ async def update_application_config(request: AppConfigRequest):
     except Exception as e:
         logger.error(f"Error updating application config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class StrategyStatsSourceRequest(BaseModel):
+    """Flip the per-strategy stats CIO is served (petrosa-data-manager#842)."""
+
+    source: str = Field(..., description="netting or ground_truth")
+    changed_by: str = Field(..., min_length=1, description="Who flips it")
+    decision_ref: str = Field(
+        ..., min_length=1, description="Link to the user decision that authorises it"
+    )
+
+
+@router.get("/strategy-stats-source", response_model=dict[str, Any])
+async def get_strategy_stats_source():
+    """The source CIO's per-strategy stats come from, and the config version that set it."""
+    if not db_manager or not db_manager.configuration:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+    strategy_stats_source.reset_cache()
+    config = await db_manager.configuration.get_app_config() or {}
+    return {
+        "success": True,
+        "data": {
+            "source": await strategy_stats_source.get_source(db_manager),
+            "sources": list(strategy_stats_source.SOURCES),
+            "version": config.get("version"),
+            "changed_by": config.get("changed_by"),
+            "reason": config.get("reason"),
+            "updated_at": _iso(config.get("updated_at")),
+        },
+    }
+
+
+@router.put("/strategy-stats-source", response_model=dict[str, Any])
+async def put_strategy_stats_source(request: StrategyStatsSourceRequest):
+    """Flip the source as a new audited application-config version (who, when, the decision link)."""
+    if not db_manager or not db_manager.configuration:
+        raise HTTPException(status_code=503, detail="Database manager not available")
+    try:
+        config = await strategy_stats_source.set_source(
+            db_manager,
+            request.source,
+            changed_by=request.changed_by,
+            decision_ref=request.decision_ref,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    logger.warning(
+        "STRATEGY_STATS_SOURCE set to %s by %s (decision %s), config version %s",
+        request.source,
+        request.changed_by,
+        request.decision_ref,
+        config.get("version"),
+    )
+    return {
+        "success": True,
+        "data": {
+            "source": request.source,
+            "version": config.get("version"),
+            "changed_by": request.changed_by,
+            "reason": config.get("reason"),
+        },
+    }
+
+
+def _iso(value: Any) -> Any:
+    return value.isoformat() if isinstance(value, datetime) else value
 
 
 @router.get("/strategies/{strategy_id}", response_model=dict[str, Any])
