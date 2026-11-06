@@ -122,3 +122,68 @@ async def test_errors_never_carry_the_token(monkeypatch) -> None:
     with pytest.raises(ExchangeHistoryError) as err:
         await _client(_Route([])).fills("BTCUSDT", 0, 1000)
     assert "other" not in str(err.value) and PAIR not in str(err.value)
+
+
+def _client_with(route, sleeps: list[float]) -> ExchangeHistoryClient:
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(route))
+    return ExchangeHistoryClient(base_url="http://te", http=http, sleep=fake_sleep)
+
+
+async def test_rate_guard_429_is_waited_out_and_retried() -> None:
+    answers = [
+        httpx.Response(
+            429,
+            json={"detail": {"error": "rate_limited"}},
+            headers={"Retry-After": "7"},
+        ),
+        httpx.Response(200, json={"rows": [{"id": 1}], "next_after_id": None}),
+    ]
+    sleeps: list[float] = []
+    rows = await _client_with(lambda request: answers.pop(0), sleeps).fills(
+        "BTCUSDT", 0, 1000
+    )
+    assert rows == [{"id": 1}]
+    assert sleeps == [7.0]
+
+
+async def test_exhausted_weight_503_is_retried_other_503_is_not() -> None:
+    sleeps: list[float] = []
+    exhausted = [
+        httpx.Response(
+            503,
+            json={"detail": {"error": "exchange_weight_exhausted"}},
+            headers={"Retry-After": "60"},
+        ),
+        httpx.Response(200, json={"rows": [], "next_after_id": None}),
+    ]
+    await _client_with(lambda r: exhausted.pop(0), sleeps).fills("BTCUSDT", 0, 1000)
+    assert sleeps == [60.0]
+
+    def unconfigured(request):
+        return httpx.Response(
+            503, json={"detail": {"error": "service_auth_unconfigured"}}
+        )
+
+    with pytest.raises(ExchangeHistoryError) as err:
+        await _client_with(unconfigured, sleeps).fills("BTCUSDT", 0, 1000)
+    assert err.value.error == "service_auth_unconfigured"
+    assert sleeps == [60.0]
+
+
+async def test_retries_are_bounded() -> None:
+    sleeps: list[float] = []
+
+    def always_limited(request):
+        return httpx.Response(
+            429,
+            json={"detail": {"error": "rate_limited"}},
+            headers={"Retry-After": "999"},
+        )
+
+    with pytest.raises(ExchangeHistoryError) as err:
+        await _client_with(always_limited, sleeps).fills("BTCUSDT", 0, 1000)
+    assert err.value.status == 429
+    assert sleeps == [60.0] * 5  # capped wait, five retries

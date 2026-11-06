@@ -11,16 +11,21 @@ tradeengine<->data-manager service identity, the ``tradeengine`` entry of
 ``DM_SERVICE_TOKENS`` (the same secret tradeengine mounts as ``DM_SERVICE_TOKEN``).
 The token is read from the environment and is never logged or returned.
 
-Any non-200 answer raises :class:`ExchangeHistoryError` with the status and the
-route's error code, so a caller reports the gap instead of a partial history.
+Tradeengine rate-guards these reads (429, or 503 while the exchange weight is
+exhausted, both with ``Retry-After``); the client waits as told and retries a bounded
+number of times. Any other non-200 answer, or the retries running out, raises
+:class:`ExchangeHistoryError` with the status and the route's error code, so a caller
+reports the gap instead of a partial history.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -32,6 +37,11 @@ CALLER_SERVICE = "data-manager"
 # The route's limits (tradeengine #833): one exchange query span and one page.
 SPAN_MS = 7 * 24 * 60 * 60 * 1000
 PAGE_ROWS = 1000
+# Waiting on the route's rate guard: bounded retries, each wait capped at the guard's
+# one-minute window.
+MAX_RETRIES = 5
+MAX_RETRY_WAIT_SECONDS = 60.0
+_RETRY_STATUSES = frozenset({429, 503})
 
 
 class ExchangeHistoryError(RuntimeError):
@@ -60,7 +70,9 @@ class ExchangeHistoryClient:
         base_url: str | None = None,
         http: httpx.AsyncClient | None = None,
         timeout_seconds: float = 30.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
+        self._sleep = sleep
         self._base_url = (
             base_url or os.environ.get("TRADEENGINE_URL") or DEFAULT_BASE_URL
         ).rstrip("/")
@@ -116,9 +128,7 @@ class ExchangeHistoryClient:
                     }
                     if after_id is not None:
                         params["after_id"] = after_id
-                    response = await http.get(
-                        f"{self._base_url}{path}", params=params, headers=headers
-                    )
+                    response = await self._get(http, path, params, headers)
                     if response.status_code != 200:
                         raise ExchangeHistoryError(
                             response.status_code, _error_code(response)
@@ -134,6 +144,44 @@ class ExchangeHistoryClient:
             if owns_client:
                 await http.aclose()
         return sorted(rows.values(), key=lambda r: int(r.get(id_key) or 0))
+
+    async def _get(
+        self,
+        http: httpx.AsyncClient,
+        path: str,
+        params: dict[str, Any],
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        """GET, waiting out the route's rate guard a bounded number of times."""
+        attempt = 0
+        while True:
+            response = await http.get(
+                f"{self._base_url}{path}", params=params, headers=headers
+            )
+            if response.status_code not in _RETRY_STATUSES or attempt >= MAX_RETRIES:
+                return response
+            if response.status_code == 503 and _error_code(response) not in {
+                "exchange_weight_exhausted"
+            }:
+                return response
+            attempt += 1
+            wait = _retry_after(response)
+            logger.info(
+                "exchange history: HTTP %s, retry %d/%d in %.0f s",
+                response.status_code,
+                attempt,
+                MAX_RETRIES,
+                wait,
+            )
+            await self._sleep(wait)
+
+
+def _retry_after(response: httpx.Response) -> float:
+    try:
+        seconds = float(response.headers.get("Retry-After", "1"))
+    except ValueError:
+        seconds = 1.0
+    return min(max(seconds, 1.0), MAX_RETRY_WAIT_SECONDS)
 
 
 def _error_code(response: httpx.Response) -> str:
