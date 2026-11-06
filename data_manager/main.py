@@ -1695,6 +1695,19 @@ async def main():
             logger.warning(
                 f"petrosa_otel package not available or failed to initialize: {e}"
             )
+        else:
+            # dm#852: a silent stall of the OTLP metric export becomes a WARNING,
+            # a :9090 counter and one all-thread stack dump in the pod log.
+            try:
+                from opentelemetry import metrics as otel_metrics
+
+                from data_manager.observability.otel_export_watchdog import (
+                    start_export_watchdog,
+                )
+
+                start_export_watchdog(otel_metrics.get_meter_provider())
+            except Exception as e:
+                logger.warning(f"otel export watchdog not started: {e}")
 
     # 3. Attach OTel logging handler LAST (after logging is configured)
     if constants.OTEL_ENABLED and attach_logging_handler:

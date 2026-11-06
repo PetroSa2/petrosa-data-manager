@@ -184,13 +184,22 @@ def correlation_matrix(
 
 
 def equity_curve(
-    rows: list[dict[str, Any]], *, window_days: int, now: datetime
+    rows: list[dict[str, Any]],
+    *,
+    window_days: int,
+    now: datetime,
+    rebase: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Sigma of the daily equity changes and the equity peak, from the ledger's wallet-balance snapshots.
 
     ``rows`` are the latest revision of each ledger day: ``day``, ``wallet_balance``, ``transfer`` (the day's
     deposits and withdrawals, taken out of the change so a deposit is not a return) and ``balance_as_of_ms``.
     The return of day d is (W_d - W_(d-1) - transfer_d) / W_(d-1), taken only between consecutive days.
+
+    ``rebase`` is an applied equity-peak re-base (petrosa-data-manager#856), the ``after`` of the latest
+    ``ledger_adjustments`` row for ``risk_equity_peak``: ``peak`` and ``peak_at``, plus ``adjustment_id``.
+    With it the peak is the higher of the re-based value and the wallet closes whose balance time is after
+    ``peak_at``; earlier closes no longer count. Sigma is unchanged: it still uses every daily return.
     """
     points: list[tuple[date, float, float, Any]] = []
     for row in rows:
@@ -212,20 +221,61 @@ def equity_curve(
     cutoff = (now - timedelta(days=window_days)).date()
     windowed = [r for d, r in returns if d > cutoff]
     sigma = sample_std(windowed)
-    peak = max(points, key=lambda p: p[1]) if points else None
     last = points[-1] if points else None
-    peak_at = None
-    if peak is not None:
-        stamp = _when(peak[3])
-        peak_at = _iso(stamp) if stamp is not None else peak[0].isoformat()
+    peak_value, peak_at, rebase_info = _peak(points, rebase)
     return {
         "sigma_daily": sigma,
         "n_returns": len(windowed),
         "sufficient": sigma is not None and len(windowed) >= MIN_DAILY_RETURNS,
-        "peak": peak[1] if peak else None,
+        "peak": peak_value,
         "peak_at": peak_at,
+        "peak_rebase": rebase_info,
         "wallet_balance": last[1] if last else None,
         "wallet_balance_day": last[0].isoformat() if last else None,
         "days": len(points),
         "source": "ledger_exchange_day_revision",
     }
+
+
+def _point_time(day: date, balance_as_of: Any) -> datetime:
+    """When a ledger close was taken: its balance time, else the end of its day."""
+    stamp = _when(balance_as_of)
+    if stamp is not None:
+        return stamp
+    return datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+
+
+def _peak(
+    points: list[tuple[date, float, float, Any]], rebase: dict[str, Any] | None
+) -> tuple[float | None, str | None, dict[str, Any] | None]:
+    """(peak, peak_at, re-base applied) over the ledger closes, honouring an applied re-base."""
+    base_value: float | None = None
+    base_at: datetime | None = None
+    if rebase is not None:
+        try:
+            base_value = float(rebase["peak"])
+        except (KeyError, TypeError, ValueError):
+            base_value = None
+        base_at = _when(rebase.get("peak_at"))
+        if base_value is None or not math.isfinite(base_value) or base_value <= 0:
+            base_value, base_at = None, None
+        if base_at is None:
+            base_value = None
+    best: tuple[float, str | None] | None = None
+    if base_value is not None and base_at is not None:
+        best = (base_value, _iso(base_at))
+    for day, balance, _, as_of in points:
+        when = _point_time(day, as_of)
+        if base_at is not None and when <= base_at:
+            continue
+        if best is None or balance > best[0]:
+            stamp = _when(as_of)
+            best = (balance, _iso(stamp) if stamp is not None else day.isoformat())
+    info = None
+    if base_value is not None and rebase is not None:
+        info = {
+            "adjustment_id": rebase.get("adjustment_id"),
+            "peak": base_value,
+            "peak_at": _iso(base_at),
+        }
+    return (best[0], best[1], info) if best else (None, None, info)
