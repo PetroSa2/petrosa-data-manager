@@ -244,3 +244,38 @@ def rounds_from_snapshot(
             "stale": False,
         },
     }
+
+
+def net_r_from_snapshot(
+    snapshot: dict[str, Any] | None, now: datetime | None = None
+) -> dict[str, Any]:
+    """``/analysis/strategy-net-r`` (CIO's keep/kill input) from the exchange-truth snapshot.
+
+    Stale or missing: no strategies, degraded; CIO's keep/kill then evaluates nothing (no verdict changes),
+    never a "keep" from old data.
+    """
+    if is_stale(snapshot, now):
+        return {
+            "strategies": {},
+            "degraded": True,
+            "error": {
+                "type": "GroundTruthStatsStale",
+                "message": "no exchange-truth stats snapshot within two refresh cycles",
+            },
+            "metadata": {"stats_source": GROUND_TRUTH, "stale": True},
+        }
+    strategies = {
+        name: entry["net_r"]
+        for name, entry in (snapshot.get("strategies") or {}).items()
+        if isinstance(entry.get("net_r"), dict)
+    }
+    return {
+        "strategies": strategies,
+        "metadata": {
+            "calculated_at": _iso(snapshot.get("computed_at")),
+            "source": "data-manager-exchange-ground-truth",
+            "stats_source": GROUND_TRUTH,
+            "rule": snapshot.get("rule"),
+            "stale": False,
+        },
+    }
