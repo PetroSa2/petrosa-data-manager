@@ -182,9 +182,14 @@ class PerformanceSnapshotStore:
         return sorted(self._requested)
 
     async def _seed(self, seed: Seed | None) -> str:
-        """Register the registry's strategies; return ``none``, ``ok`` or ``error`` for the pass log."""
+        """Register the seeded strategies; return ``none``, ``ok`` or ``error`` for the pass log.
+
+        The seed runs as part of the refresh (``snapshot_refresh_active``), so the reads it shares with the
+        computes get the refresh budget, not the request-path deadline.
+        """
         if seed is None:
             return "none"
+        token = snapshot_refresh_active.set(True)
         try:
             async with asyncio.timeout(compute_cap_seconds()):
                 strategy_ids = await seed()
@@ -202,6 +207,8 @@ class PerformanceSnapshotStore:
                 type(exc).__name__,
             )
             return "error"
+        finally:
+            snapshot_refresh_active.reset(token)
         for strategy_id in strategy_ids:
             if strategy_id:
                 self.note_request(str(strategy_id))

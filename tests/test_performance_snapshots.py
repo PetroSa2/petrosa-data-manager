@@ -41,6 +41,8 @@ def test_get_returns_copy_with_snapshot_metadata():
     served = store.get("s")
     assert served["stats"]["win_rate"] == 0.5
     assert served["metadata"]["snapshot_status"] == "served"
+    assert served["degraded"] is False
+    assert served["metadata"]["degraded"] is False
     assert served["metadata"]["snapshot_age_seconds"] >= 0
     assert "snapshot_computed_at" in served["metadata"]
     served["stats"]["win_rate"] = 0.9
@@ -75,6 +77,7 @@ def test_stale_snapshot_is_served_flagged_with_age(monkeypatch):
     stale = store.get("s")
     assert stale["metadata"]["snapshot_status"] == "stale"
     assert stale["metadata"]["stale"] is True
+    assert stale["degraded"] is False and stale["metadata"]["degraded"] is False
     assert stale["metadata"]["snapshot_age_seconds"] == pytest.approx(30.001)
     assert stale["stats"]["win_rate"] == 0.5
 
@@ -178,6 +181,22 @@ def test_seed_registers_registry_strategies_and_survives_failure():
         "a": "stored",
         "b": "stored",
     }
+
+
+def test_seed_runs_inside_the_refresh_context():
+    store = ps.PerformanceSnapshotStore(interval=60)
+    seen: list[bool] = []
+
+    async def seed() -> list[str]:
+        seen.append(ps.snapshot_refresh_active.get())
+        return ["a"]
+
+    async def compute(strategy_id: str) -> dict:
+        return _good()
+
+    asyncio.run(store.refresh_once(compute, seed))
+    assert seen == [True]
+    assert ps.snapshot_refresh_active.get() is False
 
 
 def test_run_loops_until_cancelled():
