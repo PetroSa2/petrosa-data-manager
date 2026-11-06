@@ -137,3 +137,79 @@ def test_reader_without_exporter_is_refused() -> None:
     with pytest.raises(ValueError) as err:
         wd.ExportWatch(_NoExporter())
     assert "no exporter" in str(err.value)
+
+
+# --- per-export evidence counters ---------------------------------------------------
+
+
+def _count(result: str) -> float:
+    return wd.otel_metric_exports_total.labels(result=result)._value.get()
+
+
+def _points(result: str) -> float:
+    return wd.otel_metric_export_points_total.labels(result=result)._value.get()
+
+
+class _Batch:
+    """A MetricsData-shaped batch with ``n`` data points."""
+
+    def __init__(self, n: int) -> None:
+        point = object()
+        metric = type(
+            "M", (), {"data": type("D", (), {"data_points": [point] * n})()}
+        )()
+        scope = type("S", (), {"metrics": [metric]})()
+        self.resource_metrics = [type("R", (), {"scope_metrics": [scope]})()]
+
+
+def test_each_export_is_counted_with_its_points_and_result() -> None:
+    exporter = _Exporter()
+    wd.ExportWatch(_Reader(exporter), clock=_Clock())
+    ok, ok_pts = _count("success"), _points("success")
+    bad, bad_pts = _count("failure"), _points("failure")
+
+    exporter.export(_Batch(7))
+    exporter.result = MetricExportResult.FAILURE
+    exporter.export(_Batch(3))
+
+    assert _count("success") == ok + 1 and _points("success") == ok_pts + 7
+    assert _count("failure") == bad + 1 and _points("failure") == bad_pts + 3
+    assert wd.otel_metric_last_export_points._value.get() == 3
+    assert wd.otel_metric_last_success_timestamp._value.get() > 0
+
+
+def test_an_exporter_exception_is_counted_and_reraised() -> None:
+    class _Raises(_Exporter):
+        def export(self, metrics_data, timeout_millis: float = 10_000, **kwargs):
+            raise ConnectionError("collector unreachable")
+
+    exporter = _Raises()
+    wd.ExportWatch(_Reader(exporter), clock=_Clock())
+    before = _count("exception")
+    with pytest.raises(ConnectionError):
+        exporter.export(_Batch(2))
+    assert _count("exception") == before + 1
+
+
+def test_count_points_tolerates_unexpected_batches() -> None:
+    assert wd.count_points(None) == 0
+    assert wd.count_points(object()) == 0
+    assert wd.count_points(_Batch(4)) == 4
+
+
+def test_points_are_counted_from_a_real_sdk_export(monkeypatch) -> None:
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
+    exporter = _Exporter()
+    reader = PeriodicExportingMetricReader(exporter, export_interval_millis=3_600_000)
+    provider = MeterProvider(metric_readers=[reader])
+    try:
+        wd.ExportWatch(wd.periodic_readers(provider)[0])
+        before = _points("success")
+        meter = provider.get_meter("t")
+        meter.create_counter("c1").add(1)
+        meter.create_counter("c2").add(1, {"k": "a"})
+        meter.create_counter("c2").add(1, {"k": "b"})
+        reader.force_flush()
+        assert _points("success") - before >= 3
+    finally:
+        provider.shutdown()
