@@ -41,7 +41,9 @@ async def test_route_serves_snapshot_without_computing(store, monkeypatch):
     assert time.monotonic() - started < 0.1
     assert response["stats"]["win_rate"] == 0.75
     assert response["metadata"]["snapshot_status"] == "served"
-    assert "degraded" not in response
+    # #833: a served snapshot says degraded=false explicitly (a caller testing `is False` must pass).
+    assert response["degraded"] is False
+    assert response["metadata"]["degraded"] is False
     compute.assert_not_awaited()
 
 

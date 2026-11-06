@@ -135,6 +135,7 @@ class PerformanceSnapshotStore:
     def get(self, strategy_id: str) -> dict[str, Any] | None:
         """Return a copy of the snapshot with its age, or ``None`` when there is none yet.
 
+        - Served and stale bodies carry ``degraded=False`` at the top level and in ``metadata``.
         - Up to ``STALE_AFTER_INTERVALS`` cadences old: ``snapshot_status="served"``.
         - Up to ``EXPIRE_AFTER_INTERVALS`` cadences: served, flagged ``snapshot_status="stale"`` and ``stale``.
         - Older: only ``{"metadata": {...}}`` with ``snapshot_status="expired"``, the age and computed time,
@@ -152,7 +153,11 @@ class PerformanceSnapshotStore:
             return {"metadata": {"snapshot_status": "expired", **snapshot_metadata}}
         stale = age > self.cadence * STALE_AFTER_INTERVALS
         body = deepcopy(snapshot.body)
+        # Only good bodies are stored, so a served or stale answer is not degraded: say so explicitly,
+        # because a caller testing ``degraded is False`` reads a missing key as not OK (#833).
+        body["degraded"] = False
         metadata = body.setdefault("metadata", {})
+        metadata["degraded"] = False
         metadata["snapshot_status"] = "stale" if stale else "served"
         metadata.update(snapshot_metadata)
         if stale:
