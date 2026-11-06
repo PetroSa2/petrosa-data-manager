@@ -28,7 +28,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,46 @@ otel_metric_export_stalls_total = Counter(
     "data_manager_otel_metric_export_stalls_total",
     "OTLP metric export stalls detected (no successful export for 3 intervals)",
 )
+# Per-export evidence (dm#852): every export call, its result, how many data points it
+# carried and how long it took, so exports can be matched against the collector's
+# receiver counts at the same times.
+otel_metric_exports_total = Counter(
+    "data_manager_otel_metric_exports_total",
+    "OTLP metric export calls by result (success / failure / exception)",
+    ["result"],
+)
+otel_metric_export_points_total = Counter(
+    "data_manager_otel_metric_export_points_total",
+    "Data points handed to the OTLP metric exporter, by result",
+    ["result"],
+)
+otel_metric_last_export_points = Gauge(
+    "data_manager_otel_metric_last_export_points",
+    "Data points in the most recent OTLP metric export call",
+)
+otel_metric_last_export_timestamp = Gauge(
+    "data_manager_otel_metric_last_export_timestamp_seconds",
+    "Unix time of the most recent OTLP metric export call",
+)
+otel_metric_last_success_timestamp = Gauge(
+    "data_manager_otel_metric_last_success_timestamp_seconds",
+    "Unix time of the most recent successful OTLP metric export",
+)
+otel_metric_export_seconds = Gauge(
+    "data_manager_otel_metric_last_export_seconds",
+    "Duration of the most recent OTLP metric export call in seconds",
+)
+
+
+def count_points(metrics_data: Any) -> int:
+    """Data points in one ``MetricsData`` batch (0 for anything unexpected)."""
+    total = 0
+    for resource_metrics in getattr(metrics_data, "resource_metrics", None) or ():
+        for scope_metrics in getattr(resource_metrics, "scope_metrics", None) or ():
+            for metric in getattr(scope_metrics, "metrics", None) or ():
+                data = getattr(metric, "data", None)
+                total += len(getattr(data, "data_points", None) or ())
+    return total
 
 
 class ExportWatch:
@@ -60,10 +100,25 @@ class ExportWatch:
         original = exporter.export
 
         def export(*args: Any, **kwargs: Any) -> Any:
-            result = original(*args, **kwargs)
+            points = count_points(args[0] if args else kwargs.get("metrics_data"))
+            started = time.monotonic()
+            otel_metric_last_export_points.set(points)
+            otel_metric_last_export_timestamp.set(time.time())
+            try:
+                result = original(*args, **kwargs)
+            except Exception:
+                otel_metric_exports_total.labels(result="exception").inc()
+                otel_metric_export_points_total.labels(result="exception").inc(points)
+                raise
+            finally:
+                otel_metric_export_seconds.set(time.monotonic() - started)
             # MetricExportResult.SUCCESS has value 0 in the SDK.
-            if getattr(result, "value", result) == 0:
+            outcome = "success" if getattr(result, "value", result) == 0 else "failure"
+            otel_metric_exports_total.labels(result=outcome).inc()
+            otel_metric_export_points_total.labels(result=outcome).inc(points)
+            if outcome == "success":
                 self.last_success = self.clock()
+                otel_metric_last_success_timestamp.set(time.time())
             return result
 
         exporter.export = export
