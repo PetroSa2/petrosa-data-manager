@@ -710,6 +710,7 @@ class DataManagerApp:
         asyncio.create_task(self._run_analytics())
         asyncio.create_task(self._run_drawdown_scheduler())
         asyncio.create_task(self._run_candle_warmup_scheduler())
+        asyncio.create_task(self._run_strategy_stats_refresh())
         asyncio.create_task(self._run_ledger_tieout_scheduler())
 
         self.running = True
@@ -1608,6 +1609,32 @@ class DataManagerApp:
             self._component_up("candle_warmup", False)
 
         logger.info("Candle warm-up scheduler stopped")
+
+    async def _run_strategy_stats_refresh(self) -> None:
+        """Leader-only refresh of the exchange-truth strategy stats (petrosa-data-manager#842).
+
+        Writes one ``strategy_stats_snapshots`` document per cycle; nothing changes what CIO sees until the
+        ``strategy_stats_source`` switch says ``ground_truth``. The gauge follows the real state: 1 only while
+        this pod refreshes as the leader.
+        """
+        if not await self._wait_for_database("strategy_stats_refresh"):
+            return
+
+        from data_manager.maintenance.strategy_stats_refresh import (
+            StrategyStatsRefresh,
+        )
+
+        try:
+            self.strategy_stats_refresh = StrategyStatsRefresh(
+                self.db_manager,
+                leader_election=self.leader_election,
+                on_active=lambda up: self._component_up("strategy_stats_refresh", up),
+            )
+            await self.strategy_stats_refresh.start()
+        except Exception as e:
+            logger.error(f"Error in strategy stats refresh: {e}", exc_info=True)
+        finally:
+            self._component_up("strategy_stats_refresh", False)
 
     async def _run_mongo_data_size_loop(self) -> None:
         """Periodic MongoDB logical-data-size gauge refresh (dm#248).
