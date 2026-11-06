@@ -30,8 +30,11 @@ from pymongo.errors import NetworkTimeout
 import constants
 import data_manager.api.app as api_module
 from data_manager.observability_metrics import STRATEGY_SCORECARD_EVALUATE_TOTAL
-from data_manager.services import performance_snapshots
+from data_manager.services import performance_snapshots, strategy_stats_source
 from data_manager.services.report_precompute import record_report_stage
+from data_manager.services.strategy_stats_snapshot_store import (
+    StrategyStatsSnapshotStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1265,6 +1268,32 @@ def win_rate_delta_with_noise_floor(
     return ((later - earlier) / window if significant else None), window, standard_error
 
 
+# petrosa-data-manager#842: the latest exchange-truth snapshot, read at most once a minute per pod and
+# within a short time bound, so the request path never waits on MongoDB. A failed read keeps the last one
+# (whose staleness is still judged by the serving rule).
+_GROUND_TRUTH_SNAPSHOT_CACHE_SECONDS = 60.0
+_GROUND_TRUTH_SNAPSHOT_READ_TIMEOUT_SECONDS = 2.0
+_ground_truth_snapshot_cache: tuple[float, dict[str, Any] | None] | None = None
+
+
+async def _ground_truth_snapshot() -> dict[str, Any] | None:
+    global _ground_truth_snapshot_cache
+    now = monotonic()
+    cached = _ground_truth_snapshot_cache
+    if cached is not None and now - cached[0] < _GROUND_TRUTH_SNAPSHOT_CACHE_SECONDS:
+        return cached[1]
+    adapter = getattr(api_module.db_manager, "mongodb_adapter", None)
+    snapshot = cached[1] if cached else None
+    if adapter is not None:
+        try:
+            async with asyncio.timeout(_GROUND_TRUTH_SNAPSHOT_READ_TIMEOUT_SECONDS):
+                snapshot = await StrategyStatsSnapshotStore(adapter).latest()
+        except Exception as exc:
+            logger.warning("ground-truth stats snapshot read failed: %s", exc)
+    _ground_truth_snapshot_cache = (now, snapshot)
+    return snapshot
+
+
 @router.get("/performance/{strategy_id}")
 async def get_strategy_performance(strategy_id: str):
     """Serve the strategy's background-refreshed snapshot; never read a database on the request path.
@@ -1275,6 +1304,13 @@ async def get_strategy_performance(strategy_id: str):
     snapshot past its freshness horizon is served with ``snapshot_status="stale"`` and its age; past its expiry
     the answer is degraded (``snapshot_status="expired"``), never hours-old stats presented as current.
     """
+    if await strategy_stats_source.get_source(api_module.db_manager) == (
+        strategy_stats_source.GROUND_TRUTH
+    ):
+        # petrosa-data-manager#842: the exchange-truth stats, when the switch says so
+        return strategy_stats_source.performance_from_snapshot(
+            await _ground_truth_snapshot(), strategy_id
+        )
     store = performance_snapshots.store
     store.note_request(strategy_id)
     served = store.get(strategy_id)
@@ -2119,6 +2155,18 @@ async def get_closed_rounds(
         30.0, gt=0, le=365, description="Window of the rate and holding time"
     ),
 ):
+    if window_days == 30 and await strategy_stats_source.get_source(
+        api_module.db_manager
+    ) == (strategy_stats_source.GROUND_TRUTH):
+        # petrosa-data-manager#842: the exchange-truth rounds, when the switch says so
+        body = strategy_stats_source.rounds_from_snapshot(
+            await _ground_truth_snapshot()
+        )
+        if strategy_id is not None:
+            body["strategies"] = {
+                k: v for k, v in body["strategies"].items() if k == strategy_id
+            }
+        return body
     precomputer = getattr(api_module, "report_precomputer", None)
     if precomputer is not None and strategy_id is None and window_days == 30:
         cached = await precomputer.get_or_compute(
