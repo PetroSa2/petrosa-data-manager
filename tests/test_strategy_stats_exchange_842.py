@@ -129,3 +129,88 @@ def test_no_closed_episode_means_unknown_not_zero():
 def test_empty_ground_truth_gives_no_strategies():
     assert build_strategy_stats({"episodes": []}, window_days=30) == {}
     assert build_strategy_stats({}, window_days=30) == {}
+
+
+# --- net R for CIO's keep/kill (strategy-net-r contract) --------------------------------------
+
+# CIO's keep/kill judges a strategy only with at least this many rounds of known R
+# (cio/core/keep_kill.py DERIVED_MIN_ROUNDS).
+CIO_DERIVED_MIN_ROUNDS = 10
+
+
+def _row(strategy, *, qty=1.0, entry=100.0, stop=98.0, order="o1"):
+    return {
+        "strategy_id": strategy,
+        "entry_order_id": order,
+        "entry_quantity": qty,
+        "entry_price": entry,
+        "stop_loss_price": stop,
+    }
+
+
+def _risky(n, net, strategy="s", rows=None, shares=None, status="attributed"):
+    ep = _episode(
+        n,
+        status,
+        net,
+        strategy=strategy if status == "attributed" else None,
+        shares=shares,
+        close_d=n,
+    )
+    ep["ledger_rows"] = rows if rows is not None else [_row(strategy)]
+    return ep
+
+
+def test_net_r_is_net_over_the_risk_at_entry():
+    # risk = 1 x 100 x 2 % = 2; net -4 -> -2 R; net +3 -> +1.5 R
+    gt = {"episodes": [_risky(1, -4.0), _risky(2, 3.0)]}
+    block = build_strategy_stats(gt, window_days=30)["s"]["net_r"]
+    assert [float(r) for r in block["net_r"]] == pytest.approx([-2.0, 1.5])
+    assert block["closed_rounds"] == 2 and block["rounds_without_risk"] == 0
+    assert float(block["cumulative_net_loss_usd"]) == pytest.approx(1.0)
+
+
+def test_a_shared_episode_uses_only_the_strategys_own_rows_and_share():
+    rows = [_row("a", qty=1.0, stop=98.0), _row("b", qty=3.0, stop=99.0, order="o2")]
+    ep = _risky(
+        1, -10.0, rows=rows, shares={"a": 0.25, "b": 0.75}, status="multi_strategy"
+    )
+    stats = build_strategy_stats({"episodes": [ep]}, window_days=30)
+    # a: -2.5 / (1 x 100 x 2 %) = -1.25 R; b: -7.5 / (3 x 100 x 1 %) = -2.5 R
+    assert float(stats["a"]["net_r"]["net_r"][0]) == pytest.approx(-1.25)
+    assert float(stats["b"]["net_r"]["net_r"][0]) == pytest.approx(-2.5)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],  # no linked row
+        [_row("s", stop=None)],  # no stop
+        [_row("s", stop=100.0)],  # stop at entry
+        [
+            _row("s"),
+            _row("s", qty=None, order="o2"),
+        ],  # one of two rows unusable: partial risk would overstate R
+    ],
+)
+def test_unknown_risk_is_counted_never_zero(rows):
+    block = build_strategy_stats(
+        {"episodes": [_risky(1, -4.0, rows=rows)]}, window_days=30
+    )["s"]["net_r"]
+    assert block["net_r"] == []
+    assert block["rounds_without_risk"] == 1
+    assert block["unknown_r_share"] == 1.0
+    assert float(block["cumulative_net_loss_usd"]) == pytest.approx(
+        4.0
+    )  # the loss still counts
+
+
+def test_mostly_unknown_r_is_too_few_rounds_for_keep_kill_never_keep():
+    """25 closed episodes, 20 without a stop: CIO sees 5 judged rounds (< its minimum), i.e. insufficient history."""
+    episodes = [_risky(i, 1.0) for i in range(1, 6)]  # 5 known, all winners
+    episodes += [_risky(i, -1.0, rows=[_row("s", stop=None)]) for i in range(6, 26)]
+    block = build_strategy_stats({"episodes": episodes}, window_days=30)["s"]["net_r"]
+    assert len(block["net_r"]) == 5 < CIO_DERIVED_MIN_ROUNDS
+    assert block["closed_rounds"] == 25
+    assert block["rounds_without_risk"] == 20
+    assert block["unknown_r_share"] == pytest.approx(0.8)
