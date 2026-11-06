@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -65,6 +66,10 @@ from data_manager.maintenance.candle_warmup_backfill import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How often a non-leader re-checks leadership when the election manager doesn't
+# expose its heartbeat interval (labelled fallback; the lease heartbeat is preferred).
+LEADER_POLL_FALLBACK_SECONDS = 30
 
 __all__ = [
     "CandleWarmupScheduler",
@@ -144,12 +149,25 @@ class CandleWarmupScheduler:
             never connects or disconnects them, because they are owned by the
             application lifecycle.
         leader_election: When leader election is enabled, only the leader pod
-            runs cycles, so N replicas still yield exactly one writer.
+            runs cycles, so N replicas still yield exactly one writer. Every pod
+            keeps the loop alive and waits for leadership: a pod that is not the
+            leader at startup, or loses the lease later, resumes cycles when it
+            (re)gains it (petrosa-data-manager#848).
+        on_active: Called with True when this pod starts running cycles as the
+            single writer and False when it stops (lost leadership, stopped), so
+            a component gauge reflects the real state.
     """
 
-    def __init__(self, db_manager, leader_election=None) -> None:
+    def __init__(
+        self,
+        db_manager,
+        leader_election=None,
+        on_active: Callable[[bool], None] | None = None,
+    ) -> None:
         self.db_manager = db_manager
         self.leader_election = leader_election
+        self.on_active = on_active
+        self.active = False
         self.running = False
         self.last_cycle_time: datetime | None = None
         self.last_success_time: datetime | None = None
@@ -174,8 +192,55 @@ class CandleWarmupScheduler:
             return False
         return bool(self.leader_election.is_leader)
 
+    def _leader_poll_seconds(self) -> float:
+        interval = getattr(self.leader_election, "heartbeat_interval", None)
+        if isinstance(interval, int | float) and interval > 0:
+            return float(interval)
+        return float(LEADER_POLL_FALLBACK_SECONDS)
+
+    def _set_active(self, active: bool) -> None:
+        """Record whether this pod is running cycles as the writer (on change only)."""
+        if active == self.active:
+            return
+        self.active = active
+        candle_backfill_active.set(1 if active else 0)
+        if active:
+            logger.info("candle_warmup_scheduler: leader; running warm-up cycles")
+        elif self.running:
+            logger.warning(
+                "candle_warmup_scheduler: not the leader; waiting for leadership"
+            )
+        if self.on_active is not None:
+            try:
+                self.on_active(active)
+            except Exception as exc:  # a gauge callback must never stop the loop
+                logger.error("candle_warmup_scheduler: on_active failed: %s", exc)
+
+    async def _sleep_while_leader(self, seconds: float, poll: float) -> bool:
+        """Sleep ``seconds`` in leader-poll chunks; False when stopped or cancelled.
+
+        Leadership is re-checked after every chunk, so a lost lease is noticed
+        within one poll instead of after a whole cycle interval.
+        """
+        remaining = seconds
+        while self.running and remaining > 0:
+            chunk = min(remaining, poll)
+            try:
+                await asyncio.sleep(chunk)
+            except asyncio.CancelledError:
+                return False
+            remaining -= chunk
+            if not self._is_leader():
+                self._set_active(False)
+                return self.running
+        return self.running
+
     async def start(self) -> None:
-        """Run warm-up cycles until :meth:`stop` is called."""
+        """Run warm-up cycles until :meth:`stop` is called.
+
+        The loop never exits on leadership: while this pod is not the leader it
+        waits and re-checks every lease heartbeat; while it is, it runs cycles.
+        """
         if not constants.ENABLE_CANDLE_WARMUP_SCHEDULER:
             logger.info(
                 "candle_warmup_scheduler: disabled "
@@ -183,63 +248,57 @@ class CandleWarmupScheduler:
             )
             return
 
-        if not self._is_leader():
-            logger.info(
-                "candle_warmup_scheduler: not the leader; scheduler idle on this pod"
-            )
-            candle_backfill_active.set(0)
-            return
-
         interval = max(60, int(constants.CANDLE_WARMUP_SCHEDULER_INTERVAL))
         backoff = max(10, int(constants.CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF))
         initial_delay = max(0, int(constants.CANDLE_WARMUP_SCHEDULER_INITIAL_DELAY))
+        poll = self._leader_poll_seconds()
 
         self.running = True
-        candle_backfill_active.set(1)
         logger.info(
-            "candle_warmup_scheduler: starting (interval=%ds, initial_delay=%ds)",
+            "candle_warmup_scheduler: starting (interval=%ds, initial_delay=%ds, "
+            "leader_poll=%.0fs)",
             interval,
             initial_delay,
+            poll,
         )
-
         try:
-            await asyncio.sleep(initial_delay)
-        except asyncio.CancelledError:
-            self.running = False
-            candle_backfill_active.set(0)
-            return
-
-        while self.running:
-            if not self._is_leader():
-                logger.warning(
-                    "candle_warmup_scheduler: lost leadership; stopping on this pod"
-                )
-                break
-
             try:
-                await self.run_cycle()
-                sleep_for = interval
-            except Exception as exc:
-                # run_cycle is already failure-isolated per collection; this
-                # catches the outer failures (adapters gone, config error) so
-                # the loop itself can never die.
-                self.consecutive_failures += 1
-                candle_backfill_cycles_total.labels(outcome="failed").inc()
-                logger.error(
-                    "candle_warmup_scheduler: cycle failed (%d consecutive): %s",
-                    self.consecutive_failures,
-                    exc,
-                )
-                sleep_for = backoff
-
-            try:
-                await asyncio.sleep(sleep_for)
+                await asyncio.sleep(initial_delay)
             except asyncio.CancelledError:
-                break
+                return
 
-        self.running = False
-        candle_backfill_active.set(0)
-        logger.info("candle_warmup_scheduler: stopped")
+            while self.running:
+                if not self._is_leader():
+                    self._set_active(False)
+                    try:
+                        await asyncio.sleep(poll)
+                    except asyncio.CancelledError:
+                        break
+                    continue
+
+                self._set_active(True)
+                try:
+                    await self.run_cycle()
+                    sleep_for: float = interval
+                except Exception as exc:
+                    # run_cycle is already failure-isolated per collection; this
+                    # catches the outer failures (adapters gone, config error) so
+                    # the loop itself can never die.
+                    self.consecutive_failures += 1
+                    candle_backfill_cycles_total.labels(outcome="failed").inc()
+                    logger.error(
+                        "candle_warmup_scheduler: cycle failed (%d consecutive): %s",
+                        self.consecutive_failures,
+                        exc,
+                    )
+                    sleep_for = backoff
+
+                if not await self._sleep_while_leader(sleep_for, poll):
+                    break
+        finally:
+            self.running = False
+            self._set_active(False)
+            logger.info("candle_warmup_scheduler: stopped")
 
     async def stop(self) -> None:
         """Signal the loop to exit after the in-flight sleep/cycle."""

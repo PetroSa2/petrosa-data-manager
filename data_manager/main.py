@@ -1594,11 +1594,13 @@ class DataManagerApp:
         )
 
         try:
+            # The gauge follows the real state: 1 only while this pod runs
+            # warm-up cycles as the leader (petrosa-data-manager#848).
             self.candle_warmup_scheduler = CandleWarmupScheduler(
                 self.db_manager,
                 leader_election=self.leader_election,
+                on_active=lambda up: self._component_up("candle_warmup", up),
             )
-            self._component_up("candle_warmup", True)
             await self.candle_warmup_scheduler.start()
         except Exception as e:
             logger.error(f"Error in candle warm-up scheduler: {e}", exc_info=True)
