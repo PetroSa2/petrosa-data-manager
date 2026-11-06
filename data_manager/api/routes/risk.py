@@ -8,6 +8,7 @@ floor). Reporting only: an item without enough returns is ``sufficient: false`` 
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from datetime import UTC, datetime, timedelta
 from time import monotonic
@@ -141,6 +142,46 @@ def strategy_holding_times(
     }
 
 
+#: The ledger_adjustments target of an equity-peak re-base (petrosa-data-manager#856).
+PEAK_REBASE_TABLE = "risk_equity_peak"
+PEAK_REBASE_KEY = "portfolio"
+
+
+class PeakRebaseUnavailable(RuntimeError):
+    """The re-base record could not be read; the un-rebased (higher) peak is served instead."""
+
+
+async def _load_peak_rebase(db_manager: Any | None = None) -> dict[str, Any] | None:
+    """The latest APPLIED equity-peak re-base: its ``after`` plus ``adjustment_id``, or None if never re-based.
+
+    Raises :class:`PeakRebaseUnavailable` when the audit table cannot be read or the record is malformed.
+    """
+    from data_manager.db.repositories.ledger_adjustments_repository import (
+        LedgerAdjustmentsRepository,
+    )
+
+    manager = db_manager or api_module.db_manager
+    try:
+        repo = LedgerAdjustmentsRepository(manager.mysql_adapter, None)
+        rows = await asyncio.to_thread(
+            repo.list_adjustments,
+            target_table=PEAK_REBASE_TABLE,
+            target_key=PEAK_REBASE_KEY,
+        )
+    except Exception as exc:
+        raise PeakRebaseUnavailable(f"adjustments read failed: {exc}") from exc
+    if not isinstance(rows, list):
+        raise PeakRebaseUnavailable("adjustments read returned no list")
+    applied = [r for r in rows if isinstance(r, dict) and r.get("run_mode") == "apply"]
+    if not applied:
+        return None
+    latest = applied[-1]  # rows come in chain order
+    after = latest.get("after")
+    if not isinstance(after, dict) or "peak" not in after or "peak_at" not in after:
+        raise PeakRebaseUnavailable("latest re-base has no after.peak/peak_at")
+    return {**after, "adjustment_id": latest.get("adjustment_id")}
+
+
 async def _load_stored_peak(db_manager: Any | None = None) -> dict[str, Any] | None:
     manager = db_manager or api_module.db_manager
     adapter = getattr(manager, "mongodb_adapter", None)
@@ -249,10 +290,28 @@ async def compute_risk_inputs(
             monotonic() - wallet_read_started,
             source=source,
         )
+        # An applied peak re-base (#856). If it cannot be read, serve the un-rebased peak, which is the
+        # higher one: the drawdown is then overstated (more conservative), never silently re-based.
+        rebase: dict[str, Any] | None = None
+        rebase_error: str | None = None
+        try:
+            rebase = await _load_peak_rebase(db_manager)
+        except PeakRebaseUnavailable as exc:
+            rebase_error = "peak_rebase_unavailable"
+            logger.error("risk inputs: equity peak re-base unreadable: %s", exc)
         equity_compute_started = monotonic()
         equity = await asyncio.to_thread(
-            ri.equity_curve, rows, window_days=window_days, now=now
+            functools.partial(
+                ri.equity_curve, rows, window_days=window_days, now=now, rebase=rebase
+            )
         )
+        if rebase is not None and equity.get("peak_rebase") is None:
+            rebase_error = "peak_rebase_invalid"
+            logger.error(
+                "risk inputs: equity peak re-base record is invalid: %s", rebase
+            )
+        if rebase_error:
+            equity["peak_rebase_error"] = rebase_error
         record_report_stage(
             "risk_inputs",
             "compute",
