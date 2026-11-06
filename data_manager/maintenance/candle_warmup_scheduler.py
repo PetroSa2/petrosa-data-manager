@@ -198,23 +198,27 @@ class CandleWarmupScheduler:
             return float(interval)
         return float(LEADER_POLL_FALLBACK_SECONDS)
 
+    def _report_active(self, active: bool) -> None:
+        """Export ``active`` to the gauge and the callback (no change check)."""
+        candle_backfill_active.set(1 if active else 0)
+        if self.on_active is not None:
+            try:
+                self.on_active(active)
+            except Exception as exc:  # a gauge callback must never stop the loop
+                logger.error("candle_warmup_scheduler: on_active failed: %s", exc)
+
     def _set_active(self, active: bool) -> None:
         """Record whether this pod is running cycles as the writer (on change only)."""
         if active == self.active:
             return
         self.active = active
-        candle_backfill_active.set(1 if active else 0)
         if active:
             logger.info("candle_warmup_scheduler: leader; running warm-up cycles")
         elif self.running:
             logger.warning(
                 "candle_warmup_scheduler: not the leader; waiting for leadership"
             )
-        if self.on_active is not None:
-            try:
-                self.on_active(active)
-            except Exception as exc:  # a gauge callback must never stop the loop
-                logger.error("candle_warmup_scheduler: on_active failed: %s", exc)
+        self._report_active(active)
 
     async def _sleep_while_leader(self, seconds: float, poll: float) -> bool:
         """Sleep ``seconds`` in leader-poll chunks; False when stopped.
@@ -256,6 +260,8 @@ class CandleWarmupScheduler:
         poll = self._leader_poll_seconds()
 
         self.running = True
+        # Export the starting state explicitly: a follower reads 0, not "no series".
+        self._report_active(False)
         logger.info(
             "candle_warmup_scheduler: starting (interval=%ds, initial_delay=%ds, "
             "leader_poll=%.0fs)",

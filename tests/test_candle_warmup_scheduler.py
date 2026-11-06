@@ -255,7 +255,7 @@ class TestLeadership:
 
         cycle.assert_not_awaited()
         assert polls.durations[1:] == [30.0, 30.0, 30.0]  # heartbeat polls
-        assert states == []  # never active, so the gauge was never set to 1
+        assert states == [False]  # exported 0 at start, never set to 1
 
     @pytest.mark.asyncio
     async def test_election_enabled_without_manager_fails_closed(
@@ -355,7 +355,7 @@ class TestWaitsForLeadership:
                     await asyncio.wait_for(sched.start(), timeout=5)
 
         assert cycle.await_count == 1  # ran once leadership arrived, no restart
-        assert states == [True, False]  # active as leader, inactive on stop
+        assert states == [False, True, False]  # 0 at start, leader, stopped
         assert sched.running is False
 
     @pytest.mark.asyncio
@@ -384,7 +384,7 @@ class TestWaitsForLeadership:
                     await asyncio.wait_for(sched.start(), timeout=5)
 
         assert cycle.await_count == 2
-        assert states == [True, False, True, False]
+        assert states == [False, True, False, True, False]
 
     @pytest.mark.asyncio
     async def test_a_lost_lease_is_noticed_within_one_heartbeat(
@@ -407,7 +407,7 @@ class TestWaitsForLeadership:
                     await asyncio.wait_for(sched.start(), timeout=5)
 
         assert script.durations[1] == 30.0  # first chunk of the 3600 s interval
-        assert states[:2] == [True, False]  # inactive right after that chunk
+        assert states[:3] == [False, True, False]  # inactive right after that chunk
 
     @pytest.mark.asyncio
     async def test_two_pods_one_writer(self, db_manager: MagicMock):
@@ -433,7 +433,7 @@ class TestWaitsForLeadership:
                     await asyncio.wait_for(b.start(), timeout=5)
 
         assert a_cycle.await_count >= 1 and b_cycle.await_count == 0
-        assert a_states[0] is True and b_states == []
+        assert a_states[:2] == [False, True] and b_states == [False]  # follower reads 0
 
     @pytest.mark.asyncio
     async def test_failing_gauge_callback_never_stops_the_loop(
@@ -490,4 +490,4 @@ class TestCancellation:
         assert sched.running is False
         assert sched.active is False
         assert module.candle_backfill_active._value.get() == 0
-        assert states == ([True, False] if leader else [])
+        assert states == ([False, True, False] if leader else [False])
