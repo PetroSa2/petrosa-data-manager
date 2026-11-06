@@ -129,12 +129,11 @@ def test_no_periodic_reader_starts_nothing() -> None:
     assert wd.start_export_watchdog(_Provider()) is None
 
 
-@pytest.mark.parametrize("bad", [object(), None])
-def test_reader_without_exporter_is_refused(bad) -> None:
+def test_reader_without_exporter_is_refused() -> None:
     class _NoExporter:
         _export_interval_millis = 60_000
-        _exporter = bad
+        _exporter = None
 
-    if bad is None:
-        with pytest.raises(ValueError):
-            wd.ExportWatch(_NoExporter())
+    with pytest.raises(ValueError) as err:
+        wd.ExportWatch(_NoExporter())
+    assert "no exporter" in str(err.value)
