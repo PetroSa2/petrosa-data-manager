@@ -71,15 +71,79 @@ async def test_lifespan_starts_and_cancels_snapshot_refresh(monkeypatch):
     assert cancelled.is_set()
 
 
+class _Adapter:
+    def __init__(self, config=None):
+        self.config = config
+
+    async def list_all_strategy_ids(self):
+        return ["b", "a"]
+
+    async def get_app_config(self):
+        return self.config
+
+
+def _use(monkeypatch, adapter, rows=None, events_error=None):
+    async def load_events(mongodb, strategy_id=None, **_):
+        assert mongodb is adapter and strategy_id is None  # source-wide, shared cache
+        if events_error is not None:
+            raise events_error
+        return rows or [], "latest"
+
+    monkeypatch.setattr(analysis, "_load_execution_events", load_events)
+    monkeypatch.setattr(
+        api_module, "db_manager", type("M", (), {"mongodb_adapter": adapter})()
+    )
+
+
 @pytest.mark.asyncio
 async def test_seed_reads_strategy_registry(monkeypatch):
-    class Adapter:
-        async def list_all_strategy_ids(self):
-            return ["b", "a"]
-
     monkeypatch.setattr(api_module, "db_manager", None)
     assert await api_module._configured_strategy_ids() == []
-    monkeypatch.setattr(
-        api_module, "db_manager", type("M", (), {"mongodb_adapter": Adapter()})()
-    )
+    _use(monkeypatch, _Adapter())
     assert await api_module._configured_strategy_ids() == ["b", "a"]
+
+
+@pytest.mark.asyncio
+async def test_seed_adds_allowlist_and_strategies_that_only_appear_in_fills(
+    monkeypatch,
+):
+    adapter = _Adapter({"parameters": {"enabled_strategies": ["a", "allowed"]}})
+    rows = [
+        {"strategy_id": "spread_liquidity"},
+        {"strategy_id": "b"},
+        {"strategy_id": None},
+        {"strategy_id": "spread_liquidity"},
+    ]
+    _use(monkeypatch, adapter, rows)
+
+    assert await api_module._configured_strategy_ids() == [
+        "b",
+        "a",
+        "allowed",
+        "spread_liquidity",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_extra_source_still_seeds_the_rest(monkeypatch, caplog):
+    class BrokenConfig(_Adapter):
+        async def get_app_config(self):
+            raise RuntimeError("config down")
+
+    _use(monkeypatch, BrokenConfig(), [{"strategy_id": "iceberg_detector"}])
+    assert await api_module._configured_strategy_ids() == ["b", "a", "iceberg_detector"]
+    assert "seed source=allowlist outcome=error exception=RuntimeError" in caplog.text
+
+    _use(monkeypatch, _Adapter(), events_error=TimeoutError())
+    assert await api_module._configured_strategy_ids() == ["b", "a"]
+    assert (
+        "seed source=execution_events outcome=error exception=TimeoutError"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_seed_never_swallows_a_cancel(monkeypatch):
+    _use(monkeypatch, _Adapter(), events_error=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await api_module._configured_strategy_ids()
