@@ -217,10 +217,11 @@ class CandleWarmupScheduler:
                 logger.error("candle_warmup_scheduler: on_active failed: %s", exc)
 
     async def _sleep_while_leader(self, seconds: float, poll: float) -> bool:
-        """Sleep ``seconds`` in leader-poll chunks; False when stopped or cancelled.
+        """Sleep ``seconds`` in leader-poll chunks; False when stopped.
 
         Leadership is re-checked after every chunk, so a lost lease is noticed
-        within one poll instead of after a whole cycle interval.
+        within one poll instead of after a whole cycle interval. A cancel marks
+        the scheduler inactive and propagates: it is never swallowed.
         """
         remaining = seconds
         while self.running and remaining > 0:
@@ -228,7 +229,8 @@ class CandleWarmupScheduler:
             try:
                 await asyncio.sleep(chunk)
             except asyncio.CancelledError:
-                return False
+                self._set_active(False)
+                raise
             remaining -= chunk
             if not self._is_leader():
                 self._set_active(False)
@@ -261,19 +263,15 @@ class CandleWarmupScheduler:
             initial_delay,
             poll,
         )
+        # A cancel anywhere propagates (the task ends cancelled); ``finally``
+        # marks the scheduler stopped and inactive.
         try:
-            try:
-                await asyncio.sleep(initial_delay)
-            except asyncio.CancelledError:
-                return
+            await asyncio.sleep(initial_delay)
 
             while self.running:
                 if not self._is_leader():
                     self._set_active(False)
-                    try:
-                        await asyncio.sleep(poll)
-                    except asyncio.CancelledError:
-                        break
+                    await asyncio.sleep(poll)
                     continue
 
                 self._set_active(True)

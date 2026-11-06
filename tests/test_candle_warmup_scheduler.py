@@ -451,3 +451,43 @@ class TestWaitsForLeadership:
                 with patch(f"{MODULE}.asyncio.sleep", new=_Script(sched, stop_after=3)):
                     await asyncio.wait_for(sched.start(), timeout=5)
         assert cycle.await_count >= 1
+
+
+class TestCancellation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("leader", [True, False])
+    async def test_cancel_mid_sleep_propagates_and_leaves_the_gauge_at_zero(
+        self, db_manager: MagicMock, leader: bool
+    ):
+        """A cancel is never swallowed: the task ends cancelled, the gauge at 0."""
+        from data_manager.maintenance import candle_warmup_scheduler as module
+
+        states: list[bool] = []
+        sched = CandleWarmupScheduler(
+            db_manager,
+            leader_election=_Election(leader=leader),
+            on_active=states.append,
+        )
+        asleep = asyncio.Event()
+        calls: list[float] = []
+
+        async def blocking_sleep(seconds):
+            calls.append(seconds)
+            if len(calls) >= 2:  # past the initial delay: the cycle wait / leader poll
+                asleep.set()
+                await asyncio.Event().wait()  # sleeps until cancelled
+
+        with _enabled_consts():
+            with patch.object(sched, "run_cycle", new=AsyncMock(return_value=[])):
+                with patch(f"{MODULE}.asyncio.sleep", new=blocking_sleep):
+                    task = asyncio.create_task(sched.start())
+                    await asyncio.wait_for(asleep.wait(), timeout=5)
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+
+        assert task.cancelled() is True
+        assert sched.running is False
+        assert sched.active is False
+        assert module.candle_backfill_active._value.get() == 0
+        assert states == ([True, False] if leader else [])
