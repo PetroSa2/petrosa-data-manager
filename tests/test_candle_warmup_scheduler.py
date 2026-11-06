@@ -237,18 +237,25 @@ class TestStartLoop:
 
 class TestLeadership:
     @pytest.mark.asyncio
-    async def test_non_leader_pod_does_not_run(self, db_manager: MagicMock):
-        election = MagicMock()
-        election.is_leader = False
-        sched = CandleWarmupScheduler(db_manager, leader_election=election)
+    async def test_non_leader_pod_runs_no_cycle_while_not_leader(
+        self, db_manager: MagicMock
+    ):
+        """It waits (re-checking each heartbeat) instead of returning; no writes."""
+        election = _Election(leader=False)
+        states: list[bool] = []
+        sched = CandleWarmupScheduler(
+            db_manager, leader_election=election, on_active=states.append
+        )
+        polls = _Script(sched, stop_after=3)
 
-        with patch(f"{MODULE}.constants") as consts:
-            consts.ENABLE_CANDLE_WARMUP_SCHEDULER = True
-            consts.ENABLE_LEADER_ELECTION = True
+        with _enabled_consts():
             with patch.object(sched, "run_cycle", new=AsyncMock()) as cycle:
-                await sched.start()
+                with patch(f"{MODULE}.asyncio.sleep", new=polls):
+                    await asyncio.wait_for(sched.start(), timeout=5)
 
         cycle.assert_not_awaited()
+        assert polls.durations[1:] == [30.0, 30.0, 30.0]  # heartbeat polls
+        assert states == []  # never active, so the gauge was never set to 1
 
     @pytest.mark.asyncio
     async def test_election_enabled_without_manager_fails_closed(
@@ -275,3 +282,212 @@ class TestStatus:
         assert status["consecutive_failures"] == 2
         assert status["last_cycle_time"] is None
         assert "interval_seconds" in status
+
+
+# --- petrosa-data-manager#848: wait for leadership, resume after losing it ---------
+
+
+class _Election:
+    def __init__(self, leader: bool) -> None:
+        self.is_leader = leader
+        self.heartbeat_interval = 30
+
+
+class _Script:
+    """Replaces asyncio.sleep: records durations, runs per-call hooks, stops the loop."""
+
+    def __init__(self, sched, stop_after: int, hooks=None) -> None:
+        self.sched = sched
+        self.stop_after = stop_after
+        self.hooks = hooks or {}
+        self.durations: list[float] = []
+
+    async def __call__(self, seconds) -> None:
+        self.durations.append(float(seconds))
+        call = len(self.durations)
+        hook = self.hooks.get(call)
+        if hook is not None:
+            hook()
+        if call > self.stop_after:
+            await self.sched.stop()
+
+
+def _enabled_consts(interval: int = 3600):
+    consts = patch(f"{MODULE}.constants")
+    mock = consts.start()
+    mock.ENABLE_CANDLE_WARMUP_SCHEDULER = True
+    mock.ENABLE_LEADER_ELECTION = True
+    mock.CANDLE_WARMUP_SCHEDULER_INTERVAL = interval
+    mock.CANDLE_WARMUP_SCHEDULER_INITIAL_DELAY = 0
+    mock.CANDLE_WARMUP_SCHEDULER_ERROR_BACKOFF = 10
+
+    class _Ctx:
+        def __enter__(self):
+            return mock
+
+        def __exit__(self, *exc):
+            consts.stop()
+            return False
+
+    return _Ctx()
+
+
+class TestWaitsForLeadership:
+    @pytest.mark.asyncio
+    async def test_becomes_active_when_leadership_arrives_after_startup(
+        self, db_manager: MagicMock
+    ):
+        election = _Election(leader=False)
+        states: list[bool] = []
+        sched = CandleWarmupScheduler(
+            db_manager, leader_election=election, on_active=states.append
+        )
+
+        def win():
+            election.is_leader = True
+
+        # sleep #1 = initial delay, #2 = first heartbeat poll -> wins the lease
+        script = _Script(sched, stop_after=3, hooks={2: win})
+        cycle = AsyncMock(return_value=[])
+        with _enabled_consts():
+            with patch.object(sched, "run_cycle", new=cycle):
+                with patch(f"{MODULE}.asyncio.sleep", new=script):
+                    await asyncio.wait_for(sched.start(), timeout=5)
+
+        assert cycle.await_count == 1  # ran once leadership arrived, no restart
+        assert states == [True, False]  # active as leader, inactive on stop
+        assert sched.running is False
+
+    @pytest.mark.asyncio
+    async def test_resumes_after_losing_and_regaining_leadership(
+        self, db_manager: MagicMock
+    ):
+        election = _Election(leader=True)
+        states: list[bool] = []
+        sched = CandleWarmupScheduler(
+            db_manager, leader_election=election, on_active=states.append
+        )
+
+        def lose():
+            election.is_leader = False
+
+        def regain():
+            election.is_leader = True
+
+        # 1 initial delay; cycle 1; 2 first chunk of the interval -> lease lost;
+        # 3 heartbeat poll while follower -> lease regained; cycle 2; 4 chunk -> stop
+        script = _Script(sched, stop_after=3, hooks={2: lose, 3: regain})
+        cycle = AsyncMock(return_value=[])
+        with _enabled_consts():
+            with patch.object(sched, "run_cycle", new=cycle):
+                with patch(f"{MODULE}.asyncio.sleep", new=script):
+                    await asyncio.wait_for(sched.start(), timeout=5)
+
+        assert cycle.await_count == 2
+        assert states == [True, False, True, False]
+
+    @pytest.mark.asyncio
+    async def test_a_lost_lease_is_noticed_within_one_heartbeat(
+        self, db_manager: MagicMock
+    ):
+        """The hour-long interval is slept in heartbeat chunks, not in one go."""
+        election = _Election(leader=True)
+        states: list[bool] = []
+        sched = CandleWarmupScheduler(
+            db_manager, leader_election=election, on_active=states.append
+        )
+
+        def lose():
+            election.is_leader = False
+
+        script = _Script(sched, stop_after=2, hooks={2: lose})
+        with _enabled_consts(interval=3600):
+            with patch.object(sched, "run_cycle", new=AsyncMock(return_value=[])):
+                with patch(f"{MODULE}.asyncio.sleep", new=script):
+                    await asyncio.wait_for(sched.start(), timeout=5)
+
+        assert script.durations[1] == 30.0  # first chunk of the 3600 s interval
+        assert states[:2] == [True, False]  # inactive right after that chunk
+
+    @pytest.mark.asyncio
+    async def test_two_pods_one_writer(self, db_manager: MagicMock):
+        leader, follower = _Election(leader=True), _Election(leader=False)
+        a_states: list[bool] = []
+        b_states: list[bool] = []
+        a = CandleWarmupScheduler(
+            db_manager, leader_election=leader, on_active=a_states.append
+        )
+        b = CandleWarmupScheduler(
+            db_manager, leader_election=follower, on_active=b_states.append
+        )
+        a_cycle, b_cycle = AsyncMock(return_value=[]), AsyncMock(return_value=[])
+
+        with _enabled_consts():
+            with (
+                patch.object(a, "run_cycle", new=a_cycle),
+                patch.object(b, "run_cycle", new=b_cycle),
+            ):
+                with patch(f"{MODULE}.asyncio.sleep", new=_Script(a, stop_after=2)):
+                    await asyncio.wait_for(a.start(), timeout=5)
+                with patch(f"{MODULE}.asyncio.sleep", new=_Script(b, stop_after=2)):
+                    await asyncio.wait_for(b.start(), timeout=5)
+
+        assert a_cycle.await_count >= 1 and b_cycle.await_count == 0
+        assert a_states[0] is True and b_states == []
+
+    @pytest.mark.asyncio
+    async def test_failing_gauge_callback_never_stops_the_loop(
+        self, db_manager: MagicMock
+    ):
+        def broken(_up):
+            raise RuntimeError("otel down")
+
+        sched = CandleWarmupScheduler(
+            db_manager, leader_election=_Election(leader=True), on_active=broken
+        )
+        cycle = AsyncMock(return_value=[])
+        with _enabled_consts():
+            with patch.object(sched, "run_cycle", new=cycle):
+                with patch(f"{MODULE}.asyncio.sleep", new=_Script(sched, stop_after=3)):
+                    await asyncio.wait_for(sched.start(), timeout=5)
+        assert cycle.await_count >= 1
+
+
+class TestCancellation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("leader", [True, False])
+    async def test_cancel_mid_sleep_propagates_and_leaves_the_gauge_at_zero(
+        self, db_manager: MagicMock, leader: bool
+    ):
+        """A cancel is never swallowed: the task ends cancelled, the gauge at 0."""
+        from data_manager.maintenance import candle_warmup_scheduler as module
+
+        states: list[bool] = []
+        sched = CandleWarmupScheduler(
+            db_manager,
+            leader_election=_Election(leader=leader),
+            on_active=states.append,
+        )
+        asleep = asyncio.Event()
+        calls: list[float] = []
+
+        async def blocking_sleep(seconds):
+            calls.append(seconds)
+            if len(calls) >= 2:  # past the initial delay: the cycle wait / leader poll
+                asleep.set()
+                await asyncio.Event().wait()  # sleeps until cancelled
+
+        with _enabled_consts():
+            with patch.object(sched, "run_cycle", new=AsyncMock(return_value=[])):
+                with patch(f"{MODULE}.asyncio.sleep", new=blocking_sleep):
+                    task = asyncio.create_task(sched.start())
+                    await asyncio.wait_for(asleep.wait(), timeout=5)
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+
+        assert task.cancelled() is True
+        assert sched.running is False
+        assert sched.active is False
+        assert module.candle_backfill_active._value.get() == 0
+        assert states == ([True, False] if leader else [])
