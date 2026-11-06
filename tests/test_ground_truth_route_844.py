@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -52,3 +53,43 @@ async def test_missing_input_is_503(monkeypatch) -> None:
     with pytest.raises(HTTPException) as err:
         await ground_truth.get_ground_truth(window_days=30)
     assert err.value.status_code == 503
+
+
+def test_budget_scales_with_window_and_pairs() -> None:
+    # 8 pairs x 2 calls x 5 spans = 80 calls at 48/min = 100 s, x1.5 + 30 s
+    assert ground_truth.time_budget_seconds(30, 8) == pytest.approx(180.0)
+    assert ground_truth.time_budget_seconds(7, 8) < ground_truth.time_budget_seconds(
+        30, 8
+    )
+    assert (
+        ground_truth.time_budget_seconds(180, 8) > ground_truth.BUDGET_CEILING_SECONDS
+    )
+
+
+async def test_window_over_the_ceiling_is_refused_without_any_work(monkeypatch) -> None:
+    compute = AsyncMock()
+    monkeypatch.setattr(ground_truth, "compute_ground_truth", compute)
+    with pytest.raises(HTTPException) as err:
+        await ground_truth.get_ground_truth(window_days=180)
+    assert err.value.status_code == 504
+    assert err.value.detail["error"] == "ground_truth_time_budget"
+    assert err.value.detail["window_days"] == 180
+    assert err.value.detail["hint"] == "use a smaller window"
+    compute.assert_not_awaited()
+
+
+async def test_compute_that_overruns_its_budget_is_cut_off_with_504(
+    monkeypatch,
+) -> None:
+    """Injected budget: the computation never finishes; the request does, at once."""
+    never = asyncio.Event()
+
+    async def hangs(*_args, **_kwargs):
+        await never.wait()
+
+    monkeypatch.setattr(ground_truth, "compute_ground_truth", hangs)
+    monkeypatch.setattr(ground_truth, "time_budget_seconds", lambda *_: 0.01)
+    with pytest.raises(HTTPException) as err:
+        await asyncio.wait_for(ground_truth.get_ground_truth(window_days=30), timeout=2)
+    assert err.value.status_code == 504
+    assert err.value.detail["error"] == "ground_truth_time_budget"
