@@ -163,6 +163,12 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "risk_equity_peak": operational(
         reason="tradeengine equity peak for the drawdown-from-peak rule"
     ),
+    "llm_call_records": durable(
+        mysql_table="llm_call_records",
+        key="request_id+attempt_no",
+        pending=True,
+        reason="LLM gateway call records (dm#841); MySQL holds the historic copy",
+    ),
     "strategy_stats_snapshots": transient_only(
         reason="per-strategy stats precomputed from the exchange ground truth (#842); recomputable"
     ),
@@ -312,6 +318,11 @@ _STATE_COLLECTIONS = frozenset(
 )
 
 
+#: dm#841, labelled fallback: LLM call records stay in Mongo 7 days once copied to MySQL (the history).
+LLM_CALL_RECORDS_TTL_SECONDS = int(
+    os.getenv("LLM_CALL_RECORDS_TTL_SECONDS", str(7 * 86400))
+)
+
 #: Labelled fallback: 6 h, far above two 15-minute refresh cycles of the stats snapshot (#842).
 STRATEGY_STATS_SNAPSHOT_TTL_SECONDS = int(
     os.getenv("STRATEGY_STATS_SNAPSHOT_TTL_SECONDS", "21600")
@@ -356,6 +367,13 @@ def ttl_policy_for_collection(collection: str) -> TTLPolicy | None:
         return TTLPolicy(
             "timestamp",
             constants.EXECUTION_EVENTS_TTL_SECONDS,
+            {"mysql_copied_at": {"$exists": True}},
+        )
+    if collection == "llm_call_records":
+        # Only once the MySQL historic copy exists (``mysql_copied_at``), as for execution_events (dm#841).
+        return TTLPolicy(
+            "started_at",
+            LLM_CALL_RECORDS_TTL_SECONDS,
             {"mysql_copied_at": {"$exists": True}},
         )
     if collection == "strategy_stats_snapshots":

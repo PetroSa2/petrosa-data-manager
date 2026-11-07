@@ -21,6 +21,8 @@ pandas>=2.2.0
 
 # Unified OpenTelemetry package for Petrosa services
 petrosa-otel[all]>=1.1.0
+# The LlmCallRecord contract published by the LLM gateway (dm#841); pinned, checked by a contract test
+petrosa-contracts==0.2.0
 prometheus-client>=0.19.0
 
 # Validation and configuration
