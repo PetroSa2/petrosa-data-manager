@@ -14,11 +14,13 @@ Storage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from petrosa_contracts.llm_call_record import LlmCallRecord
+from pydantic import BaseModel
 from pymongo import ASCENDING
 from pymongo.errors import DuplicateKeyError
 
@@ -102,3 +104,118 @@ class LlmCallRecordStore:
             logger.info("llm call record %s already stored", record_id(record))
             return False
         return True
+
+
+# --- the MySQL historic copy (dm#841 PR 2) -----------------------------------------------------
+
+MYSQL_TABLE = "llm_call_records"
+_ROW_FIELDS = (
+    "request_id",
+    "attempt_no",
+    "caller",
+    "priority_class",
+    "model_alias",
+    "provider_model",
+    "decision_id",
+    "investigation_id",
+    "prompt_version",
+    "started_at",
+    "queue_wait_ms",
+    "latency_ms",
+    "outcome",
+    "provider_status",
+    "prompt_tokens",
+    "completion_tokens",
+    "received_at",
+)
+
+
+class LlmCallRecordRow(BaseModel):
+    """One MySQL ``llm_call_records`` row (``record_key`` = ``request_id:attempt_no``)."""
+
+    record_key: str
+    request_id: str
+    attempt_no: int
+    caller: str
+    priority_class: str
+    model_alias: str
+    provider_model: str | None = None
+    decision_id: str | None = None
+    investigation_id: str | None = None
+    prompt_version: str | None = None
+    started_at: datetime
+    queue_wait_ms: float | None = None
+    latency_ms: float
+    outcome: str
+    provider_status: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    received_at: datetime
+
+
+def row_from_document(document: dict[str, Any]) -> LlmCallRecordRow:
+    return LlmCallRecordRow(
+        record_key=str(document["_id"]),
+        **{field: document.get(field) for field in _ROW_FIELDS},
+    )
+
+
+async def copy_pending(
+    mongodb_adapter: Any,
+    mysql_adapter: Any,
+    *,
+    limit: int = 500,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Copy one batch of not-yet-copied records to MySQL, then mark them copied.
+
+    Insert-only on ``record_key``: a record copied twice is a no-op in MySQL. ``mysql_copied_at`` is set
+    only after the MySQL write returns, so the TTL never expires a record that is not in the history.
+    Raises on a failed MySQL write; nothing is marked copied then.
+    """
+    collection = mongodb_adapter.db[COLLECTION]
+    documents = await (
+        collection.find({"_mysql_copy_pending": True})
+        .sort("started_at", 1)
+        .limit(limit)
+        .to_list(length=limit)
+    )
+    if not documents:
+        return {"copied": 0, "duplicates": 0}
+    rows = [row_from_document(d) for d in documents]
+    result = await asyncio.to_thread(
+        mysql_adapter.write,
+        rows,
+        MYSQL_TABLE,
+        insert_only=True,
+        natural_key="record_key",
+    )
+    if getattr(result, "failed", 0):
+        raise RuntimeError(
+            f"llm_call_records MySQL copy failed for {result.failed} rows"
+        )
+    await collection.update_many(
+        {"_id": {"$in": [d["_id"] for d in documents]}},
+        {
+            "$set": {
+                "mysql_copied_at": now or datetime.now(UTC),
+                "_mysql_copy_pending": False,
+            }
+        },
+    )
+    return {
+        "copied": len(documents),
+        "duplicates": int(getattr(result, "duplicates", 0) or 0),
+    }
+
+
+async def stuck_uncopied_count(
+    mongodb_adapter: Any, older_than_seconds: float, now: datetime | None = None
+) -> int:
+    """Records still waiting for the MySQL copy after ``older_than_seconds``: a broken copy shows here."""
+    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=older_than_seconds)
+    return int(
+        await mongodb_adapter.db[COLLECTION].count_documents(
+            {"_mysql_copy_pending": True, "received_at": {"$lt": cutoff}}
+        )
+    )

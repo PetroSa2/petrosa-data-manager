@@ -711,6 +711,7 @@ class DataManagerApp:
         asyncio.create_task(self._run_drawdown_scheduler())
         asyncio.create_task(self._run_candle_warmup_scheduler())
         asyncio.create_task(self._run_strategy_stats_refresh())
+        asyncio.create_task(self._run_llm_call_records_copy())
         asyncio.create_task(self._run_ledger_tieout_scheduler())
 
         self.running = True
@@ -1635,6 +1636,21 @@ class DataManagerApp:
             logger.error(f"Error in strategy stats refresh: {e}", exc_info=True)
         finally:
             self._component_up("strategy_stats_refresh", False)
+
+    async def _run_llm_call_records_copy(self) -> None:
+        """Leader-only MySQL historic copy of LLM gateway call records (petrosa-data-manager#841)."""
+        if not await self._wait_for_database("llm_call_records_copy"):
+            return
+
+        from data_manager.maintenance.llm_call_records_copy import LlmCallRecordsCopy
+
+        try:
+            self.llm_call_records_copy = LlmCallRecordsCopy(
+                self.db_manager, leader_election=self.leader_election
+            )
+            await self.llm_call_records_copy.start()
+        except Exception as e:
+            logger.error(f"Error in llm call records copy: {e}", exc_info=True)
 
     async def _run_mongo_data_size_loop(self) -> None:
         """Periodic MongoDB logical-data-size gauge refresh (dm#248).

@@ -22,6 +22,7 @@ try:
         Column,
         DateTime,
         Enum,
+        Float,
         Index,
         Integer,
         MetaData,
@@ -448,6 +449,33 @@ class MySQLAdapter(BaseAdapter):
             Index(
                 "idx_execution_events_strategy_timestamp", "strategy_id", "timestamp"
             ),
+            **event_table_args,
+        )
+        # dm#841: LLM gateway call records; Mongo llm_call_records is the operational copy.
+        self.tables["llm_call_records"] = Table(
+            "llm_call_records",
+            self.metadata,
+            Column("record_key", String(191), primary_key=True),
+            Column("request_id", String(128), nullable=False),
+            Column("attempt_no", Integer, nullable=False),
+            Column("caller", String(64), nullable=False),
+            Column("priority_class", String(32), nullable=False),
+            Column("model_alias", String(64), nullable=False),
+            Column("provider_model", String(128)),
+            Column("decision_id", String(128)),
+            Column("investigation_id", String(128)),
+            Column("prompt_version", String(64)),
+            Column("started_at", MySQLDateTime(fsp=6), nullable=False),
+            Column("queue_wait_ms", Float),
+            Column("latency_ms", Float, nullable=False),
+            Column("outcome", String(16), nullable=False),
+            Column("provider_status", Integer),
+            Column("prompt_tokens", Integer),
+            Column("completion_tokens", Integer),
+            Column("received_at", MySQLDateTime(fsp=6), nullable=False),
+            Index("idx_llm_call_records_caller_started", "caller", "started_at"),
+            Index("idx_llm_call_records_alias_started", "model_alias", "started_at"),
+            Index("idx_llm_call_records_decision", "decision_id"),
             **event_table_args,
         )
         self.tables["pnl_events"] = Table(
