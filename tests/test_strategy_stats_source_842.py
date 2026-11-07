@@ -211,3 +211,35 @@ async def test_a_process_that_never_read_the_config_falls_back_to_netting(caplog
     no_repository = MagicMock(spec=[])
     src.reset_cache()
     assert await src.get_source(no_repository) == "netting"
+
+
+def test_net_r_serves_each_strategys_keep_kill_input():
+    snapshot = {
+        **SNAPSHOT,
+        "strategies": {
+            "iceberg_detector": {
+                **SNAPSHOT["strategies"]["iceberg_detector"],
+                "net_r": {
+                    "net_r": ["-1.5", "0.5"],
+                    "closed_rounds": 25,
+                    "rounds_without_risk": 23,
+                },
+            },
+            "no_block": {"performance": {}},
+        },
+    }
+    body = src.net_r_from_snapshot(snapshot, now=NOW)
+    assert body["strategies"] == {
+        "iceberg_detector": {
+            "net_r": ["-1.5", "0.5"],
+            "closed_rounds": 25,
+            "rounds_without_risk": 23,
+        }
+    }
+    assert body["metadata"]["stats_source"] == "ground_truth"
+
+
+def test_stale_net_r_gives_no_verdict_input():
+    old = {**SNAPSHOT, "computed_at": NOW - timedelta(hours=1)}
+    body = src.net_r_from_snapshot(old, now=NOW)
+    assert body["strategies"] == {} and body["degraded"] is True

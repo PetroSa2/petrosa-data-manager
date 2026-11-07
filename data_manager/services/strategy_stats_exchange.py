@@ -46,6 +46,35 @@ def _participants(episode: dict[str, Any]) -> dict[str, float]:
     return {str(s): float(w) for s, w in shares.items() if float(w) > 0}
 
 
+def _risk_at_entry(episode: dict[str, Any], strategy: str) -> float | None:
+    """The strategy's risk at entry in this episode: sum over its rows of qty x entry x stop distance.
+
+    Rows are the strategy position rows linked to the episode by their entry order id (entries are reliable;
+    petrosa-tradeengine#838 only affects exits, and #837's stale "open" status doesn't change a row's entry stop).
+    Unknown (None) when the strategy has no linked row or any of its rows lacks a usable stop, entry or quantity:
+    a partial risk would overstate R.
+    """
+    from data_manager.services.strategy_net_r import stop_fraction_of
+
+    rows = [
+        r for r in episode.get("ledger_rows") or [] if r.get("strategy_id") == strategy
+    ]
+    if not rows:
+        return None
+    risk = 0.0
+    for row in rows:
+        fraction = stop_fraction_of(row.get("entry_price"), row.get("stop_loss_price"))
+        try:
+            quantity = float(row.get("entry_quantity"))
+            entry = float(row.get("entry_price"))
+        except (TypeError, ValueError):
+            return None
+        if fraction is None or quantity <= 0 or entry <= 0:
+            return None
+        risk += quantity * entry * float(fraction)
+    return risk if risk > 0 else None
+
+
 def build_strategy_stats(
     ground_truth: dict[str, Any], *, window_days: float
 ) -> dict[str, dict[str, Any]]:
@@ -146,5 +175,36 @@ def build_strategy_stats(
             "shared_episodes": sum(
                 1 for *_, ep in rows if ep.get("status") != "attributed"
             ),
+            "net_r": _net_r(strategy, rows),
         }
     return stats
+
+
+def _net_r(
+    strategy: str, rows: list[tuple[int, bool, float, float, dict[str, Any]]]
+) -> dict[str, Any]:
+    """The keep/kill contract (``/analysis/strategy-net-r``) for one strategy, oldest close first.
+
+    ``net_r`` holds only rounds with a known risk; the others are counted in ``rounds_without_risk`` and never
+    enter as 0, so a strategy whose rounds mostly lack a stop is "too few rounds" to CIO, never "keep".
+    """
+    net_r: list[str] = []
+    unknown = 0
+    total = 0.0
+    for _, _, share, net, episode in rows:
+        pnl = share * net
+        total += pnl
+        risk = _risk_at_entry(episode, strategy)
+        if risk is None:
+            unknown += 1
+            continue
+        net_r.append(repr(pnl / risk))
+    return {
+        "net_r": net_r,
+        "cumulative_net_loss_usd": repr(max(0.0, -total)),
+        "closed_rounds": len(rows),
+        "synthetic_rounds": 0,
+        "rounds_without_risk": unknown,
+        "unknown_r_share": (unknown / len(rows)) if rows else None,
+        "fee_unknown_fills": 0,
+    }

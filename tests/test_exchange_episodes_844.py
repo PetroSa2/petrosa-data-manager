@@ -212,3 +212,30 @@ def test_ledger_rows_annotate_and_external_closes_are_classified() -> None:
     assert r["strategies"]["iceberg_detector"]["close_kinds"] == {
         "reduce_only_market": 1
     }
+
+
+def test_ledger_rows_carry_the_entry_risk_linked_by_entry_order() -> None:
+    """The exchange-truth net R (#842) takes each row's risk at entry, linked by the entry order id."""
+    fills = [
+        _fill(1, 10, "BUY", "2", "100", 0),
+        _fill(2, 20, "SELL", "2", "98", 5, pnl="-4"),
+    ]
+    rows = [
+        {
+            "strategy_position_id": "sp1",
+            "strategy_id": "iceberg_detector",
+            "status": "open",  # te#837's stale status doesn't change the entry stop
+            "entry_order_id": "10",
+            "entry_quantity": 2.0,
+            "entry_price": 100.0,
+            "stop_loss_price": 99.0,
+        }
+    ]
+    r = _report(fills, {"10": "iceberg_detector"}, [], rows)
+    row = r["episodes"][0]["ledger_rows"][0]
+    assert row["entry_order_id"] == "10"
+    assert (row["entry_quantity"], row["entry_price"], row["stop_loss_price"]) == (
+        2.0,
+        100.0,
+        99.0,
+    )
