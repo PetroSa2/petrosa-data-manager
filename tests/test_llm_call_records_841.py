@@ -58,8 +58,9 @@ def test_a_gateway_payload_parses_from_bytes_and_dict():
     ],
 )
 def test_invalid_payloads_are_rejected(change):
-    with pytest.raises(llm.InvalidLlmCallRecord):
+    with pytest.raises(llm.InvalidLlmCallRecord) as rejected:
         llm.parse_record({**GATEWAY_PAYLOAD, **change})
+    assert str(rejected.value)
 
 
 def test_the_document_carries_the_id_utc_time_and_the_copy_marker():
@@ -104,8 +105,9 @@ async def test_a_record_is_persisted_once_even_when_redelivered():
 @pytest.mark.asyncio
 async def test_a_database_error_propagates_so_the_message_is_not_acknowledged():
     store, _, _ = _store(AsyncMock(side_effect=RuntimeError("socket timeout")))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as failed:
         await store.save(llm.parse_record(GATEWAY_PAYLOAD))
+    assert "socket timeout" in str(failed.value)
 
 
 def test_the_collection_is_registered_durable_with_a_ttl_after_the_mysql_copy():
