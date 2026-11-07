@@ -49,7 +49,7 @@ def _snapshot():
 
 @pytest.fixture
 def switched(monkeypatch):
-    src.reset_cache()
+    src.reset_state()
     store = ps.PerformanceSnapshotStore(interval=60)
     monkeypatch.setattr(ps, "store", store)
     monkeypatch.setattr(analysis, "_ground_truth_snapshot_cache", None)
@@ -61,7 +61,7 @@ def switched(monkeypatch):
         monkeypatch.setattr(src, "get_source", get_source)
 
     yield set_source, store
-    src.reset_cache()
+    src.reset_state()
 
 
 async def test_ground_truth_source_serves_the_exchange_truth_performance(

@@ -43,13 +43,13 @@ def client():
     app = api_module.create_app()
     api_module.db_manager = db
     config_module.db_manager = db
-    src.reset_cache()
+    src.reset_state()
     try:
         yield TestClient(app), configuration, stored
     finally:
         api_module.db_manager = None
         config_module.db_manager = None
-        src.reset_cache()
+        src.reset_state()
 
 
 def test_flip_is_an_audited_version_with_the_decision_link(client):

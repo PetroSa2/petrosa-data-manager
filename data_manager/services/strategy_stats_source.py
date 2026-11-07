@@ -13,6 +13,7 @@ numbers; a strategy with no closed episode in the window gets no win rate (unkno
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -32,7 +33,12 @@ SOURCE_READ_TIMEOUT_SECONDS = 2.0
 #: The contract value CIO recognises for computed performance stats (cio ``DM_PERFORMANCE_COMPUTED_SOURCE``).
 COMPUTED_SOURCE = "data-manager-pnl-calculator"
 
+logger = logging.getLogger(__name__)
+
 _cache: tuple[float, str] | None = None
+#: The last value read successfully in this process. A failed read serves it (never a silent fall back to
+#: netting after a flip); only a process that has never read the config falls back to ``netting``.
+_last_read: str | None = None
 
 
 def _normalise(value: Any) -> str:
@@ -40,14 +46,20 @@ def _normalise(value: Any) -> str:
 
 
 async def get_source(db_manager: Any, clock=time.monotonic) -> str:
-    """The configured source; ``netting`` when unset, unknown or unreadable."""
-    global _cache
+    """The configured source; ``netting`` when unset or unknown.
+
+    A failed or timed-out read serves the last value read successfully in this process, even past its cache
+    window, so a transient MongoDB failure after a flip to ``ground_truth`` never serves netting stats.
+    Only a process that has never read the config falls back to ``netting``.
+    """
+    global _cache, _last_read
     now = clock()
     if _cache is not None and now - _cache[0] < SOURCE_CACHE_SECONDS:
         return _cache[1]
-    source = NETTING
     configuration = getattr(db_manager, "configuration", None)
-    if configuration is not None:
+    if configuration is None:
+        source = _last_read or NETTING
+    else:
         try:
             async with asyncio.timeout(SOURCE_READ_TIMEOUT_SECONDS):
                 config = await configuration.get_app_config()
@@ -55,23 +67,38 @@ async def get_source(db_manager: Any, clock=time.monotonic) -> str:
             source = _normalise(
                 parameters.get(CONFIG_KEY) if isinstance(parameters, dict) else None
             )
-        except (
-            Exception
-        ):  # an unreadable config never breaks the route: netting, as before
-            source = NETTING
+            _last_read = source
+        except Exception as exc:  # an unreadable config never breaks the route
+            source = _last_read or NETTING
+            logger.warning(
+                "strategy_stats_source: config read failed (%s: %s); serving %s (%s)",
+                type(exc).__name__,
+                exc,
+                source,
+                "last read value" if _last_read else "never read: default",
+            )
     _cache = (now, source)
     return source
 
 
 def reset_cache() -> None:
+    """Drop the cached value (the next call reads the config); the last read value is kept."""
     global _cache
     _cache = None
+
+
+def reset_state() -> None:
+    """Forget everything read in this process (tests)."""
+    global _last_read
+    reset_cache()
+    _last_read = None
 
 
 async def set_source(
     db_manager: Any, source: str, *, changed_by: str, decision_ref: str
 ) -> dict[str, Any]:
     """Write ``source`` into the application config as a new audited version; returns the new config."""
+    global _last_read
     if source not in SOURCES:
         raise ValueError(f"strategy_stats_source must be one of {SOURCES}")
     if not changed_by.strip() or not decision_ref.strip():
@@ -89,6 +116,7 @@ async def set_source(
     if not config:
         raise RuntimeError("application config update failed")
     reset_cache()
+    _last_read = source
     return config
 
 

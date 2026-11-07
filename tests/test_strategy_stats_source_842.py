@@ -57,9 +57,9 @@ def _db(parameters=None, raises=False):
 
 @pytest.fixture(autouse=True)
 def _fresh_cache():
-    src.reset_cache()
+    src.reset_state()
     yield
-    src.reset_cache()
+    src.reset_state()
 
 
 @pytest.mark.asyncio
@@ -173,3 +173,41 @@ async def test_a_hung_config_read_falls_back_to_netting(monkeypatch):
     db = _db({})
     db.configuration.get_app_config = hang
     assert await src.get_source(db) == "netting"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_after_the_flip_keeps_ground_truth(caplog):
+    """A transient MongoDB failure after the flip never serves the known-wrong netting stats."""
+    now = [0.0]
+    db = _db({"strategy_stats_source": "ground_truth"})
+    assert await src.get_source(db, clock=lambda: now[0]) == "ground_truth"
+
+    db.configuration.get_app_config = AsyncMock(side_effect=RuntimeError("mongo down"))
+    now[0] = 61.0  # the cache has expired: this is a real read, and it fails
+    with caplog.at_level("WARNING", logger=src.__name__):
+        assert await src.get_source(db, clock=lambda: now[0]) == "ground_truth"
+    assert "config read failed" in caplog.text and "last read value" in caplog.text
+
+    db.configuration.get_app_config = AsyncMock(
+        return_value={"parameters": {"strategy_stats_source": "netting"}}
+    )
+    now[0] = 122.0  # a successful read still wins: the flip back takes effect
+    assert await src.get_source(db, clock=lambda: now[0]) == "netting"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_after_set_source_keeps_the_value_just_written():
+    db = _db({"symbols": []})
+    await src.set_source(db, "ground_truth", changed_by="x", decision_ref="y")
+    db.configuration.get_app_config = AsyncMock(side_effect=RuntimeError("mongo down"))
+    assert await src.get_source(db) == "ground_truth"
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_never_read_the_config_falls_back_to_netting(caplog):
+    with caplog.at_level("WARNING", logger=src.__name__):
+        assert await src.get_source(_db(raises=True)) == "netting"
+    assert "never read: default" in caplog.text
+    no_repository = MagicMock(spec=[])
+    src.reset_cache()
+    assert await src.get_source(no_repository) == "netting"
