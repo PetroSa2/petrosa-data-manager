@@ -217,3 +217,55 @@ async def test_records_stuck_uncopied_are_counted_and_warned(caplog):
 
 def test_the_registry_entry_is_no_longer_pending():
     assert registry.entry_for_collection("llm_call_records").pending is False
+
+
+@pytest.mark.asyncio
+async def test_the_copy_loop_runs_only_as_leader_and_counts_failures(monkeypatch):
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    monkeypatch.setattr(job, "INITIAL_DELAY_SECONDS", 0)
+    monkeypatch.setattr(job, "COPY_INTERVAL_SECONDS", 0)
+    added = []
+    monkeypatch.setattr(job, "COPY_TOTAL", MagicMock(add=lambda v, a: added.append(a)))
+
+    leader = MagicMock(is_leader=False)
+    copier = job.LlmCallRecordsCopy(MagicMock(), leader_election=leader)
+    calls = []
+
+    async def run_once():
+        calls.append(leader.is_leader)
+        if len(calls) == 1:
+            raise RuntimeError("mysql down")
+        copier.running = False
+        return {}
+
+    monkeypatch.setattr(copier, "run_once", run_once)
+    ticks = {"n": 0}
+    real_sleep = __import__("asyncio").sleep
+
+    async def fake_sleep(_seconds):
+        ticks["n"] += 1
+        if ticks["n"] == 2:
+            leader.is_leader = True  # becomes leader after one idle cycle
+        await real_sleep(0)
+
+    monkeypatch.setattr(job.asyncio, "sleep", fake_sleep)
+    await copier.start()
+
+    assert calls == [True, True]  # never ran while not the leader
+    assert {"result": "failure"} in added  # the failed batch is counted
+
+
+def test_without_leader_election_the_single_pod_copies():
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    assert job.LlmCallRecordsCopy(MagicMock())._is_leader() is True
+
+
+def test_the_stale_gauge_reports_only_after_the_first_measurement(monkeypatch):
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    monkeypatch.setitem(job._stale, "value", None)
+    assert list(job._observe_stale(None)) == []
+    monkeypatch.setitem(job._stale, "value", 4)
+    assert [o.value for o in job._observe_stale(None)] == [4]
