@@ -376,7 +376,20 @@ async def get_scorecard_evaluation(
 @router.get("/strategy-net-r")
 async def get_strategy_net_r() -> dict[str, Any]:
     """Per strategy: net R per closed round (oldest first), the cumulative net loss and the closed-round count:
-    the keep/kill input of the CIO (petrosa-cio#299)."""
+    the keep/kill input of the CIO (petrosa-cio#299).
+
+    This is the handler that serves the path (this router is registered before ``strategy_net_r``'s). With
+    ``strategy_stats_source=ground_truth`` (petrosa-data-manager#842) it is served from the exchange-truth
+    snapshot under the same switch as the performance and rounds contracts."""
+    from data_manager.api.routes import analysis
+    from data_manager.services import strategy_stats_source
+
+    if await strategy_stats_source.get_source(api_module.db_manager) == (
+        strategy_stats_source.GROUND_TRUTH
+    ):
+        return strategy_stats_source.net_r_from_snapshot(
+            await analysis._ground_truth_snapshot()
+        )
     data = await _scored(None, None)
     if data.status != "complete":
         return {
