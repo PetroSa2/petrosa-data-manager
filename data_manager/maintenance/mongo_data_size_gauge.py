@@ -95,6 +95,9 @@ _meter = get_meter(__name__)
 # total exported via an ObservableCounter (AC3).
 _state_lock = threading.Lock()
 _last_data_size: dict[str, int] = {}
+# dm#868: ``dbStats().indexSize`` from the same call. The quota counts data plus indexes
+# (petrosa_k8s#1420 sums both), so without this series that alert was always NoData.
+_last_index_size: dict[str, int] = {}
 _scrape_errors: int = 0
 
 
@@ -109,6 +112,14 @@ def _observe_data_size(_options: CallbackOptions) -> Iterable[Observation]:
         snapshot = dict(_last_data_size)
     for database, data_size in snapshot.items():
         yield Observation(data_size, {"database": database})
+
+
+def _observe_index_size(_options: CallbackOptions) -> Iterable[Observation]:
+    """ObservableGauge callback: the last-known index size per database (dm#868)."""
+    with _state_lock:
+        snapshot = dict(_last_index_size)
+    for database, index_size in snapshot.items():
+        yield Observation(index_size, {"database": database})
 
 
 def _observe_scrape_errors(_options: CallbackOptions) -> Iterable[Observation]:
@@ -130,6 +141,16 @@ mongo_data_size_bytes = _meter.create_observable_gauge(
         "database, from dbStats().dataSize. This is the figure Atlas M0 gates "
         "its 512 MiB quota on (NOT the compressed storageSize). Producer for "
         "petrosa_k8s#905 / #920; exported via OTLP (dm#252)."
+    ),
+)
+
+mongo_index_size_bytes = _meter.create_observable_gauge(
+    "data_manager_mongo_index_size_bytes",
+    callbacks=[_observe_index_size],
+    description=(
+        "MongoDB index size in bytes per application database, from "
+        "dbStats().indexSize (same scrape as data_manager_mongo_data_size_bytes). "
+        "The Atlas quota counts data plus indexes (petrosa_k8s#1420, dm#868)."
     ),
 )
 
@@ -218,6 +239,7 @@ async def refresh_mongo_data_size(
         return {}
 
     sampled: dict[str, int] = {}
+    sampled_index: dict[str, int] = {}
     for name, db_handle in targets:
         try:
             stats = await db_handle.command("dbStats")
@@ -232,10 +254,13 @@ async def refresh_mongo_data_size(
             continue
         data_size = int((stats or {}).get("dataSize", 0) or 0)
         sampled[name] = data_size
+        if (stats or {}).get("indexSize") is not None:
+            sampled_index[name] = int(stats["indexSize"])
 
     if sampled:
         with _state_lock:
             _last_data_size.update(sampled)
+            _last_index_size.update(sampled_index)
         total = sum(sampled.values())
         logger.info(
             "mongo_data_size: refreshed %d database(s); total dataSize=%d bytes "
