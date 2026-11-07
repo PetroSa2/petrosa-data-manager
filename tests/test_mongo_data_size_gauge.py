@@ -33,6 +33,7 @@ def _reset_gauge_state():
     """Isolate the module-level OTLP cache/counter between tests."""
     with mdsg._state_lock:
         mdsg._last_data_size.clear()
+        mdsg._last_index_size.clear()
         mdsg._scrape_errors = 0
     yield
 
@@ -215,3 +216,36 @@ async def test_observable_error_counter_callback_reports_cumulative_total():
     await mdsg.refresh_mongo_data_size(_FakeAdapter("", None))
 
     assert [o.value for o in mdsg._observe_scrape_errors(None)] == [1]
+
+
+@pytest.mark.asyncio
+async def test_index_size_is_observed_from_the_same_dbstats_with_the_same_label():
+    """dm#868: the quota alert sums data plus index; both come from one dbStats call."""
+    adapter = _FakeAdapter(
+        "petrosa_data_manager",
+        _FakeDatabase({"dataSize": 153_600_000, "indexSize": 78_300_000}),
+    )
+    await mdsg.refresh_mongo_data_size(adapter)
+
+    data = {o.attributes["database"]: o.value for o in mdsg._observe_data_size(None)}
+    index = {o.attributes["database"]: o.value for o in mdsg._observe_index_size(None)}
+    assert data == {"petrosa_data_manager": 153_600_000}
+    assert index == {"petrosa_data_manager": 78_300_000}
+
+
+@pytest.mark.asyncio
+async def test_failed_dbstats_keeps_both_last_values_and_counts_one_error():
+    good = _FakeAdapter("iso_db", _FakeDatabase({"dataSize": 500, "indexSize": 70}))
+    await mdsg.refresh_mongo_data_size(good)
+    errors_before = _scrape_errors()
+
+    broken = _FakeAdapter("iso_db", _FakeDatabase(TimeoutError("shard timed out")))
+    await mdsg.refresh_mongo_data_size(broken)
+
+    assert _scrape_errors() == errors_before + 1
+    assert [o.value for o in mdsg._observe_data_size(None)] == [500]
+    assert [o.value for o in mdsg._observe_index_size(None)] == [70]
+
+
+def test_index_gauge_yields_nothing_before_first_scrape():
+    assert list(mdsg._observe_index_size(None)) == []
