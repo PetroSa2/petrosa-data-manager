@@ -163,6 +163,9 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "risk_equity_peak": operational(
         reason="tradeengine equity peak for the drawdown-from-peak rule"
     ),
+    "strategy_stats_snapshots": transient_only(
+        reason="per-strategy stats precomputed from the exchange ground truth (#842); recomputable"
+    ),
     "trading_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"
     ),
@@ -309,6 +312,12 @@ _STATE_COLLECTIONS = frozenset(
 )
 
 
+#: Labelled fallback: 6 h, far above two 15-minute refresh cycles of the stats snapshot (#842).
+STRATEGY_STATS_SNAPSHOT_TTL_SECONDS = int(
+    os.getenv("STRATEGY_STATS_SNAPSHOT_TTL_SECONDS", "21600")
+)
+
+
 def ttl_policy_for_collection(collection: str) -> TTLPolicy | None:
     """Return the retention contract for a registered application collection."""
 
@@ -349,6 +358,10 @@ def ttl_policy_for_collection(collection: str) -> TTLPolicy | None:
             constants.EXECUTION_EVENTS_TTL_SECONDS,
             {"mysql_copied_at": {"$exists": True}},
         )
+    if collection == "strategy_stats_snapshots":
+        # Longer than two refresh cycles (15 min each), so staleness is decided by the serving logic
+        # ("unavailable" after two missed cycles), never by a document expiring underneath it (#842).
+        return TTLPolicy("computed_at", STRATEGY_STATS_SNAPSHOT_TTL_SECONDS)
     if collection == "config_rate_limits":
         return TTLPolicy(
             "timestamp",
