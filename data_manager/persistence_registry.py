@@ -166,7 +166,6 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "llm_call_records": durable(
         mysql_table="llm_call_records",
         key="request_id+attempt_no",
-        pending=True,
         reason="LLM gateway call records (dm#841); MySQL holds the historic copy",
     ),
     "strategy_stats_snapshots": transient_only(

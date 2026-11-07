@@ -118,3 +118,154 @@ def test_the_collection_is_registered_durable_with_a_ttl_after_the_mysql_copy():
     assert policy.field == "started_at"
     assert policy.seconds == registry.LLM_CALL_RECORDS_TTL_SECONDS == 7 * 86400
     assert policy.partial_filter_expression == {"mysql_copied_at": {"$exists": True}}
+
+
+# --- PR 2: the MySQL historic copy ---------------------------------------------------------------
+
+
+def test_the_mysql_table_holds_every_row_field_keyed_by_record_key():
+    from data_manager.db.mysql_adapter import MySQLAdapter
+
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
+    adapter._create_tables()
+    table = adapter.tables["llm_call_records"]
+    assert [c.name for c in table.primary_key.columns] == ["record_key"]
+    assert set(llm.LlmCallRecordRow.model_fields) <= {c.name for c in table.columns}
+    assert "prompt" not in table.c and "completion" not in table.c
+
+
+class _Cursor:
+    def __init__(self, docs):
+        self.docs = docs
+
+    def sort(self, *_a):
+        return self
+
+    def limit(self, n):
+        self.docs = self.docs[:n]
+        return self
+
+    async def to_list(self, length):
+        return list(self.docs)
+
+
+def _copy_setup(pending, write_result):
+    collection = MagicMock()
+    collection.find = MagicMock(return_value=_Cursor(pending))
+    collection.update_many = AsyncMock()
+    collection.count_documents = AsyncMock(return_value=3)
+    mongodb = MagicMock()
+    mongodb.db.__getitem__.return_value = collection
+    mysql = MagicMock()
+    mysql.write = MagicMock(return_value=write_result)
+    return mongodb, mysql, collection
+
+
+@pytest.mark.asyncio
+async def test_copy_writes_insert_only_then_marks_copied():
+    document = llm.to_document(llm.parse_record(GATEWAY_PAYLOAD), NOW)
+    mongodb, mysql, collection = _copy_setup(
+        [document], MagicMock(failed=0, duplicates=0)
+    )
+
+    result = await llm.copy_pending(mongodb, mysql, limit=10, now=NOW)
+
+    assert result == {"copied": 1, "duplicates": 0}
+    rows, table = mysql.write.call_args.args
+    assert table == "llm_call_records" and rows[0].record_key == "req-7f3a:2"
+    assert mysql.write.call_args.kwargs == {
+        "insert_only": True,
+        "natural_key": "record_key",
+    }
+    query, update = collection.update_many.await_args.args
+    assert query == {"_id": {"$in": ["req-7f3a:2"]}}
+    assert update["$set"] == {"mysql_copied_at": NOW, "_mysql_copy_pending": False}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_mysql_write_marks_nothing_copied():
+    document = llm.to_document(llm.parse_record(GATEWAY_PAYLOAD), NOW)
+    mongodb, mysql, collection = _copy_setup(
+        [document], MagicMock(failed=1, duplicates=0)
+    )
+    with pytest.raises(RuntimeError, match="copy failed"):
+        await llm.copy_pending(mongodb, mysql, now=NOW)
+    collection.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nothing_pending_writes_nothing():
+    mongodb, mysql, collection = _copy_setup([], None)
+    assert await llm.copy_pending(mongodb, mysql) == {"copied": 0, "duplicates": 0}
+    mysql.write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_records_stuck_uncopied_are_counted_and_warned(caplog):
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    mongodb, mysql, collection = _copy_setup([], None)
+    manager = MagicMock(mongodb_adapter=mongodb, mysql_adapter=mysql)
+    with caplog.at_level("WARNING"):
+        result = await job.LlmCallRecordsCopy(manager).run_once()
+    assert result["stale"] == 3
+    assert "LLM_CALL_RECORDS_COPY_STUCK" in caplog.text
+    query = collection.count_documents.await_args.args[0]
+    assert query["_mysql_copy_pending"] is True and "$lt" in query["received_at"]
+    assert job._stale["value"] == 3
+
+
+def test_the_registry_entry_is_no_longer_pending():
+    assert registry.entry_for_collection("llm_call_records").pending is False
+
+
+@pytest.mark.asyncio
+async def test_the_copy_loop_runs_only_as_leader_and_counts_failures(monkeypatch):
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    monkeypatch.setattr(job, "INITIAL_DELAY_SECONDS", 0)
+    monkeypatch.setattr(job, "COPY_INTERVAL_SECONDS", 0)
+    added = []
+    monkeypatch.setattr(job, "COPY_TOTAL", MagicMock(add=lambda v, a: added.append(a)))
+
+    leader = MagicMock(is_leader=False)
+    copier = job.LlmCallRecordsCopy(MagicMock(), leader_election=leader)
+    calls = []
+
+    async def run_once():
+        calls.append(leader.is_leader)
+        if len(calls) == 1:
+            raise RuntimeError("mysql down")
+        copier.running = False
+        return {}
+
+    monkeypatch.setattr(copier, "run_once", run_once)
+    ticks = {"n": 0}
+    real_sleep = __import__("asyncio").sleep
+
+    async def fake_sleep(_seconds):
+        ticks["n"] += 1
+        if ticks["n"] == 2:
+            leader.is_leader = True  # becomes leader after one idle cycle
+        await real_sleep(0)
+
+    monkeypatch.setattr(job.asyncio, "sleep", fake_sleep)
+    await copier.start()
+
+    assert calls == [True, True]  # never ran while not the leader
+    assert {"result": "failure"} in added  # the failed batch is counted
+
+
+def test_without_leader_election_the_single_pod_copies():
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    assert job.LlmCallRecordsCopy(MagicMock())._is_leader() is True
+
+
+def test_the_stale_gauge_reports_only_after_the_first_measurement(monkeypatch):
+    from data_manager.maintenance import llm_call_records_copy as job
+
+    monkeypatch.setitem(job._stale, "value", None)
+    assert list(job._observe_stale(None)) == []
+    monkeypatch.setitem(job._stale, "value", 4)
+    assert [o.value for o in job._observe_stale(None)] == [4]
