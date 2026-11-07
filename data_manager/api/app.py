@@ -193,11 +193,22 @@ async def lifespan(app: FastAPI):
     from data_manager.services import performance_snapshots
 
     worker = asyncio.create_task(mysql_copy_worker())
+
+    async def netting_is_fallback_only() -> bool:
+        """dm#878: the netting snapshots are only a warm fallback while CIO is served exchange truth."""
+        from data_manager.services import strategy_stats_source
+
+        return (
+            await strategy_stats_source.get_source(db_manager)
+            == strategy_stats_source.GROUND_TRUTH
+        )
+
     snapshots = asyncio.create_task(
         performance_snapshots.supervise(
             performance_snapshots.store,
             compute_strategy_performance,
             _configured_strategy_ids,
+            netting_is_fallback_only,
         )
     )
     try:

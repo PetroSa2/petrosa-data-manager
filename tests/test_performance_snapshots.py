@@ -397,7 +397,7 @@ def test_supervisor_restarts_a_loop_that_exits(monkeypatch, caplog):
     store = ps.PerformanceSnapshotStore(interval=0.01)
     runs: list[int] = []
 
-    async def fake_run(compute, seed=None):
+    async def fake_run(compute, seed=None, warm_only=None):
         runs.append(1)
         if len(runs) == 1:
             raise asyncio.CancelledError  # a stray cancel, not a shutdown
@@ -420,3 +420,115 @@ def test_supervisor_restarts_a_loop_that_exits(monkeypatch, caplog):
     assert "refresh loop exited unexpectedly (CancelledError)" in caplog.text
     assert "refresh loop exited unexpectedly (RuntimeError)" in caplog.text
     assert gauge.values == [1, 0, 1, 0, 1, 0]
+
+
+# --- dm#878: the netting snapshots are only a warm fallback while ground truth is served ------
+
+
+class _LoopClock:
+    """Drives ``store.run``: a fake monotonic clock that sleep() advances; stops after ``ticks``."""
+
+    def __init__(self, monkeypatch, ticks: int):
+        self.now = 1000.0
+        self.ticks = ticks
+        monkeypatch.setattr(ps, "monotonic", lambda: self.now)
+
+        async def fake_sleep(seconds):
+            self.now += seconds
+            self.ticks -= 1
+            if self.ticks <= 0:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(ps.asyncio, "sleep", fake_sleep)
+
+
+def _run(store, compute, warm_only):
+    with pytest.raises(asyncio.CancelledError) as stopped:
+        asyncio.run(store.run(compute, lambda: _seed(), warm_only))
+    assert stopped.type is asyncio.CancelledError
+
+
+async def _seed():
+    return ["s1"]
+
+
+def test_ground_truth_paces_the_netting_refresh_to_the_warm_fallback(monkeypatch):
+    clock = _LoopClock(monkeypatch, ticks=31)  # 31 one-minute ticks
+    passes = []
+
+    async def compute(strategy_id):
+        passes.append(clock.now)
+        return _good()
+
+    async def warm_only():
+        return True
+
+    store = ps.PerformanceSnapshotStore(interval=60)
+    _run(store, compute, warm_only)
+    # one pass at start, then one every 15 minutes, not 31 back-to-back passes
+    assert len(passes) == 3
+    assert passes[1] - passes[0] == pytest.approx(ps.WARM_FALLBACK_SECONDS)
+    assert store.slow_pace is True and store.cadence == ps.WARM_FALLBACK_SECONDS
+
+
+def test_netting_keeps_the_normal_cadence(monkeypatch):
+    clock = _LoopClock(monkeypatch, ticks=5)
+    passes = []
+
+    async def compute(strategy_id):
+        passes.append(clock.now)
+        return _good()
+
+    async def warm_only():
+        return False
+
+    store = ps.PerformanceSnapshotStore(interval=60)
+    _run(store, compute, warm_only)
+    assert len(passes) == 5 and store.slow_pace is False
+
+
+def test_a_flip_back_to_netting_refreshes_within_one_interval_and_never_serves_expired(
+    monkeypatch,
+):
+    clock = _LoopClock(monkeypatch, ticks=14)
+    mode = {"ground_truth": True}
+    passes = []
+    served_before_fresh_pass = []
+    store = ps.PerformanceSnapshotStore(interval=60)
+
+    async def compute(strategy_id):
+        if not mode["ground_truth"]:
+            # the first normal pass: what a reader sees right now must not be "expired"
+            served_before_fresh_pass.append(store.get(strategy_id))
+        passes.append(clock.now)
+        return _good()
+
+    async def warm_only():
+        if clock.now - 1000.0 >= 12 * 60:  # flip back to netting after 12 minutes
+            mode["ground_truth"] = False
+        return mode["ground_truth"]
+
+    _run(store, compute, warm_only)
+    # one slow pass at t=0, then the flip at 12 min refreshes at once (no 15-minute wait)
+    assert passes[0] == 1000.0 and passes[1] - 1000.0 == pytest.approx(12 * 60)
+    seen = served_before_fresh_pass[0]
+    assert seen["metadata"]["snapshot_status"] != "expired"
+    assert seen["stats"]["win_rate"] == 0.5
+    assert (
+        store.slow_pace is False
+    )  # a normal pass completed: back to the normal horizons
+
+
+def test_an_unreadable_source_keeps_the_normal_cadence(monkeypatch):
+    clock = _LoopClock(monkeypatch, ticks=3)
+    passes = []
+
+    async def compute(strategy_id):
+        passes.append(clock.now)
+        return _good()
+
+    async def warm_only():
+        raise RuntimeError("config read failed")
+
+    _run(ps.PerformanceSnapshotStore(interval=60), compute, warm_only)
+    assert len(passes) == 3
