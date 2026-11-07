@@ -123,23 +123,10 @@ def test_atlas_listener_records_success_with_route_source(monkeypatch):
         )
     finally:
         mongo_metrics.reset_source(token)
+    # dm#872: exported with {command, source} only (Grafana series cap); the collection is in the summary
     assert recorded == [
-        (
-            1,
-            {
-                "command": "find",
-                "collection": "signals",
-                "source": "/api/v1/analysis/scorecard",
-            },
-        ),
-        (
-            0.001,
-            {
-                "command": "find",
-                "collection": "signals",
-                "source": "/api/v1/analysis/scorecard",
-            },
-        ),
+        (1, {"command": "find", "source": "/api/v1/analysis/scorecard"}),
+        (0.001, {"command": "find", "source": "/api/v1/analysis/scorecard"}),
     ]
 
 
@@ -167,11 +154,7 @@ def test_atlas_listener_records_failure_and_unknown_collection(monkeypatch):
             {"request_id": 2, "command_name": "getMore", "duration_micros": 2000},
         )()
     )
-    assert recorded[0][2] == {
-        "command": "getMore",
-        "collection": "unknown",
-        "source": "readiness",
-    }
+    assert recorded[0][2] == {"command": "getMore", "source": "readiness"}
     assert recorded[1][0] == "add"
     assert recorded[2][0] == "record"
 
@@ -278,3 +261,43 @@ def test_startup_component_up_is_registered_on_otlp_meter():
 
 def test_ledger_tieout_cycles_is_registered_on_otlp_meter():
     assert metric_name(LEDGER_TIEOUT_CYCLES) == "ledger_tieout_cycles_total"
+
+
+def test_atlas_summary_keeps_the_collection_the_series_no_longer_carry(monkeypatch):
+    """dm#872: the per-collection breakdown moved out of the exported series, not out of observability."""
+    summary_calls = []
+
+    class Metric:
+        def add(self, *_args):
+            return None
+
+        def record(self, *_args):
+            return None
+
+    class Summary:
+        def record(self, collection, command, source, seconds, failed):
+            summary_calls.append((collection, command, source, failed))
+
+    monkeypatch.setattr(mongo_metrics, "ATLAS_OPERATIONS", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_LATENCY", Metric())
+    monkeypatch.setattr(mongo_metrics, "ATLAS_SUMMARY", Summary())
+    listener = mongo_metrics.AtlasCommandListener("primary")
+    listener.started(
+        type(
+            "Event",
+            (),
+            {
+                "request_id": 7,
+                "command_name": "find",
+                "command": {"find": "strategy_positions"},
+            },
+        )()
+    )
+    listener.succeeded(
+        type(
+            "Event",
+            (),
+            {"request_id": 7, "command_name": "find", "duration_micros": 500},
+        )()
+    )
+    assert summary_calls == [("strategy_positions", "find", "primary", False)]
