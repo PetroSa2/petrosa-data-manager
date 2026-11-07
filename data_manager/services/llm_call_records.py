@@ -219,3 +219,131 @@ async def stuck_uncopied_count(
             {"_mysql_copy_pending": True, "received_at": {"$lt": cutoff}}
         )
     )
+
+
+# --- usage (dm#841 PR 3) ---------------------------------------------------------------------
+
+USAGE_GROUPS = ("caller", "model_alias", "decision_id", "day")
+#: The usage query is bounded on the server and on the client: never longer than this.
+USAGE_TIMEOUT_SECONDS = 2.0
+MAX_USAGE_WINDOW = timedelta(days=31)
+
+
+class UsageQueryTimeout(TimeoutError):
+    """The usage aggregation did not finish within ``USAGE_TIMEOUT_SECONDS``."""
+
+
+def usage_pipeline(
+    group_by: str,
+    start: datetime,
+    end: datetime,
+    filters: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """One server-side aggregation: counts, tokens, latency/wait percentiles and outcomes per group."""
+    if group_by not in USAGE_GROUPS:
+        raise ValueError(f"group_by must be one of {USAGE_GROUPS}")
+    match: dict[str, Any] = {"started_at": {"$gte": start, "$lt": end}}
+    for field, value in (filters or {}).items():
+        if value:
+            match[field] = value
+    key: Any = (
+        {
+            "$dateToString": {
+                "format": "%Y-%m-%d",
+                "date": "$started_at",
+                "timezone": "UTC",
+            }
+        }
+        if group_by == "day"
+        else f"${group_by}"
+    )
+
+    def outcome(name: str) -> dict[str, Any]:
+        return {"$sum": {"$cond": [{"$eq": ["$outcome", name]}, 1, 0]}}
+
+    return [
+        {"$match": match},
+        {
+            "$group": {
+                "_id": key,
+                "attempts": {"$sum": 1},
+                "requests": {"$sum": {"$cond": [{"$eq": ["$attempt_no", 1]}, 1, 0]}},
+                "prompt_tokens": {"$sum": {"$ifNull": ["$prompt_tokens", 0]}},
+                "completion_tokens": {"$sum": {"$ifNull": ["$completion_tokens", 0]}},
+                "latency_ms": {
+                    "$percentile": {
+                        "input": "$latency_ms",
+                        "p": [0.5, 0.95],
+                        "method": "approximate",
+                    }
+                },
+                "queue_wait_ms": {
+                    "$percentile": {
+                        "input": "$queue_wait_ms",
+                        "p": [0.5, 0.95],
+                        "method": "approximate",
+                    }
+                },
+                "success": outcome("success"),
+                "throttled": outcome("throttled"),
+                "timeout": outcome("timeout"),
+                "error": outcome("error"),
+            }
+        },
+        {"$sort": {"attempts": -1}},
+        {"$limit": 500},
+    ]
+
+
+def _group_row(group_by: str, doc: dict[str, Any]) -> dict[str, Any]:
+    def pct(values: Any) -> dict[str, float | None]:
+        values = values if isinstance(values, list) else []
+        return {
+            "p50": values[0] if len(values) > 0 else None,
+            "p95": values[1] if len(values) > 1 else None,
+        }
+
+    return {
+        group_by: doc.get("_id"),
+        "attempts": doc.get("attempts", 0),
+        "requests": doc.get("requests", 0),
+        "tokens": {
+            "prompt": doc.get("prompt_tokens", 0),
+            "completion": doc.get("completion_tokens", 0),
+        },
+        "latency_ms": pct(doc.get("latency_ms")),
+        "queue_wait_ms": pct(doc.get("queue_wait_ms")),
+        "outcomes": {
+            o: doc.get(o, 0) for o in ("success", "throttled", "timeout", "error")
+        },
+    }
+
+
+async def usage(
+    mongodb_adapter: Any,
+    group_by: str,
+    start: datetime,
+    end: datetime,
+    filters: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """LLM usage per ``group_by`` over [start, end), bounded at ``USAGE_TIMEOUT_SECONDS``."""
+    if end <= start or end - start > MAX_USAGE_WINDOW:
+        raise ValueError("the window must be positive and at most 31 days")
+    pipeline = usage_pipeline(group_by, start, end, filters)
+    collection = mongodb_adapter.db[COLLECTION]
+    try:
+        async with asyncio.timeout(USAGE_TIMEOUT_SECONDS):
+            cursor = collection.aggregate(
+                pipeline, maxTimeMS=int(USAGE_TIMEOUT_SECONDS * 1000)
+            )
+            docs = await cursor.to_list(length=500)
+    except TimeoutError as exc:
+        raise UsageQueryTimeout(
+            f"llm usage query exceeded {USAGE_TIMEOUT_SECONDS:.0f} s"
+        ) from exc
+    return {
+        "group_by": group_by,
+        "window": {"from": start.isoformat(), "to": end.isoformat()},
+        "filters": {k: v for k, v in (filters or {}).items() if v},
+        "groups": [_group_row(group_by, d) for d in docs],
+    }
