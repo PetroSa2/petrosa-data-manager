@@ -398,3 +398,198 @@ def test_the_usage_endpoint_answers_validates_and_bounds(monkeypatch):
     timed_out = client.get("/api/v1/llm/usage")
     assert timed_out.status_code == 503
     assert timed_out.json()["detail"]["error"] == "usage_query_timeout"
+
+
+# --- PR 4: the JetStream consumer ------------------------------------------------------------
+
+
+class _Msg:
+    def __init__(self, data, delivered=1):
+        self.data = data
+        self.metadata = MagicMock(num_delivered=delivered)
+        self.acked = self.termed = False
+        self.nak_delay = None
+
+    async def ack(self):
+        self.acked = True
+
+    async def term(self):
+        self.termed = True
+
+    async def nak(self, delay=None):
+        self.nak_delay = delay
+
+
+def _consumer(save):
+    from data_manager.consumer.llm_call_record_consumer import LlmCallRecordConsumer
+
+    store = MagicMock()
+    store.save = save
+    return LlmCallRecordConsumer(MagicMock(), nats_client=MagicMock(), store=store)
+
+
+@pytest.mark.asyncio
+async def test_a_stored_record_is_acked_only_after_the_write():
+    order = []
+
+    async def save(record):
+        order.append("save")
+        return True
+
+    consumer = _consumer(save)
+    msg = _Msg(json.dumps(GATEWAY_PAYLOAD).encode())
+    original_ack = msg.ack
+
+    async def ack():
+        order.append("ack")
+        await original_ack()
+
+    msg.ack = ack
+    assert await consumer.handle(msg) == "stored"
+    assert order == ["save", "ack"]
+
+
+@pytest.mark.asyncio
+async def test_a_redelivered_record_is_acked_without_a_second_write():
+    consumer = _consumer(AsyncMock(return_value=False))
+    msg = _Msg(json.dumps(GATEWAY_PAYLOAD).encode(), delivered=2)
+    assert await consumer.handle(msg) == "duplicate"
+    assert msg.acked is True
+
+
+@pytest.mark.asyncio
+async def test_a_database_error_naks_with_backoff_and_never_acks():
+    from data_manager.consumer import llm_call_record_consumer as mod
+
+    consumer = _consumer(AsyncMock(side_effect=RuntimeError("socket timeout")))
+    msg = _Msg(json.dumps(GATEWAY_PAYLOAD).encode(), delivered=3)
+    assert await consumer.handle(msg) == "retry"
+    assert msg.acked is False and msg.nak_delay == mod.nak_delay(3) == 8.0
+    assert mod.nak_delay(20) == mod.NAK_MAX_DELAY_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_the_last_delivery_failing_is_warned_counted_and_terminated(caplog):
+    from data_manager.consumer import llm_call_record_consumer as mod
+
+    consumer = _consumer(AsyncMock(side_effect=RuntimeError("socket timeout")))
+    msg = _Msg(json.dumps(GATEWAY_PAYLOAD).encode(), delivered=mod.MAX_DELIVER)
+    with caplog.at_level("WARNING"):
+        assert await consumer.handle(msg) == "exhausted"
+    assert "LLM_CALL_RECORD_DELIVERY_EXHAUSTED" in caplog.text
+    assert msg.termed is True and msg.acked is False
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_payload_is_terminated_not_redelivered():
+    save = AsyncMock()
+    consumer = _consumer(save)
+    msg = _Msg(json.dumps({**GATEWAY_PAYLOAD, "prompt": "body"}).encode())
+    assert await consumer.handle(msg) == "invalid"
+    assert msg.termed is True
+    save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_stream_is_checked_never_created_and_one_durable_is_shared():
+    from data_manager.consumer import llm_call_record_consumer as mod
+
+    js = MagicMock()
+    js.stream_info = AsyncMock(
+        side_effect=[Exception("stream not found"), {"config": {}}]
+    )
+    js.add_stream = AsyncMock()
+    js.pull_subscribe = AsyncMock(return_value="sub")
+    nats_client = MagicMock()
+    nats_client.nc.jetstream.return_value = js
+    consumer = mod.LlmCallRecordConsumer(
+        MagicMock(), nats_client=nats_client, store=MagicMock()
+    )
+
+    assert await consumer._bind() is False  # missing: ERROR, no subscription
+    assert await consumer._bind() is True
+    js.add_stream.assert_not_called()  # never created by data-manager
+    args, kwargs = js.pull_subscribe.await_args
+    assert args == (mod.SUBJECT,)
+    assert kwargs["durable"] == mod.DURABLE and kwargs["stream"] == mod.STREAM
+    config = kwargs["config"]
+    assert config.ack_wait == 30 and config.max_deliver == 10
+    assert str(config.ack_policy.value) == "explicit"
+
+
+@pytest.mark.asyncio
+async def test_the_run_loop_rechecks_the_stream_fetches_and_survives_timeouts(
+    monkeypatch,
+):
+    import asyncio
+
+    import nats.errors
+
+    from data_manager.consumer import llm_call_record_consumer as mod
+
+    consumer = mod.LlmCallRecordConsumer(
+        MagicMock(), nats_client=MagicMock(), store=MagicMock()
+    )
+    binds = iter([False, True])
+
+    async def bind():
+        if next(binds):
+            consumer.subscription = sub
+            return True
+        return False
+
+    handled = []
+    batches = iter(
+        [
+            nats.errors.TimeoutError(),
+            RuntimeError("fetch broke"),
+            [_Msg(b"{}"), _Msg(b"{}")],
+        ]
+    )
+
+    async def fetch(batch, timeout):
+        item = next(batches)
+        if isinstance(item, Exception):
+            raise item
+        consumer.running = False
+        return item
+
+    async def handle(msg):
+        handled.append(msg)
+        return "stored"
+
+    sub = MagicMock(fetch=fetch)
+    monkeypatch.setattr(consumer, "_bind", bind)
+    monkeypatch.setattr(consumer, "handle", handle)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(mod.asyncio, "sleep", lambda *_a: real_sleep(0))
+    consumer.running = True
+    await consumer._run()
+    assert len(handled) == 2  # the batch after a timeout and a fetch error
+
+
+@pytest.mark.asyncio
+async def test_start_and_stop_own_the_nats_connection(monkeypatch):
+    from data_manager.consumer import llm_call_record_consumer as mod
+
+    nats_client = MagicMock()
+    nats_client.connect = AsyncMock(return_value=True)
+    nats_client.disconnect = AsyncMock()
+    monkeypatch.setattr(mod, "NATSClient", lambda: nats_client)
+    consumer = mod.LlmCallRecordConsumer(MagicMock())
+
+    async def idle():
+        while consumer.running:
+            await __import__("asyncio").sleep(0)
+
+    monkeypatch.setattr(consumer, "_run", idle)
+    assert await consumer.start() is True
+    assert isinstance(consumer.store, llm.LlmCallRecordStore)
+    consumer.subscription = MagicMock(unsubscribe=AsyncMock())
+    await consumer.stop()
+    nats_client.disconnect.assert_awaited_once()
+    consumer.subscription.unsubscribe.assert_awaited_once()
+
+    failing = MagicMock(connect=AsyncMock(return_value=False))
+    monkeypatch.setattr(mod, "NATSClient", lambda: failing)
+    assert await mod.LlmCallRecordConsumer(MagicMock()).start() is False
