@@ -523,6 +523,24 @@ class DataManagerApp:
             else:
                 logger.error("Failed to start decision consumer")
 
+        # LLM gateway call records (petrosa-data-manager#841): a durable JetStream pull consumer on the
+        # infra-owned LLM_CALL_RECORDS stream, shared by the pods; acks only after the Mongo write.
+        if (
+            os.getenv("ENABLE_LLM_CALL_RECORD_CONSUMER", "true").lower() == "true"
+            and self.db_manager is not None
+        ):
+            from data_manager.consumer.llm_call_record_consumer import (
+                LlmCallRecordConsumer,
+            )
+
+            self.llm_call_record_consumer = LlmCallRecordConsumer(
+                db_manager=self.db_manager
+            )
+            if await self.llm_call_record_consumer.start():
+                logger.info("LLM call record consumer started")
+            else:
+                logger.error("Failed to start the LLM call record consumer")
+
         # Initialize and start alert dispatcher (#183, FR66). Subscribes to
         # `alerts.>`, persists every event into the `alerts` Mongo collection,
         # attempts delivery to the operator webhook (or marks delivered_mock
@@ -1066,6 +1084,8 @@ class DataManagerApp:
         # Stop decision consumer
         if self.decision_consumer:
             await self.decision_consumer.stop()
+        if getattr(self, "llm_call_record_consumer", None) is not None:
+            await self.llm_call_record_consumer.stop()
             logger.info("Decision consumer stopped")
 
         # Stop alert dispatcher (#183)
