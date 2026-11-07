@@ -92,17 +92,17 @@ class AtlasCommandListener(CommandListener):
                 labels = self._commands.pop(event.request_id, None)
             if labels is None:
                 labels = (_label(event.command_name), _UNKNOWN, self.client_role)
-            attributes = {
-                "command": labels[0],
-                "collection": labels[1],
-                "source": labels[2],
-            }
+            # dm#872: the exported series carry {command, source} only. The collection (113 values) made
+            # ~470 series per pod pair and re-created them on every rollout, against Grafana Cloud's
+            # 15k series cap (petrosa_k8s#1527); no alert or dashboard reads it. The per-collection
+            # breakdown stays in the ATLAS_SUMMARY log line below.
+            attributes = {"command": labels[0], "source": labels[2]}
             ATLAS_OPERATIONS.add(1, attributes)
             if failed:
                 ATLAS_FAILURES.add(1, attributes)
             ATLAS_LATENCY.record(event.duration_micros / 1_000_000, attributes)
             ATLAS_SUMMARY.record(
-                attributes["collection"],
+                labels[1],
                 attributes["command"],
                 attributes["source"],
                 event.duration_micros / 1_000_000,
