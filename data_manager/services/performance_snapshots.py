@@ -37,6 +37,10 @@ INTERVAL_ENV = "DATA_MANAGER_PERFORMANCE_SNAPSHOT_INTERVAL_SECONDS"
 #: Fallback only, used when the env var is unset or invalid: one pass per minute. A pass that takes longer
 #: than the interval is followed directly by the next one, so the measured pass duration sets the cadence then.
 INTERVAL_FALLBACK_SECONDS = 60.0
+#: dm#878: while the served stats source is ``ground_truth`` these netting snapshots are only a warm fallback,
+#: so a pass runs at most this often instead of back to back (labelled; env-overridable).
+WARM_FALLBACK_ENV = "DATA_MANAGER_PERFORMANCE_SNAPSHOT_WARM_FALLBACK_SECONDS"
+WARM_FALLBACK_SECONDS = float(os.getenv(WARM_FALLBACK_ENV, "900"))
 #: A snapshot older than this many cadences is served flagged ``stale`` (the ``ReportPrecomputer`` convention).
 STALE_AFTER_INTERVALS = 3
 #: A snapshot older than this many cadences has expired: it is no longer served, because a caller that does
@@ -120,6 +124,9 @@ class PerformanceSnapshotStore:
 
     def __init__(self, interval: float | None = None) -> None:
         self.interval = interval if interval is not None else interval_seconds()
+        # dm#878: True from the first slow (warm-fallback) pass until a normal pass completes, so the
+        # staleness and expiry horizons keep the slow cadence across a flip back to netting.
+        self.slow_pace = False
         self.last_pass_seconds = 0.0
         self._snapshots: dict[str, _Snapshot] = {}
         self._requested: dict[str, float] = {}
@@ -127,7 +134,8 @@ class PerformanceSnapshotStore:
     @property
     def cadence(self) -> float:
         """Seconds between two refreshes of a strategy: the interval, or the last pass when it took longer."""
-        return max(self.interval, self.last_pass_seconds)
+        pace = WARM_FALLBACK_SECONDS if self.slow_pace else 0.0
+        return max(self.interval, self.last_pass_seconds, pace)
 
     def note_request(self, strategy_id: str) -> None:
         self._requested[strategy_id] = monotonic()
@@ -304,17 +312,46 @@ class PerformanceSnapshotStore:
         )
         return outcomes
 
-    async def run(self, compute: Compute, seed: Seed | None = None) -> None:
-        """Refresh until cancelled; a pass starts one interval after the previous one started, never overlapping."""
+    async def run(
+        self,
+        compute: Compute,
+        seed: Seed | None = None,
+        warm_only: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """Refresh until cancelled; a pass starts one interval after the previous one started, never overlapping.
+
+        dm#878: ``warm_only()`` says whether these snapshots are only a fallback (the served stats source is
+        ``ground_truth``). Then a pass runs at most every ``WARM_FALLBACK_SECONDS``; the check still happens
+        every interval, so a flip back to netting gets a fresh pass within one interval, and until it
+        completes the staleness horizons keep the slow cadence (no "expired" answer for an old snapshot).
+        """
+        last_pass: float | None = None
         while True:
             _raise_if_cancelling()
             started = monotonic()
-            try:
-                await self.refresh_once(compute, seed)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("performance_snapshot: refresh pass failed")
+            slow = False
+            if warm_only is not None:
+                try:
+                    slow = bool(await warm_only())
+                except Exception:
+                    slow = False  # unknown source: keep the normal cadence
+            due = (
+                not slow
+                or last_pass is None
+                or started - last_pass >= WARM_FALLBACK_SECONDS
+            )
+            if due:
+                if slow:
+                    self.slow_pace = True
+                try:
+                    await self.refresh_once(compute, seed)
+                    last_pass = started
+                    if not slow:
+                        self.slow_pace = False
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("performance_snapshot: refresh pass failed")
             await asyncio.sleep(max(0.0, self.interval - (monotonic() - started)))
 
 
@@ -323,7 +360,10 @@ RESTART_BACKOFF_MAX_INTERVALS = 10
 
 
 async def supervise(
-    store: PerformanceSnapshotStore, compute: Compute, seed: Seed | None = None
+    store: PerformanceSnapshotStore,
+    compute: Compute,
+    seed: Seed | None = None,
+    warm_only: Callable[[], Awaitable[bool]] | None = None,
 ) -> None:
     """Run the refresh loop and restart it whenever it ends for any reason other than shutdown.
 
@@ -335,7 +375,7 @@ async def supervise(
     while True:
         STARTUP_COMPONENT_UP.set(1, {"component": "performance_snapshots"})
         try:
-            await store.run(compute, seed)
+            await store.run(compute, seed, warm_only)
             reason = "returned"
         except asyncio.CancelledError:
             if _being_cancelled():

@@ -15,9 +15,11 @@ from data_manager.services import performance_snapshots as ps
 @pytest.mark.asyncio
 async def test_lifespan_runs_the_refresh_under_the_supervisor(monkeypatch):
     seen: list[tuple] = []
+    warm_hooks: list = []  # dm#878: the netting refresh is told when it is only a warm fallback
 
-    async def fake_supervise(store, compute, seed):
+    async def fake_supervise(store, compute, seed, warm_only=None):
         seen.append((store, compute, seed))
+        warm_hooks.append(warm_only)
         await asyncio.Event().wait()
 
     async def idle_worker():
@@ -39,6 +41,7 @@ async def test_lifespan_runs_the_refresh_under_the_supervisor(monkeypatch):
             api_module._configured_strategy_ids,
         )
     ]
+    assert len(warm_hooks) == 1 and callable(warm_hooks[0])
 
 
 @pytest.mark.asyncio
@@ -47,7 +50,7 @@ async def test_lifespan_starts_and_cancels_snapshot_refresh(monkeypatch):
     cancelled = asyncio.Event()
     seen: list[object] = []
 
-    async def fake_run(compute, seed):
+    async def fake_run(compute, seed, warm_only=None):
         seen.append((compute, seed))
         started.set()
         try:
