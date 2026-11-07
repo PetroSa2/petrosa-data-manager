@@ -20,6 +20,7 @@ DAY0 = datetime(2026, 8, 1, tzinfo=UTC)
 async def test_fill_loader_projects_only_round_book_fields():
     cursor = MagicMock()
     cursor.sort.return_value = cursor
+    cursor.batch_size.return_value = cursor
     cursor.to_list = AsyncMock(return_value=[])
     collection = MagicMock()
     collection.find.return_value = cursor
@@ -28,6 +29,10 @@ async def test_fill_loader_projects_only_round_book_fields():
     manager = MagicMock(mongodb_adapter=adapter)
 
     await risk_route._load_fills(NOW, manager)
+
+    # dm#818: read in batches small enough for each round trip to fit the 5 s socket timeout
+    cursor.batch_size.assert_called_once_with(risk_route._FILL_BATCH_SIZE)
+    assert risk_route._FILL_BATCH_SIZE == 400
 
     query = collection.find.call_args.args[0]
     assert query["timestamp"] == {
