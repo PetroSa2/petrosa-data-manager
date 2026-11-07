@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
@@ -56,6 +57,12 @@ async def _load_wallet_rows(
 
 _MAX_FILLS = 200_000
 _FILL_LOOKBACK_DAYS = 30.0
+#: dm#818: the 30-day fills read is ~1.2k small documents (2 ms on the server), but the Atlas M0 link moves
+#: them at ~80 KB/s, so one default cursor batch takes longer than the 5 s socket timeout and the read failed
+#: on every refresh. The socket timeout bounds each network read, not the cursor: smaller batches each fit
+#: (measured in-pod: 400/batch -> 7.4 s total, no timeout). Labelled fallback; override with
+#: RISK_FILLS_BATCH_SIZE.
+_FILL_BATCH_SIZE = max(1, int(os.getenv("RISK_FILLS_BATCH_SIZE", "400")))
 _LAST_GOOD_STRATEGIES: dict[int, tuple[dict[str, Any], datetime]] = {}
 _FILL_PROJECTION = {
     "event_type": 1,
@@ -113,6 +120,7 @@ async def _load_fills(
         await mongodb.db["execution_events"]
         .find(query, projection=_FILL_PROJECTION)
         .sort("timestamp", 1)
+        .batch_size(_FILL_BATCH_SIZE)
         .to_list(length=_MAX_FILLS)
     )
 
