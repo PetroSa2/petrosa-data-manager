@@ -269,3 +269,132 @@ def test_the_stale_gauge_reports_only_after_the_first_measurement(monkeypatch):
     assert list(job._observe_stale(None)) == []
     monkeypatch.setitem(job._stale, "value", 4)
     assert [o.value for o in job._observe_stale(None)] == [4]
+
+
+# --- PR 3: usage endpoints -------------------------------------------------------------------
+
+
+def test_the_usage_pipeline_groups_and_computes_percentiles_server_side():
+    start, end = NOW.replace(hour=0), NOW
+    pipeline = llm.usage_pipeline(
+        "caller", start, end, {"model_alias": "cio-strategist", "caller": None}
+    )
+    match, group = pipeline[0]["$match"], pipeline[1]["$group"]
+    assert match == {
+        "started_at": {"$gte": start, "$lt": end},
+        "model_alias": "cio-strategist",
+    }
+    assert group["_id"] == "$caller"
+    assert group["latency_ms"]["$percentile"]["p"] == [0.5, 0.95]
+    assert group["queue_wait_ms"]["$percentile"]["method"] == "approximate"
+    assert set(group) >= {
+        "attempts",
+        "requests",
+        "prompt_tokens",
+        "completion_tokens",
+        "success",
+        "throttled",
+        "timeout",
+        "error",
+    }
+    day = llm.usage_pipeline("day", start, end)[1]["$group"]["_id"]
+    assert day["$dateToString"]["format"] == "%Y-%m-%d"
+    with pytest.raises(ValueError) as bad:
+        llm.usage_pipeline("prompt", start, end)
+    assert "group_by" in str(bad.value)
+
+
+class _AggCursor:
+    def __init__(self, docs, delay=0.0):
+        self.docs, self.delay = docs, delay
+
+    async def to_list(self, length):
+        import asyncio
+
+        await asyncio.sleep(self.delay)
+        return self.docs
+
+
+def _usage_adapter(docs, delay=0.0):
+    collection = MagicMock()
+    collection.aggregate = MagicMock(return_value=_AggCursor(docs, delay))
+    adapter = MagicMock()
+    adapter.db.__getitem__.return_value = collection
+    return adapter, collection
+
+
+@pytest.mark.asyncio
+async def test_usage_formats_each_group_with_tokens_percentiles_and_outcomes():
+    doc = {
+        "_id": "petrosa-cio",
+        "attempts": 12,
+        "requests": 10,
+        "prompt_tokens": 9000,
+        "completion_tokens": 1200,
+        "latency_ms": [820.0, 2400.0],
+        "queue_wait_ms": [15.0, 300.0],
+        "success": 9,
+        "throttled": 2,
+        "timeout": 1,
+        "error": 0,
+    }
+    adapter, collection = _usage_adapter([doc])
+    body = await llm.usage(adapter, "caller", NOW.replace(hour=0), NOW)
+    assert body["groups"] == [
+        {
+            "caller": "petrosa-cio",
+            "attempts": 12,
+            "requests": 10,
+            "tokens": {"prompt": 9000, "completion": 1200},
+            "latency_ms": {"p50": 820.0, "p95": 2400.0},
+            "queue_wait_ms": {"p50": 15.0, "p95": 300.0},
+            "outcomes": {"success": 9, "throttled": 2, "timeout": 1, "error": 0},
+        }
+    ]
+    assert collection.aggregate.call_args.kwargs["maxTimeMS"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_a_slow_usage_query_is_a_timeout_never_a_partial_answer(monkeypatch):
+    monkeypatch.setattr(llm, "USAGE_TIMEOUT_SECONDS", 0.05)
+    adapter, _ = _usage_adapter([], delay=1.0)
+    with pytest.raises(llm.UsageQueryTimeout) as slow:
+        await llm.usage(adapter, "day", NOW.replace(hour=0), NOW)
+    assert "exceeded" in str(slow.value)
+
+
+def test_the_usage_endpoint_answers_validates_and_bounds(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import data_manager.api.app as api_module
+
+    adapter, _ = _usage_adapter([{"_id": "2026-11-07", "attempts": 1, "requests": 1}])
+    monkeypatch.setattr(api_module, "db_manager", MagicMock(mongodb_adapter=adapter))
+    client = TestClient(api_module.create_app())
+
+    ok = client.get(
+        "/api/v1/llm/usage",
+        params={
+            "group_by": "day",
+            "from": "2026-11-07T00:00:00Z",
+            "to": "2026-11-07T12:00:00Z",
+        },
+    )
+    assert ok.status_code == 200 and ok.json()["groups"][0]["day"] == "2026-11-07"
+    assert (
+        client.get("/api/v1/llm/usage", params={"group_by": "prompt"}).status_code
+        == 422
+    )
+    too_long = client.get(
+        "/api/v1/llm/usage",
+        params={"from": "2026-09-01T00:00:00Z", "to": "2026-11-07T00:00:00Z"},
+    )
+    assert too_long.status_code == 400
+
+    async def slow(*_a, **_k):
+        raise llm.UsageQueryTimeout("llm usage query exceeded 2 s")
+
+    monkeypatch.setattr(llm, "usage", slow)
+    timed_out = client.get("/api/v1/llm/usage")
+    assert timed_out.status_code == 503
+    assert timed_out.json()["detail"]["error"] == "usage_query_timeout"

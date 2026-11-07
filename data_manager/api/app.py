@@ -41,6 +41,7 @@ from data_manager.api.routes import (
     ledger,
     leverage_bounds,
     lifecycle,
+    llm_usage,
     pnl,
     portfolio_state,
     raw,
@@ -363,6 +364,7 @@ def create_app() -> FastAPI:
     # New API routes
     app.include_router(leases.router, tags=["Leases"])
     app.include_router(ledger.router, tags=["Exchange Ledger"])
+    app.include_router(llm_usage.router)
     app.include_router(trading_state.router, tags=["Trading State"])
     app.include_router(ingest.router)
     app.include_router(signals.router, tags=["Signals"])
