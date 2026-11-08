@@ -323,6 +323,15 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
         _record_failure(operation, "invalid_value")
         _dead_letter(adapter, operation, document, "invalid_value")
         return False
+    if (
+        table == "positions"
+        and document.get("created_at") is None
+        and document.get("entry_time") is not None
+    ):
+        # petrosa-data-manager#881: MySQL positions.created_at defaults to CURRENT_TIMESTAMP, so a historic position
+        # without created_at (pre-#464 documents) would read as created on the day it is copied. Its entry time is
+        # when it was created.
+        document = {**document, "created_at": document["entry_time"]}
     for attempt in range(_COPY_RETRIES):
         try:
             allowed = set(adapter.get_column_names(table))

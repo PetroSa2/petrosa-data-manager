@@ -123,3 +123,39 @@ async def test_no_quarantine_means_no_release_and_a_zero_gauge(loop_env):
 
     gauge.set.assert_any_call(0, {"table": "positions"})
     assert module._release_state["quarantined_at_release"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_position_without_created_at_takes_its_entry_time(
+    loop_env, monkeypatch
+):
+    """MySQL created_at defaults to now; a historic position must keep its own time (#881, the 60 pre-#464 rows)."""
+    repo, mysql, _ = loop_env
+    monkeypatch.setattr(
+        mysql,
+        "get_column_names",
+        lambda table: {"position_id", "status", "created_at", "entry_time"},
+    )
+    await repo._collection("positions").insert_many(
+        [
+            {
+                "position_id": "old",
+                "status": "closed",
+                "entry_time": "2026-09-26T19:12:52+00:00",
+            },
+            {
+                "position_id": "new",
+                "status": "closed",
+                "entry_time": "2026-11-01T00:00:00+00:00",
+                "created_at": "2026-11-01T00:00:01+00:00",
+            },
+        ]
+    )
+    for position_id in ("old", "new"):
+        await repo.update_position(position_id, {})
+
+    _allow_next_release(monkeypatch)
+    await module._replay_mysql_copies()
+
+    assert mysql.rows["old"]["created_at"] == "2026-09-26T19:12:52+00:00"
+    assert mysql.rows["new"]["created_at"] == "2026-11-01T00:00:01+00:00"
