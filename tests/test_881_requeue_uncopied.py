@@ -106,3 +106,109 @@ def test_batch_must_be_positive():
     with pytest.raises(SystemExit) as err:
         module.main(["--batch", "0"])
     assert err.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_a_position_changed_meanwhile_is_counted_as_skipped(setup, monkeypatch):
+    db, repo = setup
+
+    async def unchanged(position_id, data):
+        return 0
+
+    monkeypatch.setattr(repo, "update_position", unchanged)
+
+    result = await module.requeue(
+        repo, await module.candidates(db, {"in_mysql"}), batch=100, pause_seconds=0
+    )
+
+    assert result == {"queued": 0, "skipped": 5}
+
+
+def test_mysql_position_ids_reads_only_ids_and_disconnects(monkeypatch):
+    calls = {}
+
+    class FakeMySQL:
+        def __init__(self, uri, role):
+            calls["role"] = role
+
+        def connect(self):
+            calls["connected"] = True
+
+        def find_paginated(self, table, **kwargs):
+            calls["query"] = (table, kwargs["columns"], kwargs["include_total"])
+            return [
+                {"position_id": "a"},
+                {"position_id": ""},
+                {"position_id": "b"},
+            ], None
+
+        def disconnect(self):
+            calls["disconnected"] = True
+
+    import data_manager.db.mysql_adapter as mysql_module
+
+    monkeypatch.setattr(mysql_module, "MySQLAdapter", FakeMySQL)
+
+    assert module._mysql_position_ids() == {"a", "b"}
+    assert calls == {
+        "role": "adhoc",
+        "connected": True,
+        "query": ("positions", ["position_id"], False),
+        "disconnected": True,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("apply", [False, True], ids=["dry_run", "apply"])
+async def test_run_wires_mongo_and_mysql(setup, monkeypatch, apply):
+    db, _ = setup
+    state = {}
+
+    class FakeMongo:
+        def __init__(self, url, database_name):
+            self.db = db
+            state["database"] = database_name
+
+        @staticmethod
+        def _prepare_for_bson(value):
+            return value
+
+        def connect(self):
+            state["connected"] = True
+
+        def disconnect(self):
+            state["disconnected"] = True
+
+    import data_manager.db.mongodb_adapter as mongo_module
+
+    monkeypatch.setattr(mongo_module, "MongoDBAdapter", FakeMongo)
+    monkeypatch.setattr(module, "_mysql_position_ids", lambda: {"in_mysql"})
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(module.asyncio, "sleep", no_sleep)
+
+    result = await module.run(apply=apply, batch=100, pause_seconds=0)
+
+    assert result["candidates"] == 5 and result["apply"] is apply
+    assert state["disconnected"] is True
+    pending = await db["positions"].count_documents({"_mysql_copy_pending": True})
+    if apply:
+        assert (result["queued"], pending) == (5, 5)
+    else:
+        assert "queued" not in result and pending == 0
+
+
+def test_main_prints_the_dry_run_result(monkeypatch, capsys):
+    seen = {}
+
+    async def fake_run(*, apply, batch, pause_seconds):
+        seen.update(apply=apply, batch=batch, pause=pause_seconds)
+        return {"apply": apply, "candidates": 603}
+
+    monkeypatch.setattr(module, "run", fake_run)
+
+    assert module.main([]) == 0
+    assert seen == {"apply": False, "batch": 100, "pause": 60.0}
+    assert '"candidates": 603' in capsys.readouterr().out
