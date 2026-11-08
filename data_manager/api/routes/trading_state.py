@@ -17,6 +17,7 @@ from pymongo.errors import DuplicateKeyError
 
 import data_manager.api.app as api_module
 from data_manager.db.repositories.trading_state_repository import (
+    QUARANTINE_COOLOFF_SECONDS,
     TradingStateConflictError,
     TradingStateRepository,
 )
@@ -24,6 +25,7 @@ from data_manager.observability_metrics import (
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
     TRADING_STATE_MYSQL_FIELDS_DROPPED,
+    TRADING_STATE_QUARANTINED_DOCUMENTS,
     TRADING_STATE_RECOVERY_EVENTS,
 )
 
@@ -136,8 +138,58 @@ def _record_task_failure(reason: str = "replay_error") -> None:
     )
 
 
+# petrosa-data-manager#881: quarantined copies are released back to the queue in bounded batches, at most once per
+# interval. If anything was quarantined again since the last release, releasing pauses for the cool-off, so a recurring
+# error re-quarantines one batch instead of the whole backlog. Labelled fallbacks, env-overridable.
+_RELEASE_BATCH = int(os.getenv("TRADING_STATE_QUARANTINE_RELEASE_BATCH", "100"))
+_RELEASE_INTERVAL_SECONDS = float(
+    os.getenv("TRADING_STATE_QUARANTINE_RELEASE_INTERVAL_SECONDS", "60")
+)
+_release_state: dict[str, Any] = {
+    "last_release_at": 0.0,
+    "quarantined_at_release": None,
+    "paused_until": 0.0,
+}
+
+
+async def _release_quarantines(repo: TradingStateRepository) -> None:
+    now = asyncio.get_running_loop().time()
+    if now - _release_state["last_release_at"] < _RELEASE_INTERVAL_SECONDS:
+        return
+    _release_state["last_release_at"] = now
+    seen = _release_state["quarantined_at_release"]
+    if seen is not None and _copy_state.get("quarantined", 0) > seen:
+        _release_state["paused_until"] = now + QUARANTINE_COOLOFF_SECONDS
+        _release_state["quarantined_at_release"] = None
+        logger.warning(
+            "trading_state_mysql_quarantine_release_paused: copies were quarantined again after the last "
+            "release; next release in %.0f s",
+            QUARANTINE_COOLOFF_SECONDS,
+        )
+    for table in ("positions", "daily_pnl"):
+        quarantined = await repo.quarantined_count(table)
+        if quarantined and now >= _release_state["paused_until"]:
+            released = await repo.release_due_quarantines(table, _RELEASE_BATCH)
+            if released:
+                _release_state["quarantined_at_release"] = _copy_state.get(
+                    "quarantined", 0
+                )
+                TRADING_STATE_RECOVERY_EVENTS.add(
+                    released, {"outcome": "released", "operation": table}
+                )
+                logger.info(
+                    "trading_state_mysql_quarantine_released table=%s released=%d remaining=%d",
+                    table,
+                    released,
+                    quarantined - released,
+                )
+                quarantined -= released
+        TRADING_STATE_QUARANTINED_DOCUMENTS.set(quarantined, {"table": table})
+
+
 async def _replay_mysql_copies() -> None:
     repo = _repo()
+    await _release_quarantines(repo)
     for table in ("positions", "daily_pnl"):
         for document in await repo.pending_copies(table, _COPY_BATCH_SIZE):
             if await asyncio.to_thread(_copy_to_mysql, table, document):
