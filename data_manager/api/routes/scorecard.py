@@ -54,6 +54,16 @@ router = APIRouter()
 _MAX_FILLS = 200_000
 
 
+def _source_cause(exc: BaseException) -> str:
+    """A non-empty cause for a failed source read: the message if present, else the timeout budget or type."""
+    message = str(exc)
+    if message:
+        return message
+    if isinstance(exc, TimeoutError):
+        return f"timed out after {constants.ANALYTICS_DEPENDENCY_TIMEOUT_SECONDS:g}s"
+    return type(exc).__name__
+
+
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
     from data_manager.api.routes import strategy_net_r
 
@@ -144,9 +154,9 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
             None,
             None,
             [],
-            str(exc),
+            _source_cause(exc),
             "unavailable",
-            {"execution_events": str(exc)},
+            {"execution_events": _source_cause(exc)},
         )
     position_ids = sorted({p for r in book.closed for p in r.position_ids})
     decision_ids = sorted({d for r in book.closed for d in r.decision_ids})
@@ -157,7 +167,7 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
     except Exception as exc:
         logger.error("scorecard: positions read failed: %s", exc, exc_info=True)
         stops = {}
-        source_errors["positions"] = str(exc)
+        source_errors["positions"] = _source_cause(exc)
     try:
         decisions = await asyncio.wait_for(
             _load_decisions(decision_ids),
@@ -166,7 +176,7 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
     except Exception as exc:
         logger.error("scorecard: decisions read failed: %s", exc, exc_info=True)
         decisions = {}
-        source_errors["cio_decisions"] = str(exc)
+        source_errors["cio_decisions"] = _source_cause(exc)
     open_rounds = book.open_cycles()
     exposures = [
         Exposure(
@@ -205,7 +215,7 @@ async def _scored(start: datetime | None, end: datetime | None) -> Scored:
             ]
         except Exception as exc:  # the scorecard still serves, without funding
             logger.warning("scorecard: funding unavailable: %s", exc)
-            funding_error = str(exc)
+            funding_error = _source_cause(exc)
             source_errors["funding"] = funding_error
     else:
         funding_income, allocation = {}, FundingAllocation()
