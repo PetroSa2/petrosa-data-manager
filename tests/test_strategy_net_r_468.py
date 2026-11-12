@@ -214,12 +214,6 @@ def test_strategy_net_r_serves_the_cio_contract_under_both_prefixes(client, pref
     assert D(a["cumulative_net_loss_usd"]) == D("0")
 
 
-def test_the_drains_scorecard_routes_are_still_served_by_analysis(client):
-    # the scorecard paths belong to scorecard_service in analysis.py: this module registers none of them
-    paths = [route_.path for route_ in route.router.routes]
-    assert paths == ["/strategy-net-r"]
-
-
 def test_the_route_503s_without_a_database():
     api_module.db_manager = None
     assert TestClient(create_app()).get("/analysis/strategy-net-r").status_code == 503

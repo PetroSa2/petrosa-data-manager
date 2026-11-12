@@ -1,9 +1,9 @@
-"""The keep/kill input of the CIO: net R per closed round of each strategy (petrosa-data-manager#468).
+"""Read helpers for the CIO keep/kill input: net R per closed round of each strategy (petrosa-data-manager#468).
 
-``GET /analysis/strategy-net-r`` (also under ``/api/v1/analysis``) is what the CIO's keep/kill job reads
-(petrosa-cio#299, #306). Read-only: the rounds come from the round book over ``execution_events``, the stop a
-position carried from its ``positions`` row, else from its ``cio_decisions`` row. The scorecard routes are the
-drain's ``scorecard_service`` (``analysis.py``).
+The ``GET /analysis/strategy-net-r`` route (also under ``/api/v1/analysis``) is what the CIO's keep/kill job reads
+(petrosa-cio#299, #306); it is served by ``scorecard.py``, whose router is registered first. This module holds the
+read helpers those routes share. Read-only: the rounds come from the round book over ``execution_events``, the stop
+a position carried from its ``positions`` row, else from its ``cio_decisions`` row.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import HTTPException
 
 import data_manager.api.app as api_module
 from data_manager.services.round_book import FILL_EVENT_TYPES, _when, replay_book
@@ -25,7 +25,6 @@ from data_manager.services.strategy_net_r import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
 
 _MAX_FILLS = 200_000
 
@@ -159,22 +158,3 @@ async def _scored() -> list:
         logger.error("strategy-net-r: read failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return score_rounds(book.closed, stops=stops, decisions=decisions)
-
-
-@router.get("/strategy-net-r")
-async def get_strategy_net_r() -> dict[str, Any]:
-    """Per strategy: net R per closed round (oldest first), the cumulative net loss and the closed-round count:
-    the keep/kill input of the CIO (petrosa-cio#299).
-
-    With ``strategy_stats_source=ground_truth`` (petrosa-data-manager#842) it is served from the exchange-truth
-    snapshot under the same switch as the performance and rounds contracts."""
-    from data_manager.api.routes import analysis
-    from data_manager.services import strategy_stats_source
-
-    if await strategy_stats_source.get_source(api_module.db_manager) == (
-        strategy_stats_source.GROUND_TRUTH
-    ):
-        return strategy_stats_source.net_r_from_snapshot(
-            await analysis._ground_truth_snapshot()
-        )
-    return strategy_net_r(await _scored())
