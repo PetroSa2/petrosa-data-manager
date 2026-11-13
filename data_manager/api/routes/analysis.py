@@ -1694,6 +1694,12 @@ async def compute_strategy_performance(strategy_id: str):
                 _LAST_GOOD_PERFORMANCE.pop(next(iter(_LAST_GOOD_PERFORMANCE)))
         return response
     except Exception as e:
+        if isinstance(e, _AnalyticsDependencyTimeout):
+            source = locals().get("source")
+            if source is not None:
+                stale = _stale_performance(strategy_id, source, e)
+                if stale is not None:
+                    return stale
         logger.error(
             "performance: stage=%s outcome=error strategy=%s duration=%.3fs "
             "exception=%s message=%r",
