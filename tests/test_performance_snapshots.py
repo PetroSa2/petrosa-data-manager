@@ -49,6 +49,23 @@ def test_get_returns_copy_with_snapshot_metadata():
     assert store.get("s")["stats"]["win_rate"] == 0.5
 
 
+def test_warm_start_restores_age_and_expiry(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(ps, "monotonic", lambda: clock[0])
+    computed_at = ps.datetime.now(ps.UTC)
+
+    async def load():
+        return [{"strategy_id": "s", "body": _good(), "computed_at": computed_at}]
+
+    store = ps.PerformanceSnapshotStore(interval=10, load=load)
+    asyncio.run(store.warm_start())
+    assert store.get("s")["metadata"]["snapshot_status"] == "served"
+    clock[0] += 10 * ps.STALE_AFTER_INTERVALS + 1
+    assert store.get("s")["metadata"]["stale"] is True
+    clock[0] += 10 * (ps.EXPIRE_AFTER_INTERVALS - ps.STALE_AFTER_INTERVALS)
+    assert store.get("s")["metadata"]["snapshot_status"] == "expired"
+
+
 def test_degraded_body_never_replaces_good_snapshot():
     store = ps.PerformanceSnapshotStore(interval=60)
     assert not store.put("s", _degraded())
