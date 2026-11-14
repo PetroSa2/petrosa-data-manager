@@ -106,6 +106,21 @@ def test_warm_start_skips_invalid_records():
     assert store.get("missing-date") is None
 
 
+def test_warm_start_skips_degraded_records():
+    async def load():
+        return [
+            {
+                "strategy_id": "degraded",
+                "body": _degraded(),
+                "computed_at": ps.datetime.now(ps.UTC),
+            }
+        ]
+
+    store = ps.PerformanceSnapshotStore(interval=60, load=load)
+    asyncio.run(store.warm_start())
+    assert store.get("degraded") is None
+
+
 def test_degraded_body_never_replaces_good_snapshot():
     store = ps.PerformanceSnapshotStore(interval=60)
     assert not store.put("s", _degraded())

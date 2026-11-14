@@ -165,7 +165,7 @@ class PerformanceSnapshotStore:
                 strategy_id = record.get("strategy_id")
                 body = record.get("body")
                 computed_at = record.get("computed_at")
-                if not strategy_id or not isinstance(body, dict):
+                if not strategy_id or not isinstance(body, dict) or not is_good(body):
                     continue
                 if isinstance(computed_at, str):
                     try:
