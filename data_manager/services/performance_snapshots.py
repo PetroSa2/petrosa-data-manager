@@ -60,6 +60,8 @@ snapshot_refresh_active: ContextVar[bool] = ContextVar(
 
 Compute = Callable[[str], Awaitable[dict[str, Any]]]
 Seed = Callable[[], Awaitable[list[str]]]
+Persist = Callable[[str, dict[str, Any], datetime], Awaitable[None]]
+Load = Callable[[], Awaitable[list[dict[str, Any]]]]
 
 
 def interval_seconds() -> float:
@@ -122,7 +124,12 @@ class _Snapshot:
 class PerformanceSnapshotStore:
     """The last good performance response per strategy, and which strategies to refresh."""
 
-    def __init__(self, interval: float | None = None) -> None:
+    def __init__(
+        self,
+        interval: float | None = None,
+        persist: Persist | None = None,
+        load: Load | None = None,
+    ) -> None:
         self.interval = interval if interval is not None else interval_seconds()
         # dm#878: True from the first slow (warm-fallback) pass until a normal pass completes, so the
         # staleness and expiry horizons keep the slow cadence across a flip back to netting.
@@ -130,6 +137,9 @@ class PerformanceSnapshotStore:
         self.last_pass_seconds = 0.0
         self._snapshots: dict[str, _Snapshot] = {}
         self._requested: dict[str, float] = {}
+        self._persist = persist
+        self._load = load
+        self._loaded = False
 
     @property
     def cadence(self) -> float:
@@ -139,6 +149,44 @@ class PerformanceSnapshotStore:
 
     def note_request(self, strategy_id: str) -> None:
         self._requested[strategy_id] = monotonic()
+
+    def configure_persistence(self, persist: Persist | None, load: Load | None) -> None:
+        self._persist = persist
+        self._load = load
+        self._loaded = False
+
+    async def warm_start(self) -> None:
+        """Restore persisted snapshots once after a process restart."""
+        if self._loaded or self._load is None:
+            return
+        self._loaded = True
+        try:
+            for record in await self._load():
+                strategy_id = record.get("strategy_id")
+                body = record.get("body")
+                computed_at = record.get("computed_at")
+                if not strategy_id or not isinstance(body, dict) or not is_good(body):
+                    continue
+                if isinstance(computed_at, str):
+                    try:
+                        computed_at = datetime.fromisoformat(
+                            computed_at.replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        continue
+                if not isinstance(computed_at, datetime):
+                    continue
+                if computed_at.tzinfo is None:
+                    computed_at = computed_at.replace(tzinfo=UTC)
+                age = max(0.0, (datetime.now(UTC) - computed_at).total_seconds())
+                self._snapshots[str(strategy_id)] = _Snapshot(
+                    deepcopy(body), computed_at, monotonic() - age
+                )
+                self.note_request(str(strategy_id))
+        except Exception:
+            logger.warning(
+                "performance_snapshot: warm start load failed", exc_info=True
+            )
 
     def get(self, strategy_id: str) -> dict[str, Any] | None:
         """Return a copy of the snapshot with its age, or ``None`` when there is none yet.
@@ -275,6 +323,10 @@ class PerformanceSnapshotStore:
                 snapshot_refresh_active.reset(token)
             _raise_if_cancelling()
             kept = self.put(strategy_id, body)
+            if kept and self._persist is not None:
+                await self._persist(
+                    strategy_id, body, self._snapshots[strategy_id].computed_at
+                )
             outcomes[strategy_id] = "stored" if kept else "kept_previous"
             PERFORMANCE_SNAPSHOT_REFRESH.add(
                 1, {"strategy_id": strategy_id, "outcome": outcomes[strategy_id]}
@@ -326,6 +378,7 @@ class PerformanceSnapshotStore:
         completes the staleness horizons keep the slow cadence (no "expired" answer for an old snapshot).
         """
         last_pass: float | None = None
+        await self.warm_start()
         while True:
             _raise_if_cancelling()
             started = monotonic()
