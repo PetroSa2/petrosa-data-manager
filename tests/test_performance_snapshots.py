@@ -66,6 +66,46 @@ def test_warm_start_restores_age_and_expiry(monkeypatch):
     assert store.get("s")["metadata"]["snapshot_status"] == "expired"
 
 
+def test_refresh_persists_only_good_snapshots():
+    persisted: list[tuple[str, dict, object]] = []
+
+    async def persist(strategy_id, body, computed_at):
+        persisted.append((strategy_id, body, computed_at))
+
+    store = ps.PerformanceSnapshotStore(interval=60, persist=persist)
+    store.note_request("good")
+    store.note_request("bad")
+
+    async def compute(strategy_id: str) -> dict:
+        return _good() if strategy_id == "good" else _degraded()
+
+    assert asyncio.run(store.refresh_once(compute)) == {
+        "bad": "kept_previous",
+        "good": "stored",
+    }
+    assert [item[0] for item in persisted] == ["good"]
+    assert persisted[0][1] == _good()
+
+
+def test_warm_start_skips_invalid_records():
+    async def load():
+        return [
+            {
+                "strategy_id": "missing-body",
+                "body": None,
+                "computed_at": ps.datetime.now(ps.UTC),
+            },
+            {"strategy_id": "bad-date", "body": _good(), "computed_at": "not-a-date"},
+            {"strategy_id": "missing-date", "body": _good()},
+        ]
+
+    store = ps.PerformanceSnapshotStore(interval=60, load=load)
+    asyncio.run(store.warm_start())
+    assert store.get("missing-body") is None
+    assert store.get("bad-date") is None
+    assert store.get("missing-date") is None
+
+
 def test_degraded_body_never_replaces_good_snapshot():
     store = ps.PerformanceSnapshotStore(interval=60)
     assert not store.put("s", _degraded())
