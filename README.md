@@ -492,6 +492,15 @@ curl "http://localhost:8000/metrics"
 Emitted per persisted fill by the execution-events consumer (labels: `symbol`, `side`).
 Only fill events (`filled` / `partial_fill`) contribute; duplicate-key replays are not double-counted.
 
+All five counters are pre-initialized at `0` on startup (#889) so the series exist before
+the first fill: one unlabelled series plus one series per label pair, where `symbol` is a
+configured `SUPPORTED_PAIRS` value (or `other`) and `side` is `buy`, `sell` (or `other`),
+labelled with the constant `service` / `consumer` attributes. That is
+`1 + 3 * (len(SUPPORTED_PAIRS) + 1)` series per counter (28 with the default 8 pairs,
+140 across the five counters); a `petrosa_k8s` series allowlist should use these counts.
+A fill's `symbol` / `side` are clamped to those values at emission (`side` is
+case-normalized first), so a payload value can never add a free-form series.
+
 | Metric | Type | Meaning |
 |--------|------|---------|
 | `data_manager_execution_fills_total` | counter | Persisted fill events |

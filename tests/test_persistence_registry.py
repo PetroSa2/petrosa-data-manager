@@ -85,6 +85,13 @@ def test_config_rate_limits_uses_the_shared_timestamp_ttl_contract():
     assert policy.partial_filter_expression is None
 
 
+def test_performance_snapshots_uses_computed_at_ttl_contract():
+    policy = ttl_policy_for_collection("performance_snapshots")
+    assert policy is not None
+    assert policy.field == "computed_at"
+    assert policy.seconds > 0
+
+
 def test_scanner_finds_names_passed_to_collection_helpers(tmp_path: Path):
     module = tmp_path / "repository.py"
     module.write_text(
