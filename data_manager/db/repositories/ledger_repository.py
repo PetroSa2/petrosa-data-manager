@@ -388,6 +388,14 @@ class LedgerRepository(BaseRepository):
             for fill in day_fills:
                 symbol = str(fill.get("symbol", "unknown"))
                 fills_by_symbol.setdefault(symbol, []).append(fill)
+            symbol_exchange = {
+                symbol: sum(
+                    (Decimal(str(fill.get("realized_pnl", 0)))
+                     + Decimal(str(fill.get("commission", 0))))
+                    for fill in symbol_fills
+                )
+                for symbol, symbol_fills in fills_by_symbol.items()
+            }
             symbol_tolerances = {
                 symbol: calculate_tolerance(
                     symbol_fills,
@@ -430,6 +438,17 @@ class LedgerRepository(BaseRepository):
                     if row
                     else "0",
                     "unexplained": str(variance),
+                    "attribution": {
+                        "by_symbol": {
+                            symbol: {
+                                "exchange_realized_and_fees": str(amount),
+                                "ledger_realized_and_fees": None,
+                                "unexplained": None,
+                            }
+                            for symbol, amount in symbol_exchange.items()
+                        },
+                        "method": "exchange fills grouped by symbol; ledger daily P&L is not symbol-labelled",
+                    },
                     "cumulative_variance": str(cumulative),
                     "tolerance": {
                         "daily": tolerance,
