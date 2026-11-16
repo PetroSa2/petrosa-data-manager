@@ -482,6 +482,26 @@ async def test_start_subscribes_to_configured_subject(
 
 
 @pytest.mark.asyncio
+async def test_start_preinitializes_fill_counters(
+    execution_events_consumer, mock_nats_client_async, monkeypatch
+):
+    import data_manager.consumer.execution_events_consumer as execution_events_consumer_module
+
+    mock_nats_client_async.subscribe.return_value = MagicMock()
+    execution_events_consumer._owns_nats_client = False
+    calls = []
+    monkeypatch.setattr(
+        execution_events_consumer_module,
+        "preinitialize_fill_counters",
+        lambda: calls.append(True),
+    )
+    started = await execution_events_consumer.start()
+    assert started is True
+    assert calls == [True]
+    await execution_events_consumer.stop()
+
+
+@pytest.mark.asyncio
 async def test_start_returns_false_when_subscribe_fails(
     execution_events_consumer, mock_nats_client_async
 ):
@@ -651,3 +671,113 @@ async def test_fill_without_pnl_emits_count_but_no_win_loss(
     mocks["execution_fill_pnl_total"].add.assert_not_called()
     mocks["execution_fill_wins_total"].add.assert_not_called()
     mocks["execution_fill_losses_total"].add.assert_not_called()
+
+
+# --- #889: fill counters pre-initialized on a fresh registry -----------------
+
+
+def test_fill_counters_preinitialized_on_fresh_registry(monkeypatch):
+    """Every bounded fill counter exists at 0 before the first fill (#889)."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    # conftest disables the OTel SDK for the suite; this test needs a real one.
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+
+    import data_manager.consumer.execution_events_consumer as mod
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    try:
+        points_by_name = _assert_preinitialized(provider, reader, mod)
+    finally:
+        provider.shutdown()
+
+    assert points_by_name
+
+
+def _assert_preinitialized(provider, reader, mod):
+    import constants
+
+    meter = provider.get_meter("test.fresh-registry")
+    counters = mod._create_fill_counters(meter)
+
+    applied = mod.preinitialize_fill_counters(counters)
+
+    symbols = list(
+        dict.fromkeys(
+            pair.strip() for pair in constants.SUPPORTED_PAIRS if pair.strip()
+        )
+    )
+    assert applied == 1 + 3 * (len(symbols) + 1)
+
+    data = reader.get_metrics_data()
+    points_by_name = {}
+    for resource_metrics in data.resource_metrics:
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
+                points_by_name[metric.name] = metric.data.data_points
+
+    assert set(points_by_name) == {
+        name for name, _description in mod._FILL_COUNTER_SPECS
+    }
+    expected = {(None, None)}
+    expected.update(
+        (symbol, side)
+        for symbol in [*symbols, "other"]
+        for side in ("buy", "sell", "other")
+    )
+
+    for name, points in points_by_name.items():
+        seen = {
+            (point.attributes.get("symbol"), point.attributes.get("side"))
+            for point in points
+        }
+        assert seen == expected, name
+        assert all(point.value == 0 for point in points), name
+        for point in points:
+            if point.attributes.get("symbol") is not None:
+                assert point.attributes.get("consumer") == "execution", name
+            else:
+                assert point.attributes == {}, name
+
+    return points_by_name
+
+
+def test_preinitialized_fill_label_set_is_bounded():
+    """Only configured symbols and buy/sell sides are pre-created (#889)."""
+    import data_manager.consumer.execution_events_consumer as mod
+
+    label_sets = mod._fill_label_sets()
+
+    sides = {attrs.get("side") for attrs in label_sets}
+    assert sides == {None, "buy", "sell", "other"}
+    symbols = {attrs.get("symbol") for attrs in label_sets}
+    assert None in symbols
+    assert symbols - {None, "other"} == set(mod.constants.SUPPORTED_PAIRS)
+
+
+@pytest.mark.asyncio
+async def test_fill_metrics_clamp_unknown_symbol_and_side(
+    execution_events_consumer, monkeypatch
+):
+    """A payload symbol/side outside the bounded set lands in `other` (#889)."""
+    mocks = _patch_business_metrics(monkeypatch)
+    msg = _build_msg(_exec_payload(symbol="DOGEUSDT", side="long", pnl=1.0))
+    await execution_events_consumer._process_message(msg)
+
+    attrs = mocks["execution_fills_total"].add.call_args.args[1]
+    assert attrs["symbol"] == "other"
+    assert attrs["side"] == "other"
+
+
+@pytest.mark.asyncio
+async def test_fill_metrics_normalize_side_case(execution_events_consumer, monkeypatch):
+    """An exchange-style uppercase side maps onto the bounded label (#889)."""
+    mocks = _patch_business_metrics(monkeypatch)
+    msg = _build_msg(_exec_payload(side="SELL", pnl=-1.0))
+    await execution_events_consumer._process_message(msg)
+
+    attrs = mocks["execution_fills_total"].add.call_args.args[1]
+    assert attrs["symbol"] == "BTCUSDT"
+    assert attrs["side"] == "sell"

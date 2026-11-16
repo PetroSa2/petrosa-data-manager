@@ -6,6 +6,7 @@ import time
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -227,7 +228,9 @@ async def test_routes_delegate_to_repository(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tieout_routes_publish_metrics_and_validate_range(monkeypatch):
+async def test_tieout_routes_leave_readiness_metrics_untouched_and_validate_range(
+    monkeypatch,
+):
     class Repo:
         def tieout(self, first, last):
             return {"days": [{"unexplained": "1.25"}], "cumulative_variance": "1.25"}
@@ -240,8 +243,17 @@ async def test_tieout_routes_publish_metrics_and_validate_range(monkeypatch):
             }
 
     monkeypatch.setattr(ledger, "_repo", lambda: Repo())
+    variance = MagicMock()
+    cumulative = MagicMock()
+    last_complete_day = MagicMock()
+    monkeypatch.setattr(ledger, "TIEOUT_VARIANCE", variance)
+    monkeypatch.setattr(ledger, "TIEOUT_CUMULATIVE", cumulative)
+    monkeypatch.setattr(ledger, "TIEOUT_LAST_COMPLETE_DAY", last_complete_day)
     result = await ledger.get_tieout(date(2026, 9, 30), date(2026, 9, 30))
     assert result["cumulative_variance"] == "1.25"
+    variance.set.assert_not_called()
+    cumulative.set.assert_not_called()
+    last_complete_day.set.assert_not_called()
     assert (await ledger.get_positions_tieout())["phantom_rows"] == []
     with pytest.raises(HTTPException) as error:
         await ledger.get_tieout(date(2026, 10, 2), date(2026, 10, 1))

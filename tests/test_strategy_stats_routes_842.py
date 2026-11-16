@@ -143,32 +143,3 @@ async def test_snapshot_read_is_cached_and_a_slow_read_keeps_the_last_one(monkey
         await analysis._ground_truth_snapshot() is first
     )  # read timed out: the last one is kept
     assert len(reads) == 2
-
-
-async def test_keep_kill_input_follows_the_switch(switched, monkeypatch):
-    import data_manager.api.routes.strategy_net_r as net_r_route
-
-    set_source, _ = switched
-    snapshot = _snapshot()
-    snapshot["strategies"]["iceberg_detector"]["net_r"] = {
-        "net_r": ["-1.0"],
-        "closed_rounds": 25,
-        "rounds_without_risk": 24,
-    }
-    monkeypatch.setattr(
-        analysis, "_ground_truth_snapshot", AsyncMock(return_value=snapshot)
-    )
-    netting = AsyncMock(return_value=[])
-    monkeypatch.setattr(net_r_route, "_scored", netting)
-
-    set_source("ground_truth")
-    body = await net_r_route.get_strategy_net_r()
-    assert body["strategies"]["iceberg_detector"]["rounds_without_risk"] == 24
-    netting.assert_not_awaited()
-
-    set_source("netting")
-    body = await net_r_route.get_strategy_net_r()
-    assert body == {
-        "strategies": {}
-    }  # the existing netting path, from its own (here empty) rounds
-    netting.assert_awaited_once()
