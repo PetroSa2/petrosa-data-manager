@@ -329,23 +329,6 @@ async def get_tieout(from_: date = Query(..., alias="from"), to: date = Query(..
         raise HTTPException(status_code=422, detail="invalid tie-out range")
     try:
         result = await _read_tieout((from_, to), from_, to)
-        variances = [Decimal(day["unexplained"]) for day in result["days"]]
-        TIEOUT_VARIANCE.set(
-            float(variances[-1]) if variances else 0, {"window": "latest"}
-        )
-        TIEOUT_VARIANCE.set(
-            float(max(variances, key=lambda value: abs(value), default=Decimal("0"))),
-            {"window": "worst_in_window"},
-        )
-        TIEOUT_CUMULATIVE.set(float(result["cumulative_variance"]))
-        if variances:
-            TIEOUT_LAST_COMPLETE_DAY.set(
-                datetime.combine(
-                    min(to, datetime.now(UTC).date() - timedelta(days=1)),
-                    datetime.min.time(),
-                    UTC,
-                ).timestamp()
-            )
         return result
     except HTTPException:
         raise

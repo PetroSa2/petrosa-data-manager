@@ -71,26 +71,119 @@ execution_processing_time = _meter.create_histogram(
 # querying MongoDB through the /api/v1/trades API on every panel refresh.
 _FILL_EVENT_TYPES = ("filled", "partial_fill")
 
-execution_fills_total = _meter.create_counter(
-    "data_manager_execution_fills_total",
-    description="Total execution fill events persisted (filled / partial_fill)",
+_FILL_COUNTER_SPECS = (
+    (
+        "data_manager_execution_fills_total",
+        "Total execution fill events persisted (filled / partial_fill)",
+    ),
+    (
+        "data_manager_execution_fill_pnl_total",
+        "Cumulative realized PnL across persisted fills (quote currency)",
+    ),
+    (
+        "data_manager_execution_fill_fee_total",
+        "Cumulative trading fees across persisted fills",
+    ),
+    (
+        "data_manager_execution_fill_wins_total",
+        "Persisted fills with positive realized PnL (win)",
+    ),
+    (
+        "data_manager_execution_fill_losses_total",
+        "Persisted fills with negative realized PnL (loss)",
+    ),
 )
-execution_fill_pnl_total = _meter.create_counter(
-    "data_manager_execution_fill_pnl_total",
-    description="Cumulative realized PnL across persisted fills (quote currency)",
+
+
+def _create_fill_counters(meter: Any) -> tuple[Any, ...]:
+    return tuple(
+        meter.create_counter(name, description=description)
+        for name, description in _FILL_COUNTER_SPECS
+    )
+
+
+(
+    execution_fills_total,
+    execution_fill_pnl_total,
+    execution_fill_fee_total,
+    execution_fill_wins_total,
+    execution_fill_losses_total,
+) = _create_fill_counters(_meter)
+
+# #889: a labelled OTel counter only appears on its first increment, so between
+# a restart and the first fill there was no series at all and the
+# `data-manager-no-execution-fills` alert could not tell "no fills" from
+# "metric missing". Worse, `increase()` over a series first scraped at 1 reads
+# 0, hiding the first fill of every label set. Pre-initializing the bounded
+# label set at 0 fixes both.
+#
+# The label set is bounded on purpose: a fill's `symbol` and `side` are
+# clamped to configured values at emission, so neither can add a free-form
+# series. `symbol` is one of the configured `SUPPORTED_PAIRS` (or `other` for
+# a symbol outside that list) and `side` is one of `buy` / `sell` (or `other`).
+# The per-fill attributes also carry the constant `service` / `consumer`
+# labels. One unlabelled series is pre-created too, so
+# `data_manager_execution_fills_total` itself exists however the labelled
+# series are queried. Series per counter: `1 + 3 * (len(SUPPORTED_PAIRS) + 1)`
+# (28 with the default 8 pairs), i.e. 140 for the five counters. A
+# PetroSa2/petrosa_k8s series-allowlist entry should use these counts; keep
+# this in sync with README.md.
+_FILL_SIDES = ("buy", "sell")
+_OTHER_LABEL = "other"
+_FILL_COUNTERS = (
+    execution_fills_total,
+    execution_fill_pnl_total,
+    execution_fill_fee_total,
+    execution_fill_wins_total,
+    execution_fill_losses_total,
 )
-execution_fill_fee_total = _meter.create_counter(
-    "data_manager_execution_fill_fee_total",
-    description="Cumulative trading fees across persisted fills",
-)
-execution_fill_wins_total = _meter.create_counter(
-    "data_manager_execution_fill_wins_total",
-    description="Persisted fills with positive realized PnL (win)",
-)
-execution_fill_losses_total = _meter.create_counter(
-    "data_manager_execution_fill_losses_total",
-    description="Persisted fills with negative realized PnL (loss)",
-)
+
+
+def _supported_symbols() -> list[str]:
+    return list(
+        dict.fromkeys(
+            pair.strip() for pair in constants.SUPPORTED_PAIRS if pair.strip()
+        )
+    )
+
+
+def _bounded_symbol(symbol: Any) -> str:
+    return (
+        symbol
+        if isinstance(symbol, str) and symbol in _supported_symbols()
+        else _OTHER_LABEL
+    )
+
+
+def _bounded_side(side: Any) -> str:
+    bounded = side.strip().lower() if isinstance(side, str) else ""
+    return bounded if bounded in _FILL_SIDES else _OTHER_LABEL
+
+
+def _fill_label_sets() -> list[dict[str, str]]:
+    """The bounded fill-counter label sets: the unlabelled series first."""
+    symbols = [*_supported_symbols(), _OTHER_LABEL]
+    sides = (*_FILL_SIDES, _OTHER_LABEL)
+    label_sets: list[dict[str, str]] = [{}]
+    for symbol in symbols:
+        for side in sides:
+            label_sets.append({**_METRIC_ATTRS, "symbol": symbol, "side": side})
+    return label_sets
+
+
+def preinitialize_fill_counters(counters: Any = _FILL_COUNTERS) -> int:
+    """Create every bounded fill-counter series at 0 (#889).
+
+    Returns the number of label sets applied to each counter.
+    """
+    label_sets = _fill_label_sets()
+    for counter in counters:
+        for attrs in label_sets:
+            counter.add(0, attrs)
+    return len(label_sets)
+
+
+preinitialize_fill_counters()
 
 
 def _emit_fill_business_metrics(event: "ExecutionEvent") -> None:
@@ -103,11 +196,11 @@ def _emit_fill_business_metrics(event: "ExecutionEvent") -> None:
     if event.event_type not in _FILL_EVENT_TYPES:
         return
 
-    attrs = {**_METRIC_ATTRS}
-    if event.symbol:
-        attrs["symbol"] = event.symbol
-    if event.side:
-        attrs["side"] = event.side
+    attrs = {
+        **_METRIC_ATTRS,
+        "symbol": _bounded_symbol(event.symbol),
+        "side": _bounded_side(event.side),
+    }
 
     execution_fills_total.add(1, attrs)
 
@@ -167,6 +260,10 @@ class ExecutionEventsConsumer:
 
     async def start(self) -> bool:
         try:
+            # #889: instruments created at import are proxies when the meter
+            # provider is configured later, so the zero-valued series are
+            # registered here again, on the real meter, before any fill.
+            preinitialize_fill_counters()
             logger.info(
                 "Starting execution events consumer", extra={"subject": self.subject}
             )

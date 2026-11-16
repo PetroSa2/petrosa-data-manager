@@ -193,6 +193,29 @@ async def lifespan(app: FastAPI):
 
     worker = asyncio.create_task(mysql_copy_worker())
 
+    async def load_performance_snapshots() -> list[dict]:
+        adapter = getattr(db_manager, "mongodb_adapter", None)
+        if adapter is None:
+            return []
+        await adapter.ensure_indexes("performance_snapshots")
+        cursor = adapter.db["performance_snapshots"].find({})
+        return await cursor.to_list(length=None)
+
+    async def persist_performance_snapshot(strategy_id, body, computed_at) -> None:
+        adapter = getattr(db_manager, "mongodb_adapter", None)
+        if adapter is None:
+            return
+        await adapter.ensure_indexes("performance_snapshots")
+        await adapter.db["performance_snapshots"].replace_one(
+            {"strategy_id": strategy_id},
+            {"strategy_id": strategy_id, "body": body, "computed_at": computed_at},
+            upsert=True,
+        )
+
+    performance_snapshots.store.configure_persistence(
+        persist_performance_snapshot, load_performance_snapshots
+    )
+
     async def netting_is_fallback_only() -> bool:
         """dm#878: the netting snapshots are only a warm fallback while CIO is served exchange truth."""
         from data_manager.services import strategy_stats_source
