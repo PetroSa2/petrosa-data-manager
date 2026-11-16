@@ -20,9 +20,8 @@ SUPERSEDED = {
 }
 
 # Files that never ran on 5.7 and are not replaced yet. Each one has its own ticket; remove the entry with the fix.
-KNOWN_UNFIXED = {
-    "003_klines_drop_redundant_index.sql": "PetroSa2/petrosa-data-manager#882",
-}
+# 003 was fixed on main by PetroSa2/petrosa-data-manager#882.
+KNOWN_UNFIXED: dict[str, str] = {}
 
 # Syntax MySQL 5.7 rejects (MariaDB extensions or MySQL 8.0 additions).
 NOT_ON_MYSQL_57 = {
