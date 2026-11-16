@@ -900,6 +900,10 @@ class MongoDBAdapter(BaseAdapter):
                         name="strategy_id_timestamp_desc",
                     )
                 ]
+            elif collection == "performance_snapshots":
+                indexes = [
+                    IndexModel([("strategy_id", ASCENDING)], unique=True),
+                ]
             elif collection == "cio_auto_resume_registry":
                 indexes = [IndexModel([("strategy_id", ASCENDING)], unique=True)]
             elif collection == "cio_decisions":

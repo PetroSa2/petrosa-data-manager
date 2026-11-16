@@ -171,6 +171,9 @@ REGISTRY: dict[str, PersistenceSpec] = {
     "strategy_stats_snapshots": transient_only(
         reason="per-strategy stats precomputed from the exchange ground truth (#842); recomputable"
     ),
+    "performance_snapshots": transient_only(
+        reason="per-strategy netting performance snapshots; recomputable"
+    ),
     "trading_configs_global": transient_only(
         reason="runtime configuration; managed by deployment"
     ),
@@ -378,6 +381,8 @@ def ttl_policy_for_collection(collection: str) -> TTLPolicy | None:
     if collection == "strategy_stats_snapshots":
         # Longer than two refresh cycles (15 min each), so staleness is decided by the serving logic
         # ("unavailable" after two missed cycles), never by a document expiring underneath it (#842).
+        return TTLPolicy("computed_at", STRATEGY_STATS_SNAPSHOT_TTL_SECONDS)
+    if collection == "performance_snapshots":
         return TTLPolicy("computed_at", STRATEGY_STATS_SNAPSHOT_TTL_SECONDS)
     if collection == "config_rate_limits":
         return TTLPolicy(

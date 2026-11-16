@@ -49,6 +49,24 @@ class TestExtractDbName:
         assert a.db_name == "petrosa_data_manager"
 
 
+class TestPerformanceSnapshotIndexes:
+    @pytest.mark.asyncio
+    async def test_ensure_indexes_creates_unique_strategy_index(self, adapter):
+        coll = MagicMock()
+        coll.index_information = AsyncMock(return_value={})
+        coll.create_indexes = AsyncMock()
+        adapter.db.__getitem__ = MagicMock(return_value=coll)
+
+        await adapter.ensure_indexes("performance_snapshots")
+
+        indexes = coll.create_indexes.call_args.args[0]
+        strategy_indexes = [
+            index for index in indexes if index.document["key"] == {"strategy_id": 1}
+        ]
+        assert len(strategy_indexes) == 1
+        assert strategy_indexes[0].document["unique"] is True
+
+
 class TestConnectDisconnect:
     def test_connect_initializes_client(self):
         with patch(

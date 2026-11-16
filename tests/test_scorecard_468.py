@@ -381,6 +381,12 @@ def test_the_period_filters_by_close_time(client):
     assert body["groups"]["A"]["n_trades"] == 1
 
 
+def test_complete_scorecard_has_no_source_errors(client):
+    body = client.get("/analysis/scorecard").json()
+    assert body["status"] == "complete"
+    assert body["source_errors"] == {}
+
+
 def test_strategy_net_r_serves_the_cio_contract(client):
     body = client.get("/api/v1/analysis/strategy-net-r").json()
     a = body["strategies"]["A"]
@@ -466,6 +472,45 @@ async def test_partial_scorecard_source_failures_are_incomplete(monkeypatch):
     assert result["status"] == "incomplete"
     assert set(result["source_errors"]) == {"positions", "cio_decisions", "funding"}
     assert result["funding"]["error"] == "funding read failed"
+
+
+@pytest.mark.asyncio
+async def test_scorecard_cio_decisions_timeout_has_a_real_cause(monkeypatch):
+    rows = _round_rows("A", 100, 110, 0, position_id="p1", decision_id="d1")
+
+    async def fills(end):
+        return rows
+
+    async def ok_stops(ids):
+        return {}
+
+    async def timeout_decisions(ids):
+        raise TimeoutError()
+
+    async def ok_funding(first, last):
+        return {}, set()
+
+    monkeypatch.setattr(route, "_load_fills", fills)
+    monkeypatch.setattr(route, "_load_stops", ok_stops)
+    monkeypatch.setattr(route, "_load_decisions", timeout_decisions)
+    monkeypatch.setattr(route, "_load_funding", ok_funding)
+    api_module.db_manager = MagicMock()
+    try:
+        result = await route.get_scorecard(from_=None, to=None, group_by="strategy")
+    finally:
+        api_module.db_manager = None
+
+    assert result["status"] == "incomplete"
+    cause = result["source_errors"]["cio_decisions"]
+    assert cause  # non-empty
+    assert "timed out" in cause
+
+
+def test_source_cause_is_never_empty():
+    timeout_cause = route._source_cause(TimeoutError())
+    assert timeout_cause and "timed out" in timeout_cause
+    assert route._source_cause(RuntimeError("boom")) == "boom"
+    assert route._source_cause(ValueError()) == "ValueError"
 
 
 @pytest.mark.asyncio
