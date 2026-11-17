@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from data_manager.api.routes import ledger
+from data_manager.db.repositories import ledger_repository
 
 
 def daily_payload(**overrides):
@@ -722,3 +723,43 @@ def test_tieout_marks_missing_day_incomplete_when_sources_are_nonempty():
 
     assert result["incomplete"] is True
     assert result["days"][-1]["status"] == "incomplete"
+
+
+def test_tieout_includes_symbol_attribution_for_exchange_fills(monkeypatch):
+    monkeypatch.setattr(
+        ledger_repository,
+        "_exchange_info",
+        SimpleNamespace(get=lambda _symbol: None),
+    )
+    result = FakeLedgerRepository(
+        [
+            Result(
+                [
+                    {
+                        "day": date(2026, 9, 30),
+                        "realized_pnl": 3,
+                        "commission": 1,
+                        "funding_fee": 0,
+                        "other_income_total": 0,
+                        "is_final": True,
+                    }
+                ]
+            ),
+            Result([{"date": date(2026, 9, 30), "daily_pnl": 0}]),
+            Result(
+                [
+                    {
+                        "symbol": "BTCUSDT",
+                        "quantity": 1,
+                        "commission": 0.25,
+                        "commission_asset": "USDT",
+                        "trade_time": datetime(2026, 9, 30, 12),
+                        "realized_pnl": 3,
+                    }
+                ]
+            ),
+        ]
+    ).tieout(date(2026, 9, 30), date(2026, 9, 30))
+
+    attribution = result["days"][0]["attribution"]["by_symbol"]["BTCUSDT"]
+    assert attribution["exchange_realized_and_fees"] == "3.25"
