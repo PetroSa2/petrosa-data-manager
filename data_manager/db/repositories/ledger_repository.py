@@ -390,8 +390,10 @@ class LedgerRepository(BaseRepository):
                 fills_by_symbol.setdefault(symbol, []).append(fill)
             symbol_exchange = {
                 symbol: sum(
-                    (Decimal(str(fill.get("realized_pnl", 0)))
-                     + Decimal(str(fill.get("commission", 0))))
+                    (
+                        Decimal(str(fill.get("realized_pnl", 0)))
+                        + Decimal(str(fill.get("commission", 0)))
+                    )
                     for fill in symbol_fills
                 )
                 for symbol, symbol_fills in fills_by_symbol.items()
