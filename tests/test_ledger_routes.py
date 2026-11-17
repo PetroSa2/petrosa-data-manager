@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from data_manager.api.routes import ledger
+from data_manager.db.repositories import ledger_repository
 
 
 def daily_payload(**overrides):
@@ -724,7 +725,12 @@ def test_tieout_marks_missing_day_incomplete_when_sources_are_nonempty():
     assert result["days"][-1]["status"] == "incomplete"
 
 
-def test_tieout_includes_symbol_attribution_for_exchange_fills():
+def test_tieout_includes_symbol_attribution_for_exchange_fills(monkeypatch):
+    monkeypatch.setattr(
+        ledger_repository,
+        "_exchange_info",
+        SimpleNamespace(get=lambda _symbol: None),
+    )
     result = FakeLedgerRepository(
         [
             Result(
