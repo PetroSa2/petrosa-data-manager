@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from datetime import UTC, date, datetime, timezone
 from functools import wraps
@@ -49,15 +50,46 @@ _COPY_BACKOFF_MAX_SECONDS = 300
 _VALID_POSITION_STATUSES = frozenset(
     {"open", "partially_closed", "closed", "superseded"}
 )
-_DROPPED_FIELD_ALLOWLIST = frozenset(
-    {
-        "entry_commission",
-        "pnl_unknown",
-        "fee_status",
-        "closed_by_strategy_id",
-        "status",
-    }
-)
+# PetroSa2/petrosa-data-manager#880: tradeengine sends these fields alongside the MySQL column that already holds the
+# same value (checked against production rows, 2026-11-07). They are not lost when that column exists and the
+# document carries it, so they are not counted as dropped. Without the target value they are dropped and counted.
+_ALIASED_FIELDS: dict[str, str] = {
+    "order_id": "entry_order_id",
+    "trade_id": "entry_trade_ids",
+    "commission": "commission_total",
+    "fee_asset": "commission_asset",
+    "avg_price": "entry_price",
+    "last_update": "updated_at",
+}
+# Every dropped field is named on the counter (#880: no hiding place), with a cap on distinct names so a producer
+# sending arbitrary keys cannot exhaust the Grafana series budget. Labelled fallback, env-overridable.
+_DROPPED_FIELD_NAME_CAP = int(os.getenv("TRADING_STATE_DROPPED_FIELD_NAME_CAP", "32"))
+_DROPPED_FIELD_NAMES: set[str] = set()
+_FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _dropped_field_label(field: str) -> str:
+    if field in _DROPPED_FIELD_NAMES:
+        return field
+    if _FIELD_NAME.match(field) and len(_DROPPED_FIELD_NAMES) < _DROPPED_FIELD_NAME_CAP:
+        _DROPPED_FIELD_NAMES.add(field)
+        return field
+    return "other_overflow"
+
+
+def _dropped_fields(document: dict[str, Any], allowed: set[str]) -> set[str]:
+    """Fields of the document MySQL cannot store: no column, and not an alias whose target value is copied."""
+    dropped = set()
+    for field in set(TradingStateRepository._public(document)) - allowed:
+        target = _ALIASED_FIELDS.get(field)
+        if (
+            target is not None
+            and target in allowed
+            and document.get(target) is not None
+        ):
+            continue
+        dropped.add(field)
+    return dropped
 
 
 class TradingDocument(BaseModel):
@@ -274,16 +306,9 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
     for attempt in range(_COPY_RETRIES):
         try:
             allowed = set(adapter.get_column_names(table))
-            dropped = set(TradingStateRepository._public(document)) - allowed
-            for field in dropped:
+            for field in _dropped_fields(document, allowed):
                 TRADING_STATE_MYSQL_FIELDS_DROPPED.add(
-                    1,
-                    {
-                        "table": table,
-                        "field": field
-                        if field in _DROPPED_FIELD_ALLOWLIST
-                        else "other",
-                    },
+                    1, {"table": table, "field": _dropped_field_label(field)}
                 )
             data = {k: v for k, v in document.items() if k in allowed}
             key = "date" if table == "daily_pnl" else "position_id"
