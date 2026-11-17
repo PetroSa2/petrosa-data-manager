@@ -1,3 +1,5 @@
+-- SUPERSEDED on MySQL 5.7 by 020_trading_state_columns_mysql57.sql (PetroSa2/petrosa-data-manager#880): do not run.
+-- ADD COLUMN IF NOT EXISTS below is MariaDB syntax; production MySQL 5.7 rejects it, so these columns never existed.
 -- PetroSa2/petrosa-data-manager#464. Operator-only, additive and idempotent.
 -- Capture SHOW CREATE TABLE positions and execution_events before applying.
 SET @positions_status_sql = IF(

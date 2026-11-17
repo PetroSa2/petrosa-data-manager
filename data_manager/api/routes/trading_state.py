@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from datetime import UTC, date, datetime, timezone
 from functools import wraps
@@ -17,6 +18,7 @@ from pymongo.errors import DuplicateKeyError
 
 import data_manager.api.app as api_module
 from data_manager.db.repositories.trading_state_repository import (
+    QUARANTINE_COOLOFF_SECONDS,
     TradingStateConflictError,
     TradingStateRepository,
 )
@@ -24,6 +26,7 @@ from data_manager.observability_metrics import (
     TRADING_STATE_DEAD_LETTER_COUNT,
     TRADING_STATE_MYSQL_COPY_FAILED,
     TRADING_STATE_MYSQL_FIELDS_DROPPED,
+    TRADING_STATE_QUARANTINED_DOCUMENTS,
     TRADING_STATE_RECOVERY_EVENTS,
 )
 
@@ -49,15 +52,46 @@ _COPY_BACKOFF_MAX_SECONDS = 300
 _VALID_POSITION_STATUSES = frozenset(
     {"open", "partially_closed", "closed", "superseded"}
 )
-_DROPPED_FIELD_ALLOWLIST = frozenset(
-    {
-        "entry_commission",
-        "pnl_unknown",
-        "fee_status",
-        "closed_by_strategy_id",
-        "status",
-    }
-)
+# PetroSa2/petrosa-data-manager#880: tradeengine sends these fields alongside the MySQL column that already holds the
+# same value (checked against production rows, 2026-11-07). They are not lost when that column exists and the
+# document carries it, so they are not counted as dropped. Without the target value they are dropped and counted.
+_ALIASED_FIELDS: dict[str, str] = {
+    "order_id": "entry_order_id",
+    "trade_id": "entry_trade_ids",
+    "commission": "commission_total",
+    "fee_asset": "commission_asset",
+    "avg_price": "entry_price",
+    "last_update": "updated_at",
+}
+# Every dropped field is named on the counter (#880: no hiding place), with a cap on distinct names so a producer
+# sending arbitrary keys cannot exhaust the Grafana series budget. Labelled fallback, env-overridable.
+_DROPPED_FIELD_NAME_CAP = int(os.getenv("TRADING_STATE_DROPPED_FIELD_NAME_CAP", "32"))
+_DROPPED_FIELD_NAMES: set[str] = set()
+_FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _dropped_field_label(field: str) -> str:
+    if field in _DROPPED_FIELD_NAMES:
+        return field
+    if _FIELD_NAME.match(field) and len(_DROPPED_FIELD_NAMES) < _DROPPED_FIELD_NAME_CAP:
+        _DROPPED_FIELD_NAMES.add(field)
+        return field
+    return "other_overflow"
+
+
+def _dropped_fields(document: dict[str, Any], allowed: set[str]) -> set[str]:
+    """Fields of the document MySQL cannot store: no column, and not an alias whose target value is copied."""
+    dropped = set()
+    for field in set(TradingStateRepository._public(document)) - allowed:
+        target = _ALIASED_FIELDS.get(field)
+        if (
+            target is not None
+            and target in allowed
+            and document.get(target) is not None
+        ):
+            continue
+        dropped.add(field)
+    return dropped
 
 
 class TradingDocument(BaseModel):
@@ -136,8 +170,58 @@ def _record_task_failure(reason: str = "replay_error") -> None:
     )
 
 
+# petrosa-data-manager#881: quarantined copies are released back to the queue in bounded batches, at most once per
+# interval. If anything was quarantined again since the last release, releasing pauses for the cool-off, so a recurring
+# error re-quarantines one batch instead of the whole backlog. Labelled fallbacks, env-overridable.
+_RELEASE_BATCH = int(os.getenv("TRADING_STATE_QUARANTINE_RELEASE_BATCH", "100"))
+_RELEASE_INTERVAL_SECONDS = float(
+    os.getenv("TRADING_STATE_QUARANTINE_RELEASE_INTERVAL_SECONDS", "60")
+)
+_release_state: dict[str, Any] = {
+    "last_release_at": 0.0,
+    "quarantined_at_release": None,
+    "paused_until": 0.0,
+}
+
+
+async def _release_quarantines(repo: TradingStateRepository) -> None:
+    now = asyncio.get_running_loop().time()
+    if now - _release_state["last_release_at"] < _RELEASE_INTERVAL_SECONDS:
+        return
+    _release_state["last_release_at"] = now
+    seen = _release_state["quarantined_at_release"]
+    if seen is not None and _copy_state.get("quarantined", 0) > seen:
+        _release_state["paused_until"] = now + QUARANTINE_COOLOFF_SECONDS
+        _release_state["quarantined_at_release"] = None
+        logger.warning(
+            "trading_state_mysql_quarantine_release_paused: copies were quarantined again after the last "
+            "release; next release in %.0f s",
+            QUARANTINE_COOLOFF_SECONDS,
+        )
+    for table in ("positions", "daily_pnl"):
+        quarantined = await repo.quarantined_count(table)
+        if quarantined and now >= _release_state["paused_until"]:
+            released = await repo.release_due_quarantines(table, _RELEASE_BATCH)
+            if released:
+                _release_state["quarantined_at_release"] = _copy_state.get(
+                    "quarantined", 0
+                )
+                TRADING_STATE_RECOVERY_EVENTS.add(
+                    released, {"outcome": "released", "operation": table}
+                )
+                logger.info(
+                    "trading_state_mysql_quarantine_released table=%s released=%d remaining=%d",
+                    table,
+                    released,
+                    quarantined - released,
+                )
+                quarantined -= released
+        TRADING_STATE_QUARANTINED_DOCUMENTS.set(quarantined, {"table": table})
+
+
 async def _replay_mysql_copies() -> None:
     repo = _repo()
+    await _release_quarantines(repo)
     for table in ("positions", "daily_pnl"):
         for document in await repo.pending_copies(table, _COPY_BATCH_SIZE):
             if await asyncio.to_thread(_copy_to_mysql, table, document):
@@ -271,19 +355,21 @@ def _copy_to_mysql(operation: str, document: dict[str, Any]) -> bool:
         _record_failure(operation, "invalid_value")
         _dead_letter(adapter, operation, document, "invalid_value")
         return False
+    if (
+        table == "positions"
+        and document.get("created_at") is None
+        and document.get("entry_time") is not None
+    ):
+        # petrosa-data-manager#881: MySQL positions.created_at defaults to CURRENT_TIMESTAMP, so a historic position
+        # without created_at (pre-#464 documents) would read as created on the day it is copied. Its entry time is
+        # when it was created.
+        document = {**document, "created_at": document["entry_time"]}
     for attempt in range(_COPY_RETRIES):
         try:
             allowed = set(adapter.get_column_names(table))
-            dropped = set(TradingStateRepository._public(document)) - allowed
-            for field in dropped:
+            for field in _dropped_fields(document, allowed):
                 TRADING_STATE_MYSQL_FIELDS_DROPPED.add(
-                    1,
-                    {
-                        "table": table,
-                        "field": field
-                        if field in _DROPPED_FIELD_ALLOWLIST
-                        else "other",
-                    },
+                    1, {"table": table, "field": _dropped_field_label(field)}
                 )
             data = {k: v for k, v in document.items() if k in allowed}
             key = "date" if table == "daily_pnl" else "position_id"

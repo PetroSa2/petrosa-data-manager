@@ -43,6 +43,11 @@ TRADING_STATE_MYSQL_FIELDS_DROPPED = _meter.create_counter(
     "trading_state_mysql_fields_dropped_total",
     description="Trading state fields omitted from MySQL copies",
 )
+# petrosa-data-manager#881: documents currently kept out of the MySQL copy. Alert when > 0 for 24 h.
+TRADING_STATE_QUARANTINED_DOCUMENTS = _meter.create_gauge(
+    "trading_state_mysql_quarantined_documents",
+    description="Trading state documents quarantined from the MySQL copy, by table",
+)
 TRADING_STATE_DEAD_LETTER_COUNT = _meter.create_gauge(
     "trading_state_dead_letter_count",
     description="Trading state MySQL copy dead letters",

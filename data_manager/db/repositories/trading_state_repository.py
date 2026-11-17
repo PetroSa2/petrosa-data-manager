@@ -16,6 +16,16 @@ class TradingStateConflictError(ValueError):
     pass
 
 
+# petrosa-data-manager#881: a quarantined copy used to stay out of the MySQL history forever, even after the cause was
+# gone and the document had thousands of newer versions. It is now released again when its version has advanced since
+# it was quarantined, or after a cool-off, at most QUARANTINE_MAX_RELEASES times. After that it stays quarantined (it
+# was dead-lettered when quarantined) and shows on the quarantined-documents gauge. Labelled fallbacks, env-overridable.
+QUARANTINE_COOLOFF_SECONDS = float(
+    os.getenv("TRADING_STATE_QUARANTINE_COOLOFF_SECONDS", str(6 * 3600))
+)
+QUARANTINE_MAX_RELEASES = int(os.getenv("TRADING_STATE_QUARANTINE_MAX_RELEASES", "3"))
+
+
 class TradingStateRepository(BaseRepository):
     """CRUD operations for the operational trading state collections."""
 
@@ -223,7 +233,7 @@ class TradingStateRepository(BaseRepository):
         quarantined = attempts >= 5
         now = datetime.now(UTC)
         delay = 0 if attempts == 1 else min(300, 2 ** min(attempts - 1, 8))
-        update = {
+        update: dict[str, Any] = {
             "$set": {
                 "_mysql_copy_attempted_at": now,
                 "_mysql_copy_next_attempt_at": now
@@ -233,6 +243,12 @@ class TradingStateRepository(BaseRepository):
             },
             "$inc": {"_mysql_copy_attempts": 1},
         }
+        if quarantined:
+            # What release_due_quarantines compares against (#881).
+            update["$set"]["_mysql_copy_quarantined_version"] = document[
+                "_mysql_copy_version"
+            ]
+            update["$set"]["_mysql_copy_quarantined_at"] = now
         await self._collection(table).update_one(
             {
                 key: document[key],
@@ -256,4 +272,85 @@ class TradingStateRepository(BaseRepository):
                     + timedelta(seconds=300),
                 }
             },
+        )
+
+    async def release_due_quarantines(
+        self,
+        table: str,
+        limit: int,
+        *,
+        cooloff_seconds: float = QUARANTINE_COOLOFF_SECONDS,
+        max_releases: int = QUARANTINE_MAX_RELEASES,
+    ) -> int:
+        """Return up to ``limit`` quarantined copies to the pending queue (#881); the number released.
+
+        Due: the document changed since it was quarantined (its version advanced), or the quarantine is older than the
+        cool-off. A document quarantined before #881 has no record of either and is due. Each release resets the attempt
+        count, so a recurring error re-quarantines after the usual bounded retries; after ``max_releases`` releases the
+        document is left quarantined for good.
+        """
+        now = datetime.now(UTC)
+        collection = self._collection(table)
+        rows = await (
+            collection.find(
+                {
+                    "_mysql_copy_quarantined": True,
+                    "$and": [
+                        {
+                            "$or": [
+                                {"_mysql_copy_releases": {"$exists": False}},
+                                {"_mysql_copy_releases": {"$lt": max_releases}},
+                            ]
+                        },
+                        {
+                            "$or": [
+                                {"_mysql_copy_quarantined_version": {"$exists": False}},
+                                {
+                                    "$expr": {
+                                        "$gt": [
+                                            "$_mysql_copy_version",
+                                            "$_mysql_copy_quarantined_version",
+                                        ]
+                                    }
+                                },
+                                {
+                                    "_mysql_copy_quarantined_at": {
+                                        "$lte": now - timedelta(seconds=cooloff_seconds)
+                                    }
+                                },
+                            ]
+                        },
+                    ],
+                },
+                {"_id": 1, "_mysql_copy_version": 1},
+            )
+            .sort([("_mysql_copy_attempted_at", 1), ("_id", 1)])
+            .limit(limit)
+            .to_list(length=limit)
+        )
+        released = 0
+        for row in rows:
+            result = await collection.update_one(
+                {
+                    "_id": row["_id"],
+                    "_mysql_copy_quarantined": True,
+                    "_mysql_copy_version": row.get("_mysql_copy_version"),
+                },
+                {
+                    "$set": {
+                        "_mysql_copy_quarantined": False,
+                        "_mysql_copy_pending": True,
+                        "_mysql_copy_attempts": 0,
+                        "_mysql_copy_next_attempt_at": now,
+                    },
+                    "$inc": {"_mysql_copy_releases": 1},
+                },
+            )
+            released += int(result.modified_count or 0)
+        return released
+
+    async def quarantined_count(self, table: str) -> int:
+        """Documents currently kept out of the MySQL copy (#881 gauge)."""
+        return await self._collection(table).count_documents(
+            {"_mysql_copy_quarantined": True}
         )
