@@ -220,6 +220,56 @@ class TestStreamingGapDetector:
         assert request.end_time == first_open + timedelta(minutes=45)
 
     @pytest.mark.asyncio
+    async def test_inclusive_close_timestamp_maps_to_exact_open_time(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        second_open = first_open + timedelta(minutes=15)
+
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", first_open)
+        )
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", second_open)
+        )
+
+        assert detector._last_seen[("BTCUSDT", "15m")] == second_open
+        mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_out_of_order_event_does_not_move_watermark(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        recent_open = first_open + timedelta(minutes=15)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", recent_open)
+        )
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", first_open)
+        )
+
+        assert detector._last_seen[("BTCUSDT", "15m")] == recent_open
+        mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_backfill_end_is_capped_at_24_hours(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        late_open = first_open + timedelta(hours=48)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", first_open)
+        )
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", late_open)
+        )
+
+        request = mock_backfill_orchestrator.create_backfill_job.call_args.args[0]
+        assert request.start_time == first_open + timedelta(minutes=15)
+        assert request.end_time == first_open + timedelta(hours=24, minutes=15)
+
+    @pytest.mark.asyncio
     async def test_backfill_for_small_gap(self, detector, mock_backfill_orchestrator):
         """Every detected closed-candle gap triggers a backfill."""
         # First candle: 10 minutes ago

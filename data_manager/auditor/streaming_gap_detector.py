@@ -243,6 +243,9 @@ class StreamingGapDetector:
             )
             prev_ts = self._last_seen.get(key)
 
+            if prev_ts is not None and candle_open_time <= prev_ts:
+                return
+
             if prev_ts is not None:
                 # Calculate the expected next candle timestamp
                 expected_next_ts = prev_ts + timedelta(seconds=interval_seconds)
