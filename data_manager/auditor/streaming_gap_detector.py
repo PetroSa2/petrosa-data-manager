@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -223,28 +223,38 @@ class StreamingGapDetector:
             if not symbol or not timeframe or close_time_str is None:
                 return
 
-            # Parse the candle close timestamp
-            close_time = as_aware_utc(datetime.fromtimestamp(close_time_str / 1000.0))
+            # Binance's ``T`` is the candle close timestamp. Convert it to the
+            # opening timestamp before comparing it with the previous candle;
+            # comparing close times to an open-time interval creates a false
+            # gap at every timeframe boundary.
+            close_time = as_aware_utc(
+                datetime.fromtimestamp(close_time_str / 1000.0, tz=UTC)
+            )
 
             key = (symbol, timeframe)
             interval_seconds = parse_timeframe_to_seconds(timeframe)
             if interval_seconds <= 0:
                 return
 
+            candle_open_time = (
+                close_time
+                - timedelta(seconds=interval_seconds)
+                + timedelta(milliseconds=1)
+            )
             prev_ts = self._last_seen.get(key)
 
             if prev_ts is not None:
                 # Calculate the expected next candle timestamp
                 expected_next_ts = prev_ts + timedelta(seconds=interval_seconds)
                 gap_start = expected_next_ts
-                gap_duration = (close_time - gap_start).total_seconds()
+                gap_duration = (candle_open_time - gap_start).total_seconds()
 
                 # Check if this is a new gap (not a duplicate of a recently reported one)
                 gap_id = (symbol, timeframe, gap_start.strftime("%Y-%m-%dT%H:%M:%S"))
                 now = time.monotonic()
                 last_report = self._last_report_time.get(key, 0)
 
-                if gap_duration > STREAMING_GAP_TOLERANCE_INTERVALS * interval_seconds:
+                if gap_duration >= STREAMING_GAP_TOLERANCE_INTERVALS * interval_seconds:
                     # Gap detected
                     logger.info(
                         f"Streaming gap detected: {symbol} {timeframe} "
@@ -273,11 +283,15 @@ class StreamingGapDetector:
                         # Trigger backfill if configured
                         if self.backfill_orchestrator:
                             await self._trigger_backfill(
-                                symbol, timeframe, gap_start, close_time, gap_duration
+                                symbol,
+                                timeframe,
+                                gap_start,
+                                candle_open_time,
+                                gap_duration,
                             )
 
             # Update last seen timestamp
-            self._last_seen[key] = close_time
+            self._last_seen[key] = candle_open_time
 
         except Exception as e:
             logger.warning(f"Error processing kline event: {e}", exc_info=True)

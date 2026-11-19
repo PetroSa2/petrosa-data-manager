@@ -121,6 +121,21 @@ class TestStreamingGapDetector:
             "e": "kline",
         }
 
+    def _make_open_time_msg(self, symbol, timeframe, open_time):
+        interval_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+        }[timeframe]
+        # Binance's ``T`` is the inclusive end of the candle, one millisecond
+        # before the next candle opens.
+        close_time = (
+            open_time + timedelta(seconds=interval_seconds) - timedelta(milliseconds=1)
+        )
+        return self._make_kline_msg(
+            symbol, timeframe, int(close_time.timestamp() * 1000)
+        )
+
     async def _process_kline(self, detector, msg):
         """Helper: call _on_kline_event and wait for background tasks."""
         await detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
@@ -145,6 +160,22 @@ class TestStreamingGapDetector:
         mock_backfill_orchestrator.create_backfill_job.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_15m_closed_candles_use_open_time_for_gap_detection(
+        self, detector, mock_backfill_orchestrator
+    ):
+        """Consecutive Binance close times must not report a false 15m gap."""
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        for offset in (0, 15, 30):
+            await self._process_kline(
+                detector,
+                self._make_open_time_msg(
+                    "BTCUSDT", "15m", first_open + timedelta(minutes=offset)
+                ),
+            )
+
+        mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_gap_detected_on_large_jump(
         self, detector, mock_backfill_orchestrator
     ):
@@ -166,6 +197,27 @@ class TestStreamingGapDetector:
 
         # Backfill should be triggered (gap > tolerance * interval)
         assert mock_backfill_orchestrator.create_backfill_job.called
+
+    @pytest.mark.asyncio
+    async def test_15m_missing_closed_candle_triggers_backfill(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", first_open)
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg(
+                "BTCUSDT", "15m", first_open + timedelta(minutes=45)
+            ),
+        )
+
+        await asyncio.sleep(0.01)
+        request = mock_backfill_orchestrator.create_backfill_job.call_args.args[0]
+        assert request.timeframe == "15m"
+        assert request.start_time == first_open + timedelta(minutes=15)
+        assert request.end_time == first_open + timedelta(minutes=45)
 
     @pytest.mark.asyncio
     async def test_backfill_for_small_gap(self, detector, mock_backfill_orchestrator):
