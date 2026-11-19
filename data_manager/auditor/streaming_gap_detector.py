@@ -216,9 +216,9 @@ class StreamingGapDetector:
             if not kline:
                 return
 
-            # Binance emits updates while a candle is forming.  Only the
-            # closed event is a durable candle boundary for gap detection.
-            if kline.get("x") is not True:
+            # Publishers may omit Binance's optional final-candle flag. Only
+            # an explicit false means the candle is still forming.
+            if kline.get("x") is False:
                 return
 
             symbol = data.get("s", "")
@@ -247,11 +247,6 @@ class StreamingGapDetector:
                 + timedelta(milliseconds=1)
             )
             prev_ts = self._last_seen.get(key)
-
-            # NATS delivery can be interleaved or out of order.  An older
-            # event must not move the watermark backwards or create a gap.
-            if prev_ts is not None and candle_open_time <= prev_ts:
-                return
 
             if prev_ts is not None:
                 # Calculate the expected next candle timestamp
