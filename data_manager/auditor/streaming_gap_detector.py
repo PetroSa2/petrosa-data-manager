@@ -247,6 +247,7 @@ class StreamingGapDetector:
             )
             async with self._gap_locks[key]:
                 prev_ts = self._last_seen.get(key)
+                next_last_seen = candle_open_time
 
                 if prev_ts is not None:
                     expected_next_ts = prev_ts + timedelta(seconds=interval_seconds)
@@ -276,22 +277,40 @@ class StreamingGapDetector:
                             gaps_detected_total.labels(
                                 symbol=symbol, timeframe=timeframe, source="streaming"
                             ).inc()
-                            submitted = await self._trigger_backfill(
+                            submitted_through = await self._trigger_backfill(
                                 symbol,
                                 timeframe,
                                 gap_start,
                                 candle_open_time,
                                 gap_duration,
                             )
-                            if submitted:
+                            if submitted_through is None:
+                                next_last_seen = prev_ts
+                            elif submitted_through >= candle_open_time:
                                 last_seen_timestamp.labels(
                                     symbol=symbol, timeframe=timeframe
                                 ).set(candle_open_time.timestamp())
                                 self._reported_gaps[gap_id] = now
+                            else:
+                                covered_through = submitted_through - timedelta(
+                                    seconds=interval_seconds
+                                )
+                                next_last_seen = covered_through
+                                last_seen_timestamp.labels(
+                                    symbol=symbol, timeframe=timeframe
+                                ).set(covered_through.timestamp())
+                                self._reported_gaps[
+                                    (
+                                        symbol,
+                                        timeframe,
+                                        gap_start.isoformat(),
+                                        submitted_through.isoformat(),
+                                    )
+                                ] = now
 
                 # An out-of-order event must not move the watermark backwards.
-                if prev_ts is None or candle_open_time > prev_ts:
-                    self._last_seen[key] = candle_open_time
+                if prev_ts is None or next_last_seen > prev_ts:
+                    self._last_seen[key] = next_last_seen
 
         except Exception as e:
             logger.warning(f"Error processing kline event: {e}", exc_info=True)
@@ -303,7 +322,7 @@ class StreamingGapDetector:
         gap_start: datetime,
         gap_end: datetime,
         gap_duration: float,
-    ) -> bool:
+    ) -> datetime | None:
         """
         Trigger a backfill for the detected gap.
 
@@ -316,11 +335,17 @@ class StreamingGapDetector:
             gap_start: When the gap started.
             gap_end: The timestamp of the first candle after the gap.
             gap_duration: Duration of the gap in seconds.
+
+        Returns:
+            The end of the last fully submitted chunk, or None when no chunk
+            was submitted, so the caller can keep the watermark behind any
+            unsent range.
         """
         try:
             # Split long gaps so every interval is covered; do not advance a
             # repair watermark past a range that was never submitted.
             chunk_end = gap_start
+            submitted_through = None
             while chunk_end < gap_end:
                 effective_end = min(
                     gap_end,
@@ -359,16 +384,17 @@ class StreamingGapDetector:
                     logger.warning(
                         "No backfill orchestrator or queue; gap remains unsubmitted"
                     )
-                    return False
+                    return submitted_through
                 chunk_end = effective_end
-            return True
+                submitted_through = effective_end
+            return submitted_through
 
         except Exception as e:
             logger.error(
                 f"Failed to trigger backfill for {symbol} {timeframe}: {e}",
                 exc_info=True,
             )
-            return False
+            return submitted_through
 
     async def get_status(self) -> dict:
         """

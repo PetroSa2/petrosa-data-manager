@@ -510,7 +510,19 @@ class TestStreamingGapDetector:
             ),
         )
 
-        assert detector._last_seen["BTCUSDT", "1m"] == first_open + timedelta(minutes=2)
+        assert detector._last_seen["BTCUSDT", "1m"] == first_open
+        assert not detector._reported_gaps
+
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg(
+                "BTCUSDT", "1m", first_open + timedelta(minutes=3)
+            ),
+        )
+        requests = [
+            call.args[0] for call in orchestrator.create_backfill_job.call_args_list
+        ]
+        assert requests[-1].start_time == first_open + timedelta(minutes=1)
 
     @pytest.mark.asyncio
     async def test_dual_submission_failure_retries_same_gap(self, mock_candle_repo):
@@ -531,13 +543,157 @@ class TestStreamingGapDetector:
             self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3))
         )
         first_attempts = orchestrator.create_backfill_job.await_count
-        detector._last_seen["BTCUSDT", "1m"] = first_open
+        assert detector._last_seen["BTCUSDT", "1m"] == first_open
         await detector._process_kline(
             self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=4))
         )
 
         assert orchestrator.create_backfill_job.await_count == first_attempts + 1
+        request = orchestrator.create_backfill_job.call_args.args[0]
+        assert request.start_time == first_open + timedelta(minutes=1)
         assert len(detector._reported_gaps) == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_multichunk_failure_retries_unsent_remainder(
+        self, mock_candle_repo
+    ):
+        outcomes = [MagicMock(job_id="bf-ok"), RuntimeError("down")]
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+
+        async def create_job(request):
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(side_effect=create_job)
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=orchestrator,
+        )
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        final_open = first_open + timedelta(hours=48, minutes=1)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", final_open)
+        )
+
+        requests = [
+            call.args[0] for call in orchestrator.create_backfill_job.call_args_list
+        ]
+        assert len(requests) == 2
+        covered_through = requests[0].end_time - timedelta(minutes=1)
+        assert detector._last_seen["BTCUSDT", "1m"] == covered_through
+        assert list(detector._reported_gaps) == [
+            (
+                "BTCUSDT",
+                "1m",
+                (first_open + timedelta(minutes=1)).isoformat(),
+                requests[0].end_time.isoformat(),
+            )
+        ]
+
+        orchestrator.create_backfill_job.side_effect = None
+        orchestrator.create_backfill_job.return_value = MagicMock(job_id="bf-retry")
+        later_open = final_open + timedelta(minutes=1)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", later_open)
+        )
+
+        retries = [
+            call.args[0] for call in orchestrator.create_backfill_job.call_args_list[2:]
+        ]
+        assert retries[0].start_time == requests[0].end_time
+        assert retries[-1].end_time == later_open
+        assert detector._last_seen["BTCUSDT", "1m"] == later_open
+
+    @pytest.mark.asyncio
+    async def test_cancelled_backfill_releases_pair_lock(self, mock_candle_repo):
+        started = asyncio.Event()
+        call_count = 0
+
+        async def create_job(request):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                started.set()
+                await asyncio.Event().wait()
+            return MagicMock(job_id="bf-ok")
+
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(side_effect=create_job)
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=orchestrator,
+        )
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        await detector._on_kline_event(
+            MagicMock(
+                data=json.dumps(
+                    self._make_open_time_msg(
+                        "BTCUSDT", "1m", first_open + timedelta(minutes=2)
+                    )
+                ).encode()
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        task = next(task for task in detector._background_tasks if not task.done())
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        lock = detector._gap_locks["BTCUSDT", "1m"]
+        assert lock.locked() is False
+        assert detector._last_seen["BTCUSDT", "1m"] == first_open
+
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3))
+        )
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_callbacks_submit_once_per_pair(self, mock_candle_repo):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        call_count = 0
+
+        async def create_job(request):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                started.set()
+                await release.wait()
+            return MagicMock(job_id="bf-ok")
+
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(side_effect=create_job)
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=orchestrator,
+        )
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        gap_msg = json.dumps(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=2))
+        ).encode()
+        await detector._on_kline_event(MagicMock(data=gap_msg))
+        await detector._on_kline_event(MagicMock(data=gap_msg))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert (
+            len([task for task in detector._background_tasks if not task.done()]) == 2
+        )
+
+        release.set()
+        await asyncio.gather(*list(detector._background_tasks))
+        assert call_count == 1
 
 
 class TestStreamingGapDetectorIntegration:
