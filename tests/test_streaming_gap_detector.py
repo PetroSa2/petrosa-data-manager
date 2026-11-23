@@ -554,6 +554,40 @@ class TestStreamingGapDetector:
         assert len(detector._reported_gaps) == 0
 
     @pytest.mark.asyncio
+    async def test_unavailable_backfill_path_leaves_gap_uncovered_and_retries(
+        self, mock_candle_repo
+    ):
+        detector = StreamingGapDetector(candle_repo=mock_candle_repo)
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        gap_open = first_open + timedelta(minutes=3)
+        with patch(
+            "data_manager.auditor.streaming_gap_detector.last_seen_timestamp"
+        ) as gauge:
+            await detector._process_kline(
+                self._make_open_time_msg("BTCUSDT", "1m", gap_open)
+            )
+        gauge.labels.assert_not_called()
+        assert detector._last_seen["BTCUSDT", "1m"] == first_open
+        assert not detector._reported_gaps
+
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(
+            return_value=MagicMock(job_id="bf-123")
+        )
+        detector.backfill_orchestrator = orchestrator
+        later_open = gap_open + timedelta(minutes=1)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", later_open)
+        )
+        request = orchestrator.create_backfill_job.call_args.args[0]
+        assert request.start_time == first_open + timedelta(minutes=1)
+        assert request.end_time == later_open
+        assert detector._last_seen["BTCUSDT", "1m"] == later_open
+
+    @pytest.mark.asyncio
     async def test_partial_multichunk_failure_retries_unsent_remainder(
         self, mock_candle_repo
     ):
