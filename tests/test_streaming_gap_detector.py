@@ -570,6 +570,33 @@ class TestStreamingGapDetector:
 
         assert detector._last_seen["BTCUSDT", "1m"] == first_open + timedelta(minutes=2)
 
+    @pytest.mark.asyncio
+    async def test_dual_submission_failure_retries_same_gap(self, mock_candle_repo):
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(side_effect=RuntimeError("down"))
+        queue = MagicMock()
+        queue.add = AsyncMock(side_effect=RuntimeError("queue down"))
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=orchestrator,
+            backfill_queue=queue,
+        )
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3))
+        )
+        detector._reported_gaps.clear()
+        detector._last_seen["BTCUSDT", "1m"] = first_open
+        await detector._process_kline(
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3))
+        )
+
+        assert orchestrator.create_backfill_job.await_count == 2
+        assert len(detector._reported_gaps) == 0
+
 
 class TestStreamingGapDetectorIntegration:
     """Integration-style tests that verify the full detection backfill flow."""

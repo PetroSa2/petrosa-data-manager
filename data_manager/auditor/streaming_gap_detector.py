@@ -267,7 +267,6 @@ class StreamingGapDetector:
                     )
                     now = time.monotonic()
                     if now - self._reported_gaps.get(gap_id, 0) >= 30:
-                        self._reported_gaps[gap_id] = now
 
                         # Record the latency metric
                         gap_detection_latency.labels(
@@ -285,13 +284,15 @@ class StreamingGapDetector:
                         ).set(close_time.timestamp())
 
                         # Trigger backfill if configured
-                        await self._trigger_backfill(
+                        submitted = await self._trigger_backfill(
                             symbol,
                             timeframe,
                             gap_start,
                             candle_open_time,
                             gap_duration,
                         )
+                        if submitted:
+                            self._reported_gaps[gap_id] = now
 
             # An out-of-order event must not move the watermark backwards.
             if prev_ts is None or candle_open_time > prev_ts:
@@ -307,7 +308,7 @@ class StreamingGapDetector:
         gap_start: datetime,
         gap_end: datetime,
         gap_duration: float,
-    ) -> None:
+    ) -> bool:
         """
         Trigger a backfill for the detected gap.
 
@@ -343,7 +344,9 @@ class StreamingGapDetector:
                 submitted = False
                 if self.backfill_orchestrator:
                     try:
-                        job = await self.backfill_orchestrator.create_backfill_job(request)
+                        job = await self.backfill_orchestrator.create_backfill_job(
+                            request
+                        )
                         backfills_triggered_total.labels(
                             symbol=symbol, timeframe=timeframe, source="streaming"
                         ).inc()
@@ -361,14 +364,16 @@ class StreamingGapDetector:
                     logger.warning(
                         "No backfill orchestrator or queue; gap remains unsubmitted"
                     )
-                    return
+                    return False
                 chunk_end = effective_end
+            return True
 
         except Exception as e:
             logger.error(
                 f"Failed to trigger backfill for {symbol} {timeframe}: {e}",
                 exc_info=True,
             )
+            return False
 
     async def get_status(self) -> dict:
         """
