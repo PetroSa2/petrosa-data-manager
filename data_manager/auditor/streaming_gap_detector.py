@@ -114,6 +114,7 @@ class StreamingGapDetector:
         self._last_seen: dict[tuple[str, str], datetime] = {}
         # Track only exact ranges; distinct gaps must not share a cooldown.
         self._reported_gaps: dict[tuple[str, str, str, str], float] = {}
+        self._gap_locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> bool:
@@ -244,59 +245,53 @@ class StreamingGapDetector:
                 - timedelta(seconds=interval_seconds)
                 + timedelta(milliseconds=1)
             )
-            prev_ts = self._last_seen.get(key)
+            async with self._gap_locks[key]:
+                prev_ts = self._last_seen.get(key)
 
-            if prev_ts is not None:
-                # Calculate the expected next candle timestamp
-                expected_next_ts = prev_ts + timedelta(seconds=interval_seconds)
-                gap_start = expected_next_ts
-                gap_duration = (candle_open_time - gap_start).total_seconds()
+                if prev_ts is not None:
+                    expected_next_ts = prev_ts + timedelta(seconds=interval_seconds)
+                    gap_start = expected_next_ts
+                    gap_duration = (candle_open_time - gap_start).total_seconds()
 
-                if gap_duration >= STREAMING_GAP_TOLERANCE_INTERVALS * interval_seconds:
-                    # Gap detected
-                    logger.info(
-                        f"Streaming gap detected: {symbol} {timeframe} "
-                        f"gap={gap_duration:.0f}s at {gap_start.isoformat()}"
-                    )
+                    if (
+                        gap_duration
+                        >= STREAMING_GAP_TOLERANCE_INTERVALS * interval_seconds
+                    ):
+                        logger.info(
+                            f"Streaming gap detected: {symbol} {timeframe} "
+                            f"gap={gap_duration:.0f}s at {gap_start.isoformat()}"
+                        )
 
-                    gap_id = (
-                        symbol,
-                        timeframe,
-                        gap_start.isoformat(),
-                        candle_open_time.isoformat(),
-                    )
-                    now = time.monotonic()
-                    if now - self._reported_gaps.get(gap_id, 0) >= 30:
-
-                        # Record the latency metric
-                        gap_detection_latency.labels(
-                            symbol=symbol, timeframe=timeframe
-                        ).observe(gap_duration)
-
-                        # Update metrics
-                        gaps_detected_total.labels(
-                            symbol=symbol, timeframe=timeframe, source="streaming"
-                        ).inc()
-
-                        # Update last seen timestamp metric
-                        last_seen_timestamp.labels(
-                            symbol=symbol, timeframe=timeframe
-                        ).set(close_time.timestamp())
-
-                        # Trigger backfill if configured
-                        submitted = await self._trigger_backfill(
+                        gap_id = (
                             symbol,
                             timeframe,
-                            gap_start,
-                            candle_open_time,
-                            gap_duration,
+                            gap_start.isoformat(),
+                            candle_open_time.isoformat(),
                         )
-                        if submitted:
-                            self._reported_gaps[gap_id] = now
+                        now = time.monotonic()
+                        if now - self._reported_gaps.get(gap_id, 0) >= 30:
+                            gap_detection_latency.labels(
+                                symbol=symbol, timeframe=timeframe
+                            ).observe(gap_duration)
+                            gaps_detected_total.labels(
+                                symbol=symbol, timeframe=timeframe, source="streaming"
+                            ).inc()
+                            last_seen_timestamp.labels(
+                                symbol=symbol, timeframe=timeframe
+                            ).set(close_time.timestamp())
+                            submitted = await self._trigger_backfill(
+                                symbol,
+                                timeframe,
+                                gap_start,
+                                candle_open_time,
+                                gap_duration,
+                            )
+                            if submitted:
+                                self._reported_gaps[gap_id] = now
 
-            # An out-of-order event must not move the watermark backwards.
-            if prev_ts is None or candle_open_time > prev_ts:
-                self._last_seen[key] = candle_open_time
+                # An out-of-order event must not move the watermark backwards.
+                if prev_ts is None or candle_open_time > prev_ts:
+                    self._last_seen[key] = candle_open_time
 
         except Exception as e:
             logger.warning(f"Error processing kline event: {e}", exc_info=True)

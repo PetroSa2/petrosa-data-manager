@@ -241,6 +241,20 @@ class TestStreamingGapDetector:
         assert request.start_time == first_open + timedelta(minutes=15)
 
     @pytest.mark.asyncio
+    async def test_explicit_final_flag_matches_omitted_flag(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        omitted = self._make_open_time_msg("BTCUSDT", "15m", first_open)
+        explicit = self._make_open_time_msg(
+            "BTCUSDT", "15m", first_open + timedelta(minutes=30)
+        )
+        omitted["k"].pop("x")
+        await self._process_kline(detector, omitted)
+        await self._process_kline(detector, explicit)
+        assert mock_backfill_orchestrator.create_backfill_job.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_gap_at_one_interval_boundary_triggers_backfill(
         self, detector, mock_backfill_orchestrator
     ):
@@ -517,6 +531,8 @@ class TestStreamingGapDetector:
         ]
         assert len(requests) == 2
         assert requests[0].start_time == first_open + timedelta(minutes=1)
+        assert requests[0].end_time == requests[0].start_time + timedelta(hours=24)
+        assert requests[1].start_time == requests[0].end_time
         assert requests[-1].end_time == final_open
         assert all(
             left.end_time == right.start_time
@@ -588,13 +604,13 @@ class TestStreamingGapDetector:
         await detector._process_kline(
             self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3))
         )
-        detector._reported_gaps.clear()
+        first_attempts = orchestrator.create_backfill_job.await_count
         detector._last_seen["BTCUSDT", "1m"] = first_open
         await detector._process_kline(
-            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3))
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=4))
         )
 
-        assert orchestrator.create_backfill_job.await_count == 2
+        assert orchestrator.create_backfill_job.await_count == first_attempts + 1
         assert len(detector._reported_gaps) == 0
 
 
