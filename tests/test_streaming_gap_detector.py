@@ -511,11 +511,17 @@ class TestStreamingGapDetector:
             detector, self._make_open_time_msg("BTCUSDT", "1m", final_open)
         )
 
-        requests = [call.args[0] for call in mock_backfill_orchestrator.create_backfill_job.call_args_list]
+        requests = [
+            call.args[0]
+            for call in mock_backfill_orchestrator.create_backfill_job.call_args_list
+        ]
         assert len(requests) == 2
         assert requests[0].start_time == first_open + timedelta(minutes=1)
         assert requests[-1].end_time == final_open
-        assert all(left.end_time == right.start_time for left, right in zip(requests, requests[1:]))
+        assert all(
+            left.end_time == right.start_time
+            for left, right in zip(requests, requests[1:], strict=False)
+        )
 
     @pytest.mark.asyncio
     async def test_distinct_gaps_are_not_suppressed_by_cooldown(
@@ -527,11 +533,15 @@ class TestStreamingGapDetector:
         )
         await self._process_kline(
             detector,
-            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3)),
+            self._make_open_time_msg(
+                "BTCUSDT", "1m", first_open + timedelta(minutes=3)
+            ),
         )
         await self._process_kline(
             detector,
-            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=6)),
+            self._make_open_time_msg(
+                "BTCUSDT", "1m", first_open + timedelta(minutes=6)
+            ),
         )
 
         assert mock_backfill_orchestrator.create_backfill_job.await_count == 2
@@ -553,7 +563,9 @@ class TestStreamingGapDetector:
         )
         await self._process_kline(
             detector,
-            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=2)),
+            self._make_open_time_msg(
+                "BTCUSDT", "1m", first_open + timedelta(minutes=2)
+            ),
         )
 
         assert detector._last_seen["BTCUSDT", "1m"] == first_open + timedelta(minutes=2)
