@@ -498,6 +498,66 @@ class TestStreamingGapDetector:
         # Should trigger backfill for the 5-minute gap
         assert mock_backfill_orchestrator.create_backfill_job.called
 
+    @pytest.mark.asyncio
+    async def test_gap_over_24_hours_is_submitted_in_complete_chunks(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        final_open = first_open + timedelta(hours=48, minutes=1)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", final_open)
+        )
+
+        requests = [call.args[0] for call in mock_backfill_orchestrator.create_backfill_job.call_args_list]
+        assert len(requests) == 2
+        assert requests[0].start_time == first_open + timedelta(minutes=1)
+        assert requests[-1].end_time == final_open
+        assert all(left.end_time == right.start_time for left, right in zip(requests, requests[1:]))
+
+    @pytest.mark.asyncio
+    async def test_distinct_gaps_are_not_suppressed_by_cooldown(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3)),
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=6)),
+        )
+
+        assert mock_backfill_orchestrator.create_backfill_job.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_enqueue_does_not_claim_gap_submitted(self, mock_candle_repo):
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(side_effect=RuntimeError("down"))
+        queue = MagicMock()
+        queue.add = AsyncMock(side_effect=RuntimeError("queue down"))
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=orchestrator,
+            backfill_queue=queue,
+        )
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=2)),
+        )
+
+        assert detector._last_seen["BTCUSDT", "1m"] == first_open + timedelta(minutes=2)
+
 
 class TestStreamingGapDetectorIntegration:
     """Integration-style tests that verify the full detection backfill flow."""
