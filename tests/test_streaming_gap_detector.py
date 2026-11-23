@@ -121,6 +121,21 @@ class TestStreamingGapDetector:
             "e": "kline",
         }
 
+    def _make_open_time_msg(self, symbol, timeframe, open_time):
+        interval_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+        }[timeframe]
+        # Binance's ``T`` is the inclusive end of the candle, one millisecond
+        # before the next candle opens.
+        close_time = (
+            open_time + timedelta(seconds=interval_seconds) - timedelta(milliseconds=1)
+        )
+        return self._make_kline_msg(
+            symbol, timeframe, int(close_time.timestamp() * 1000)
+        )
+
     async def _process_kline(self, detector, msg):
         """Helper: call _on_kline_event and wait for background tasks."""
         await detector._on_kline_event(MagicMock(data=json.dumps(msg).encode()))
@@ -142,6 +157,22 @@ class TestStreamingGapDetector:
             await self._process_kline(detector, msg)
 
         # No backfill should be triggered
+        mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_15m_closed_candles_use_open_time_for_gap_detection(
+        self, detector, mock_backfill_orchestrator
+    ):
+        """Consecutive Binance close times must not report a false 15m gap."""
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        for offset in (0, 15, 30):
+            await self._process_kline(
+                detector,
+                self._make_open_time_msg(
+                    "BTCUSDT", "15m", first_open + timedelta(minutes=offset)
+                ),
+            )
+
         mock_backfill_orchestrator.create_backfill_job.assert_not_called()
 
     @pytest.mark.asyncio
@@ -168,20 +199,58 @@ class TestStreamingGapDetector:
         assert mock_backfill_orchestrator.create_backfill_job.called
 
     @pytest.mark.asyncio
-    async def test_backfill_for_small_gap(self, detector, mock_backfill_orchestrator):
-        """Every detected closed-candle gap triggers a backfill."""
-        # First candle: 10 minutes ago
-        first_ts = int(
-            (
-                datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC) - timedelta(minutes=10)
-            ).timestamp()
-            * 1000
+    async def test_15m_missing_closed_candle_triggers_backfill(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "15m", first_open)
         )
-        msg1 = self._make_kline_msg("BTCUSDT", "1m", first_ts)
-        await self._process_kline(detector, msg1)
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg(
+                "BTCUSDT", "15m", first_open + timedelta(minutes=45)
+            ),
+        )
 
-        # Second candle: 7 minutes ago (gap = 3 minutes = 180s from expected 11:56)
-        # This is exactly at MIN_GAP_DURATION_SECONDS boundary.
+        await asyncio.sleep(0.01)
+        request = mock_backfill_orchestrator.create_backfill_job.call_args.args[0]
+        assert request.timeframe == "15m"
+        assert request.start_time == first_open + timedelta(minutes=15)
+        assert request.end_time == first_open + timedelta(minutes=45)
+
+    @pytest.mark.asyncio
+    async def test_event_without_final_flag_is_processed(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        first = self._make_open_time_msg("BTCUSDT", "15m", first_open)
+        second = self._make_open_time_msg(
+            "BTCUSDT", "15m", first_open + timedelta(minutes=30)
+        )
+        first["k"].pop("x")
+        second["k"].pop("x")
+
+        await self._process_kline(detector, first)
+        await self._process_kline(detector, second)
+
+        assert detector._last_seen[("BTCUSDT", "15m")] == first_open + timedelta(
+            minutes=30
+        )
+        request = mock_backfill_orchestrator.create_backfill_job.call_args.args[0]
+        assert request.start_time == first_open + timedelta(minutes=15)
+
+    @pytest.mark.asyncio
+    async def test_gap_at_one_interval_boundary_triggers_backfill(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+
+        # The next event is two intervals later, leaving one candle missing.
+        """
         # Use 6 minutes ago to get a gap of 4 minutes = 240s which is > 180s.
         # Actually let's use 6.5 minutes ago for a gap of 3.5 minutes = 210s > 180s.
         # That would trigger backfill. Let's use 7 minutes for exactly 180s gap.
@@ -253,7 +322,15 @@ class TestStreamingGapDetector:
         # But 11:53:30 - 11:51:00 = 2min30s = 150s. Yes.
         # 150 > 120 -> detected. 150 < 180 -> True -> no backfill.
         # So this test should pass (no backfill triggered).
-        mock_backfill_orchestrator.create_backfill_job.assert_called()
+        """
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg(
+                "BTCUSDT", "1m", first_open + timedelta(minutes=2)
+            ),
+        )
+        request = mock_backfill_orchestrator.create_backfill_job.call_args.args[0]
+        assert request.start_time == first_open + timedelta(minutes=1)
 
     @pytest.mark.asyncio
     async def test_dedup_prevents_repeated_backfill(
@@ -309,6 +386,18 @@ class TestStreamingGapDetector:
 
         # No backfill for out-of-order event
         mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+        assert detector._last_seen[("BTCUSDT", "1m")] == datetime(
+            2026, 1, 1, 12, 9, 0, 1000, tzinfo=UTC
+        )
+
+        # A later event must still use the original forward watermark.
+        next_ts = int(datetime(2026, 1, 1, 12, 11, 0, tzinfo=UTC).timestamp() * 1000)
+        await self._process_kline(
+            detector, self._make_kline_msg("BTCUSDT", "1m", next_ts)
+        )
+        assert detector._last_seen[("BTCUSDT", "1m")] == datetime(
+            2026, 1, 1, 12, 10, 0, 1000, tzinfo=UTC
+        )
 
     @pytest.mark.asyncio
     async def test_multiple_symbols_tracked_independently(
@@ -408,6 +497,66 @@ class TestStreamingGapDetector:
 
         # Should trigger backfill for the 5-minute gap
         assert mock_backfill_orchestrator.create_backfill_job.called
+
+    @pytest.mark.asyncio
+    async def test_gap_over_24_hours_is_submitted_in_complete_chunks(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        final_open = first_open + timedelta(hours=48, minutes=1)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", final_open)
+        )
+
+        requests = [call.args[0] for call in mock_backfill_orchestrator.create_backfill_job.call_args_list]
+        assert len(requests) == 2
+        assert requests[0].start_time == first_open + timedelta(minutes=1)
+        assert requests[-1].end_time == final_open
+        assert all(left.end_time == right.start_time for left, right in zip(requests, requests[1:]))
+
+    @pytest.mark.asyncio
+    async def test_distinct_gaps_are_not_suppressed_by_cooldown(
+        self, detector, mock_backfill_orchestrator
+    ):
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=3)),
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=6)),
+        )
+
+        assert mock_backfill_orchestrator.create_backfill_job.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_enqueue_does_not_claim_gap_submitted(self, mock_candle_repo):
+        orchestrator = MagicMock()
+        orchestrator.create_backfill_job = AsyncMock(side_effect=RuntimeError("down"))
+        queue = MagicMock()
+        queue.add = AsyncMock(side_effect=RuntimeError("queue down"))
+        detector = StreamingGapDetector(
+            candle_repo=mock_candle_repo,
+            backfill_orchestrator=orchestrator,
+            backfill_queue=queue,
+        )
+        first_open = datetime(2026, 1, 1, tzinfo=UTC)
+        await self._process_kline(
+            detector, self._make_open_time_msg("BTCUSDT", "1m", first_open)
+        )
+        await self._process_kline(
+            detector,
+            self._make_open_time_msg("BTCUSDT", "1m", first_open + timedelta(minutes=2)),
+        )
+
+        assert detector._last_seen["BTCUSDT", "1m"] == first_open + timedelta(minutes=2)
 
 
 class TestStreamingGapDetectorIntegration:
