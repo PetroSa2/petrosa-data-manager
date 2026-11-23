@@ -386,6 +386,18 @@ class TestStreamingGapDetector:
 
         # No backfill for out-of-order event
         mock_backfill_orchestrator.create_backfill_job.assert_not_called()
+        assert detector._last_seen[("BTCUSDT", "1m")] == datetime(
+            2026, 1, 1, 12, 9, 0, 1000, tzinfo=UTC
+        )
+
+        # A later event must still use the original forward watermark.
+        next_ts = int(datetime(2026, 1, 1, 12, 11, 0, tzinfo=UTC).timestamp() * 1000)
+        await self._process_kline(
+            detector, self._make_kline_msg("BTCUSDT", "1m", next_ts)
+        )
+        assert detector._last_seen[("BTCUSDT", "1m")] == datetime(
+            2026, 1, 1, 12, 10, 0, 1000, tzinfo=UTC
+        )
 
     @pytest.mark.asyncio
     async def test_multiple_symbols_tracked_independently(

@@ -295,8 +295,9 @@ class StreamingGapDetector:
                                 gap_duration,
                             )
 
-            # Update last seen timestamp
-            self._last_seen[key] = candle_open_time
+            # An out-of-order event must not move the watermark backwards.
+            if prev_ts is None or candle_open_time > prev_ts:
+                self._last_seen[key] = candle_open_time
 
         except Exception as e:
             logger.warning(f"Error processing kline event: {e}", exc_info=True)
