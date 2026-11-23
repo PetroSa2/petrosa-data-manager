@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -29,6 +30,13 @@ from data_manager.services.exchange_history_client import ExchangeHistoryClient
 
 # Read caps: exceeding one is an explicit error, never a silently cut window.
 MAX_POSITION_ROWS = 50_000
+# petrosa-data-manager#867: the strategy_positions read is fetched in small batches. One default batch
+# (the whole ~6.5 MB collection) takes ~7 s on Atlas, longer than the client's 5 s socket timeout, so every
+# refresh failed with NetworkTimeout and CIO got null stats. With 200-row batches each round trip stays well
+# under the timeout (measured 2026-11-23: 2,677 rows in ~17 s, no timeout). Labelled fallback, env-overridable.
+POSITION_READ_BATCH_SIZE = int(
+    os.getenv("GROUND_TRUTH_POSITION_READ_BATCH_SIZE", "200")
+)
 MAX_JOURNAL_ROWS = 200_000
 # The journal is read with a margin around the window: an order placed just before the
 # window can be closed inside it.
@@ -85,7 +93,11 @@ async def read_position_rows(
     Filtered here, not in the query: the stored times mix datetimes and ISO strings,
     and a typed range filter would silently miss one kind.
     """
-    cursor = mongodb.db["strategy_positions"].find({}, _POSITION_FIELDS)
+    cursor = (
+        mongodb.db["strategy_positions"]
+        .find({}, _POSITION_FIELDS)
+        .batch_size(POSITION_READ_BATCH_SIZE)
+    )
     rows = await cursor.limit(MAX_POSITION_ROWS + 1).to_list(
         length=MAX_POSITION_ROWS + 1
     )

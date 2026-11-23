@@ -27,6 +27,11 @@ class _Cursor:
     def __init__(self, rows):
         self.rows = rows
         self.cap = None
+        self.batch = None
+
+    def batch_size(self, size):
+        self.batch = size
+        return self
 
     def limit(self, cap):
         self.cap = cap
@@ -101,6 +106,19 @@ async def test_position_rows_are_filtered_to_the_window_for_both_time_kinds() ->
     ]
     got = await read_position_rows(_Mongo(rows), START, NOW)
     assert [r["strategy_position_id"] for r in got] == ["a", "b", "c"]
+
+
+async def test_position_read_uses_small_batches_so_no_round_trip_hits_the_socket_timeout() -> (
+    None
+):
+    """petrosa-data-manager#867: one default batch timed out on Atlas; the read must be batched."""
+    import data_manager.services.exchange_ground_truth_inputs as inputs
+
+    mongo = _Mongo([{"strategy_position_id": "a", "entry_time": NOW}])
+    got = await read_position_rows(mongo, START, NOW)
+    assert [r["strategy_position_id"] for r in got] == ["a"]
+    assert mongo.cursor.batch == inputs.POSITION_READ_BATCH_SIZE
+    assert 0 < inputs.POSITION_READ_BATCH_SIZE <= 500
 
 
 async def test_position_read_over_the_cap_is_an_error(monkeypatch) -> None:
