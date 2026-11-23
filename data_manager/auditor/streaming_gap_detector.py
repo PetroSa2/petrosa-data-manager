@@ -276,9 +276,6 @@ class StreamingGapDetector:
                             gaps_detected_total.labels(
                                 symbol=symbol, timeframe=timeframe, source="streaming"
                             ).inc()
-                            last_seen_timestamp.labels(
-                                symbol=symbol, timeframe=timeframe
-                            ).set(close_time.timestamp())
                             submitted = await self._trigger_backfill(
                                 symbol,
                                 timeframe,
@@ -287,6 +284,9 @@ class StreamingGapDetector:
                                 gap_duration,
                             )
                             if submitted:
+                                last_seen_timestamp.labels(
+                                    symbol=symbol, timeframe=timeframe
+                                ).set(candle_open_time.timestamp())
                                 self._reported_gaps[gap_id] = now
 
                 # An out-of-order event must not move the watermark backwards.
