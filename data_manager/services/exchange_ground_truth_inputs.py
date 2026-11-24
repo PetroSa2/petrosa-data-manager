@@ -85,17 +85,39 @@ def _in_window(row: dict[str, Any], start: datetime, end: datetime) -> bool:
     return any(t is not None and start <= t <= end for t in (entry, exit_))
 
 
+# The query-side pre-filter is wider than the window so it can only over-select:
+# an ISO string carries its own UTC offset (at most a day either way), and its text
+# form may differ from ours after the date ("T" or " ", fractions, "Z" or "+00:00").
+_PREFILTER_MARGIN = timedelta(days=2)
+
+
+def _window_prefilter(start: datetime, end: datetime) -> dict[str, Any]:
+    """A Mongo filter matching every row ``_in_window`` can accept, datetimes and ISO strings alike."""
+    low = (start if start.tzinfo else start.replace(tzinfo=UTC)) - _PREFILTER_MARGIN
+    high = (end if end.tzinfo else end.replace(tzinfo=UTC)) + _PREFILTER_MARGIN
+    low_text = low.astimezone(UTC).date().isoformat()
+    # Every string dated on the last day sorts below the next day's date prefix.
+    high_text = (high.astimezone(UTC).date() + timedelta(days=1)).isoformat()
+    clauses: list[dict[str, Any]] = []
+    for field in ("entry_time", "exit_time"):
+        clauses.append({field: {"$gte": low, "$lte": high}})
+        clauses.append({field: {"$gte": low_text, "$lt": high_text}})
+    return {"$or": clauses}
+
+
 async def read_position_rows(
     mongodb: Any, start: datetime, end: datetime
 ) -> list[dict[str, Any]]:
     """Strategy position rows with an entry or exit in ``[start, end]``.
 
-    Filtered here, not in the query: the stored times mix datetimes and ISO strings,
-    and a typed range filter would silently miss one kind.
+    The stored times mix datetimes and ISO strings, and a typed range filter would
+    silently miss one kind. So the query pre-filters on both kinds with a margin
+    (petrosa-data-manager#911: only the window crosses the network, not the whole
+    collection), and ``_in_window`` keeps the exact semantics on what comes back.
     """
     cursor = (
         mongodb.db["strategy_positions"]
-        .find({}, _POSITION_FIELDS)
+        .find(_window_prefilter(start, end), _POSITION_FIELDS)
         .batch_size(POSITION_READ_BATCH_SIZE)
     )
     rows = await cursor.limit(MAX_POSITION_ROWS + 1).to_list(
