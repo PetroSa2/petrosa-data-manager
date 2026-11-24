@@ -102,6 +102,12 @@ def _window_prefilter(start: datetime, end: datetime) -> dict[str, Any]:
     for field in ("entry_time", "exit_time"):
         clauses.append({field: {"$gte": low, "$lte": high}})
         clauses.append({field: {"$gte": low_text, "$lt": high_text}})
+        # fromisoformat also accepts forms without the dashed date prefix (compact
+        # "20261120T120000Z", week dates "2026-W47-5"); they do not sort into the text
+        # range, so always return them and let _in_window decide.
+        clauses.append(
+            {field: {"$type": "string", "$not": {"$regex": r"^\d{4}-\d{2}-\d{2}"}}}
+        )
     return {"$or": clauses}
 
 

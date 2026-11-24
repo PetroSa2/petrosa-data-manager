@@ -81,6 +81,12 @@ def _rows():
             "exit_time": before.isoformat(),
         },
         {"strategy_position_id": "s-garbage", "entry_time": "not-a-time"},
+        # forms fromisoformat accepts without the dashed date prefix
+        {
+            "strategy_position_id": "s-compact",
+            "entry_time": inside.strftime("%Y%m%dT%H%M%SZ"),
+        },
+        {"strategy_position_id": "s-week", "exit_time": inside.strftime("%G-W%V-%u")},
         {"strategy_position_id": "missing-times"},
     ]
 
@@ -104,6 +110,7 @@ async def test_query_prefilter_returns_exactly_the_python_window_rows():
     assert "dt-exit-in-entry-before" in expected
     assert "s-minus5-edge" in expected
     assert "dt-just-before" not in expected
+    assert {"s-compact", "s-week"} <= set(expected)
 
 
 @pytest.mark.asyncio
