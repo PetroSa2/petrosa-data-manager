@@ -123,4 +123,8 @@ async def test_query_prefilter_leaves_out_rows_far_outside_the_window():
     ).to_list(length=None)
 
     ids = {r["strategy_position_id"] for r in raw}
-    assert not ids & {"dt-out", "dt-after", "s-out", "missing-times", "s-garbage"}
+    assert not ids & {"dt-out", "dt-after", "s-out", "missing-times"}
+    # Strings without a dashed date prefix are over-selected on purpose; _in_window drops junk.
+    assert "s-garbage" in ids
+    got = await module.read_position_rows(SimpleNamespace(db=db), START, END)
+    assert "s-garbage" not in {r["strategy_position_id"] for r in got}
