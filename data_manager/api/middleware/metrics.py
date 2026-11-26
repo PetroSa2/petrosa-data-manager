@@ -88,6 +88,9 @@ DATABASE_OPERATION_DURATION = Histogram(
 )
 
 
+UNMATCHED_ENDPOINT = "<unmatched>"
+
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """
     Middleware for collecting detailed API metrics.
@@ -113,6 +116,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             status_code = response.status_code
+            # petrosa_k8s#1527: label by the matched route template, so path parameters (lease
+            # names with random suffixes) don't create a new series set per value.
+            endpoint = self._metric_endpoint(request, endpoint)
 
             # Get response size
             response_size = self._get_response_size(response)
@@ -126,10 +132,21 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
         except Exception as e:
             # Record error metrics
+            endpoint = self._metric_endpoint(request, endpoint)
             self._record_error_metrics(method, endpoint, e, start_time, request_size)
             raise
         finally:
             reset_source(source_token)
+
+    @staticmethod
+    def _metric_endpoint(request: Request, fallback: str) -> str:
+        """The matched route's template (``/api/v1/leases/{name}/acquire``); unmatched paths share one
+        label so scanners and typos can't create series either."""
+        route = request.scope.get("route")
+        template = getattr(route, "path", None)
+        if isinstance(template, str) and template:
+            return template
+        return UNMATCHED_ENDPOINT if request.scope.get("type") == "http" else fallback
 
     def _extract_endpoint(self, request: Request) -> str:
         """Extract endpoint name from request path."""
@@ -139,6 +156,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/v1/"):
             # Generic API endpoints
             parts = path.split("/")
+            if len(parts) >= 5 and parts[3] == "leases":
+                # Lease names carry random suffixes: one bounded label (petrosa_k8s#1527).
+                return "/api/v1/leases/{name}"
             if len(parts) >= 5:
                 return f"/api/v1/{parts[3]}/{parts[4]}"
             elif len(parts) >= 4:
