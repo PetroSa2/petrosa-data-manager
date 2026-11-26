@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -34,15 +36,69 @@ def _analytics_database(mongodb: Any) -> Any:
     return analytics_db if analytics_db is not None else mongodb.db
 
 
+# petrosa-data-manager#918: the all-time fill read (~3.9k rows with payloads) takes ~4.7 s over the
+# DBaaS link, at the 5 s request budget, so the scorecard went `unavailable`. One shared full read
+# per TTL fills a process cache; requests are served from it (stale-while-revalidate). The read runs
+# as a shared task shielded from request cancellation, so a request that times out still leaves the
+# cache filled for the next one; late-written rows are picked up within the TTL.
+_FILL_CACHE_TTL_SECONDS = float(os.getenv("SCORECARD_FILL_CACHE_TTL_SECONDS", "300"))
+_fill_rows: list[dict[str, Any]] | None = None
+_fill_loaded_at = 0.0
+_fill_task: asyncio.Task[None] | None = None
+
+
+def _fill_time(row: dict[str, Any]) -> datetime:
+    from data_manager.services.historic_analytics import _as_datetime
+
+    return _as_datetime(row.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
+
+
+async def _refresh_fills(mysql: Any) -> None:
+    global _fill_rows, _fill_loaded_at
+    from data_manager.services.historic_analytics import read_execution_events
+
+    rows, _ = await asyncio.to_thread(read_execution_events, mysql)
+    _fill_rows = sorted(rows, key=_fill_time)
+    _fill_loaded_at = time.monotonic()
+
+
+def _log_refresh_failure(task: asyncio.Task[None]) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("scorecard fill cache refresh failed: %s", task.exception())
+
+
+def _start_refresh(mysql: Any) -> asyncio.Task[None]:
+    global _fill_task
+    if _fill_task is None or _fill_task.done():
+        _fill_task = asyncio.get_running_loop().create_task(_refresh_fills(mysql))
+        _fill_task.add_done_callback(_log_refresh_failure)
+    return _fill_task
+
+
+async def _cached_mysql_fills(mysql: Any) -> list[dict[str, Any]]:
+    """All fills from the process cache; refreshed at most once per TTL, never inside a request."""
+    if _fill_rows is not None:
+        if time.monotonic() - _fill_loaded_at >= _FILL_CACHE_TTL_SECONDS:
+            _start_refresh(mysql)  # serve the cached rows while the refresh runs
+        return _fill_rows
+    await asyncio.shield(_start_refresh(mysql))
+    return _fill_rows or []
+
+
+def _reset_fill_cache() -> None:
+    global _fill_rows, _fill_loaded_at, _fill_task
+    _fill_rows, _fill_loaded_at, _fill_task = None, 0.0, None
+
+
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
     from data_manager.services.historic_analytics import get_mysql_adapter
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
-        from data_manager.services.historic_analytics import read_execution_events
-
-        rows, _ = await asyncio.to_thread(read_execution_events, mysql, end=end)
-        return rows
+        rows = await _cached_mysql_fills(mysql)
+        if end is None:
+            return list(rows)
+        return [row for row in rows if _fill_time(row) < end]
     mongodb = api_module.db_manager.mongodb_adapter
     database = _analytics_database(mongodb)
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
