@@ -547,7 +547,13 @@ class MySQLAdapter(BaseAdapter):
                     "idx_execution_events_type_timestamp",
                 ):
                     try:
-                        index.create(self.engine, checkfirst=True)
+                        with self.engine.begin() as connection:
+                            # Fail fast instead of queueing the dual-writes behind a metadata lock
+                            # (lock_wait_timeout defaults to a year); the next start retries.
+                            connection.execute(
+                                sa.text("SET SESSION lock_wait_timeout = 5")
+                            )
+                            index.create(connection, checkfirst=True)
                     except Exception as exc:
                         # Another pod building the same index at startup (a race on checkfirst) or
                         # a slow build must not stop this pod: the index is an optimisation.
