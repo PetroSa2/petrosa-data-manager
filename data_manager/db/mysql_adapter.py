@@ -449,6 +449,8 @@ class MySQLAdapter(BaseAdapter):
             Index(
                 "idx_execution_events_strategy_timestamp", "strategy_id", "timestamp"
             ),
+            # petrosa-data-manager#823: the round book reads every strategy's fills in a window.
+            Index("idx_execution_events_type_timestamp", "event_type", "timestamp"),
             **event_table_args,
         )
         # dm#841: LLM gateway call records; Mongo llm_call_records is the operational copy.
@@ -538,12 +540,20 @@ class MySQLAdapter(BaseAdapter):
         # Create all tables
         if self.engine is not None:
             self.metadata.create_all(self.engine)
-            strategy_index = next(
-                index
-                for index in self.tables["execution_events"].indexes
-                if index.name == "idx_execution_events_strategy_timestamp"
-            )
-            strategy_index.create(self.engine, checkfirst=True)
+            # create_all does not add indexes to an existing table: create these explicitly.
+            for index in self.tables["execution_events"].indexes:
+                if index.name in (
+                    "idx_execution_events_strategy_timestamp",
+                    "idx_execution_events_type_timestamp",
+                ):
+                    try:
+                        index.create(self.engine, checkfirst=True)
+                    except Exception as exc:
+                        # Another pod building the same index at startup (a race on checkfirst) or
+                        # a slow build must not stop this pod: the index is an optimisation.
+                        logger.warning(
+                            "MySQL index %s not created now: %s", index.name, exc
+                        )
             logger.info("MySQL tables created/verified")
 
     def _create_klines_table(

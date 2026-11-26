@@ -26,7 +26,7 @@ except ImportError:
 from fastapi import APIRouter, HTTPException, Query
 from prometheus_client import Gauge, Histogram
 from pydantic import BaseModel
-from pymongo.errors import NetworkTimeout
+from pymongo.errors import NetworkTimeout, PyMongoError
 
 import constants
 import data_manager.api.app as api_module
@@ -1848,6 +1848,12 @@ async def get_slippage_by_regime(
     )
 
 
+# petrosa-data-manager#823: labelled bounds for the MySQL-first round read (env-overridable).
+_ROUND_MYSQL_MAX_EXECUTION_MS = int(os.getenv("ROUND_MYSQL_MAX_EXECUTION_MS", "8000"))
+# Dual-writes stamp mysql_copied_at within seconds; only this recent span can hold an uncopied fill.
+_ROUND_UNCOPIED_LOOKBACK_SECONDS = float(
+    os.getenv("ROUND_UNCOPIED_LOOKBACK_SECONDS", str(3 * 86400))
+)
 _ROUND_MYSQL_COLUMNS = (
     "event_key",
     "decision_id",
@@ -1909,7 +1915,8 @@ def _read_round_fills_mysql(
     engine = mysql._ensure_connected()
     strategy_clause = "AND strategy_id = :strategy_id " if strategy_id else ""
     statement = text(
-        f"SELECT {', '.join(_ROUND_MYSQL_COLUMNS)} FROM execution_events "
+        f"SELECT /*+ MAX_EXECUTION_TIME({_ROUND_MYSQL_MAX_EXECUTION_MS}) */ "
+        f"{', '.join(_ROUND_MYSQL_COLUMNS)} FROM execution_events "
         "WHERE timestamp >= :start AND timestamp <= :end "
         "AND event_type IN :events "
         f"{strategy_clause}"
@@ -2014,6 +2021,7 @@ async def compute_closed_rounds(
 
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         read_started = monotonic()
+        fills_source.update(source="mongo", uncopied_read="not_needed")
         collection = _analytics_database(mongodb)["execution_events"]
         rows: list[dict[str, Any]] | None = None
         if mysql_history is not None:
@@ -2034,23 +2042,34 @@ async def compute_closed_rounds(
                 )
             else:
                 fills_source["source"] = "mysql"
+                # Only the recent span: older documents were stamped by the dual-write, or copied
+                # by the historic backfill (which never stamps them) and are in MySQL already.
+                uncopied_since = max(
+                    window_start,
+                    window_end - timedelta(seconds=_ROUND_UNCOPIED_LOOKBACK_SECONDS),
+                )
+                uncopied_query = {
+                    **query,
+                    "timestamp": {"$gte": uncopied_since, "$lte": window_end},
+                    "mysql_copied_at": {"$exists": False},
+                }
                 try:
                     uncopied = await (
                         collection.find(
-                            {**query, "mysql_copied_at": {"$exists": False}},
+                            uncopied_query,
                             projection=ROUND_BOOK_PROJECTION,
                         )
                         .sort("timestamp", 1)
                         .to_list(length=_ROUND_MAX_FILLS)
                     )
                     fills_source["uncopied_read"] = "ok"
-                except NetworkTimeout as exc:
+                except PyMongoError as exc:
                     # The fills not yet in MySQL are missing: say so instead of returning nothing.
                     logger.warning(
-                        "rounds: uncopied execution_events read timed out: %s", exc
+                        "rounds: uncopied execution_events read failed: %s", exc
                     )
                     uncopied = []
-                    fills_source["uncopied_read"] = "timed_out"
+                    fills_source["uncopied_read"] = "failed"
                 rows = _merge_round_fills(mysql_rows, uncopied, _ROUND_MAX_FILLS)
         if rows is None:
             cursor = collection.find(query, projection=ROUND_BOOK_PROJECTION).sort(
@@ -2164,7 +2183,7 @@ async def compute_closed_rounds(
         "fills_source": fills_source["source"],
         "uncopied_read": fills_source["uncopied_read"],
     }
-    if fills_source["uncopied_read"] == "timed_out":
+    if fills_source["uncopied_read"] == "failed":
         report["status"] = "partial"
     return report
 

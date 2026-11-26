@@ -179,12 +179,72 @@ async def test_mysql_failure_falls_back_to_the_mongo_read():
 
 
 @pytest.mark.asyncio
-async def test_uncopied_timeout_keeps_mysql_rows_and_reports_partial():
+async def test_uncopied_failure_keeps_mysql_rows_and_reports_partial():
     mysql = FakeMySQL([_mysql_row("o1", "BUY", 0.01, 50000, 120)])
     collection = FakeCollection(error=NetworkTimeout("slow atlas"))
     report = await analysis.compute_closed_rounds(
         _manager(collection, mysql), "order_flow_imbalance", 90
     )
     assert report["metadata"]["fills_read"] == 1
-    assert report["metadata"]["uncopied_read"] == "timed_out"
+    assert report["metadata"]["uncopied_read"] == "failed"
     assert report["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_any_mongo_error_on_the_uncopied_read_is_partial_not_500():
+    from pymongo.errors import ServerSelectionTimeoutError
+
+    mysql = FakeMySQL([_mysql_row("o1", "BUY", 0.01, 50000, 120)])
+    collection = FakeCollection(error=ServerSelectionTimeoutError("no primary"))
+    report = await analysis.compute_closed_rounds(
+        _manager(collection, mysql), "order_flow_imbalance", 90
+    )
+    assert report["status"] == "partial"
+    assert report["metadata"]["fills_read"] == 1
+
+
+@pytest.mark.asyncio
+async def test_mongo_only_fill_is_merged_and_a_copied_one_counted_once():
+    """A fill whose dual-write failed is only in Mongo; one in both stores is counted once."""
+    in_both = _mysql_row("o1", "BUY", 0.01, 50000, 120)
+    mysql = FakeMySQL([in_both])
+    mongo_only = analysis._mysql_round_row(_mysql_row("o2", "SELL", 0.01, 50100, 30))
+    duplicate = analysis._mysql_round_row(in_both)
+    collection = FakeCollection(docs=[duplicate, mongo_only])
+    report = await analysis.compute_closed_rounds(
+        _manager(collection, mysql), "order_flow_imbalance", 90
+    )
+    assert report["metadata"]["fills_read"] == 2
+    assert report["strategies"]["order_flow_imbalance"]["fills"] == 2
+
+
+@pytest.mark.asyncio
+async def test_sql_bounds_order_and_uncopied_lookback():
+    mysql = FakeMySQL([])
+    collection = FakeCollection()
+    await analysis.compute_closed_rounds(
+        _manager(collection, mysql), "order_flow_imbalance", 90
+    )
+    sql, params = mysql.calls[0]
+    assert "timestamp >= :start AND timestamp <= :end" in sql
+    assert "ORDER BY timestamp LIMIT :cap" in sql and "DESC" not in sql
+    assert "MAX_EXECUTION_TIME" in sql
+    assert params["end"] - params["start"] == timedelta(days=90)
+    [mongo_query] = collection.queries
+    since = mongo_query["timestamp"]["$gte"]
+    assert mongo_query["timestamp"]["$lte"] - since == timedelta(
+        seconds=analysis._ROUND_UNCOPIED_LOOKBACK_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_mode_global_read_uses_mysql(monkeypatch):
+    """The default orphan-marking mode reads every strategy's fills first (no strategy filter)."""
+    monkeypatch.setenv("ROUND_ORPHAN_MARKING", "report")
+    mysql = FakeMySQL([_mysql_row("o1", "BUY", 0.01, 50000, 120)])
+    collection = FakeCollection()
+    report = await analysis.compute_closed_rounds(_manager(collection, mysql), None, 30)
+    sql, params = mysql.calls[0]
+    assert "strategy_id = :strategy_id" not in sql and "strategy_id" not in params
+    assert report["metadata"]["fills_source"] == "mysql"
+    assert report["metadata"]["fills_read"] == 1
