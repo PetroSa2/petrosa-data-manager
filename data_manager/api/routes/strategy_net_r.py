@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -34,15 +34,70 @@ def _analytics_database(mongodb: Any) -> Any:
     return analytics_db if analytics_db is not None else mongodb.db
 
 
+# petrosa-data-manager#918: the all-time fill read (~3.9k rows with payloads) takes ~4.7 s over the
+# DBaaS link, at the 5 s request budget, so the scorecard went `unavailable`. Fills are append-only:
+# keep them per process and read only what is new since the watermark (with an overlap for late
+# writes), so a request reads seconds of data, not all history.
+_FILL_CACHE_OVERLAP = timedelta(minutes=5)
+_fill_cache: dict[str, dict[str, Any]] = {}
+_fill_cache_watermark: datetime | None = None
+_fill_cache_lock = asyncio.Lock()
+
+
+def _fill_key(row: dict[str, Any]) -> str:
+    return f"{row.get('order_id')}:{row.get('event_type')}"
+
+
+def _fill_time(row: dict[str, Any]) -> datetime:
+    from data_manager.services.historic_analytics import _as_datetime
+
+    return _as_datetime(row.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
+
+
+async def _cached_mysql_fills(mysql: Any) -> list[dict[str, Any]]:
+    """All fills, from a process cache topped up with the rows since its watermark."""
+    global _fill_cache_watermark
+    from data_manager.services.historic_analytics import (
+        EXECUTION_EVENT_ANALYTICS_COLUMNS,
+        read_execution_events,
+    )
+
+    async with _fill_cache_lock:
+        if _fill_cache_watermark is None:
+            rows, _ = await asyncio.to_thread(read_execution_events, mysql)
+        else:
+            rows, _ = await asyncio.to_thread(
+                read_execution_events,
+                mysql,
+                start=_fill_cache_watermark - _FILL_CACHE_OVERLAP,
+                end=datetime.now(UTC) + _FILL_CACHE_OVERLAP,
+            )
+        for row in rows:
+            # The full read selects EXECUTION_EVENT_ANALYTICS_COLUMNS; the range read returns every
+            # column. Keep one row shape in the cache.
+            _fill_cache[_fill_key(row)] = {
+                column: row.get(column) for column in EXECUTION_EVENT_ANALYTICS_COLUMNS
+            }
+        if _fill_cache:
+            _fill_cache_watermark = max(_fill_time(row) for row in _fill_cache.values())
+        return sorted(_fill_cache.values(), key=_fill_time)
+
+
+def _reset_fill_cache() -> None:
+    global _fill_cache_watermark
+    _fill_cache.clear()
+    _fill_cache_watermark = None
+
+
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
     from data_manager.services.historic_analytics import get_mysql_adapter
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
-        from data_manager.services.historic_analytics import read_execution_events
-
-        rows, _ = await asyncio.to_thread(read_execution_events, mysql, end=end)
-        return rows
+        rows = await _cached_mysql_fills(mysql)
+        if end is None:
+            return list(rows)
+        return [row for row in rows if _fill_time(row) < end]
     mongodb = api_module.db_manager.mongodb_adapter
     database = _analytics_database(mongodb)
     query: dict[str, Any] = {"event_type": {"$in": sorted(FILL_EVENT_TYPES)}}
