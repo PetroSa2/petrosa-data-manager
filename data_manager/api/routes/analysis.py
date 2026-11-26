@@ -3,6 +3,7 @@ Analytics endpoints for computed metrics.
 """
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -25,7 +26,7 @@ except ImportError:
 from fastapi import APIRouter, HTTPException, Query
 from prometheus_client import Gauge, Histogram
 from pydantic import BaseModel
-from pymongo.errors import NetworkTimeout
+from pymongo.errors import NetworkTimeout, PyMongoError
 
 import constants
 import data_manager.api.app as api_module
@@ -1847,6 +1848,116 @@ async def get_slippage_by_regime(
     )
 
 
+# petrosa-data-manager#823: labelled bounds for the MySQL-first round read (env-overridable).
+_ROUND_MYSQL_MAX_EXECUTION_MS = int(os.getenv("ROUND_MYSQL_MAX_EXECUTION_MS", "8000"))
+# Dual-writes stamp mysql_copied_at within seconds; only this recent span can hold an uncopied fill.
+_ROUND_UNCOPIED_LOOKBACK_SECONDS = float(
+    os.getenv("ROUND_UNCOPIED_LOOKBACK_SECONDS", str(3 * 86400))
+)
+_ROUND_MYSQL_COLUMNS = (
+    "event_key",
+    "decision_id",
+    "strategy_id",
+    "order_id",
+    "event_type",
+    "timestamp",
+    "reason",
+    "symbol",
+    "side",
+    "qty",
+    "fill_qty",
+    "fill_quantity",
+    "price",
+    "fill_price",
+    "fill_time",
+    "fee",
+    "fee_asset",
+    "pnl",
+    "payload",
+)
+
+
+def _mysql_round_row(row: Any) -> dict[str, Any]:
+    """A MySQL ``execution_events`` row in the shape of the Mongo document the round book reads."""
+    doc: dict[str, Any] = {}
+    for key in _ROUND_MYSQL_COLUMNS:
+        value = row.get(key)
+        if isinstance(value, Decimal):
+            value = float(value)
+        elif isinstance(value, datetime) and value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        doc[key] = value
+    payload = doc.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {}
+    doc["payload"] = payload if isinstance(payload, dict) else {}
+    return doc
+
+
+def _read_round_fills_mysql(
+    mysql: Any,
+    event_types: list[str],
+    start: datetime,
+    end: datetime,
+    strategy_id: str | None,
+    cap: int,
+) -> list[dict[str, Any]]:
+    """The window's fills from the MySQL historic copy (petrosa-data-manager#823).
+
+    Every execution event is dual-written to MySQL as it arrives; reading the window there avoids pulling up
+    to 50k documents through the Atlas link, which timed out on every 30/90-day replay.
+    """
+    from sqlalchemy import bindparam, text
+
+    engine = mysql._ensure_connected()
+    strategy_clause = "AND strategy_id = :strategy_id " if strategy_id else ""
+    statement = text(
+        f"SELECT /*+ MAX_EXECUTION_TIME({_ROUND_MYSQL_MAX_EXECUTION_MS}) */ "
+        f"{', '.join(_ROUND_MYSQL_COLUMNS)} FROM execution_events "
+        "WHERE timestamp >= :start AND timestamp <= :end "
+        "AND event_type IN :events "
+        f"{strategy_clause}"
+        "ORDER BY timestamp LIMIT :cap"
+    ).bindparams(bindparam("events", expanding=True))
+    params: dict[str, Any] = {
+        "events": event_types,
+        "start": start.astimezone(UTC).replace(tzinfo=None),
+        "end": end.astimezone(UTC).replace(tzinfo=None),
+        "cap": cap,
+    }
+    if strategy_id:
+        params["strategy_id"] = strategy_id
+    with engine.begin() as connection:
+        rows = connection.execute(statement, params).mappings().all()
+    return [_mysql_round_row(row) for row in rows]
+
+
+def _round_event_key(row: dict[str, Any]) -> str:
+    return f"{row.get('order_id')}:{row.get('event_type')}"
+
+
+def _merge_round_fills(
+    mysql_rows: list[dict[str, Any]], mongo_rows: list[dict[str, Any]], cap: int
+) -> list[dict[str, Any]]:
+    """MySQL rows plus the Mongo documents not copied yet, once each, in time order, at most ``cap``."""
+    merged: dict[str, dict[str, Any]] = {}
+    for row in mysql_rows:
+        merged[_round_event_key(row)] = row
+    for row in mongo_rows:
+        merged.setdefault(_round_event_key(row), row)
+
+    def when(row: dict[str, Any]) -> datetime:
+        value = row.get("timestamp")
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        return datetime.min.replace(tzinfo=UTC)
+
+    return sorted(merged.values(), key=when)[:cap]
+
+
 def _round_overlay_mode() -> str:
     mode = os.getenv("ROUND_ORPHAN_MARKING", "report").lower()
     return mode if mode in {"off", "report", "apply"} else "report"
@@ -1905,14 +2016,66 @@ async def compute_closed_rounds(
         "timestamp": {"$gte": window_start, "$lte": window_end},
     }
 
+    mysql_history = getattr(db_manager, "mysql_adapter", None)
+    fills_source = {"source": "mongo", "uncopied_read": "not_needed"}
+
     async def read(query: dict[str, Any]) -> list[dict[str, Any]]:
         read_started = monotonic()
-        cursor = (
-            _analytics_database(mongodb)["execution_events"]
-            .find(query, projection=ROUND_BOOK_PROJECTION)
-            .sort("timestamp", 1)
-        )
-        rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
+        fills_source.update(source="mongo", uncopied_read="not_needed")
+        collection = _analytics_database(mongodb)["execution_events"]
+        rows: list[dict[str, Any]] | None = None
+        if mysql_history is not None:
+            # petrosa-data-manager#823: the MySQL historic copy, plus the few Mongo documents not copied yet.
+            try:
+                mysql_rows = await _run_heavy(
+                    _read_round_fills_mysql,
+                    mysql_history,
+                    sorted(FILL_EVENT_TYPES),
+                    window_start,
+                    window_end,
+                    query.get("strategy_id"),
+                    _ROUND_MAX_FILLS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "rounds: MySQL execution_events read failed, reading Mongo: %s", exc
+                )
+            else:
+                fills_source["source"] = "mysql"
+                # Only the recent span: older documents were stamped by the dual-write, or copied
+                # by the historic backfill (which never stamps them) and are in MySQL already.
+                uncopied_since = max(
+                    window_start,
+                    window_end - timedelta(seconds=_ROUND_UNCOPIED_LOOKBACK_SECONDS),
+                )
+                uncopied_query = {
+                    **query,
+                    "timestamp": {"$gte": uncopied_since, "$lte": window_end},
+                    "mysql_copied_at": {"$exists": False},
+                }
+                try:
+                    uncopied = await (
+                        collection.find(
+                            uncopied_query,
+                            projection=ROUND_BOOK_PROJECTION,
+                        )
+                        .sort("timestamp", 1)
+                        .to_list(length=_ROUND_MAX_FILLS)
+                    )
+                    fills_source["uncopied_read"] = "ok"
+                except PyMongoError as exc:
+                    # The fills not yet in MySQL are missing: say so instead of returning nothing.
+                    logger.warning(
+                        "rounds: uncopied execution_events read failed: %s", exc
+                    )
+                    uncopied = []
+                    fills_source["uncopied_read"] = "failed"
+                rows = _merge_round_fills(mysql_rows, uncopied, _ROUND_MAX_FILLS)
+        if rows is None:
+            cursor = collection.find(query, projection=ROUND_BOOK_PROJECTION).sort(
+                "timestamp", 1
+            )
+            rows = await cursor.to_list(length=_ROUND_MAX_FILLS)
         record_report_stage(
             "rounds", "read+decode", monotonic() - read_started, source=source
         )
@@ -2017,7 +2180,11 @@ async def compute_closed_rounds(
         "fills_read": len(rows),
         "truncated": truncated,
         "source": "data-manager-round-book",
+        "fills_source": fills_source["source"],
+        "uncopied_read": fills_source["uncopied_read"],
     }
+    if fills_source["uncopied_read"] == "failed":
+        report["status"] = "partial"
     return report
 
 
