@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+import os
+import time
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -35,17 +37,14 @@ def _analytics_database(mongodb: Any) -> Any:
 
 
 # petrosa-data-manager#918: the all-time fill read (~3.9k rows with payloads) takes ~4.7 s over the
-# DBaaS link, at the 5 s request budget, so the scorecard went `unavailable`. Fills are append-only:
-# keep them per process and read only what is new since the watermark (with an overlap for late
-# writes), so a request reads seconds of data, not all history.
-_FILL_CACHE_OVERLAP = timedelta(minutes=5)
-_fill_cache: dict[str, dict[str, Any]] = {}
-_fill_cache_watermark: datetime | None = None
-_fill_cache_lock = asyncio.Lock()
-
-
-def _fill_key(row: dict[str, Any]) -> str:
-    return f"{row.get('order_id')}:{row.get('event_type')}"
+# DBaaS link, at the 5 s request budget, so the scorecard went `unavailable`. One shared full read
+# per TTL fills a process cache; requests are served from it (stale-while-revalidate). The read runs
+# as a shared task shielded from request cancellation, so a request that times out still leaves the
+# cache filled for the next one; late-written rows are picked up within the TTL.
+_FILL_CACHE_TTL_SECONDS = float(os.getenv("SCORECARD_FILL_CACHE_TTL_SECONDS", "300"))
+_fill_rows: list[dict[str, Any]] | None = None
+_fill_loaded_at = 0.0
+_fill_task: asyncio.Task[None] | None = None
 
 
 def _fill_time(row: dict[str, Any]) -> datetime:
@@ -54,39 +53,41 @@ def _fill_time(row: dict[str, Any]) -> datetime:
     return _as_datetime(row.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
 
 
-async def _cached_mysql_fills(mysql: Any) -> list[dict[str, Any]]:
-    """All fills, from a process cache topped up with the rows since its watermark."""
-    global _fill_cache_watermark
-    from data_manager.services.historic_analytics import (
-        EXECUTION_EVENT_ANALYTICS_COLUMNS,
-        read_execution_events,
-    )
+async def _refresh_fills(mysql: Any) -> None:
+    global _fill_rows, _fill_loaded_at
+    from data_manager.services.historic_analytics import read_execution_events
 
-    async with _fill_cache_lock:
-        if _fill_cache_watermark is None:
-            rows, _ = await asyncio.to_thread(read_execution_events, mysql)
-        else:
-            rows, _ = await asyncio.to_thread(
-                read_execution_events,
-                mysql,
-                start=_fill_cache_watermark - _FILL_CACHE_OVERLAP,
-                end=datetime.now(UTC) + _FILL_CACHE_OVERLAP,
-            )
-        for row in rows:
-            # The full read selects EXECUTION_EVENT_ANALYTICS_COLUMNS; the range read returns every
-            # column. Keep one row shape in the cache.
-            _fill_cache[_fill_key(row)] = {
-                column: row.get(column) for column in EXECUTION_EVENT_ANALYTICS_COLUMNS
-            }
-        if _fill_cache:
-            _fill_cache_watermark = max(_fill_time(row) for row in _fill_cache.values())
-        return sorted(_fill_cache.values(), key=_fill_time)
+    rows, _ = await asyncio.to_thread(read_execution_events, mysql)
+    _fill_rows = sorted(rows, key=_fill_time)
+    _fill_loaded_at = time.monotonic()
+
+
+def _log_refresh_failure(task: asyncio.Task[None]) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("scorecard fill cache refresh failed: %s", task.exception())
+
+
+def _start_refresh(mysql: Any) -> asyncio.Task[None]:
+    global _fill_task
+    if _fill_task is None or _fill_task.done():
+        _fill_task = asyncio.get_running_loop().create_task(_refresh_fills(mysql))
+        _fill_task.add_done_callback(_log_refresh_failure)
+    return _fill_task
+
+
+async def _cached_mysql_fills(mysql: Any) -> list[dict[str, Any]]:
+    """All fills from the process cache; refreshed at most once per TTL, never inside a request."""
+    if _fill_rows is not None:
+        if time.monotonic() - _fill_loaded_at >= _FILL_CACHE_TTL_SECONDS:
+            _start_refresh(mysql)  # serve the cached rows while the refresh runs
+        return _fill_rows
+    await asyncio.shield(_start_refresh(mysql))
+    return _fill_rows or []
 
 
 def _reset_fill_cache() -> None:
-    global _fill_cache_watermark
-    _fill_cache.clear()
-    _fill_cache_watermark = None
+    global _fill_rows, _fill_loaded_at, _fill_task
+    _fill_rows, _fill_loaded_at, _fill_task = None, 0.0, None
 
 
 async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
