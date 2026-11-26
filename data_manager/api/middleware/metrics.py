@@ -139,6 +139,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/v1/"):
             # Generic API endpoints
             parts = path.split("/")
+            if len(parts) >= 5 and parts[3] == "leases":
+                # Lease names carry random suffixes (signal_spread_liquidity_ETHUSDT_fa2bf3d866cf):
+                # one bounded label, or each new lease adds a series set (petrosa_k8s#1527).
+                return "/api/v1/leases/{name}"
             if len(parts) >= 5:
                 return f"/api/v1/{parts[3]}/{parts[4]}"
             elif len(parts) >= 4:
