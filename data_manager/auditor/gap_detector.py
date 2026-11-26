@@ -165,8 +165,14 @@ class GapDetector:
                     gaps.append(gap)
                     await self._log_gap(symbol, timeframe, gap)
 
-            # Check for gap at the end
-            if timestamps[-1] < end - expected_interval - tolerance:
+            # Check for gap at the end. petrosa-data-manager#906: the newest candles reach the store up
+            # to the readiness freshness budget (CANDLE_WARMUP_FRESHNESS_INTERVALS x interval) after they
+            # close; inside it a missing trailing candle is still arriving, not a gap. Without this the
+            # 15m audit flagged (and backfilled) the not-yet-ingested candle on every symbol each run.
+            head_grace = expected_interval * max(
+                constants.CANDLE_WARMUP_FRESHNESS_INTERVALS - 1, 0
+            )
+            if timestamps[-1] < end - expected_interval - tolerance - head_grace:
                 gap = GapInfo(
                     start_time=timestamps[-1] + expected_interval,
                     end_time=end,
