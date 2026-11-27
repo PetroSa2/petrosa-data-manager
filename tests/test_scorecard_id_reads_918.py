@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from datetime import datetime
 from decimal import Decimal as D
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import sqlalchemy as sa
 
 from data_manager.api.routes import strategy_net_r
+from data_manager.db.mysql_adapter import MySQLAdapter
+
+
+@pytest.fixture(autouse=True)
+def _fresh_decision_cache():
+    strategy_net_r._reset_decision_cache()
+    yield
+    strategy_net_r._reset_decision_cache()
 
 
 class FakeMySQL:
@@ -131,3 +143,116 @@ async def test_no_ids_means_no_read():
         assert await strategy_net_r._load_stops([]) == {}
         assert await strategy_net_r._load_decisions([]) == {}
     assert mysql.calls == []
+
+
+def _decision(decision_id: str, pct: str = "0.02") -> dict:
+    return {"decision_id": decision_id, "payload": {"stop_loss_pct": pct}}
+
+
+@pytest.mark.asyncio
+async def test_decision_rows_are_cached_and_only_unseen_ids_are_read():
+    mysql = FakeMySQL({"cio_decisions": [_decision("d1"), _decision("d2")]})
+    with patch.object(strategy_net_r.api_module, "db_manager", _manager(mysql)):
+        first = await strategy_net_r._load_decisions(["d1"])
+        second = await strategy_net_r._load_decisions(["d1", "d2", "absent"])
+
+    assert set(first) == {"d1"}
+    assert set(second) == {"d1", "d2"}
+    assert [c["filter"]["decision_id"] for c in mysql.calls] == [
+        ["d1"],
+        ["d2", "absent"],  # d1 came from the cache; an absent id is asked again
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_decision_read_still_fills_the_cache():
+    release = threading.Event()
+    mysql = FakeMySQL({"cio_decisions": [_decision("d1")]})
+    inner = mysql.find_paginated
+
+    def slow(*args, **kwargs):
+        release.wait(2)
+        return inner(*args, **kwargs)
+
+    mysql.find_paginated = slow
+    with patch.object(strategy_net_r.api_module, "db_manager", _manager(mysql)):
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(strategy_net_r._load_decisions(["d1"]), 0.05)
+        with pytest.raises(
+            asyncio.TimeoutError
+        ):  # the next request joins the same read
+            await asyncio.wait_for(strategy_net_r._load_decisions(["d1"]), 0.05)
+        release.set()
+        decisions = await asyncio.wait_for(strategy_net_r._load_decisions(["d1"]), 2)
+
+    assert decisions["d1"]["stop_fraction"] == D("0.02")
+    assert len(mysql.calls) == 1
+
+
+@pytest.fixture
+def sqlite_mysql():
+    """The real adapter on SQLite, with a reflected positions table that has no avg_price."""
+    adapter = MySQLAdapter("sqlite:///:memory:", role="serving")
+    adapter.engine_options = {}
+    adapter.engine = sa.create_engine(
+        "sqlite://",
+        poolclass=sa.pool.StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    adapter._connected = True
+    adapter._create_tables()
+    when = datetime(2026, 11, 26)
+    with adapter.engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE positions (id INTEGER PRIMARY KEY, position_id VARCHAR(64) UNIQUE,"
+            " entry_price NUMERIC(20,8), stop_loss NUMERIC(20,8), metadata TEXT)"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO positions (position_id, entry_price, stop_loss, metadata)"
+            " VALUES ('p1', 100, 98, 'big'), ('other', 1, 1, 'big')"
+        )
+        conn.execute(
+            adapter.tables["cio_decisions"].insert(),
+            [
+                {
+                    "decision_id": "d1",
+                    "strategy_id": "s",
+                    "timestamp": when,
+                    "source": "cio_llm",
+                    "payload": {"entry_price": 100, "stop_loss": 99},
+                    "reasoning": {"text": "long"},
+                    "received_at": when,
+                }
+            ],
+        )
+    statements: list[str] = []
+    sa.event.listen(
+        adapter.engine,
+        "before_cursor_execute",
+        lambda _c, _cur, statement, *_rest: statements.append(statement.lower()),
+    )
+    return adapter, statements
+
+
+@pytest.mark.asyncio
+async def test_the_real_adapter_reads_by_id_without_a_count_or_wide_columns(
+    sqlite_mysql,
+):
+    adapter, statements = sqlite_mysql
+    manager = SimpleNamespace(mysql_adapter=adapter, mongodb_adapter=None)
+    with patch.object(strategy_net_r.api_module, "db_manager", manager):
+        stops = await strategy_net_r._load_stops(["p1", "missing"])
+        decisions = await strategy_net_r._load_decisions(["d1", "dx"])
+
+    assert stops == {"p1": D("0.02")}
+    assert decisions == {"d1": {"source": "cio_llm", "stop_fraction": D("0.01")}}
+    selects = [
+        s
+        for s in statements
+        if s.lstrip().startswith("select")
+        and ("from positions" in s or "from cio_decisions" in s)
+    ]
+    assert len(selects) == 2
+    assert all(" in (" in s for s in selects)
+    assert not any("count(" in s for s in selects)
+    assert not any("metadata" in s or "reasoning" in s for s in selects)
