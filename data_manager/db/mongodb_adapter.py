@@ -796,6 +796,11 @@ class MongoDBAdapter(BaseAdapter):
         if not self._connected:
             raise DatabaseError("Not connected to database")
 
+        # petrosa-data-manager#923: the PyMongoError handler below reads both. Bind them before any
+        # Mongo call, so an error in index_information() reaches the TTL fallback instead of an
+        # UnboundLocalError that skipped the rest of startup's index/TTL coverage.
+        ttl_policy = ttl_policy_for_collection(collection)
+        existing_ttl = False
         try:
             target_database = (
                 database
@@ -1096,7 +1101,6 @@ class MongoDBAdapter(BaseAdapter):
                     IndexModel([("symbol", ASCENDING), ("timestamp", ASCENDING)]),
                 ]
 
-            ttl_policy = ttl_policy_for_collection(collection)
             existing_indexes_result = coll.index_information()
             existing_indexes = (
                 await existing_indexes_result
