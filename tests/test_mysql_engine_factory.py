@@ -265,6 +265,49 @@ def test_pool_events_move_the_gauges() -> None:
     assert gauge("connections_open") == open_
 
 
+def test_a_failed_ping_and_reconnect_does_not_push_the_in_use_gauge_below_zero() -> (
+    None
+):
+    """petrosa-data-manager#921: during an outage the pre-ping fails, the reconnect fails, and
+    SQLAlchemy fires `checkin` with no matching `checkout`; the gauge reached -243 in production."""
+    labels = {"role": "adhoc"}
+    engine = build_engine(SQLITE, "adhoc")
+    before = _sample("data_manager_mysql_pool_in_use", **labels)
+    engine.connect().close()  # a pooled connection the next checkout will ping
+
+    def lost(*_args: object) -> None:
+        raise engine.dialect.dbapi.OperationalError("Lost connection")
+
+    engine.dialect.do_ping = lost
+    engine.dialect.is_disconnect = lambda *args, **kwargs: True
+
+    @event.listens_for(engine, "do_connect")
+    def _refuse(dialect, conn_rec, cargs, cparams):
+        raise engine.dialect.dbapi.OperationalError("Can't connect")
+
+    for _ in range(3):
+        with pytest.raises(sa.exc.OperationalError):
+            engine.connect()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before
+    engine.dispose()
+
+
+def test_an_invalidated_checked_out_connection_is_counted_back_in() -> None:
+    labels = {"role": "adhoc"}
+    engine = build_engine(SQLITE, "adhoc")
+    before = _sample("data_manager_mysql_pool_in_use", **labels)
+    connection = engine.connect()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before + 1
+    connection.invalidate()
+    connection.close()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before
+    again = engine.connect()  # the record reconnects; it is counted once more
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before + 1
+    again.close()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before
+    engine.dispose()
+
+
 def test_pool_peak_gauge_tracks_highest_concurrent_checkout() -> None:
     engine = build_engine(SQLITE, "serving")
     first = engine.connect()

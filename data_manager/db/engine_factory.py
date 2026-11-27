@@ -31,6 +31,7 @@ ROLE_DEFAULTS: dict[str, tuple[int, int, int]] = {
     "adhoc": (1, 0, 5),
 }
 ROLE_CAPS = {"serving": 8, "cron": 1, "job": 1, "adhoc": 1}
+_CHECKED_OUT = "petrosa_checked_out"
 ERROR_KINDS = ("max_user_connections", "too_many_connections", "pool_timeout")
 
 pool_in_use = Gauge(
@@ -259,9 +260,17 @@ def build_engine(
         del dbapi_connection, connection_record
         connections_open.labels(role=role).dec()
 
+    # petrosa-data-manager#921: SQLAlchemy also fires `checkin` for connections that never passed a
+    # counted `checkout` (failed or invalidated connections during an outage), which drove the gauge
+    # to -243. Count a checkin only for a record this engine marked at checkout.
     @event.listens_for(engine, "checkout")
     def _checkout(dbapi_connection: Any, connection_record: Any, proxy: Any) -> None:
-        del dbapi_connection, connection_record, proxy
+        del dbapi_connection, proxy
+        info = getattr(connection_record, "record_info", None)
+        if isinstance(info, dict):
+            if info.get(_CHECKED_OUT):
+                return
+            info[_CHECKED_OUT] = True
         with state_lock:
             current = state["in_use"]
             state["in_use"] += 1
@@ -272,7 +281,10 @@ def build_engine(
 
     @event.listens_for(engine, "checkin")
     def _checkin(dbapi_connection: Any, connection_record: Any) -> None:
-        del dbapi_connection, connection_record
+        del dbapi_connection
+        info = getattr(connection_record, "record_info", None)
+        if not isinstance(info, dict) or not info.pop(_CHECKED_OUT, False):
+            return
         with state_lock:
             state["in_use"] = max(0, state["in_use"] - 1)
         pool_in_use.labels(role=role).dec()
