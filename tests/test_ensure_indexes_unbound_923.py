@@ -46,6 +46,7 @@ async def test_an_index_read_timeout_falls_back_to_the_ttl_index(adapter):
     )
     assert keys == [(policy.field, 1)]
     assert options["expireAfterSeconds"] == policy.seconds
+    coll.drop_index.assert_not_awaited()  # the fallback never drops an index
 
 
 @pytest.mark.asyncio
