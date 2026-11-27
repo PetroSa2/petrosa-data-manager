@@ -29,6 +29,18 @@ def enable_legacy_mysql_writes_for_existing_route_tests(monkeypatch):
     monkeypatch.setattr(constants, "GENERIC_MYSQL_WRITES_ENABLED", True)
 
 
+@pytest.fixture(autouse=True)
+def reset_scorecard_process_caches():
+    """The scorecard's fill and decision caches are process-wide; no test may see another's."""
+    from data_manager.api.routes import strategy_net_r
+
+    strategy_net_r._reset_fill_cache()
+    strategy_net_r._reset_decision_cache()
+    yield
+    strategy_net_r._reset_fill_cache()
+    strategy_net_r._reset_decision_cache()
+
+
 @pytest.fixture
 def mock_nats_client():
     """Create a mock NATS client."""

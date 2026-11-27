@@ -9,6 +9,7 @@ a position carried from its ``positions`` row, else from its ``cio_decisions`` r
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -64,7 +65,7 @@ async def _refresh_fills(mysql: Any) -> None:
 
 def _log_refresh_failure(task: asyncio.Task[None]) -> None:
     if not task.cancelled() and task.exception() is not None:
-        logger.warning("scorecard fill cache refresh failed: %s", task.exception())
+        logger.warning("scorecard cache read failed: %s", task.exception())
 
 
 def _start_refresh(mysql: Any) -> asyncio.Task[None]:
@@ -112,6 +113,76 @@ async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
     )
 
 
+# petrosa-data-manager#918: the stop and decision lookups read whole tables (positions ~3.3k rows
+# 14.4 s, cio_decisions ~14.7k rows 31.6 s over the DBaaS link), so both timed out at the 5 s
+# budget and the scorecard stayed `incomplete`. Read only the ids the scored rounds name (both are
+# indexed: positions.position_id unique, cio_decisions.decision_id primary key) and only the
+# columns the stop math needs, in bounded IN-list chunks. Decision rows never change once written
+# and the scored rounds can name thousands of them, so they are cached by id and only unseen ids are
+# read, by one shared task shielded from request cancellation (a request that hits the budget still
+# leaves the rows cached for the next one, and abandoned reads do not pile up).
+_ID_CHUNK = 500
+_POSITION_COLUMNS = ("position_id", "entry_price", "avg_price", "stop_loss")
+_DECISION_COLUMNS = ("decision_id", "source", "price", "payload")
+
+
+def _read_rows_by_id(
+    mysql: Any, table: str, id_column: str, ids: list[str], columns: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for start in range(0, len(ids), _ID_CHUNK):
+        chunk = ids[start : start + _ID_CHUNK]
+        page, *_ = mysql.find_paginated(
+            table,
+            filter_dict={id_column: chunk},
+            limit=len(chunk),
+            columns=columns,
+            include_total=False,
+        )
+        rows.extend(page)
+    return rows
+
+
+_decision_rows: dict[str, dict[str, Any]] = {}
+_decision_task: asyncio.Task[None] | None = None
+
+
+async def _fetch_decision_rows(mysql: Any, ids: list[str]) -> None:
+    rows = await asyncio.to_thread(
+        _read_rows_by_id, mysql, "cio_decisions", "decision_id", ids, _DECISION_COLUMNS
+    )
+    for row in rows:
+        if row.get("decision_id") is not None:
+            _decision_rows[str(row["decision_id"])] = row
+
+
+async def _cached_decision_rows(mysql: Any, ids: list[str]) -> list[dict[str, Any]]:
+    global _decision_task
+    while missing := [i for i in ids if i not in _decision_rows]:
+        running = _decision_task
+        if running is not None and not running.done():
+            # another request's read may cover these ids: wait for it, then re-check;
+            # its failure is that request's to report
+            try:
+                await asyncio.shield(running)
+            except Exception:
+                pass
+            continue
+        _decision_task = asyncio.get_running_loop().create_task(
+            _fetch_decision_rows(mysql, missing)
+        )
+        _decision_task.add_done_callback(_log_refresh_failure)
+        await asyncio.shield(_decision_task)
+        break  # ids still missing after our own read are not in MySQL
+    return [_decision_rows[i] for i in ids if i in _decision_rows]
+
+
+def _reset_decision_cache() -> None:
+    global _decision_task
+    _decision_rows.clear()
+    _decision_task = None
+
+
 async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
     """position id -> the stop fraction the position carried, from its row."""
     if not position_ids:
@@ -120,9 +191,14 @@ async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
-        from data_manager.services.historic_analytics import read_table
-
-        rows = await asyncio.to_thread(read_table, mysql, "positions")
+        rows = await asyncio.to_thread(
+            _read_rows_by_id,
+            mysql,
+            "positions",
+            "position_id",
+            position_ids,
+            _POSITION_COLUMNS,
+        )
     else:
         mongodb = api_module.db_manager.mongodb_adapter
         database = _analytics_database(mongodb)
@@ -149,9 +225,7 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
-        from data_manager.services.historic_analytics import read_table
-
-        rows = await asyncio.to_thread(read_table, mysql, "cio_decisions")
+        rows = await _cached_decision_rows(mysql, decision_ids)
     else:
         mongodb = api_module.db_manager.mongodb_adapter
         database = _analytics_database(mongodb)
@@ -163,6 +237,14 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
         payload = row.get("payload") or {}
+        # MySQL's JSON column arrives as a dict; a Mongo document may carry its payload as text.
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
         price = payload.get("entry_price") or payload.get("price") or row.get("price")
         stop = stop_fraction_of(price, payload.get("stop_loss"))
         if stop is None and payload.get("stop_loss_pct") is not None:
