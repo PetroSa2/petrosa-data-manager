@@ -158,15 +158,22 @@ async def _fetch_decision_rows(mysql: Any, ids: list[str]) -> None:
 
 async def _cached_decision_rows(mysql: Any, ids: list[str]) -> list[dict[str, Any]]:
     global _decision_task
-    if _decision_task is not None and not _decision_task.done():
-        await asyncio.shield(_decision_task)
-    missing = [i for i in ids if i not in _decision_rows]
-    if missing:
+    while missing := [i for i in ids if i not in _decision_rows]:
+        running = _decision_task
+        if running is not None and not running.done():
+            # another request's read may cover these ids: wait for it, then re-check;
+            # its failure is that request's to report
+            try:
+                await asyncio.shield(running)
+            except Exception:
+                pass
+            continue
         _decision_task = asyncio.get_running_loop().create_task(
             _fetch_decision_rows(mysql, missing)
         )
         _decision_task.add_done_callback(_log_refresh_failure)
         await asyncio.shield(_decision_task)
+        break  # ids still missing after our own read are not in MySQL
     return [_decision_rows[i] for i in ids if i in _decision_rows]
 
 

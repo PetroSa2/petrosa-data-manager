@@ -16,13 +16,6 @@ from data_manager.api.routes import strategy_net_r
 from data_manager.db.mysql_adapter import MySQLAdapter
 
 
-@pytest.fixture(autouse=True)
-def _fresh_decision_cache():
-    strategy_net_r._reset_decision_cache()
-    yield
-    strategy_net_r._reset_decision_cache()
-
-
 class FakeMySQL:
     """find_paginated over in-memory rows, honouring the IN filter and the column list."""
 
@@ -256,3 +249,31 @@ async def test_the_real_adapter_reads_by_id_without_a_count_or_wide_columns(
     assert all(" in (" in s for s in selects)
     assert not any("count(" in s for s in selects)
     assert not any("metadata" in s or "reasoning" in s for s in selects)
+
+
+@pytest.mark.asyncio
+async def test_requests_waiting_on_one_read_do_not_each_read_the_same_ids():
+    """Review of #920: waiters re-check after the in-flight read instead of all reading again."""
+    release = threading.Event()
+    mysql = FakeMySQL({"cio_decisions": [_decision("d1"), _decision("d2")]})
+    inner = mysql.find_paginated
+
+    def slow(*args, **kwargs):
+        release.wait(2)
+        return inner(*args, **kwargs)
+
+    mysql.find_paginated = slow
+    with patch.object(strategy_net_r.api_module, "db_manager", _manager(mysql)):
+        first = asyncio.ensure_future(strategy_net_r._load_decisions(["d1"]))
+        await asyncio.sleep(0.01)
+        waiters = [
+            asyncio.ensure_future(strategy_net_r._load_decisions(ids))
+            for ids in (["d2"], ["d2"], ["d2", "d3"])
+        ]
+        await asyncio.sleep(0.01)
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(first, *waiters), 2)
+
+    assert "d1" in results[0] and all("d2" in r for r in results[1:])
+    reads = [c["filter"]["decision_id"] for c in mysql.calls]
+    assert sum("d2" in ids for ids in reads) == 1  # d2 read once, not once per waiter
