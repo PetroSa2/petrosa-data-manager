@@ -9,6 +9,7 @@ a position carried from its ``positions`` row, else from its ``cio_decisions`` r
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -112,6 +113,35 @@ async def _load_fills(end: datetime | None) -> list[dict[str, Any]]:
     )
 
 
+# petrosa-data-manager#918: the stop and decision lookups read whole tables (positions ~3.3k rows
+# 14.4 s, cio_decisions ~14.7k rows 31.6 s over the DBaaS link), so both timed out at the 5 s
+# budget and the scorecard stayed `incomplete`. Read only the ids the scored rounds name (both are
+# indexed: positions.position_id unique, cio_decisions.decision_id primary key) and only the
+# columns the stop math needs, in bounded IN-list chunks.
+_ID_CHUNK = 500
+_POSITION_COLUMNS = ("position_id", "entry_price", "avg_price", "stop_loss")
+_DECISION_COLUMNS = ("decision_id", "source", "price", "payload")
+
+
+def _read_rows_by_id(
+    mysql: Any, table: str, id_column: str, ids: list[str], columns: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    from data_manager.services.historic_analytics import MAX_ANALYTICS_ROWS
+
+    rows: list[dict[str, Any]] = []
+    for start in range(0, len(ids), _ID_CHUNK):
+        chunk = ids[start : start + _ID_CHUNK]
+        page, *_ = mysql.find_paginated(
+            table,
+            filter_dict={id_column: chunk},
+            limit=MAX_ANALYTICS_ROWS,
+            columns=columns,
+            include_total=False,
+        )
+        rows.extend(page)
+    return rows
+
+
 async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
     """position id -> the stop fraction the position carried, from its row."""
     if not position_ids:
@@ -120,9 +150,14 @@ async def _load_stops(position_ids: list[str]) -> dict[str, Decimal]:
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
-        from data_manager.services.historic_analytics import read_table
-
-        rows = await asyncio.to_thread(read_table, mysql, "positions")
+        rows = await asyncio.to_thread(
+            _read_rows_by_id,
+            mysql,
+            "positions",
+            "position_id",
+            position_ids,
+            _POSITION_COLUMNS,
+        )
     else:
         mongodb = api_module.db_manager.mongodb_adapter
         database = _analytics_database(mongodb)
@@ -149,9 +184,14 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
 
     mysql = get_mysql_adapter(api_module.db_manager)
     if mysql is not None:
-        from data_manager.services.historic_analytics import read_table
-
-        rows = await asyncio.to_thread(read_table, mysql, "cio_decisions")
+        rows = await asyncio.to_thread(
+            _read_rows_by_id,
+            mysql,
+            "cio_decisions",
+            "decision_id",
+            decision_ids,
+            _DECISION_COLUMNS,
+        )
     else:
         mongodb = api_module.db_manager.mongodb_adapter
         database = _analytics_database(mongodb)
@@ -163,6 +203,13 @@ async def _load_decisions(decision_ids: list[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
         payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
         price = payload.get("entry_price") or payload.get("price") or row.get("price")
         stop = stop_fraction_of(price, payload.get("stop_loss"))
         if stop is None and payload.get("stop_loss_pct") is not None:
