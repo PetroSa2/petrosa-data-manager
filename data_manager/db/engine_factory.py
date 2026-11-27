@@ -267,10 +267,9 @@ def build_engine(
     def _checkout(dbapi_connection: Any, connection_record: Any, proxy: Any) -> None:
         del dbapi_connection, proxy
         info = getattr(connection_record, "record_info", None)
-        if isinstance(info, dict):
-            if info.get(_CHECKED_OUT):
-                return
-            info[_CHECKED_OUT] = True
+        if not isinstance(info, dict) or info.get(_CHECKED_OUT):
+            return  # uncountable record, or a repeated checkout event for the same checkout
+        info[_CHECKED_OUT] = True
         with state_lock:
             current = state["in_use"]
             state["in_use"] += 1

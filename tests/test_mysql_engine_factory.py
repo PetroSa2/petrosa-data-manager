@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import sqlite3
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -288,6 +289,44 @@ def test_a_failed_ping_and_reconnect_does_not_push_the_in_use_gauge_below_zero()
     for _ in range(3):
         with pytest.raises(sa.exc.OperationalError):
             engine.connect()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before
+    engine.dispose()
+
+
+def test_a_failed_recycle_reconnect_does_not_push_the_in_use_gauge_below_zero() -> None:
+    labels = {"role": "adhoc"}
+    engine = build_engine(SQLITE, "adhoc", pool_recycle=0)
+    before = _sample("data_manager_mysql_pool_in_use", **labels)
+    engine.connect().close()
+    time.sleep(0.01)  # the pooled connection is now past pool_recycle
+
+    @event.listens_for(engine, "do_connect")
+    def _refuse(dialect, conn_rec, cargs, cparams):
+        raise engine.dialect.dbapi.OperationalError("Can't connect")
+
+    for _ in range(3):
+        with pytest.raises(sa.exc.OperationalError):
+            engine.connect()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before
+    engine.dispose()
+
+
+def test_a_repeated_checkout_event_is_counted_once() -> None:
+    """A checkout listener raising DisconnectionError makes SQLAlchemy fire `checkout` again."""
+    labels = {"role": "adhoc"}
+    engine = build_engine(SQLITE, "adhoc")
+    calls = {"n": 0}
+
+    @event.listens_for(engine, "checkout")
+    def _disconnect_once(dbapi_connection, connection_record, proxy):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sa.exc.DisconnectionError("stale")
+
+    before = _sample("data_manager_mysql_pool_in_use", **labels)
+    connection = engine.connect()
+    assert _sample("data_manager_mysql_pool_in_use", **labels) == before + 1
+    connection.close()
     assert _sample("data_manager_mysql_pool_in_use", **labels) == before
     engine.dispose()
 
