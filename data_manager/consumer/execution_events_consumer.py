@@ -39,6 +39,18 @@ from data_manager.observability.thin_data_evidence import (
 from data_manager.utils.nats_trace_propagator import NATSTracePropagator
 
 logger = logging.getLogger(__name__)
+
+# petrosa-data-manager#925: whole regime documents (~1 KB, ~1,400 per symbol) took ~13 s per symbol
+# on Atlas and timed out at 5 s. A fill stamp needs only the regime and its time fields
+# (slippage_report.regime_time), newest first: 500 documents cover about a day.
+_REGIME_PROJECTION = {
+    "_id": 0,
+    "regime": 1,
+    "computed_at": 1,
+    "metadata.computed_at": 1,
+    "timestamp": 1,
+}
+_REGIME_REFRESH_LIMIT = 500
 tracer = trace.get_tracer(__name__)
 
 EXECUTION_EVENTS_COLLECTION = "execution_events"
@@ -575,15 +587,19 @@ class ExecutionEventsConsumer:
                     try:
                         docs = await (
                             adapter.db[f"analytics_{symbol.strip()}_regime"]
-                            .find({})
-                            .to_list(length=2000)
+                            .find({}, _REGIME_PROJECTION)
+                            .sort([("_id", -1)])
+                            .limit(_REGIME_REFRESH_LIMIT)
+                            .to_list(length=_REGIME_REFRESH_LIMIT)
                         )
                         self._regime_cache[symbol.strip()] = (now, docs)
-                    except Exception:
+                    except Exception as exc:
+                        # The symbol keeps its last good timeline; one line, no traceback.
                         logger.warning(
-                            "Could not refresh regime cache for %s",
+                            "Could not refresh regime cache for %s: %s: %s",
                             symbol,
-                            exc_info=True,
+                            type(exc).__name__,
+                            exc,
                         )
             await asyncio.sleep(900)
 
