@@ -136,11 +136,17 @@ async def test_precomputer_refreshes_each_report_with_explicit_defaults(monkeypa
 @pytest.mark.asyncio
 async def test_regime_refresh_populates_cache_off_the_fill_path(monkeypatch):
     class Cursor:
+        def sort(self, *args):
+            return self
+
+        def limit(self, *args):
+            return self
+
         async def to_list(self, length=None):
             return [{"regime": "balanced_market"}]
 
     class Collection:
-        def find(self, query):
+        def find(self, query, projection=None):
             return Cursor()
 
     class Database(dict):
